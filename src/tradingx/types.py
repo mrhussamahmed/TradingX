@@ -172,6 +172,31 @@ class ValidationReport:
 
 
 @dataclass(frozen=True)
+class GateDecisionCandidateSummary:
+    candidate_id: str
+    status: str
+    failed_criteria: tuple[str, ...]
+    summary: str
+
+
+@dataclass(frozen=True)
+class GateDecisionBrief:
+    gate_id: str
+    status: str
+    decision_summary: str
+    required_operator_action: str
+    generated_at_utc: datetime
+    evidence_refs: tuple[str, ...]
+    candidate_summaries: tuple[GateDecisionCandidateSummary, ...]
+    latest_open_positions: tuple[str, ...]
+    latest_cash: Decimal | None
+    latest_equity: Decimal | None
+    blocked_trade_count: int
+    reconciliation_failure_count: int
+    latest_alert_summary: str
+
+
+@dataclass(frozen=True)
 class BenchmarkCloseSeries:
     symbol: str
     closes: tuple[Decimal, ...]
@@ -251,6 +276,8 @@ __all__ = (
     "BenchmarkCloseSeries",
     "EvaluationEvidencePack",
     "GateAssessment",
+    "GateDecisionBrief",
+    "GateDecisionCandidateSummary",
     "GateReportResult",
     "LatestQuote",
     "MarketSnapshot",

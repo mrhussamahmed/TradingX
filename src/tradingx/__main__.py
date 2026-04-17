@@ -11,6 +11,7 @@ from typing import Any
 
 from alpaca.data.enums import Adjustment, DataFeed
 
+from tradingx.alerts import build_gate_decision_alert
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_controller,
@@ -19,6 +20,7 @@ from tradingx.controller import (
 )
 from tradingx.data import build_default_market_data_gateway
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.reporting import build_gate_decision_brief
 from tradingx.service import build_default_paper_service
 from tradingx.validation import (
     load_benchmark_close_series,
@@ -78,6 +80,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     evidence_parser = subparsers.add_parser("evidence-report")
     evidence_parser.add_argument("--artifact-root", default="artifacts/paper_loop")
+
+    decision_parser = subparsers.add_parser("decision-report")
+    decision_parser.add_argument("--gate", default=None)
+    decision_parser.add_argument(
+        "--validation-artifact-root",
+        default="artifacts/validation",
+    )
+    decision_parser.add_argument(
+        "--paper-artifact-root",
+        default="artifacts/paper_loop",
+    )
 
     benchmark_prep_parser = subparsers.add_parser("prepare-benchmark-closes")
     benchmark_prep_parser.add_argument("--env-file", default=".env")
@@ -164,6 +177,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             json.dumps(
                 _serialize(store.build_operator_evidence_report()),
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    if args.command == "decision-report":
+        brief = build_gate_decision_brief(
+            validation_store=FilesystemArtifactStore(
+                Path(args.validation_artifact_root)
+            ),
+            paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
+            gate_id=args.gate,
+        )
+        print(
+            json.dumps(
+                _serialize(
+                    {
+                        "brief": brief,
+                        "alert": build_gate_decision_alert(brief),
+                    }
+                ),
                 sort_keys=True,
             )
         )

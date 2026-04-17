@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from tradingx.alerts import (
     MemoryAlertTransport,
@@ -10,11 +11,16 @@ from tradingx.alerts import (
     SmtpAlertTransport,
     TelegramAlertTransport,
     build_alert_dispatcher,
+    build_gate_decision_alert,
     build_live_disable_alert,
     build_risk_control_alert,
 )
 from tradingx.config import TradingConfig
-from tradingx.types import RiskControlEvent
+from tradingx.types import (
+    GateDecisionBrief,
+    GateDecisionCandidateSummary,
+    RiskControlEvent,
+)
 
 
 def test_alerts_module_shell_is_importable() -> None:
@@ -56,6 +62,48 @@ def test_live_disable_alert_reports_manual_halt_state() -> None:
 
     assert alert.category == "operations"
     assert "manual halt active" in alert.summary.lower()
+
+
+def test_build_gate_decision_alert_matches_gate_contract() -> None:
+    alert = build_gate_decision_alert(
+        GateDecisionBrief(
+            gate_id="1",
+            status="pending",
+            decision_summary=(
+                "Gate 1 is pending because out-of-sample evidence " "is incomplete."
+            ),
+            required_operator_action=(
+                "Do not advance; collect the missing evidence " "and rerun Gate 1."
+            ),
+            generated_at_utc=datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+            evidence_refs=(
+                "validation_reports/gate-1-20260417T180000Z.json",
+                "evaluation_evidence/evaluation-1.json",
+            ),
+            candidate_summaries=(
+                GateDecisionCandidateSummary(
+                    candidate_id="trend-following-v1",
+                    status="pending",
+                    failed_criteria=("out_of_sample_profile",),
+                    summary="Needs more history.",
+                ),
+            ),
+            latest_open_positions=("SPY",),
+            latest_cash=Decimal("10025.00"),
+            latest_equity=Decimal("10030.00"),
+            blocked_trade_count=2,
+            reconciliation_failure_count=1,
+            latest_alert_summary="stale_data blocked trade intent intent-1",
+        )
+    )
+
+    assert alert.category == "gate"
+    assert alert.severity == "critical"
+    assert "gate 1 pending" in alert.summary.lower()
+    assert alert.evidence_refs == (
+        "validation_reports/gate-1-20260417T180000Z.json",
+        "evaluation_evidence/evaluation-1.json",
+    )
 
 
 def test_operator_alert_dispatcher_records_delivery_targets() -> None:

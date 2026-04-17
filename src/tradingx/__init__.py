@@ -6,6 +6,7 @@ __all__ = [
     "data",
     "execution",
     "portfolio",
+    "reporting",
     "risk",
     "service",
     "types",

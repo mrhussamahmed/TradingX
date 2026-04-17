@@ -9,6 +9,8 @@ from pathlib import Path
 from tradingx import __main__ as cli
 from tradingx.types import (
     AccountSnapshot,
+    GateDecisionBrief,
+    GateDecisionCandidateSummary,
     LatestQuote,
     OrderRecord,
     RoundTripResult,
@@ -146,6 +148,33 @@ class FakeGateValidationController:
                 "status": "pass",
             },
         }
+
+
+def fake_gate_decision_brief() -> GateDecisionBrief:
+    return GateDecisionBrief(
+        gate_id="1",
+        status="pass",
+        decision_summary="Gate 1 passed for trend-following-v1.",
+        required_operator_action=(
+            "Review the evidence and decide whether to advance to Gate 2."
+        ),
+        generated_at_utc=datetime(2026, 4, 17, 21, 45, tzinfo=UTC),
+        evidence_refs=("validation_reports/gate-1-20260417.json",),
+        candidate_summaries=(
+            GateDecisionCandidateSummary(
+                candidate_id="trend-following-v1",
+                status="pass",
+                failed_criteria=(),
+                summary="All Gate 1 criteria satisfied.",
+            ),
+        ),
+        latest_open_positions=("SPY",),
+        latest_cash=Decimal("10025.00"),
+        latest_equity=Decimal("10030.00"),
+        blocked_trade_count=1,
+        reconciliation_failure_count=0,
+        latest_alert_summary="stale_data blocked trade intent intent-1",
+    )
 
 
 @dataclass(frozen=True)
@@ -475,12 +504,51 @@ def test_main_prints_operator_evidence_report(tmp_path, capsys) -> None:
     assert payload["counts"]["trade_intents"] == 1
 
 
+def test_main_prints_gate_decision_report(monkeypatch, tmp_path, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "build_gate_decision_brief",
+        lambda *, validation_store, paper_store, gate_id=None: (
+            fake_gate_decision_brief()
+        ),
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "decision-report",
+            "--gate",
+            "1",
+            "--validation-artifact-root",
+            str(tmp_path / "validation"),
+            "--paper-artifact-root",
+            str(tmp_path / "paper_loop"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["brief"]["gate_id"] == "1"
+    assert payload["alert"]["category"] == "gate"
+    assert payload["alert"]["severity"] == "critical"
+
+
 def test_evidence_report_defaults_to_paper_loop_root() -> None:
     parser = cli.build_parser()
 
     args = parser.parse_args(["evidence-report"])
 
     assert args.artifact_root == "artifacts/paper_loop"
+
+
+def test_decision_report_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["decision-report"])
+
+    assert args.gate is None
+    assert args.validation_artifact_root == "artifacts/validation"
+    assert args.paper_artifact_root == "artifacts/paper_loop"
 
 
 def test_run_paper_service_parser_defaults() -> None:

@@ -13,7 +13,12 @@ from typing import Protocol, Self, cast
 from urllib.request import Request, urlopen
 
 from tradingx.config import TradingConfig
-from tradingx.types import EvaluationEvidencePack, OperatorAlert, RiskControlEvent
+from tradingx.types import (
+    EvaluationEvidencePack,
+    GateDecisionBrief,
+    OperatorAlert,
+    RiskControlEvent,
+)
 
 
 def build_risk_control_alert(
@@ -68,6 +73,20 @@ def build_live_disable_alert(config: TradingConfig) -> OperatorAlert:
         evidence_refs=(),
         delivery_targets=(),
         sent_at_utc=datetime.now(UTC),
+    )
+
+
+def build_gate_decision_alert(brief: GateDecisionBrief) -> OperatorAlert:
+    return OperatorAlert(
+        alert_id=f"alert-gate-decision-{brief.gate_id}",
+        severity="critical",
+        category="gate",
+        summary=(
+            f"Gate {brief.gate_id} {brief.status}: {brief.required_operator_action}"
+        ),
+        evidence_refs=brief.evidence_refs,
+        delivery_targets=(),
+        sent_at_utc=brief.generated_at_utc,
     )
 
 
@@ -227,6 +246,7 @@ __all__ = (
     "TelegramAlertTransport",
     "build_alert_dispatcher",
     "build_evaluation_summary_alert",
+    "build_gate_decision_alert",
     "build_live_disable_alert",
     "build_risk_control_alert",
 )

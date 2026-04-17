@@ -293,6 +293,9 @@ class FilesystemArtifactStore:
             },
         }
 
+    def list_artifact_payloads(self, category: str) -> list[dict[str, Any]]:
+        return self._read_category_payloads(category)
+
     def _read_category_payloads(self, category: str) -> list[dict[str, Any]]:
         category_dir = self._root_dir / category
         if not category_dir.exists():

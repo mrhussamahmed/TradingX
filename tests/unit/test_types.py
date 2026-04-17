@@ -6,6 +6,8 @@ from pathlib import Path
 
 from tradingx.types import (
     GateAssessment,
+    GateDecisionBrief,
+    GateDecisionCandidateSummary,
     GateReportResult,
     OperatorAlert,
     PortfolioState,
@@ -178,3 +180,33 @@ def test_validation_report_and_gate_report_result_capture_gate_evidence() -> Non
 
     assert report.candidate_results[0].criteria[0].passed is True
     assert gate_result.gate_assessment.status == "pass"
+
+
+def test_gate_decision_brief_captures_operator_ready_summary() -> None:
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    brief = GateDecisionBrief(
+        gate_id="2",
+        status="fail",
+        decision_summary="Gate 2 failed under cost stress.",
+        required_operator_action="Do not advance; address failed robustness criteria.",
+        generated_at_utc=timestamp,
+        evidence_refs=("validation_reports/gate-2-20260417.json",),
+        candidate_summaries=(
+            GateDecisionCandidateSummary(
+                candidate_id="trend-following-v1",
+                status="fail",
+                failed_criteria=("cost_stress",),
+                summary="2x cost stress made the strategy unprofitable.",
+            ),
+        ),
+        latest_open_positions=("SPY",),
+        latest_cash=Decimal("10000"),
+        latest_equity=Decimal("9980"),
+        blocked_trade_count=3,
+        reconciliation_failure_count=1,
+        latest_alert_summary="kill_switch blocked trade intent intent-1",
+    )
+
+    assert brief.candidate_summaries[0].failed_criteria == ("cost_stress",)
+    assert brief.latest_open_positions == ("SPY",)
+    assert brief.blocked_trade_count == 3

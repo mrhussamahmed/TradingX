@@ -157,7 +157,25 @@ Expected behavior:
 - Gate 2 reports the 2x cost stress, parameter-perturbation, and
   rolling walk-forward criteria for each mandatory candidate.
 
-## 10. Quickstart verification status
+## 10. Build the operator decision brief
+
+After generating a gate report, summarize it for the operator:
+
+```bash
+uv run tradingx decision-report --gate 1
+```
+
+Expected behavior:
+
+- The command reads the latest matching validation report and gate
+  assessment under `artifacts/validation/`.
+- It combines that with the current paper-loop evidence summary from
+  `artifacts/paper_loop/`.
+- It prints an operator-ready brief, including candidate-level failed
+  criteria, current blocked-trade and reconciliation counts, the latest
+  open positions, and a gate-decision alert preview.
+
+## 11. Quickstart verification status
 
 This quickstart was exercised on 2026-04-17 with:
 
@@ -165,6 +183,7 @@ This quickstart was exercised on 2026-04-17 with:
 - `uv run tradingx live-disable-status --env-file .env`
 - `uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17 --output-file <fixture>`
 - `uv run tradingx gate-report --gate 1 --benchmark-closes-file <fixture> --window-start 2023-01-01 --window-end 2026-04-17`
+- `uv run tradingx decision-report --gate 1`
 - `uv run pytest`
 - `./scripts/validate`
 

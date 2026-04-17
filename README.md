@@ -29,6 +29,7 @@ uv run tradingx paper-recover --env-file .env --symbol SPY
 uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
 uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json --window-start 2023-01-01 --window-end 2026-04-17
+uv run tradingx decision-report --gate 1
 ```
 
 `paper-loop` is intended for regular US market hours and paper mode
@@ -49,6 +50,12 @@ by default. `gate-report` writes validation artifacts under
 array like `["100","101.5"]` or a simple comma/newline-delimited list,
 but when you use the prepared artifact the command can infer whether the
 series is dividend-adjusted and will reject window mismatches.
+
+`decision-report` reads the latest validation artifacts together with the
+paper-loop evidence summary and prints one operator-ready brief plus a
+gate-decision alert preview. It is meant to answer the practical next
+question after a gate run: should the operator advance, wait for more
+evidence, or send the strategy back for changes?
 
 ## Repo gate
 
