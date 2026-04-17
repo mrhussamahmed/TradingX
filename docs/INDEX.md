@@ -77,7 +77,14 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| _(none yet — Phase 0 will add the initial ADRs per the bootstrap install runbook)_ |
+| ADR-0001 | Use Python 3.11 as the baseline runtime | 1.0.0 | active | `docs/adrs/ADR-0001-language-python-3.11.md` |
+| ADR-0002 | Use uv as the package manager | 1.0.0 | active | `docs/adrs/ADR-0002-package-manager-uv.md` |
+| ADR-0003 | Use Alpaca for Stage 1 and Stage 2 brokerage | 1.0.0 | active | `docs/adrs/ADR-0003-broker-alpaca.md` |
+| ADR-0004 | Use SPY as the Stage 1 and Stage 2 benchmark | 1.0.0 | active | `docs/adrs/ADR-0004-benchmark-spy.md` |
+| ADR-0005 | Preserve sequential Stage 1 through Stage 4 progression | 1.0.0 | active | `docs/adrs/ADR-0005-stage-progression-1-through-4.md` |
+| ADR-0006 | Use SMTP email as the default emergency channel | 1.0.0 | active | `docs/adrs/ADR-0006-emergency-channel-smtp.md` |
+| ADR-0007 | Restrict Stage 1 and Stage 2 trading to regular market hours | 1.0.0 | active | `docs/adrs/ADR-0007-market-hours-regular-only.md` |
+| ADR-0008 | Require a real Alpaca paper round trip in Phase 0 | 1.0.0 | active | `docs/adrs/ADR-0008-walking-skeleton-deliverable.md` |
 
 ### Specifications (SPEC-NNNN)
 
@@ -117,9 +124,9 @@ rather than by per-session INDEX rows:
   intent (discoverability, ground-truth front-matter) without the
   scaling problem.
 
-| id pattern  | description            | count (current) | latest active | path                            |
-| ----------- | ---------------------- | --------------- | ------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 0               | none          | `docs/handover/SESSIONS/`       |
+| id pattern  | description            | count (current) | latest active          | path                            |
+| ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
+| SESS-*      | Session handovers      | 1               | SESS-2026-04-17-001    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 
@@ -148,7 +155,7 @@ documents an incident).
 
 | id                  | title                       | version | status | path                                              |
 | ------------------- | --------------------------- | ------- | ------ | ------------------------------------------------- |
-| _(none yet — Phase 0 will add the strategy-evaluation template)_ |
+| ADRTPL-0001         | Strategy evaluation ADR template | 1.0.0 | active | `docs/adrs/templates/strategy_evaluation.md`      |
 
 ## Pre-repository supersession history (historical only)
 

@@ -1,1 +1,14 @@
 .DS_Store
+.coverage
+.env
+.env.*
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.pyc
+__pycache__/
+artifacts/
+
+!.env.example
+!.env.research.example
