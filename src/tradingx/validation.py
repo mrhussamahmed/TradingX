@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from tradingx.data import close_to_close_returns
 from tradingx.evaluation import TRADING_DAYS_PER_YEAR, evaluate_candidate
 from tradingx.strategy import build_candidate_return_series
 from tradingx.types import (
+    BenchmarkCloseSeries,
     StrategyCandidate,
     ValidationCandidateResult,
     ValidationCriterionResult,
@@ -462,18 +463,113 @@ def build_gate_report(
     )
 
 
-def load_close_series(path: Path) -> tuple[Decimal, ...]:
+def _parse_optional_datetime(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    timestamp = datetime.fromisoformat(str(value))
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
+
+
+def load_benchmark_close_series(path: Path) -> BenchmarkCloseSeries:
     raw_text = path.read_text(encoding="utf-8").strip()
     if not raw_text:
-        return ()
+        return BenchmarkCloseSeries(
+            symbol="SPY",
+            closes=(),
+            window_start_utc=None,
+            window_end_utc=None,
+            generated_at_utc=None,
+            feed="",
+            adjustment="",
+            series_is_adjusted=False,
+        )
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
         tokens = [token.strip() for token in raw_text.replace("\n", ",").split(",")]
-        return tuple(Decimal(token) for token in tokens if token)
-    if not isinstance(payload, list):
-        raise ValueError("Benchmark closes file must contain a JSON list.")
-    return tuple(Decimal(str(value)) for value in payload)
+        return BenchmarkCloseSeries(
+            symbol="SPY",
+            closes=tuple(Decimal(token) for token in tokens if token),
+            window_start_utc=None,
+            window_end_utc=None,
+            generated_at_utc=None,
+            feed="",
+            adjustment="",
+            series_is_adjusted=False,
+        )
+    if isinstance(payload, list):
+        return BenchmarkCloseSeries(
+            symbol="SPY",
+            closes=tuple(Decimal(str(value)) for value in payload),
+            window_start_utc=None,
+            window_end_utc=None,
+            generated_at_utc=None,
+            feed="",
+            adjustment="",
+            series_is_adjusted=False,
+        )
+    if not isinstance(payload, dict):
+        raise ValueError(
+            "Benchmark closes file must contain a JSON list or a "
+            "benchmark artifact object."
+        )
+    closes = payload.get("closes")
+    if not isinstance(closes, list):
+        raise ValueError(
+            "Benchmark artifact object must contain a JSON list of closes."
+        )
+    adjustment = str(payload.get("adjustment") or "")
+    return BenchmarkCloseSeries(
+        symbol=str(payload.get("symbol") or "SPY"),
+        closes=tuple(Decimal(str(value)) for value in closes),
+        window_start_utc=_parse_optional_datetime(payload.get("window_start_utc")),
+        window_end_utc=_parse_optional_datetime(payload.get("window_end_utc")),
+        generated_at_utc=_parse_optional_datetime(payload.get("generated_at_utc")),
+        feed=str(payload.get("feed") or ""),
+        adjustment=adjustment,
+        series_is_adjusted=bool(
+            payload.get("series_is_adjusted", adjustment in {"dividend", "all"})
+        ),
+    )
 
 
-__all__ = ("build_gate_report", "load_close_series")
+def load_close_series(path: Path) -> tuple[Decimal, ...]:
+    return load_benchmark_close_series(path).closes
+
+
+def write_benchmark_close_series(path: Path, series: BenchmarkCloseSeries) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "symbol": series.symbol,
+        "window_start_utc": (
+            series.window_start_utc.astimezone(UTC).isoformat()
+            if series.window_start_utc is not None
+            else None
+        ),
+        "window_end_utc": (
+            series.window_end_utc.astimezone(UTC).isoformat()
+            if series.window_end_utc is not None
+            else None
+        ),
+        "generated_at_utc": (
+            series.generated_at_utc.astimezone(UTC).isoformat()
+            if series.generated_at_utc is not None
+            else None
+        ),
+        "feed": series.feed,
+        "adjustment": series.adjustment,
+        "series_is_adjusted": series.series_is_adjusted,
+        "closes": [str(value) for value in series.closes],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+__all__ = (
+    "build_gate_report",
+    "load_benchmark_close_series",
+    "load_close_series",
+    "write_benchmark_close_series",
+)

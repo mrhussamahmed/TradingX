@@ -9,15 +9,21 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from alpaca.data.enums import Adjustment, DataFeed
+
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_controller,
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
+from tradingx.data import build_default_market_data_gateway
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.service import build_default_paper_service
-from tradingx.validation import load_close_series
+from tradingx.validation import (
+    load_benchmark_close_series,
+    write_benchmark_close_series,
+)
 
 
 def _serialize(value: Any) -> Any:
@@ -72,6 +78,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     evidence_parser = subparsers.add_parser("evidence-report")
     evidence_parser.add_argument("--artifact-root", default="artifacts/paper_loop")
+
+    benchmark_prep_parser = subparsers.add_parser("prepare-benchmark-closes")
+    benchmark_prep_parser.add_argument("--env-file", default=".env")
+    benchmark_prep_parser.add_argument("--symbol", default="SPY")
+    benchmark_prep_parser.add_argument("--window-start", required=True)
+    benchmark_prep_parser.add_argument("--window-end", required=True)
+    benchmark_prep_parser.add_argument(
+        "--feed",
+        choices=tuple(feed.value for feed in DataFeed),
+        default=DataFeed.IEX.value,
+    )
+    benchmark_prep_parser.add_argument(
+        "--adjustment",
+        choices=tuple(adjustment.value for adjustment in Adjustment),
+        default=Adjustment.DIVIDEND.value,
+    )
+    benchmark_prep_parser.add_argument("--output-file", default=None)
 
     gate_parser = subparsers.add_parser("gate-report")
     gate_parser.add_argument("--env-file", default=".env")
@@ -146,12 +169,70 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "prepare-benchmark-closes":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        market_data_gateway = build_default_market_data_gateway(config)
+        window_start_utc = datetime.fromisoformat(args.window_start).replace(tzinfo=UTC)
+        window_end_utc = datetime.fromisoformat(args.window_end).replace(tzinfo=UTC)
+        series = market_data_gateway.get_daily_close_series(
+            args.symbol,
+            start_utc=window_start_utc,
+            end_utc=window_end_utc,
+            feed=args.feed,
+            adjustment=args.adjustment,
+        )
+        output_file = (
+            Path(args.output_file)
+            if args.output_file is not None
+            else config.runtime.artifact_root
+            / "validation"
+            / "benchmarks"
+            / (
+                f"{args.symbol.lower()}-"
+                f"{window_start_utc.date().isoformat()}-"
+                f"{window_end_utc.date().isoformat()}-"
+                f"{args.adjustment}.json"
+            )
+        )
+        write_benchmark_close_series(output_file, series)
+        print(
+            json.dumps(
+                _serialize(
+                    {
+                        "output_file": output_file,
+                        "series": series,
+                    }
+                ),
+                sort_keys=True,
+            )
+        )
+        return 0
+
     if args.command == "gate-report":
         config = TradingConfig.from_env_file(Path(args.env_file))
         controller = build_default_gate_validation_controller(
             config,
             artifact_root=Path(args.artifact_root),
         )
+        window_start_utc = datetime.fromisoformat(args.window_start).replace(tzinfo=UTC)
+        window_end_utc = datetime.fromisoformat(args.window_end).replace(tzinfo=UTC)
+        benchmark_series = load_benchmark_close_series(Path(args.benchmark_closes_file))
+        if (
+            benchmark_series.window_start_utc is not None
+            and benchmark_series.window_start_utc != window_start_utc
+        ):
+            raise ValueError(
+                "Benchmark closes artifact window start does not match "
+                "the requested gate-report window."
+            )
+        if (
+            benchmark_series.window_end_utc is not None
+            and benchmark_series.window_end_utc != window_end_utc
+        ):
+            raise ValueError(
+                "Benchmark closes artifact window end does not match "
+                "the requested gate-report window."
+            )
         universe = (
             tuple(
                 item.strip().upper()
@@ -163,13 +244,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         gate_result = controller.generate_gate_report(
             gate_id=args.gate,
-            benchmark_closes=load_close_series(Path(args.benchmark_closes_file)),
-            window_start_utc=datetime.fromisoformat(args.window_start).replace(
-                tzinfo=UTC
-            ),
-            window_end_utc=datetime.fromisoformat(args.window_end).replace(tzinfo=UTC),
+            benchmark_closes=benchmark_series.closes,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
             universe=universe,
-            benchmark_series_is_adjusted=args.benchmark_adjusted,
+            benchmark_series_is_adjusted=(
+                args.benchmark_adjusted or benchmark_series.series_is_adjusted
+            ),
         )
         print(json.dumps(_serialize(gate_result), sort_keys=True))
         return 0

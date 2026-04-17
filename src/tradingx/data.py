@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from alpaca.data.enums import DataFeed
+from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import (
     StockBarsRequest,
@@ -16,7 +16,8 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetCalendarRequest
 
-from tradingx.types import LatestQuote, MarketSnapshot
+from tradingx.config import TradingConfig
+from tradingx.types import BenchmarkCloseSeries, LatestQuote, MarketSnapshot
 
 
 def _to_decimal(value: object) -> Decimal:
@@ -37,6 +38,18 @@ def close_to_close_returns(closes: Sequence[Decimal]) -> tuple[Decimal, ...]:
             continue
         returns.append((current_close - previous_close) / previous_close)
     return tuple(returns)
+
+
+def _normalize_feed(feed: str | DataFeed) -> DataFeed:
+    return feed if isinstance(feed, DataFeed) else DataFeed(feed.lower())
+
+
+def _normalize_adjustment(adjustment: str | Adjustment) -> Adjustment:
+    return (
+        adjustment
+        if isinstance(adjustment, Adjustment)
+        else Adjustment(adjustment.lower())
+    )
 
 
 class AlpacaMarketDataGateway:
@@ -134,6 +147,48 @@ class AlpacaMarketDataGateway:
             timestamp=max(trade_timestamp, quote_timestamp),
         )
 
+    def get_daily_close_series(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str | DataFeed = DataFeed.IEX,
+        adjustment: str | Adjustment = Adjustment.DIVIDEND,
+    ) -> BenchmarkCloseSeries:
+        normalized_symbol = symbol.upper()
+        normalized_feed = _normalize_feed(feed)
+        normalized_adjustment = _normalize_adjustment(adjustment)
+        bars_request = StockBarsRequest(
+            symbol_or_symbols=normalized_symbol,
+            timeframe=TimeFrame.Day,
+            start=start_utc,
+            end=end_utc,
+            feed=normalized_feed,
+            adjustment=normalized_adjustment,
+        )
+        bars_response = self._client.get_stock_bars(bars_request)
+        if isinstance(bars_response, dict):
+            bars = bars_response.get(normalized_symbol, [])
+        else:
+            bars = bars_response[normalized_symbol]
+        if not bars:
+            raise ValueError(
+                f"No daily bars returned for {normalized_symbol} between "
+                f"{start_utc.isoformat()} and {end_utc.isoformat()}."
+            )
+        return BenchmarkCloseSeries(
+            symbol=normalized_symbol,
+            closes=tuple(_to_decimal(bar.close) for bar in bars),
+            window_start_utc=start_utc,
+            window_end_utc=end_utc,
+            generated_at_utc=datetime.now(UTC),
+            feed=normalized_feed.value,
+            adjustment=normalized_adjustment.value,
+            series_is_adjusted=normalized_adjustment
+            in {Adjustment.DIVIDEND, Adjustment.ALL},
+        )
+
 
 class AlpacaRegularHoursCalendar:
     def __init__(self, trading_client: TradingClient) -> None:
@@ -164,3 +219,10 @@ class AlpacaRegularHoursCalendar:
             session_close = session_close.astimezone(eastern)
         observed_at_eastern = observed_at_utc.astimezone(eastern)
         return session_open <= observed_at_eastern <= session_close
+
+
+def build_default_market_data_gateway(config: TradingConfig) -> AlpacaMarketDataGateway:
+    return AlpacaMarketDataGateway.from_credentials(
+        api_key=config.paper_credentials.api_key,
+        api_secret=config.paper_credentials.api_secret,
+    )

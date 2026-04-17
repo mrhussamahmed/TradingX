@@ -27,7 +27,8 @@ uv run tradingx paper-loop --env-file .env --symbol SPY --quantity 1
 uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx paper-recover --env-file .env --symbol SPY
 uv run tradingx evidence-report --artifact-root artifacts/paper_loop
-uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file benchmark-closes.json --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted
+uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
+uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json --window-start 2023-01-01 --window-end 2026-04-17
 ```
 
 `paper-loop` is intended for regular US market hours and paper mode
@@ -41,11 +42,13 @@ If `TRADINGX_TELEGRAM_BOT_TOKEN` / `TRADINGX_TELEGRAM_CHAT_ID` or the
 delivered through those transports in addition to being persisted under
 `artifacts/paper_loop/operator_alerts/`.
 
-`gate-report` writes validation artifacts under `artifacts/validation/`.
-The benchmark closes file may be a JSON array like `["100","101.5"]`
-or a simple comma/newline-delimited list of close prices. Pass
-`--benchmark-adjusted` only when the input series is already
-dividend-adjusted.
+`prepare-benchmark-closes` fetches daily closes from Alpaca market data
+and writes a metadata-rich artifact under `artifacts/validation/benchmarks/`
+by default. `gate-report` writes validation artifacts under
+`artifacts/validation/`. The benchmark closes input may still be a JSON
+array like `["100","101.5"]` or a simple comma/newline-delimited list,
+but when you use the prepared artifact the command can infer whether the
+series is dividend-adjusted and will reject window mismatches.
 
 ## Repo gate
 

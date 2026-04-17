@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -90,4 +91,36 @@ def test_build_gate2_report_is_pending_when_history_is_too_short() -> None:
         and not criterion.passed
         and "252 trading days" in criterion.details
         for criterion in report.candidate_results[0].criteria
+    )
+
+
+def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> None:
+    module = importlib.import_module("tradingx.validation")
+    artifact_file = tmp_path / "spy-dividend-benchmark.json"
+    artifact_file.write_text(
+        json.dumps(
+            {
+                "symbol": "SPY",
+                "window_start_utc": "2023-01-01T00:00:00+00:00",
+                "window_end_utc": "2026-04-17T00:00:00+00:00",
+                "generated_at_utc": "2026-04-17T21:15:00+00:00",
+                "feed": "iex",
+                "adjustment": "dividend",
+                "series_is_adjusted": True,
+                "closes": ["100", "101.5", "102.25"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    series = module.load_benchmark_close_series(artifact_file)
+
+    assert series.symbol == "SPY"
+    assert series.series_is_adjusted is True
+    assert series.feed == "iex"
+    assert series.adjustment == "dividend"
+    assert series.closes == (
+        Decimal("100"),
+        Decimal("101.5"),
+        Decimal("102.25"),
     )

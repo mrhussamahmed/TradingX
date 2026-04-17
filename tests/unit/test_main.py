@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -145,6 +146,50 @@ class FakeGateValidationController:
                 "status": "pass",
             },
         }
+
+
+@dataclass(frozen=True)
+class FakeBenchmarkSeries:
+    symbol: str
+    closes: tuple[Decimal, ...]
+    window_start_utc: datetime
+    window_end_utc: datetime
+    generated_at_utc: datetime
+    feed: str
+    adjustment: str
+    series_is_adjusted: bool
+
+
+class FakeBenchmarkGateway:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def get_daily_close_series(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str,
+        adjustment: str,
+    ) -> FakeBenchmarkSeries:
+        self.called_with = {
+            "symbol": symbol,
+            "start_utc": start_utc,
+            "end_utc": end_utc,
+            "feed": feed,
+            "adjustment": adjustment,
+        }
+        return FakeBenchmarkSeries(
+            symbol=symbol,
+            closes=(Decimal("100"), Decimal("101"), Decimal("102")),
+            window_start_utc=start_utc,
+            window_end_utc=end_utc,
+            generated_at_utc=datetime(2026, 4, 17, 21, 30, tzinfo=UTC),
+            feed=feed,
+            adjustment=adjustment,
+            series_is_adjusted=adjustment in {"dividend", "all"},
+        )
 
 
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
@@ -319,7 +364,18 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
     )
     benchmark_closes_file = tmp_path / "benchmark-closes.json"
     benchmark_closes_file.write_text(
-        json.dumps(["100", "101", "102"]),
+        json.dumps(
+            {
+                "symbol": "SPY",
+                "window_start_utc": "2026-04-01T00:00:00+00:00",
+                "window_end_utc": "2026-04-17T00:00:00+00:00",
+                "generated_at_utc": "2026-04-17T21:15:00+00:00",
+                "feed": "iex",
+                "adjustment": "dividend",
+                "series_is_adjusted": True,
+                "closes": ["100", "101", "102"],
+            }
+        ),
         encoding="utf-8",
     )
     fake_controller = FakeGateValidationController()
@@ -344,7 +400,6 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
             "2026-04-17",
             "--artifact-root",
             str(tmp_path / "validation"),
-            "--benchmark-adjusted",
         ]
     )
 
@@ -359,6 +414,50 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
         "benchmark_series_is_adjusted": True,
     }
     assert payload["gate_assessment"]["status"] == "pass"
+
+
+def test_main_prepares_benchmark_closes_artifact(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n" "ALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+    output_file = tmp_path / "benchmarks" / "spy-dividend.json"
+    fake_gateway = FakeBenchmarkGateway()
+    monkeypatch.setattr(
+        cli,
+        "build_default_market_data_gateway",
+        lambda config: fake_gateway,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "prepare-benchmark-closes",
+            "--env-file",
+            str(env_file),
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+            "--output-file",
+            str(output_file),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert fake_gateway.called_with == {
+        "symbol": "SPY",
+        "start_utc": datetime(2026, 4, 1, tzinfo=UTC),
+        "end_utc": datetime(2026, 4, 17, tzinfo=UTC),
+        "feed": "iex",
+        "adjustment": "dividend",
+    }
+    assert payload["output_file"] == str(output_file)
+    artifact = json.loads(output_file.read_text(encoding="utf-8"))
+    assert artifact["series_is_adjusted"] is True
+    assert artifact["closes"] == ["100", "101", "102"]
 
 
 def test_main_prints_operator_evidence_report(tmp_path, capsys) -> None:
@@ -415,3 +514,23 @@ def test_gate_report_parser_defaults() -> None:
     assert args.artifact_root == "artifacts/validation"
     assert args.universe is None
     assert args.benchmark_adjusted is False
+
+
+def test_prepare_benchmark_closes_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(
+        [
+            "prepare-benchmark-closes",
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+        ]
+    )
+
+    assert args.env_file == ".env"
+    assert args.symbol == "SPY"
+    assert args.feed == "iex"
+    assert args.adjustment == "dividend"
+    assert args.output_file is None

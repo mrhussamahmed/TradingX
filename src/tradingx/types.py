@@ -172,6 +172,18 @@ class ValidationReport:
 
 
 @dataclass(frozen=True)
+class BenchmarkCloseSeries:
+    symbol: str
+    closes: tuple[Decimal, ...]
+    window_start_utc: datetime | None
+    window_end_utc: datetime | None
+    generated_at_utc: datetime | None
+    feed: str
+    adjustment: str
+    series_is_adjusted: bool
+
+
+@dataclass(frozen=True)
 class GateReportResult:
     report: ValidationReport
     gate_assessment: GateAssessment
@@ -236,6 +248,7 @@ class ServiceRunResult:
 
 __all__ = (
     "AccountSnapshot",
+    "BenchmarkCloseSeries",
     "EvaluationEvidencePack",
     "GateAssessment",
     "GateReportResult",

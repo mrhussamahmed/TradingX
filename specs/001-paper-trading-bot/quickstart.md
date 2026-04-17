@@ -118,8 +118,23 @@ Expected behavior:
 
 ## 9. Generate Gate 1 or Gate 2 validation reports
 
-Create a benchmark close-series file first. The simplest accepted format
-is a JSON array of close prices:
+Prepare a dividend-adjusted benchmark close-series artifact first:
+
+```bash
+uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
+```
+
+By default this writes:
+
+```text
+artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json
+```
+
+The prepared artifact includes the symbol, requested window, data feed,
+adjustment mode, adjustment flag, and the close series. `gate-report`
+will infer the dividend-adjusted status from that artifact and reject a
+window mismatch. The legacy fallback format is still accepted as a JSON
+array of close prices:
 
 ```json
 ["100", "101.25", "102.10"]
@@ -128,8 +143,8 @@ is a JSON array of close prices:
 Then run a report command:
 
 ```bash
-uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file benchmark-closes.json --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted
-uv run tradingx gate-report --env-file .env --gate 2 --benchmark-closes-file benchmark-closes.json --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted
+uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json --window-start 2023-01-01 --window-end 2026-04-17
+uv run tradingx gate-report --env-file .env --gate 2 --benchmark-closes-file artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json --window-start 2023-01-01 --window-end 2026-04-17
 ```
 
 Expected behavior:
@@ -148,7 +163,8 @@ This quickstart was exercised on 2026-04-17 with:
 
 - `uv run tradingx config-summary --env-file .env`
 - `uv run tradingx live-disable-status --env-file .env`
-- `uv run tradingx gate-report --gate 1 --benchmark-closes-file <fixture> --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted`
+- `uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17 --output-file <fixture>`
+- `uv run tradingx gate-report --gate 1 --benchmark-closes-file <fixture> --window-start 2023-01-01 --window-end 2026-04-17`
 - `uv run pytest`
 - `./scripts/validate`
 

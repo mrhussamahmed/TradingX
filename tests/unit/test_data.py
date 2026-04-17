@@ -30,6 +30,14 @@ class FakeSnapshot:
 
 class FakeBar:
     volume = 1_500_000
+    close = 600.25
+    timestamp = datetime(2026, 4, 16, 20, 0, tzinfo=UTC)
+
+
+class FakeHistoricalBar:
+    def __init__(self, close: float, timestamp: datetime) -> None:
+        self.close = close
+        self.timestamp = timestamp
 
 
 class FakeDataClient:
@@ -88,6 +96,44 @@ def test_market_snapshot_includes_last_trade_and_trailing_adv() -> None:
     assert snapshot.ask_price == Decimal("600.1")
     assert snapshot.average_daily_volume_30d == Decimal("1500000")
     assert snapshot.timestamp == datetime(2026, 4, 17, 17, 0, 1, tzinfo=UTC)
+
+
+def test_daily_close_series_uses_adjusted_daily_bars() -> None:
+    class HistoricalBarsClient(FakeDataClient):
+        def get_stock_bars(self, request):
+            self.last_request = request
+            return {
+                "SPY": [
+                    FakeHistoricalBar(
+                        close=598.25,
+                        timestamp=datetime(2026, 4, 15, 20, 0, tzinfo=UTC),
+                    ),
+                    FakeHistoricalBar(
+                        close=600.75,
+                        timestamp=datetime(2026, 4, 16, 20, 0, tzinfo=UTC),
+                    ),
+                ]
+            }
+
+    client = HistoricalBarsClient()
+    gateway = AlpacaMarketDataGateway(client=client)
+
+    series = gateway.get_daily_close_series(
+        "SPY",
+        start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        feed="iex",
+        adjustment="dividend",
+    )
+
+    assert client.last_request.symbol_or_symbols == "SPY"
+    assert str(client.last_request.feed) == "DataFeed.IEX"
+    assert str(client.last_request.adjustment) == "Adjustment.DIVIDEND"
+    assert series.symbol == "SPY"
+    assert series.series_is_adjusted is True
+    assert series.closes == (Decimal("598.25"), Decimal("600.75"))
+    assert series.window_start_utc == datetime(2026, 4, 1, tzinfo=UTC)
+    assert series.window_end_utc == datetime(2026, 4, 17, tzinfo=UTC)
 
 
 def test_regular_hours_calendar_reports_open_session() -> None:
