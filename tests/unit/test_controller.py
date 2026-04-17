@@ -7,7 +7,8 @@ from decimal import Decimal
 from alpaca.trading.enums import OrderSide
 
 from tradingx.controller import RoundTripController
-from tradingx.types import AccountSnapshot, LatestQuote, OrderRecord
+from tradingx.risk import PreTradeRiskContext
+from tradingx.types import AccountSnapshot, LatestQuote, MarketSnapshot, OrderRecord
 
 
 class FakeRiskEngine:
@@ -15,12 +16,26 @@ class FakeRiskEngine:
         self.calls = []
 
     def assert_order_allowed(
-        self, symbol: str, quantity: Decimal, *, is_live_order: bool
+        self, context: PreTradeRiskContext, *, is_live_order: bool
     ) -> None:
-        self.calls.append((symbol, quantity, is_live_order))
+        self.calls.append((context, is_live_order))
 
 
 class FakeMarketData:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
+        self.calls += 1
+        return MarketSnapshot(
+            symbol=symbol,
+            last_trade_price=Decimal("600.00"),
+            bid_price=Decimal("599.90"),
+            ask_price=Decimal("600.10"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=datetime(2026, 4, 17, 17, 0, self.calls, tzinfo=UTC),
+        )
+
     def get_latest_quote(self, symbol: str) -> LatestQuote:
         return LatestQuote(
             symbol=symbol,
@@ -50,6 +65,28 @@ class FakeExecution:
             filled_avg_price=Decimal("0"),
         )
 
+    def submit_oco_exit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        *,
+        take_profit_limit: Decimal,
+        stop_price: Decimal,
+    ) -> OrderRecord:
+        order_id = f"order-{len(self.submissions) + 1}"
+        self.submissions.append(
+            (symbol, quantity, "oco", take_profit_limit, stop_price)
+        )
+        return OrderRecord(
+            order_id=order_id,
+            client_order_id=f"{order_id}-client",
+            symbol=symbol,
+            side="sell",
+            status="accepted",
+            filled_qty=Decimal("0"),
+            filled_avg_price=Decimal("0"),
+        )
+
     def wait_for_fill(
         self,
         order_id: str,
@@ -69,6 +106,23 @@ class FakeExecution:
             filled_avg_price=Decimal("600.00"),
         )
 
+    def wait_for_oco_exit_fill(
+        self,
+        order_id: str,
+        *,
+        timeout_seconds: float = 30,
+        poll_interval_seconds: float = 1,
+    ) -> OrderRecord:
+        return OrderRecord(
+            order_id=order_id,
+            client_order_id=f"{order_id}-client",
+            symbol="SPY",
+            side="sell",
+            status="filled",
+            filled_qty=Decimal("1"),
+            filled_avg_price=Decimal("599.90"),
+        )
+
 
 class FakePortfolio:
     def __init__(self) -> None:
@@ -84,12 +138,17 @@ class FakePortfolio:
                 buying_power=Decimal("2000.25"),
             ),
         ]
+        self.position_quantities = [
+            Decimal("0"),
+            Decimal("1"),
+            Decimal("0"),
+        ]
 
     def get_account_snapshot(self) -> AccountSnapshot:
         return self.snapshots.pop(0)
 
     def get_position_quantity(self, symbol: str) -> Decimal:
-        return Decimal("0")
+        return self.position_quantities.pop(0)
 
 
 def test_round_trip_controller_writes_structured_log(tmp_path) -> None:
@@ -106,6 +165,8 @@ def test_round_trip_controller_writes_structured_log(tmp_path) -> None:
     assert result.sell_order.status == "filled"
     assert result.final_position_quantity == Decimal("0")
     assert result.log_path.exists()
+    assert controller._execution.submissions[0] == ("SPY", Decimal("1"), OrderSide.BUY)
+    assert controller._execution.submissions[1][2] == "oco"
 
     payload = json.loads(result.log_path.read_text(encoding="utf-8"))
     assert payload["symbol"] == "SPY"

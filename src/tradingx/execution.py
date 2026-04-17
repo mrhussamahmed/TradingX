@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from decimal import Decimal
 from typing import Any
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+from alpaca.trading.requests import (
+    GetOrderByIdRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
 
 from tradingx.types import OrderRecord
 
@@ -33,6 +40,19 @@ def _to_order_record(order: Any) -> OrderRecord:
         filled_qty=_to_decimal(getattr(order, "filled_qty", "0")),
         filled_avg_price=_to_decimal(getattr(order, "filled_avg_price", "0")),
     )
+
+
+def _extract_broker_error_message(error: Exception) -> str:
+    try:
+        payload = json.loads(str(error))
+    except json.JSONDecodeError:
+        return str(error)
+    if isinstance(payload, dict):
+        for key in ("message", "reject_reason", "code"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+    return str(error)
 
 
 class OrderRejected(RuntimeError):
@@ -68,7 +88,40 @@ class AlpacaPaperExecutionGateway:
             time_in_force=TimeInForce.DAY,
             client_order_id=f"tradingx-{uuid.uuid4()}",
         )
-        order = _to_order_record(self._trading_client.submit_order(order_request))
+        try:
+            raw_order = self._trading_client.submit_order(order_request)
+        except Exception as error:
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        order = _to_order_record(raw_order)
+        if order.status in REJECTED_STATUSES:
+            raise OrderRejected(
+                f"Order {order.order_id} ended with status {order.status}."
+            )
+        return order
+
+    def submit_oco_exit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        *,
+        take_profit_limit: Decimal,
+        stop_price: Decimal,
+    ) -> OrderRecord:
+        order_request = LimitOrderRequest(
+            symbol=symbol,
+            qty=float(quantity),
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.OCO,
+            take_profit=TakeProfitRequest(limit_price=float(take_profit_limit)),
+            stop_loss=StopLossRequest(stop_price=float(stop_price)),
+            client_order_id=f"tradingx-{uuid.uuid4()}",
+        )
+        try:
+            raw_order = self._trading_client.submit_order(order_request)
+        except Exception as error:
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        order = _to_order_record(raw_order)
         if order.status in REJECTED_STATUSES:
             raise OrderRejected(
                 f"Order {order.order_id} ended with status {order.status}."
@@ -84,7 +137,11 @@ class AlpacaPaperExecutionGateway:
     ) -> OrderRecord:
         deadline = time.monotonic() + timeout_seconds
         while True:
-            order = _to_order_record(self._trading_client.get_order_by_id(order_id))
+            try:
+                raw_order = self._trading_client.get_order_by_id(order_id)
+            except Exception as error:
+                raise OrderRejected(_extract_broker_error_message(error)) from None
+            order = _to_order_record(raw_order)
             if order.status == "filled":
                 return order
             if order.status in REJECTED_STATUSES:
@@ -94,3 +151,55 @@ class AlpacaPaperExecutionGateway:
             if time.monotonic() >= deadline:
                 raise OrderTimeout(f"Timed out waiting for order {order_id} to fill.")
             time.sleep(poll_interval_seconds)
+
+    def wait_for_oco_exit_fill(
+        self,
+        order_id: str,
+        *,
+        timeout_seconds: float = 30,
+        poll_interval_seconds: float = 1,
+    ) -> OrderRecord:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                raw_order = self._trading_client.get_order_by_id(
+                    order_id,
+                    filter=GetOrderByIdRequest(nested=True),
+                )
+            except Exception as error:
+                raise OrderRejected(_extract_broker_error_message(error)) from None
+            parent_order = _to_order_record(raw_order)
+            if parent_order.status == "filled":
+                return parent_order
+            filled_leg = self._find_filled_leg(raw_order)
+            if filled_leg is not None:
+                return filled_leg
+            if parent_order.status in REJECTED_STATUSES:
+                raise OrderRejected(
+                    f"Order {order_id} ended with status {parent_order.status}."
+                )
+            if time.monotonic() >= deadline:
+                raise OrderTimeout(
+                    f"Timed out waiting for OCO exit order {order_id} to fill."
+                )
+            time.sleep(poll_interval_seconds)
+
+    def _find_filled_leg(self, order: Any) -> OrderRecord | None:
+        leg_records = [
+            _to_order_record(leg) for leg in list(getattr(order, "legs", None) or [])
+        ]
+        for leg_record in leg_records:
+            if leg_record.status == "filled":
+                return leg_record
+        for leg_record in leg_records:
+            if leg_record.status in {"expired", "rejected", "suspended"}:
+                raise OrderRejected(
+                    "Order leg "
+                    f"{leg_record.order_id} ended with status "
+                    f"{leg_record.status}."
+                )
+        if leg_records and all(
+            leg_record.status == "canceled" for leg_record in leg_records
+        ):
+            raise OrderRejected("All OCO exit legs were canceled before fill.")
+        return None

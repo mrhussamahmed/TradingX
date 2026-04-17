@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -14,8 +15,8 @@ from tradingx.config import TradingConfig
 from tradingx.data import AlpacaMarketDataGateway
 from tradingx.execution import AlpacaPaperExecutionGateway
 from tradingx.portfolio import AlpacaPortfolioGateway
-from tradingx.risk import PaperOnlyRiskEngine
-from tradingx.types import RoundTripResult
+from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
+from tradingx.types import LatestQuote, RoundTripResult
 
 
 def _serialize(value: Any) -> Any:
@@ -54,19 +55,62 @@ class RoundTripController:
         log_dir: Path,
     ) -> RoundTripResult:
         initial_account = self._portfolio.get_account_snapshot()
-        quote = self._market_data.get_latest_quote(symbol)
+        initial_position_quantity = self._portfolio.get_position_quantity(symbol)
+        entry_market_snapshot = self._market_data.get_market_snapshot(symbol)
+        quote = LatestQuote(
+            symbol=symbol,
+            bid_price=entry_market_snapshot.bid_price,
+            ask_price=entry_market_snapshot.ask_price,
+            timestamp=entry_market_snapshot.timestamp,
+        )
 
-        self._risk.assert_order_allowed(symbol, quantity, is_live_order=False)
+        self._risk.assert_order_allowed(
+            PreTradeRiskContext(
+                symbol=symbol,
+                side=OrderSide.BUY,
+                quantity=quantity,
+                last_trade_price=entry_market_snapshot.last_trade_price,
+                average_daily_volume_30d=entry_market_snapshot.average_daily_volume_30d,
+                market_data_timestamp=entry_market_snapshot.timestamp,
+                account_equity=initial_account.equity,
+                buying_power=initial_account.buying_power,
+                current_position_quantity=initial_position_quantity,
+                broker_state_timestamp=datetime.now(UTC),
+            ),
+            is_live_order=False,
+        )
         buy_submitted = self._execution.submit_market_order(
             symbol, quantity, OrderSide.BUY
         )
         buy_order = self._execution.wait_for_fill(buy_submitted.order_id)
 
-        self._risk.assert_order_allowed(symbol, quantity, is_live_order=False)
-        sell_submitted = self._execution.submit_market_order(
-            symbol, quantity, OrderSide.SELL
+        opened_position_quantity = self._wait_for_position_quantity(
+            symbol,
+            minimum_quantity=quantity,
         )
-        sell_order = self._execution.wait_for_fill(sell_submitted.order_id)
+        exit_market_snapshot = self._market_data.get_market_snapshot(symbol)
+        self._risk.assert_order_allowed(
+            PreTradeRiskContext(
+                symbol=symbol,
+                side=OrderSide.SELL,
+                quantity=quantity,
+                last_trade_price=exit_market_snapshot.last_trade_price,
+                average_daily_volume_30d=exit_market_snapshot.average_daily_volume_30d,
+                market_data_timestamp=exit_market_snapshot.timestamp,
+                account_equity=initial_account.equity,
+                buying_power=initial_account.buying_power,
+                current_position_quantity=opened_position_quantity,
+                broker_state_timestamp=datetime.now(UTC),
+            ),
+            is_live_order=False,
+        )
+        sell_submitted = self._execution.submit_oco_exit_order(
+            symbol,
+            quantity,
+            take_profit_limit=exit_market_snapshot.bid_price,
+            stop_price=self._build_stop_price(exit_market_snapshot.bid_price),
+        )
+        sell_order = self._execution.wait_for_oco_exit_fill(sell_submitted.order_id)
 
         final_account = self._portfolio.get_account_snapshot()
         final_position_quantity = self._portfolio.get_position_quantity(symbol)
@@ -122,6 +166,34 @@ class RoundTripController:
             encoding="utf-8",
         )
         return log_path
+
+    def _wait_for_position_quantity(
+        self,
+        symbol: str,
+        *,
+        minimum_quantity: Decimal,
+        timeout_seconds: float = 30,
+        poll_interval_seconds: float = 1,
+    ) -> Decimal:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            position_quantity = self._portfolio.get_position_quantity(symbol)
+            if position_quantity >= minimum_quantity:
+                return position_quantity
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for broker position in "
+                    f"{symbol} to reach {minimum_quantity}."
+                )
+            time.sleep(poll_interval_seconds)
+
+    def _build_stop_price(self, bid_price: Decimal) -> Decimal:
+        gap = Decimal("0.25")
+        minimum_gap = Decimal("0.01")
+        stop_price = bid_price - gap
+        if stop_price <= Decimal("0"):
+            stop_price = bid_price - minimum_gap
+        return stop_price
 
 
 def build_default_controller(config: TradingConfig) -> RoundTripController:

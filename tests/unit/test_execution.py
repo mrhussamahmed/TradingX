@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 from alpaca.trading.enums import OrderSide
 
-from tradingx.execution import AlpacaPaperExecutionGateway
+from tradingx.execution import AlpacaPaperExecutionGateway, OrderRejected
 
 
 class FakeOrder:
@@ -67,3 +68,78 @@ def test_submit_and_wait_for_fill() -> None:
     assert submitted.status == "accepted"
     assert filled.status == "filled"
     assert filled.filled_qty == Decimal("1")
+
+
+def test_submit_oco_exit_order_uses_complex_exit_group() -> None:
+    client = FakeTradingClient()
+    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+
+    submitted = gateway.submit_oco_exit_order(
+        "SPY",
+        Decimal("1"),
+        take_profit_limit=Decimal("599.90"),
+        stop_price=Decimal("599.65"),
+    )
+
+    assert client.submitted.symbol == "SPY"
+    assert client.submitted.order_class.value == "oco"
+    assert client.submitted.take_profit.limit_price == 599.9
+    assert client.submitted.stop_loss.stop_price == 599.65
+    assert submitted.status == "accepted"
+
+
+class ErrorTradingClient:
+    def submit_order(self, order_data):
+        raise RuntimeError('{"message":"potential wash trade detected"}')
+
+
+def test_submit_order_sanitizes_broker_error_details() -> None:
+    gateway = AlpacaPaperExecutionGateway(trading_client=ErrorTradingClient())
+
+    with pytest.raises(OrderRejected, match="potential wash trade detected"):
+        gateway.submit_market_order("SPY", Decimal("1"), OrderSide.BUY)
+
+
+class FakeNestedTradingClient:
+    def get_order_by_id(self, order_id, filter=None):
+        canceled_leg = FakeOrder(order_id="order-2", status="canceled", side="sell")
+        filled_leg = FakeOrder(order_id="order-3", status="filled", side="sell")
+        parent = FakeOrder(order_id="order-1", status="accepted", side="sell")
+        parent.legs = [canceled_leg, filled_leg]
+        return parent
+
+
+def test_wait_for_oco_exit_fill_ignores_canceled_sibling_when_other_leg_fills() -> None:
+    gateway = AlpacaPaperExecutionGateway(trading_client=FakeNestedTradingClient())
+
+    filled = gateway.wait_for_oco_exit_fill(
+        "order-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert filled.order_id == "order-3"
+    assert filled.status == "filled"
+
+
+class FakeFilledParentOcoTradingClient:
+    def get_order_by_id(self, order_id, filter=None):
+        canceled_leg = FakeOrder(order_id="order-2", status="canceled", side="sell")
+        parent = FakeOrder(order_id="order-1", status="filled", side="sell")
+        parent.legs = [canceled_leg]
+        return parent
+
+
+def test_wait_for_oco_exit_fill_returns_filled_parent_order() -> None:
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=FakeFilledParentOcoTradingClient()
+    )
+
+    filled = gateway.wait_for_oco_exit_fill(
+        "order-1",
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert filled.order_id == "order-1"
+    assert filled.status == "filled"

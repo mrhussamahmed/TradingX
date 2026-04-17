@@ -15,6 +15,16 @@ class LatestQuote:
 
 
 @dataclass(frozen=True)
+class MarketSnapshot:
+    symbol: str
+    last_trade_price: Decimal
+    bid_price: Decimal
+    ask_price: Decimal
+    average_daily_volume_30d: Decimal
+    timestamp: datetime
+
+
+@dataclass(frozen=True)
 class OrderRecord:
     order_id: str
     client_order_id: str
