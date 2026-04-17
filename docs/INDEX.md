@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: INDEX-0001@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-17-004
+author_session: SESS-2026-04-17-005
 ---
 
 # Artifact index
@@ -99,6 +99,12 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | PLAN-0001 | TradingX Stage 1 paper trading bot implementation plan | 1.0.0 | active | `specs/001-paper-trading-bot/plan.md` |
 
+### Task lists (TASKS-NNNN)
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| TASKS-0001 | TradingX Stage 1 paper trading bot task list | 1.0.0 | active | `specs/001-paper-trading-bot/tasks.md` |
+
 ### Research notes
 
 | id       | title | version | status | path |
@@ -158,7 +164,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 4               | SESS-2026-04-17-004    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 5               | SESS-2026-04-17-005    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 
