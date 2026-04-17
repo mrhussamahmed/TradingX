@@ -7,14 +7,14 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-002
+author_session: SESS-2026-04-17-003
 ---
 
 # Current project state
 
 - Active session: none
-- Active branch: main
-- Active phase: 0
+- Active branch: 001-paper-trading-bot
+- Active phase: 1
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -22,5 +22,7 @@ author_session: SESS-2026-04-17-002
 
 ## Pending items
 
-- Phase 0 is complete.
-- Await operator go-ahead before starting Phase 1 with `/speckit.specify`.
+- Phase 0 is complete and pushed to `origin/main`.
+- `SPEC-0001` exists as a draft at `specs/001-paper-trading-bot/spec.md`.
+- Next artifact step is spec review or promotion, then `/speckit.plan` on
+  `001-paper-trading-bot`.

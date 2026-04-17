@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: INDEX-0001@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-17-002
+author_session: SESS-2026-04-17-003
 ---
 
 # Artifact index
@@ -90,7 +90,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| _(none yet — Phase 1 will add the first spec via `/speckit.specify`)_ |
+| SPEC-0001 | TradingX Stage 1 paper trading bot specification | 1.0.0 | draft | `specs/001-paper-trading-bot/spec.md` |
 
 ### Plans (PLAN-NNNN)
 
@@ -126,7 +126,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 2               | SESS-2026-04-17-002    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 3               | SESS-2026-04-17-003    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 
