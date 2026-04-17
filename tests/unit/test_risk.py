@@ -7,7 +7,12 @@ import pytest
 from alpaca.trading.enums import OrderSide
 
 from tradingx.config import TradingConfig
-from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext, RiskViolation
+from tradingx.risk import (
+    PaperOnlyRiskEngine,
+    PreTradeRiskContext,
+    RiskViolation,
+)
+from tradingx.types import MarketSnapshot, PortfolioState, TradeIntent
 
 
 def make_engine() -> PaperOnlyRiskEngine:
@@ -159,3 +164,75 @@ def test_rejects_orders_when_kill_switch_is_active() -> None:
             make_context(kill_switch_active=True),
             is_live_order=False,
         )
+
+
+def make_trade_intent(**overrides: object) -> TradeIntent:
+    values: dict[str, object] = {
+        "intent_id": "intent-1",
+        "candidate_id": "baseline-long-only-v1",
+        "symbol": "SPY",
+        "side": "buy",
+        "quantity": Decimal("1"),
+        "reason_code": "baseline_long_entry",
+        "generated_at_utc": datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+    }
+    values.update(overrides)
+    return TradeIntent(**values)
+
+
+def make_market_snapshot(**overrides: object) -> MarketSnapshot:
+    values: dict[str, object] = {
+        "symbol": "SPY",
+        "last_trade_price": Decimal("101.00"),
+        "bid_price": Decimal("100.95"),
+        "ask_price": Decimal("101.05"),
+        "average_daily_volume_30d": Decimal("1500000"),
+        "timestamp": datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+    }
+    values.update(overrides)
+    return MarketSnapshot(**values)
+
+
+def make_portfolio_state(**overrides: object) -> PortfolioState:
+    values: dict[str, object] = {
+        "as_of_utc": datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+        "cash": Decimal("10000.00"),
+        "equity": Decimal("10000.00"),
+        "buying_power": Decimal("20000.00"),
+        "positions": (),
+        "open_orders": (),
+    }
+    values.update(overrides)
+    return PortfolioState(**values)
+
+
+def test_evaluate_trade_intent_returns_approved_decision() -> None:
+    engine = make_engine()
+
+    decision = engine.evaluate_trade_intent(
+        make_trade_intent(),
+        make_market_snapshot(),
+        make_portfolio_state(),
+        broker_state_timestamp=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+    )
+
+    assert decision.decision == "approved"
+    assert decision.control_code == "passed"
+    assert decision.event is None
+
+
+def test_evaluate_trade_intent_returns_blocked_event_with_control_code() -> None:
+    engine = make_engine()
+
+    decision = engine.evaluate_trade_intent(
+        make_trade_intent(),
+        make_market_snapshot(average_daily_volume_30d=Decimal("999999")),
+        make_portfolio_state(),
+        broker_state_timestamp=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+    )
+
+    assert decision.decision == "blocked"
+    assert decision.control_code == "liquidity_filter"
+    assert decision.event is not None
+    assert decision.event.blocked is True
+    assert decision.event.control_type == "liquidity_filter"

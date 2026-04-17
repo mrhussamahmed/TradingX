@@ -12,6 +12,9 @@ dependencies = [
   "alpaca-py>=0.43,<0.44",
   "pytz",
   "python-dotenv>=1.2,<1.3",
+  "nautilus-trader>=1.221,<1.222",
+  "prometheus-client>=0.25,<1",
+  "python-telegram-bot>=22.7,<23",
 ]
 
 [dependency-groups]
@@ -24,7 +27,7 @@ dev = [
 ]
 
 [project.scripts]
-tradingx = "tradingx.controller:main"
+tradingx = "tradingx.__main__:main"
 
 [tool.black]
 line-length = 88

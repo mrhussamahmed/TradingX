@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import TypeAlias
+
+ScalarValue: TypeAlias = str | int | float | bool | Decimal
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,99 @@ class AccountSnapshot:
 
 
 @dataclass(frozen=True)
+class PositionSnapshot:
+    symbol: str
+    quantity: Decimal
+    average_entry_price: Decimal
+    market_value: Decimal
+
+
+@dataclass(frozen=True)
+class StrategyCandidate:
+    candidate_id: str
+    family: str
+    benchmark_symbol: str
+    universe: tuple[str, ...]
+    parameter_set: dict[str, ScalarValue]
+    status: str
+    evidence_pack_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationEvidencePack:
+    evidence_pack_id: str
+    candidate_id: str
+    window_start_utc: datetime
+    window_end_utc: datetime
+    benchmark_metrics: dict[str, ScalarValue]
+    candidate_metrics: dict[str, ScalarValue]
+    adversarial_checks: tuple[str, ...]
+    recommendation: str
+    assumptions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TradeIntent:
+    intent_id: str
+    candidate_id: str
+    symbol: str
+    side: str
+    quantity: Decimal | None
+    reason_code: str
+    generated_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class RiskControlEvent:
+    event_id: str
+    intent_id: str | None
+    severity: str
+    control_type: str
+    blocked: bool
+    recorded_at_utc: datetime
+    operator_visible: bool
+
+
+@dataclass(frozen=True)
+class PortfolioState:
+    as_of_utc: datetime
+    cash: Decimal
+    equity: Decimal
+    buying_power: Decimal
+    positions: tuple[PositionSnapshot, ...]
+    open_orders: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReconciliationSnapshot:
+    reconciliation_id: str
+    portfolio_state: PortfolioState
+    broker_state_age_seconds: int
+    differences: tuple[str, ...]
+    resolved: bool
+
+
+@dataclass(frozen=True)
+class OperatorAlert:
+    alert_id: str
+    severity: str
+    category: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+    delivery_targets: tuple[str, ...]
+    sent_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class GateAssessment:
+    gate_id: str
+    status: str
+    evidence_refs: tuple[str, ...]
+    decision_summary: str
+    recorded_at_utc: datetime
+
+
+@dataclass(frozen=True)
 class RoundTripResult:
     symbol: str
     quantity: Decimal
@@ -54,3 +150,34 @@ class RoundTripResult:
     final_position_quantity: Decimal
     cash_delta: Decimal
     log_path: Path
+
+
+@dataclass(frozen=True)
+class TradingLoopResult:
+    terminal_state: str
+    trade_intent: TradeIntent
+    order_record: OrderRecord | None
+    risk_event: RiskControlEvent | None
+    reconciliation: ReconciliationSnapshot
+    artifact_paths: tuple[Path, ...]
+    recovered: bool = False
+
+
+__all__ = (
+    "AccountSnapshot",
+    "EvaluationEvidencePack",
+    "GateAssessment",
+    "LatestQuote",
+    "MarketSnapshot",
+    "OperatorAlert",
+    "OrderRecord",
+    "PortfolioState",
+    "PositionSnapshot",
+    "ReconciliationSnapshot",
+    "RiskControlEvent",
+    "RoundTripResult",
+    "ScalarValue",
+    "StrategyCandidate",
+    "TradeIntent",
+    "TradingLoopResult",
+)

@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: INDEX-0001@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-17-005
+author_session: SESS-2026-04-17-006
 ---
 
 # Artifact index
@@ -164,7 +164,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 5               | SESS-2026-04-17-005    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 6               | SESS-2026-04-17-006    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

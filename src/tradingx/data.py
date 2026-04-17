@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
@@ -11,12 +13,30 @@ from alpaca.data.requests import (
     StockSnapshotRequest,
 )
 from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetCalendarRequest
 
 from tradingx.types import LatestQuote, MarketSnapshot
 
 
 def _to_decimal(value: object) -> Decimal:
     return Decimal(str(value))
+
+
+def close_to_close_returns(closes: Sequence[Decimal]) -> tuple[Decimal, ...]:
+    if len(closes) < 2:
+        return ()
+    returns: list[Decimal] = []
+    for previous_close, current_close in zip(
+        closes[:-1],
+        closes[1:],
+        strict=False,
+    ):
+        if previous_close == Decimal("0"):
+            returns.append(Decimal("0"))
+            continue
+        returns.append((current_close - previous_close) / previous_close)
+    return tuple(returns)
 
 
 class AlpacaMarketDataGateway:
@@ -113,3 +133,34 @@ class AlpacaMarketDataGateway:
             average_daily_volume_30d=average_daily_volume,
             timestamp=max(trade_timestamp, quote_timestamp),
         )
+
+
+class AlpacaRegularHoursCalendar:
+    def __init__(self, trading_client: TradingClient) -> None:
+        self._trading_client = trading_client
+
+    def is_open(self, observed_at_utc: datetime) -> bool:
+        calendars = self._trading_client.get_calendar(
+            GetCalendarRequest(
+                start=observed_at_utc.date(),
+                end=observed_at_utc.date(),
+            )
+        )
+        if isinstance(calendars, dict):
+            return False
+        if not calendars:
+            return False
+        calendar_entry = calendars[0]
+        eastern = ZoneInfo("America/New_York")
+        session_open = calendar_entry.open
+        session_close = calendar_entry.close
+        if session_open.tzinfo is None:
+            session_open = session_open.replace(tzinfo=eastern)
+        else:
+            session_open = session_open.astimezone(eastern)
+        if session_close.tzinfo is None:
+            session_close = session_close.replace(tzinfo=eastern)
+        else:
+            session_close = session_close.astimezone(eastern)
+        observed_at_eastern = observed_at_utc.astimezone(eastern)
+        return session_open <= observed_at_eastern <= session_close

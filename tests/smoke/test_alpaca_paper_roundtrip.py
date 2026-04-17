@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,3 +29,6 @@ def test_alpaca_paper_roundtrip() -> None:
     assert result.sell_order.status == "filled"
     assert result.final_position_quantity == Decimal("0")
     assert result.log_path.exists()
+    payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+    assert payload["symbol"] == "SPY"
+    assert payload["buy_order"]["status"] == "filled"

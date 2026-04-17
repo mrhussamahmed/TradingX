@@ -80,13 +80,15 @@ class AlpacaPaperExecutionGateway:
         symbol: str,
         quantity: Decimal,
         side: OrderSide,
+        *,
+        client_order_id: str | None = None,
     ) -> OrderRecord:
         order_request = MarketOrderRequest(
             symbol=symbol,
             qty=float(quantity),
             side=side,
             time_in_force=TimeInForce.DAY,
-            client_order_id=f"tradingx-{uuid.uuid4()}",
+            client_order_id=client_order_id or f"tradingx-{uuid.uuid4()}",
         )
         try:
             raw_order = self._trading_client.submit_order(order_request)
@@ -98,6 +100,13 @@ class AlpacaPaperExecutionGateway:
                 f"Order {order.order_id} ended with status {order.status}."
             )
         return order
+
+    def get_order_by_client_id(self, client_order_id: str) -> OrderRecord:
+        try:
+            raw_order = self._trading_client.get_order_by_client_id(client_order_id)
+        except Exception as error:
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        return _to_order_record(raw_order)
 
     def submit_oco_exit_order(
         self,

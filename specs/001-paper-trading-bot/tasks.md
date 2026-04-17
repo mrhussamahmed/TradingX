@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-005
+author_session: SESS-2026-04-17-006
 ---
 
 # Tasks: TradingX Stage 1 paper trading bot
@@ -36,9 +36,9 @@ place.
 **Purpose**: Add the missing Stage 1 dependencies and module entry
 points before deeper implementation work starts.
 
-- [ ] T001 Update Stage 1 dependencies in `pyproject.toml` and `uv.lock`
-- [ ] T002 [P] Create Stage 1 module shells in `src/tradingx/strategy.py`, `src/tradingx/evaluation.py`, `src/tradingx/alerts.py`, `src/tradingx/monitoring.py`, and `src/tradingx/persistence.py`
-- [ ] T003 [P] Create matching unit-test shells in `tests/unit/test_strategy.py`, `tests/unit/test_evaluation.py`, `tests/unit/test_alerts.py`, `tests/unit/test_monitoring.py`, and `tests/unit/test_persistence.py`
+- [x] T001 Update Stage 1 dependencies in `pyproject.toml` and `uv.lock`
+- [x] T002 [P] Create Stage 1 module shells in `src/tradingx/strategy.py`, `src/tradingx/evaluation.py`, `src/tradingx/alerts.py`, `src/tradingx/monitoring.py`, and `src/tradingx/persistence.py`
+- [x] T003 [P] Create matching unit-test shells in `tests/unit/test_strategy.py`, `tests/unit/test_evaluation.py`, `tests/unit/test_alerts.py`, `tests/unit/test_monitoring.py`, and `tests/unit/test_persistence.py`
 
 ---
 
@@ -50,15 +50,15 @@ that every user story depends on.
 **⚠️ CRITICAL**: No user story work should begin until this phase is
 complete.
 
-- [ ] T004 [P] Add failing tests for shared Stage 1 domain records in `tests/unit/test_types.py`
-- [ ] T005 Extend shared Stage 1 records in `src/tradingx/types.py`
-- [ ] T006 [P] Add failing tests for filesystem evidence repositories in `tests/unit/test_persistence.py`
-- [ ] T007 Implement filesystem evidence repositories in `src/tradingx/persistence.py`
-- [ ] T008 [P] Add failing tests for metrics and event recording in `tests/unit/test_monitoring.py`
-- [ ] T009 Implement metrics and event recording in `src/tradingx/monitoring.py`
-- [ ] T010 [P] Extend failing runtime-configuration tests in `tests/unit/test_config.py`
-- [ ] T011 Extend paper-loop and evidence configuration in `src/tradingx/config.py`
-- [ ] T012 Implement Stage 1 CLI entrypoints in `src/tradingx/__main__.py`
+- [x] T004 [P] Add failing tests for shared Stage 1 domain records in `tests/unit/test_types.py`
+- [x] T005 Extend shared Stage 1 records in `src/tradingx/types.py`
+- [x] T006 [P] Add failing tests for filesystem evidence repositories in `tests/unit/test_persistence.py`
+- [x] T007 Implement filesystem evidence repositories in `src/tradingx/persistence.py`
+- [x] T008 [P] Add failing tests for metrics and event recording in `tests/unit/test_monitoring.py`
+- [x] T009 Implement metrics and event recording in `src/tradingx/monitoring.py`
+- [x] T010 [P] Extend failing runtime-configuration tests in `tests/unit/test_config.py`
+- [x] T011 Extend paper-loop and evidence configuration in `src/tradingx/config.py`
+- [x] T012 Implement Stage 1 CLI entrypoints in `src/tradingx/__main__.py`
 
 **Checkpoint**: Shared foundations are ready; user stories can now be
 implemented independently.
@@ -77,18 +77,18 @@ unsafe situations are blocked and recorded.
 
 ### Tests for User Story 1
 
-- [ ] T013 [P] [US1] Add failing unit tests for trade-intent generation and risk event decisions in `tests/unit/test_strategy.py` and `tests/unit/test_risk.py`
-- [ ] T014 [P] [US1] Add a failing trading-loop contract test in `tests/contract/test_trading_loop_contract.py`
-- [ ] T015 [P] [US1] Add a failing paper-loop integration test in `tests/integration/test_paper_trading_loop.py`
-- [ ] T016 [P] [US1] Add a failing recovery and idempotency integration test in `tests/integration/test_recovery_reconciliation.py`
+- [x] T013 [P] [US1] Add failing unit tests for trade-intent generation and risk event decisions in `tests/unit/test_strategy.py` and `tests/unit/test_risk.py`
+- [x] T014 [P] [US1] Add a failing trading-loop contract test in `tests/contract/test_trading_loop_contract.py`
+- [x] T015 [P] [US1] Add a failing paper-loop integration test in `tests/integration/test_paper_trading_loop.py`
+- [x] T016 [P] [US1] Add a failing recovery and idempotency integration test in `tests/integration/test_recovery_reconciliation.py`
 
 ### Implementation for User Story 1
 
-- [ ] T017 [P] [US1] Implement deterministic baseline signal generation in `src/tradingx/strategy.py`
-- [ ] T018 [US1] Extend market and account snapshots in `src/tradingx/data.py` and `src/tradingx/portfolio.py`
-- [ ] T019 [US1] Refactor hard pre-trade checks to emit auditable risk decisions in `src/tradingx/risk.py`
-- [ ] T020 [US1] Attach trade-intent, order-record, and reconciliation persistence to the paper loop in `src/tradingx/execution.py` and `src/tradingx/controller.py`
-- [ ] T021 [US1] Wire the regular-hours paper loop and restart reconciliation flow in `src/tradingx/__main__.py` and `src/tradingx/controller.py`
+- [x] T017 [P] [US1] Implement deterministic baseline signal generation in `src/tradingx/strategy.py`
+- [x] T018 [US1] Extend market and account snapshots in `src/tradingx/data.py` and `src/tradingx/portfolio.py`
+- [x] T019 [US1] Refactor hard pre-trade checks to emit auditable risk decisions in `src/tradingx/risk.py`
+- [x] T020 [US1] Attach trade-intent, order-record, and reconciliation persistence to the paper loop in `src/tradingx/execution.py` and `src/tradingx/controller.py`
+- [x] T021 [US1] Wire the regular-hours paper loop and restart reconciliation flow in `src/tradingx/__main__.py` and `src/tradingx/controller.py`
 
 **Checkpoint**: User Story 1 is independently functional as the MVP
 paper bot.
@@ -107,16 +107,16 @@ pack with a keep/reject/research-further recommendation.
 
 ### Tests for User Story 2
 
-- [ ] T022 [P] [US2] Add failing unit tests for candidate definitions and evaluation metrics in `tests/unit/test_strategy.py` and `tests/unit/test_evaluation.py`
-- [ ] T023 [P] [US2] Add a failing evaluation contract test in `tests/contract/test_strategy_evaluation_contract.py`
-- [ ] T024 [P] [US2] Add a failing evaluation-pipeline integration test in `tests/integration/test_strategy_evaluation_pipeline.py`
+- [x] T022 [P] [US2] Add failing unit tests for candidate definitions and evaluation metrics in `tests/unit/test_strategy.py` and `tests/unit/test_evaluation.py`
+- [x] T023 [P] [US2] Add a failing evaluation contract test in `tests/contract/test_strategy_evaluation_contract.py`
+- [x] T024 [P] [US2] Add a failing evaluation-pipeline integration test in `tests/integration/test_strategy_evaluation_pipeline.py`
 
 ### Implementation for User Story 2
 
-- [ ] T025 [US2] Implement the mandatory candidate registry and deterministic strategy builders in `src/tradingx/strategy.py`
-- [ ] T026 [US2] Implement benchmark-relative metrics and adversarial checks in `src/tradingx/evaluation.py`
-- [ ] T027 [US2] Add the Nautilus Trader evaluation adapter and replay entrypoints in `src/tradingx/evaluation.py` and `src/tradingx/data.py`
-- [ ] T028 [US2] Persist evaluation evidence packs and recommendations in `src/tradingx/persistence.py` and `src/tradingx/controller.py`
+- [x] T025 [US2] Implement the mandatory candidate registry and deterministic strategy builders in `src/tradingx/strategy.py`
+- [x] T026 [US2] Implement benchmark-relative metrics and adversarial checks in `src/tradingx/evaluation.py`
+- [x] T027 [US2] Add the Nautilus Trader evaluation adapter and replay entrypoints in `src/tradingx/evaluation.py` and `src/tradingx/data.py`
+- [x] T028 [US2] Persist evaluation evidence packs and recommendations in `src/tradingx/persistence.py` and `src/tradingx/controller.py`
 
 **Checkpoint**: User Story 2 produces evidence-backed candidate outputs
 without depending on User Story 3.
@@ -135,16 +135,16 @@ without enabling live trading.
 
 ### Tests for User Story 3
 
-- [ ] T029 [P] [US3] Add failing unit tests for alert payloads and metrics fan-out in `tests/unit/test_alerts.py` and `tests/unit/test_monitoring.py`
-- [ ] T030 [P] [US3] Add a failing operator-evidence contract test in `tests/contract/test_operator_evidence_contract.py`
-- [ ] T031 [P] [US3] Add a failing operator-alert integration test in `tests/integration/test_operator_alerts.py`
+- [x] T029 [P] [US3] Add failing unit tests for alert payloads and metrics fan-out in `tests/unit/test_alerts.py` and `tests/unit/test_monitoring.py`
+- [x] T030 [P] [US3] Add a failing operator-evidence contract test in `tests/contract/test_operator_evidence_contract.py`
+- [x] T031 [P] [US3] Add a failing operator-alert integration test in `tests/integration/test_operator_alerts.py`
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Implement operator alert payload builders and transport adapters in `src/tradingx/alerts.py`
-- [ ] T033 [US3] Extend evidence and freshness metrics in `src/tradingx/monitoring.py` and `src/tradingx/controller.py`
-- [ ] T034 [US3] Implement manual-halt visibility and live-disable reporting in `src/tradingx/config.py`, `src/tradingx/risk.py`, and `src/tradingx/alerts.py`
-- [ ] T035 [US3] Add operator-facing evidence and report commands in `src/tradingx/__main__.py` and `src/tradingx/persistence.py`
+- [x] T032 [US3] Implement operator alert payload builders and transport adapters in `src/tradingx/alerts.py`
+- [x] T033 [US3] Extend evidence and freshness metrics in `src/tradingx/monitoring.py` and `src/tradingx/controller.py`
+- [x] T034 [US3] Implement manual-halt visibility and live-disable reporting in `src/tradingx/config.py`, `src/tradingx/risk.py`, and `src/tradingx/alerts.py`
+- [x] T035 [US3] Add operator-facing evidence and report commands in `src/tradingx/__main__.py` and `src/tradingx/persistence.py`
 
 **Checkpoint**: User Story 3 provides bounded operator oversight without
 changing the behavior of the other stories.
@@ -156,9 +156,9 @@ changing the behavior of the other stories.
 **Purpose**: Finalize validation coverage and refresh the operator-facing
 runbooks after the three user stories land.
 
-- [ ] T036 [P] Update end-to-end validation coverage in `scripts/validate` and `tests/smoke/test_alpaca_paper_roundtrip.py`
-- [ ] T037 [P] Refresh operator and developer runbooks in `README.md` and `specs/001-paper-trading-bot/quickstart.md`
-- [ ] T038 Run the quickstart flow documented in `specs/001-paper-trading-bot/quickstart.md` and capture any required follow-up edits in that file
+- [x] T036 [P] Update end-to-end validation coverage in `scripts/validate` and `tests/smoke/test_alpaca_paper_roundtrip.py`
+- [x] T037 [P] Refresh operator and developer runbooks in `README.md` and `specs/001-paper-trading-bot/quickstart.md`
+- [x] T038 Run the quickstart flow documented in `specs/001-paper-trading-bot/quickstart.md` and capture any required follow-up edits in that file
 
 ---
 

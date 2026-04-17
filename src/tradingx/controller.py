@@ -11,12 +11,32 @@ from typing import Any
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide
 
+from tradingx.alerts import (
+    OperatorAlertDispatcher,
+    build_evaluation_summary_alert,
+    build_risk_control_alert,
+)
 from tradingx.config import TradingConfig
-from tradingx.data import AlpacaMarketDataGateway
+from tradingx.data import AlpacaMarketDataGateway, AlpacaRegularHoursCalendar
 from tradingx.execution import AlpacaPaperExecutionGateway
+from tradingx.monitoring import StageMetrics
+from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
-from tradingx.types import LatestQuote, RoundTripResult
+from tradingx.strategy import (
+    DeterministicBaselineStrategy,
+    build_mandatory_candidate_registry,
+)
+from tradingx.types import (
+    EvaluationEvidencePack,
+    LatestQuote,
+    PortfolioState,
+    ReconciliationSnapshot,
+    RiskControlEvent,
+    RoundTripResult,
+    TradeIntent,
+    TradingLoopResult,
+)
 
 
 def _serialize(value: Any) -> Any:
@@ -183,6 +203,374 @@ class RoundTripController:
             time.sleep(poll_interval_seconds)
 
 
+class PaperTradingLoopController:
+    def __init__(
+        self,
+        *,
+        market_data: Any,
+        execution: Any,
+        portfolio: Any,
+        risk: PaperOnlyRiskEngine,
+        strategy: DeterministicBaselineStrategy,
+        artifacts: FilesystemArtifactStore,
+        metrics: StageMetrics,
+        alert_dispatcher: OperatorAlertDispatcher | None = None,
+        regular_hours_checker: Any,
+        now_provider: Any | None = None,
+        command_timeout_seconds: float = 30,
+    ) -> None:
+        self._market_data = market_data
+        self._execution = execution
+        self._portfolio = portfolio
+        self._risk = risk
+        self._strategy = strategy
+        self._artifacts = artifacts
+        self._metrics = metrics
+        self._alert_dispatcher = alert_dispatcher
+        self._regular_hours_checker = regular_hours_checker
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
+        self._command_timeout_seconds = command_timeout_seconds
+
+    def run_trading_cycle(
+        self,
+        symbol: str,
+        quantity: Decimal,
+    ) -> TradingLoopResult:
+        portfolio_state = self._portfolio.get_portfolio_state()
+        market_snapshot = self._market_data.get_market_snapshot(symbol)
+        trade_intent = self._strategy.generate_trade_intent(
+            market_snapshot=market_snapshot,
+            portfolio_state=portfolio_state,
+            quantity=quantity,
+        )
+        trade_path = self._artifacts.write_trade_intent(trade_intent)
+        self._metrics.record_evidence_artifact("trade_intent")
+        self._metrics.record_live_disable_state(True)
+        self._metrics.record_manual_halt_state(
+            self._risk._config.runtime.manual_kill_switch_active
+        )
+
+        if trade_intent.side not in {"buy", "sell", "reduce"}:
+            reconciliation = self._build_reconciliation(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                differences=(trade_intent.reason_code,),
+            )
+            reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+                reconciliation
+            )
+            self._metrics.record_evidence_artifact("reconciliation")
+            self._metrics.record_trade_terminal_state("no_action")
+            return TradingLoopResult(
+                terminal_state="no_action",
+                trade_intent=trade_intent,
+                order_record=None,
+                risk_event=None,
+                reconciliation=reconciliation,
+                artifact_paths=(trade_path, reconciliation_path),
+            )
+
+        if not self._regular_hours_checker(self._now_provider()):
+            risk_event = self._build_manual_risk_event(
+                trade_intent,
+                control_code="outside_regular_hours",
+            )
+            risk_path = self._artifacts.write_risk_control_event(risk_event)
+            self._metrics.record_evidence_artifact("risk_event")
+            reconciliation = self._build_reconciliation(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                differences=(risk_event.control_type,),
+            )
+            reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+                reconciliation
+            )
+            self._metrics.record_evidence_artifact("reconciliation")
+            self._metrics.record_trade_terminal_state("blocked_trade")
+            self._metrics.record_reconciliation_age_seconds(
+                reconciliation.broker_state_age_seconds
+            )
+            alert_path = self._dispatch_risk_alert(
+                risk_event,
+                evidence_refs=(str(risk_path), str(reconciliation_path)),
+            )
+            return TradingLoopResult(
+                terminal_state="blocked_trade",
+                trade_intent=trade_intent,
+                order_record=None,
+                risk_event=risk_event,
+                reconciliation=reconciliation,
+                artifact_paths=tuple(
+                    path
+                    for path in (trade_path, risk_path, reconciliation_path, alert_path)
+                    if path is not None
+                ),
+            )
+
+        risk_decision = self._risk.evaluate_trade_intent(
+            trade_intent,
+            market_snapshot,
+            portfolio_state,
+            broker_state_timestamp=portfolio_state.as_of_utc,
+        )
+        if risk_decision.event is not None:
+            risk_path = self._artifacts.write_risk_control_event(risk_decision.event)
+            self._metrics.record_evidence_artifact("risk_event")
+            reconciliation = self._build_reconciliation(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                differences=(risk_decision.control_code,),
+            )
+            reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+                reconciliation
+            )
+            self._metrics.record_evidence_artifact("reconciliation")
+            self._metrics.record_trade_terminal_state("blocked_trade")
+            self._metrics.record_reconciliation_age_seconds(
+                reconciliation.broker_state_age_seconds
+            )
+            alert_path = self._dispatch_risk_alert(
+                risk_decision.event,
+                evidence_refs=(str(risk_path), str(reconciliation_path)),
+            )
+            return TradingLoopResult(
+                terminal_state="blocked_trade",
+                trade_intent=trade_intent,
+                order_record=None,
+                risk_event=risk_decision.event,
+                reconciliation=reconciliation,
+                artifact_paths=tuple(
+                    path
+                    for path in (trade_path, risk_path, reconciliation_path, alert_path)
+                    if path is not None
+                ),
+            )
+
+        existing_order = self._artifacts.read_order_record(trade_intent.intent_id)
+        recovered = existing_order is not None
+        if existing_order is None:
+            existing_order = self._execution.submit_market_order(
+                trade_intent.symbol,
+                quantity,
+                OrderSide.BUY if trade_intent.side == "buy" else OrderSide.SELL,
+                client_order_id=trade_intent.intent_id,
+            )
+            order_path = self._artifacts.write_order_record(
+                trade_intent.intent_id,
+                existing_order,
+            )
+            self._metrics.record_evidence_artifact("order")
+        else:
+            order_path = self._artifacts.order_record_path(trade_intent.intent_id)
+
+        order_record = self._execution.wait_for_fill(
+            existing_order.order_id,
+            timeout_seconds=self._command_timeout_seconds,
+            poll_interval_seconds=0,
+        )
+        order_record = self._merge_order_records(existing_order, order_record)
+        self._artifacts.write_order_record(trade_intent.intent_id, order_record)
+        final_portfolio_state = self._portfolio.get_portfolio_state()
+        reconciliation = self._build_reconciliation(
+            trade_intent=trade_intent,
+            portfolio_state=final_portfolio_state,
+            differences=(),
+        )
+        reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+            reconciliation
+        )
+        self._metrics.record_evidence_artifact("reconciliation")
+        self._metrics.record_trade_terminal_state("reconciled_trade")
+        self._metrics.record_reconciliation_age_seconds(
+            reconciliation.broker_state_age_seconds
+        )
+        return TradingLoopResult(
+            terminal_state="reconciled_trade",
+            trade_intent=trade_intent,
+            order_record=order_record,
+            risk_event=None,
+            reconciliation=reconciliation,
+            artifact_paths=(trade_path, order_path, reconciliation_path),
+            recovered=recovered,
+        )
+
+    def recover_trading_cycle(self, symbol: str) -> TradingLoopResult | None:
+        trade_intent = self._artifacts.find_latest_trade_intent(symbol)
+        if trade_intent is None:
+            return None
+        order_record = self._artifacts.read_order_record(trade_intent.intent_id)
+        reconciliation_id = self._reconciliation_id(trade_intent.intent_id)
+        existing_reconciliation = self._artifacts.read_reconciliation_snapshot(
+            reconciliation_id
+        )
+        trade_path = self._artifacts.trade_intent_path(trade_intent.intent_id)
+        artifact_paths = [trade_path]
+        if order_record is not None:
+            artifact_paths.append(
+                self._artifacts.order_record_path(trade_intent.intent_id)
+            )
+        if existing_reconciliation is not None and existing_reconciliation.resolved:
+            artifact_paths.append(
+                self._artifacts.reconciliation_path(reconciliation_id)
+            )
+            return TradingLoopResult(
+                terminal_state=(
+                    "reconciled_trade" if order_record is not None else "blocked_trade"
+                ),
+                trade_intent=trade_intent,
+                order_record=order_record,
+                risk_event=None,
+                reconciliation=existing_reconciliation,
+                artifact_paths=tuple(artifact_paths),
+                recovered=True,
+            )
+        if order_record is None:
+            return None
+
+        filled_order = self._execution.wait_for_fill(
+            order_record.order_id,
+            timeout_seconds=self._command_timeout_seconds,
+            poll_interval_seconds=0,
+        )
+        filled_order = self._merge_order_records(order_record, filled_order)
+        self._artifacts.write_order_record(trade_intent.intent_id, filled_order)
+        final_portfolio_state = self._portfolio.get_portfolio_state()
+        reconciliation = self._build_reconciliation(
+            trade_intent=trade_intent,
+            portfolio_state=final_portfolio_state,
+            differences=(),
+        )
+        reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+            reconciliation
+        )
+        self._metrics.record_evidence_artifact("reconciliation")
+        self._metrics.record_trade_terminal_state("reconciled_trade")
+        self._metrics.record_reconciliation_age_seconds(
+            reconciliation.broker_state_age_seconds
+        )
+        return TradingLoopResult(
+            terminal_state="reconciled_trade",
+            trade_intent=trade_intent,
+            order_record=filled_order,
+            risk_event=None,
+            reconciliation=reconciliation,
+            artifact_paths=tuple(artifact_paths + [reconciliation_path]),
+            recovered=True,
+        )
+
+    def _build_manual_risk_event(
+        self,
+        trade_intent: TradeIntent,
+        *,
+        control_code: str,
+    ) -> RiskControlEvent:
+        return RiskControlEvent(
+            event_id=f"risk-{trade_intent.intent_id}",
+            intent_id=trade_intent.intent_id,
+            severity="warning",
+            control_type=control_code,
+            blocked=True,
+            recorded_at_utc=self._now_provider(),
+            operator_visible=True,
+        )
+
+    def _build_reconciliation(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        portfolio_state: PortfolioState,
+        differences: tuple[str, ...],
+    ) -> ReconciliationSnapshot:
+        return ReconciliationSnapshot(
+            reconciliation_id=self._reconciliation_id(trade_intent.intent_id),
+            portfolio_state=portfolio_state,
+            broker_state_age_seconds=max(
+                0,
+                int((self._now_provider() - portfolio_state.as_of_utc).total_seconds()),
+            ),
+            differences=differences,
+            resolved=True,
+        )
+
+    def _reconciliation_id(self, intent_id: str) -> str:
+        return f"reconcile-{intent_id}"
+
+    def _merge_order_records(self, accepted_order: Any, filled_order: Any) -> Any:
+        return type(filled_order)(
+            order_id=filled_order.order_id,
+            client_order_id=accepted_order.client_order_id,
+            symbol=filled_order.symbol,
+            side=filled_order.side,
+            status=filled_order.status,
+            filled_qty=filled_order.filled_qty,
+            filled_avg_price=filled_order.filled_avg_price,
+        )
+
+    def _dispatch_risk_alert(
+        self,
+        risk_event: RiskControlEvent,
+        *,
+        evidence_refs: tuple[str, ...],
+    ) -> Path | None:
+        if self._alert_dispatcher is None:
+            return None
+        alert = self._alert_dispatcher.dispatch(
+            build_risk_control_alert(
+                risk_event,
+                evidence_refs=evidence_refs,
+            )
+        )
+        self._metrics.record_operator_alert(alert.severity)
+        self._metrics.record_evidence_artifact("operator_alert")
+        return self._artifacts.write_operator_alert(alert)
+
+
+class StrategyEvaluationController:
+    def __init__(
+        self,
+        *,
+        adapter: Any,
+        artifacts: FilesystemArtifactStore,
+        alert_dispatcher: OperatorAlertDispatcher | None = None,
+        metrics: StageMetrics | None = None,
+    ) -> None:
+        self._adapter = adapter
+        self._artifacts = artifacts
+        self._alert_dispatcher = alert_dispatcher
+        self._metrics = metrics or StageMetrics()
+
+    def evaluate_mandatory_candidates(
+        self,
+        *,
+        benchmark_closes: tuple[Decimal, ...],
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        universe: tuple[str, ...],
+    ) -> tuple[EvaluationEvidencePack, ...]:
+        evidence_packs: list[EvaluationEvidencePack] = []
+        for candidate in build_mandatory_candidate_registry(universe):
+            evidence_pack = self._adapter.evaluate_price_history(
+                candidate,
+                benchmark_closes=benchmark_closes,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+            )
+            evidence_path = self._artifacts.write_evaluation_evidence(evidence_pack)
+            self._metrics.record_evidence_artifact("evaluation_evidence")
+            if self._alert_dispatcher is not None:
+                alert = self._alert_dispatcher.dispatch(
+                    build_evaluation_summary_alert(
+                        evidence_pack,
+                        evidence_refs=(str(evidence_path),),
+                    )
+                )
+                self._artifacts.write_operator_alert(alert)
+                self._metrics.record_operator_alert(alert.severity)
+                self._metrics.record_evidence_artifact("operator_alert")
+            evidence_packs.append(evidence_pack)
+        return tuple(evidence_packs)
+
+
 def build_default_controller(config: TradingConfig) -> RoundTripController:
     trading_client = TradingClient(
         config.paper_credentials.api_key,
@@ -197,6 +585,30 @@ def build_default_controller(config: TradingConfig) -> RoundTripController:
         execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),
+    )
+
+
+def build_default_paper_trading_controller(
+    config: TradingConfig,
+) -> PaperTradingLoopController:
+    trading_client = TradingClient(
+        config.paper_credentials.api_key,
+        config.paper_credentials.api_secret,
+        paper=True,
+    )
+    return PaperTradingLoopController(
+        market_data=AlpacaMarketDataGateway.from_credentials(
+            api_key=config.paper_credentials.api_key,
+            api_secret=config.paper_credentials.api_secret,
+        ),
+        execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
+        portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
+        risk=PaperOnlyRiskEngine(config),
+        strategy=DeterministicBaselineStrategy(),
+        artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
+        metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
+        regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
+        command_timeout_seconds=config.runtime.command_timeout_seconds,
     )
 
 

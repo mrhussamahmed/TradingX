@@ -16,6 +16,7 @@ uv run mypy --strict src
 echo "==> pytest (unit + integration + coverage)"
 uv run pytest \
   tests/unit \
+  tests/contract \
   tests/integration \
   --cov=tradingx \
   --cov-report=term-missing \
