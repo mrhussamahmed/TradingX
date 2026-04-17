@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from tradingx.data import AlpacaMarketDataGateway
+from tradingx.data import AlpacaMarketDataGateway, AlpacaRegularHoursCalendar
 
 
 class FakeQuote:
@@ -49,6 +49,21 @@ class FakeDataClient:
         return {"SPY": [FakeBar() for _ in range(30)]}
 
 
+class FakeCalendarEntry:
+    def __init__(self, open_at: datetime, close_at: datetime) -> None:
+        self.date = date(2026, 4, 17)
+        self.open = open_at
+        self.close = close_at
+
+
+class FakeCalendarClient:
+    def __init__(self, calendars) -> None:
+        self._calendars = calendars
+
+    def get_calendar(self, filters):
+        return self._calendars
+
+
 def test_latest_quote_uses_symbol_key_and_decimal_prices() -> None:
     client = FakeDataClient()
     gateway = AlpacaMarketDataGateway(client=client)
@@ -73,3 +88,33 @@ def test_market_snapshot_includes_last_trade_and_trailing_adv() -> None:
     assert snapshot.ask_price == Decimal("600.1")
     assert snapshot.average_daily_volume_30d == Decimal("1500000")
     assert snapshot.timestamp == datetime(2026, 4, 17, 17, 0, 1, tzinfo=UTC)
+
+
+def test_regular_hours_calendar_reports_open_session() -> None:
+    calendar = AlpacaRegularHoursCalendar(
+        FakeCalendarClient(
+            [
+                FakeCalendarEntry(
+                    open_at=datetime(2026, 4, 17, 9, 30),
+                    close_at=datetime(2026, 4, 17, 16, 0),
+                )
+            ]
+        )
+    )
+
+    assert calendar.is_open(datetime(2026, 4, 17, 15, 0, tzinfo=UTC)) is True
+
+
+def test_regular_hours_calendar_reports_closed_session() -> None:
+    calendar = AlpacaRegularHoursCalendar(
+        FakeCalendarClient(
+            [
+                FakeCalendarEntry(
+                    open_at=datetime(2026, 4, 17, 9, 30),
+                    close_at=datetime(2026, 4, 17, 16, 0),
+                )
+            ]
+        )
+    )
+
+    assert calendar.is_open(datetime(2026, 4, 17, 20, 30, tzinfo=UTC)) is False

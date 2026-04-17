@@ -61,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_disable_parser.add_argument("--env-file", default=".env")
 
     evidence_parser = subparsers.add_parser("evidence-report")
-    evidence_parser.add_argument("--artifact-root", default="artifacts")
+    evidence_parser.add_argument("--artifact-root", default="artifacts/paper_loop")
     return parser
 
 

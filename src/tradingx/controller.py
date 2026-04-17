@@ -512,14 +512,12 @@ class PaperTradingLoopController:
         *,
         evidence_refs: tuple[str, ...],
     ) -> Path | None:
-        if self._alert_dispatcher is None:
-            return None
-        alert = self._alert_dispatcher.dispatch(
-            build_risk_control_alert(
-                risk_event,
-                evidence_refs=evidence_refs,
-            )
+        alert = build_risk_control_alert(
+            risk_event,
+            evidence_refs=evidence_refs,
         )
+        if self._alert_dispatcher is not None:
+            alert = self._alert_dispatcher.dispatch(alert)
         self._metrics.record_operator_alert(alert.severity)
         self._metrics.record_evidence_artifact("operator_alert")
         return self._artifacts.write_operator_alert(alert)

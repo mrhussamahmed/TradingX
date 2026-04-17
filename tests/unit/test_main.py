@@ -221,3 +221,11 @@ def test_main_prints_operator_evidence_report(tmp_path, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["counts"]["trade_intents"] == 1
+
+
+def test_evidence_report_defaults_to_paper_loop_root() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["evidence-report"])
+
+    assert args.artifact_root == "artifacts/paper_loop"

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from alpaca.trading.client import TradingClient
 
 from tradingx.config import TradingConfig
 from tradingx.controller import build_default_controller
+from tradingx.data import AlpacaRegularHoursCalendar
 
 
 @pytest.mark.smoke
@@ -16,6 +19,17 @@ def test_alpaca_paper_roundtrip() -> None:
     if not config.has_real_paper_credentials():
         pytest.skip(
             "Skipping smoke test: .env does not contain real Alpaca paper credentials."
+        )
+    calendar = AlpacaRegularHoursCalendar(
+        TradingClient(
+            config.paper_credentials.api_key,
+            config.paper_credentials.api_secret,
+            paper=True,
+        )
+    )
+    if not calendar.is_open(datetime.now(UTC)):
+        pytest.skip(
+            "Skipping smoke test: regular US market hours are currently closed."
         )
 
     controller = build_default_controller(config)

@@ -53,7 +53,7 @@ paper credentials are present.
 ## 5. Review local evidence artifacts
 
 ```bash
-uv run tradingx evidence-report --artifact-root artifacts
+uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 ```
 
 Expected behavior:
