@@ -1,0 +1,2 @@
+# TradingX
+trading  bot
