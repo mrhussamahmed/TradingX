@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-009
+author_session: SESS-2026-04-17-010
 ---
 
 # Current project state
@@ -30,6 +30,7 @@ author_session: SESS-2026-04-17-009
 - `GATES-0001` defines the Stage 1 gate evidence baseline.
 - `TASKS-0001` implementation is complete and merged into `main`.
 - `codex/paper-service-upgrades` has been merged into `main`.
+- `codex/gate-validation-reporting` has been merged into `main`.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -39,10 +40,14 @@ author_session: SESS-2026-04-17-009
     stop-loss thresholds
   - an offline mandatory-candidate evaluation pipeline with persisted
     evidence packs
+  - Gate 1 and Gate 2 validation-report generation from benchmark close
+    series, including persisted validation reports and gate assessments
   - richer operator alerts, including optional Telegram and SMTP
     delivery and evidence-report summaries for paper-service runs
 - Validation is green on `main`; `./scripts/validate` passed with the
   expected closed-market smoke skip.
 - Next artifact step is to run the paper service during regular US
-  market hours, verify real Telegram/SMTP delivery if desired, and begin
-  collecting the longer-lived evidence required for Gates 1 through 3.
+  market hours, verify real Telegram/SMTP delivery if desired, generate
+  real Gate 1 and Gate 2 reports from a dividend-adjusted benchmark
+  series, and begin collecting the longer-lived evidence required for
+  Gate 3.
