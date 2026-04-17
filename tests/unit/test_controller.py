@@ -87,6 +87,19 @@ class FakeExecution:
             filled_avg_price=Decimal("0"),
         )
 
+    def close_position(self, symbol: str) -> OrderRecord:
+        order_id = f"order-{len(self.submissions) + 1}"
+        self.submissions.append((symbol, "close_position"))
+        return OrderRecord(
+            order_id=order_id,
+            client_order_id=f"{order_id}-client",
+            symbol=symbol,
+            side="sell",
+            status="accepted",
+            filled_qty=Decimal("0"),
+            filled_avg_price=Decimal("0"),
+        )
+
     def wait_for_fill(
         self,
         order_id: str,
@@ -166,7 +179,7 @@ def test_round_trip_controller_writes_structured_log(tmp_path) -> None:
     assert result.final_position_quantity == Decimal("0")
     assert result.log_path.exists()
     assert controller._execution.submissions[0] == ("SPY", Decimal("1"), OrderSide.BUY)
-    assert controller._execution.submissions[1][2] == "oco"
+    assert controller._execution.submissions[1][1] == "close_position"
 
     payload = json.loads(result.log_path.read_text(encoding="utf-8"))
     assert payload["symbol"] == "SPY"

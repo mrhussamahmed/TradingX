@@ -2,19 +2,19 @@
 id: SPEC-0001
 title: TradingX Stage 1 paper trading bot specification
 version: 1.0.0
-status: draft
+status: active
 created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-003
+author_session: SESS-2026-04-17-004
 ---
 
 # Feature Specification: TradingX Stage 1 Paper Trading Bot
 
 **Feature Branch**: `001-paper-trading-bot`  
 **Created**: 2026-04-17  
-**Status**: Draft  
+**Status**: Active  
 **Input**: User description: "Create the Phase 1 specification for TradingX: one autonomous AI-assisted trading bot that begins with Stage 1 paper trading of US equities against a large-cap benchmark, pursues benchmark-beating risk-adjusted returns, preserves capital through non-negotiable risk controls, operates during regular US market hours without constant operator monitoring, evaluates mandatory strategy candidates under a shared adversarial methodology, and remains paper-only until all acceptance gates are passed."
 
 ## User Scenarios & Testing *(mandatory)*

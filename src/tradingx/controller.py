@@ -104,13 +104,8 @@ class RoundTripController:
             ),
             is_live_order=False,
         )
-        sell_submitted = self._execution.submit_oco_exit_order(
-            symbol,
-            quantity,
-            take_profit_limit=exit_market_snapshot.bid_price,
-            stop_price=self._build_stop_price(exit_market_snapshot.bid_price),
-        )
-        sell_order = self._execution.wait_for_oco_exit_fill(sell_submitted.order_id)
+        sell_submitted = self._execution.close_position(symbol)
+        sell_order = self._execution.wait_for_fill(sell_submitted.order_id)
 
         final_account = self._portfolio.get_account_snapshot()
         final_position_quantity = self._portfolio.get_position_quantity(symbol)
@@ -186,14 +181,6 @@ class RoundTripController:
                     f"{symbol} to reach {minimum_quantity}."
                 )
             time.sleep(poll_interval_seconds)
-
-    def _build_stop_price(self, bid_price: Decimal) -> Decimal:
-        gap = Decimal("0.25")
-        minimum_gap = Decimal("0.01")
-        stop_price = bid_price - gap
-        if stop_price <= Decimal("0"):
-            stop_price = bid_price - minimum_gap
-        return stop_price
 
 
 def build_default_controller(config: TradingConfig) -> RoundTripController:

@@ -88,6 +88,47 @@ def test_submit_oco_exit_order_uses_complex_exit_group() -> None:
     assert submitted.status == "accepted"
 
 
+class FakeClosePositionTradingClient:
+    def __init__(self) -> None:
+        self.closed_symbol = None
+        self.order_reads = [
+            FakeOrder(order_id="close-order-1", status="new", side="sell"),
+            FakeOrder(order_id="close-order-1", status="filled", side="sell"),
+        ]
+
+    def close_position(self, symbol):
+        self.closed_symbol = symbol
+        return FakeOrder(
+            order_id="close-order-1",
+            status="accepted",
+            symbol=symbol,
+            side="sell",
+            client_order_id="close-order-1-client",
+            filled_qty="0",
+            filled_avg_price="0",
+        )
+
+    def get_order_by_id(self, order_id, filter=None):
+        return self.order_reads.pop(0)
+
+
+def test_close_position_submits_and_waits_for_fill() -> None:
+    client = FakeClosePositionTradingClient()
+    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+
+    submitted = gateway.close_position("SPY")
+    filled = gateway.wait_for_fill(
+        submitted.order_id,
+        timeout_seconds=1,
+        poll_interval_seconds=0,
+    )
+
+    assert client.closed_symbol == "SPY"
+    assert submitted.status == "accepted"
+    assert filled.status == "filled"
+    assert filled.side == "sell"
+
+
 class ErrorTradingClient:
     def submit_order(self, order_data):
         raise RuntimeError('{"message":"potential wash trade detected"}')

@@ -128,6 +128,23 @@ class AlpacaPaperExecutionGateway:
             )
         return order
 
+    def close_position(self, symbol: str) -> OrderRecord:
+        """Close an existing Alpaca paper position with the broker helper.
+
+        source: https://alpaca.markets/sdks/python/api_reference/trading/positions.html
+            (retrieved 2026-04-17)
+        """
+        try:
+            raw_order = self._trading_client.close_position(symbol)
+        except Exception as error:
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        order = _to_order_record(raw_order)
+        if order.status in REJECTED_STATUSES:
+            raise OrderRejected(
+                f"Order {order.order_id} ended with status {order.status}."
+            )
+        return order
+
     def wait_for_fill(
         self,
         order_id: str,

@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: INDEX-0001@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-17-003
+author_session: SESS-2026-04-17-004
 ---
 
 # Artifact index
@@ -85,18 +85,50 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0006 | Use SMTP email as the default emergency channel | 1.0.0 | active | `docs/adrs/ADR-0006-emergency-channel-smtp.md` |
 | ADR-0007 | Restrict Stage 1 and Stage 2 trading to regular market hours | 1.0.0 | active | `docs/adrs/ADR-0007-market-hours-regular-only.md` |
 | ADR-0008 | Require a real Alpaca paper round trip in Phase 0 | 1.0.0 | active | `docs/adrs/ADR-0008-walking-skeleton-deliverable.md` |
+| ADR-0009 | Use Nautilus Trader as the backtest engine | 1.0.0 | active | `docs/adrs/ADR-0009-backtest-engine-nautilus-trader.md` |
 
 ### Specifications (SPEC-NNNN)
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| SPEC-0001 | TradingX Stage 1 paper trading bot specification | 1.0.0 | draft | `specs/001-paper-trading-bot/spec.md` |
+| SPEC-0001 | TradingX Stage 1 paper trading bot specification | 1.0.0 | active | `specs/001-paper-trading-bot/spec.md` |
 
 ### Plans (PLAN-NNNN)
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| _(none yet — Phase 2 will add the first plan via `/speckit.plan`)_ |
+| PLAN-0001 | TradingX Stage 1 paper trading bot implementation plan | 1.0.0 | active | `specs/001-paper-trading-bot/plan.md` |
+
+### Research notes
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| RESEARCH-0001 | TradingX Stage 1 planning research | 1.0.0 | active | `specs/001-paper-trading-bot/research.md` |
+
+### Data models
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| DATAMODEL-0001 | TradingX Stage 1 planning data model | 1.0.0 | active | `specs/001-paper-trading-bot/data-model.md` |
+
+### Quickstarts
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| QUICKSTART-0001 | TradingX Stage 1 planning quickstart | 1.0.0 | active | `specs/001-paper-trading-bot/quickstart.md` |
+
+### Contracts (CONTRACT-NNNN)
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| CONTRACT-0001 | Trading loop contract | 1.0.0 | active | `specs/001-paper-trading-bot/contracts/trading_loop.md` |
+| CONTRACT-0002 | Operator alerts and evidence contract | 1.0.0 | active | `specs/001-paper-trading-bot/contracts/operator_evidence.md` |
+
+### Validation gate definitions
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| GATES-0001 | Stage 1 acceptance gates | 1.0.0 | active | `docs/validation/acceptance_gates.md` |
 
 ### Session handovers (SESS-*)
 
@@ -126,7 +158,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 3               | SESS-2026-04-17-003    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 4               | SESS-2026-04-17-004    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 
