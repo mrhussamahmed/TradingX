@@ -6,7 +6,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.types import GateAssessment, OperatorAlert, TradeIntent
+from tradingx.types import (
+    EvaluationEvidencePack,
+    GateAssessment,
+    OperatorAlert,
+    ServiceCycleSnapshot,
+    ServiceSymbolResult,
+    TradeIntent,
+)
 
 
 def test_persistence_module_shell_is_importable() -> None:
@@ -96,3 +103,61 @@ def test_filesystem_artifact_store_builds_operator_evidence_report(tmp_path) -> 
     assert report["counts"]["trade_intents"] == 1
     assert report["counts"]["operator_alerts"] == 1
     assert "alert-1.json" in report["latest_artifacts"]["operator_alerts"]
+
+
+def test_filesystem_artifact_store_writes_service_cycle_and_builds_richer_summary(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=("SPY", "QQQ"),
+            symbol_results=(
+                ServiceSymbolResult(
+                    symbol="SPY",
+                    terminal_state="reconciled_trade",
+                    reason_code="baseline_long_entry",
+                    recovered=False,
+                ),
+                ServiceSymbolResult(
+                    symbol="QQQ",
+                    terminal_state="blocked_trade",
+                    reason_code="liquidity_filter",
+                    recovered=False,
+                ),
+            ),
+            blocked_trade_count=1,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY",),
+            cash=Decimal("10025.00"),
+            equity=Decimal("10030.00"),
+            buying_power=Decimal("20030.00"),
+        )
+    )
+    store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="evaluation-1",
+            candidate_id="trend-following-v1",
+            window_start_utc=timestamp,
+            window_end_utc=timestamp,
+            benchmark_metrics={"sharpe": Decimal("1.0")},
+            candidate_metrics={"sharpe": Decimal("1.2")},
+            adversarial_checks=("adv_check",),
+            recommendation="keep",
+            assumptions=(),
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert report["counts"]["service_cycles"] == 1
+    assert report["summary"]["blocked_trade_count"] == 1
+    assert report["summary"]["latest_open_positions"] == ["SPY"]
+    assert report["summary"]["latest_cash"] == "10025.00"
+    assert report["summary"]["latest_equity"] == "10030.00"
+    assert report["summary"]["evaluation_recommendations"] == {"keep": 1}

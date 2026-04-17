@@ -86,6 +86,33 @@ class FakePaperLoopController:
         }
 
 
+class FakePaperServiceController:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def run(
+        self,
+        *,
+        symbols,
+        quantity: Decimal,
+        interval_seconds: int,
+        max_cycles: int,
+    ):
+        self.called_with = {
+            "symbols": symbols,
+            "quantity": quantity,
+            "interval_seconds": interval_seconds,
+            "max_cycles": max_cycles,
+        }
+        return {
+            "cycles_completed": max_cycles,
+            "last_cycle": {
+                "cycle_status": "executed",
+                "symbols": list(symbols),
+            },
+        }
+
+
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -192,6 +219,46 @@ def test_main_runs_recovery_command(monkeypatch, tmp_path, capsys) -> None:
     assert payload["recovered"] is True
 
 
+def test_main_runs_paper_service_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+    fake_controller = FakePaperServiceController()
+    monkeypatch.setattr(
+        cli,
+        "build_default_paper_service",
+        lambda config: fake_controller,
+    )
+
+    exit_code = cli.main(
+        [
+            "run-paper-service",
+            "--env-file",
+            str(env_file),
+            "--symbols",
+            "SPY,QQQ",
+            "--quantity",
+            "1",
+            "--interval-seconds",
+            "300",
+            "--max-cycles",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert fake_controller.called_with == {
+        "symbols": ("SPY", "QQQ"),
+        "quantity": Decimal("1"),
+        "interval_seconds": 300,
+        "max_cycles": 2,
+    }
+    assert payload["cycles_completed"] == 2
+
+
 def test_main_prints_live_disable_status(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -229,3 +296,13 @@ def test_evidence_report_defaults_to_paper_loop_root() -> None:
     args = parser.parse_args(["evidence-report"])
 
     assert args.artifact_root == "artifacts/paper_loop"
+
+
+def test_run_paper_service_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["run-paper-service"])
+
+    assert args.symbols is None
+    assert args.interval_seconds is None
+    assert args.max_cycles is None

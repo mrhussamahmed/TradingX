@@ -39,6 +39,13 @@ def _normalize_int(value: str | None, *, default: int) -> int:
     return int(normalized)
 
 
+def _normalize_csv(value: str | None) -> tuple[str, ...]:
+    normalized = _normalize_value(value)
+    if not normalized:
+        return ()
+    return tuple(item.strip().upper() for item in normalized.split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class PaperCredentials:
     api_key: str
@@ -63,18 +70,40 @@ class LiveTradingControls:
 
 
 @dataclass(frozen=True)
+class AlertingConfig:
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_to_email: str = ""
+    smtp_use_starttls: bool = True
+
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    def smtp_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_from_email and self.smtp_to_email)
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     artifact_root: Path = Path("artifacts")
     metrics_namespace: str = "tradingx"
     enforce_regular_hours: bool = True
     command_timeout_seconds: int = 30
     manual_kill_switch_active: bool = False
+    service_interval_seconds: int = 300
+    symbol_universe: tuple[str, ...] = ("SPY",)
 
 
 @dataclass(frozen=True)
 class TradingConfig:
     paper_credentials: PaperCredentials
     live_controls: LiveTradingControls
+    alerting: AlertingConfig
     runtime: RuntimeConfig
 
     @classmethod
@@ -86,6 +115,29 @@ class TradingConfig:
                 account_id=_normalize_value(values.get("ALPACA_PAPER_ACCOUNT_ID")),
             ),
             live_controls=LiveTradingControls(),
+            alerting=AlertingConfig(
+                telegram_bot_token=_normalize_value(
+                    values.get("TRADINGX_TELEGRAM_BOT_TOKEN")
+                ),
+                telegram_chat_id=_normalize_value(
+                    values.get("TRADINGX_TELEGRAM_CHAT_ID")
+                ),
+                smtp_host=_normalize_value(values.get("TRADINGX_SMTP_HOST")),
+                smtp_port=_normalize_int(
+                    values.get("TRADINGX_SMTP_PORT"),
+                    default=587,
+                ),
+                smtp_username=_normalize_value(values.get("TRADINGX_SMTP_USERNAME")),
+                smtp_password=_normalize_value(values.get("TRADINGX_SMTP_PASSWORD")),
+                smtp_from_email=_normalize_value(
+                    values.get("TRADINGX_SMTP_FROM_EMAIL")
+                ),
+                smtp_to_email=_normalize_value(values.get("TRADINGX_SMTP_TO_EMAIL")),
+                smtp_use_starttls=_normalize_bool(
+                    values.get("TRADINGX_SMTP_USE_STARTTLS"),
+                    default=True,
+                ),
+            ),
             runtime=RuntimeConfig(
                 artifact_root=Path(
                     _normalize_value(values.get("TRADINGX_ARTIFACT_ROOT"))
@@ -107,6 +159,13 @@ class TradingConfig:
                     values.get("TRADINGX_MANUAL_KILL_SWITCH"),
                     default=False,
                 ),
+                service_interval_seconds=_normalize_int(
+                    values.get("TRADINGX_SERVICE_INTERVAL_SECONDS"),
+                    default=300,
+                ),
+                symbol_universe=(
+                    _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
+                ),
             ),
         )
 
@@ -119,7 +178,7 @@ class TradingConfig:
             self.paper_credentials.api_key
         ) and not _is_placeholder(self.paper_credentials.api_secret)
 
-    def to_safe_summary(self) -> dict[str, str | bool | int]:
+    def to_safe_summary(self) -> dict[str, str | bool | int | list[str]]:
         return {
             "has_real_paper_credentials": self.has_real_paper_credentials(),
             "artifact_root": str(self.runtime.artifact_root),
@@ -127,6 +186,10 @@ class TradingConfig:
             "enforce_regular_hours": self.runtime.enforce_regular_hours,
             "command_timeout_seconds": self.runtime.command_timeout_seconds,
             "manual_kill_switch_active": self.runtime.manual_kill_switch_active,
+            "service_interval_seconds": self.runtime.service_interval_seconds,
+            "symbol_universe": list(self.runtime.symbol_universe),
+            "telegram_alerts_enabled": self.alerting.telegram_enabled(),
+            "smtp_alerts_enabled": self.alerting.smtp_enabled(),
             "live_trading_enabled": self.live_controls.all_layers_enabled(),
         }
 

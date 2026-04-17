@@ -18,6 +18,7 @@ from tradingx.types import (
     PositionSnapshot,
     ReconciliationSnapshot,
     RiskControlEvent,
+    ServiceCycleSnapshot,
     TradeIntent,
 )
 
@@ -73,6 +74,13 @@ class FilesystemArtifactStore:
             "gate_assessments",
             f"gate-{assessment.gate_id}.json",
             assessment,
+        )
+
+    def write_service_cycle_snapshot(self, snapshot: ServiceCycleSnapshot) -> Path:
+        return self._write_json(
+            "service_cycles",
+            f"{snapshot.cycle_id}.json",
+            snapshot,
         )
 
     def trade_intent_path(self, intent_id: str) -> Path:
@@ -201,6 +209,7 @@ class FilesystemArtifactStore:
             "evaluation_evidence",
             "operator_alerts",
             "gate_assessments",
+            "service_cycles",
         )
         counts: dict[str, int] = {}
         latest_artifacts: dict[str, str] = {}
@@ -211,10 +220,73 @@ class FilesystemArtifactStore:
             )
             counts[category] = len(artifacts)
             latest_artifacts[category] = artifacts[-1].name if artifacts else ""
+        service_cycle_payloads = self._read_category_payloads("service_cycles")
+        evaluation_payloads = self._read_category_payloads("evaluation_evidence")
+        latest_service_cycle = (
+            service_cycle_payloads[-1] if service_cycle_payloads else None
+        )
+        daily_pnl = Decimal("0")
+        if latest_service_cycle is not None:
+            latest_cycle_day = str(latest_service_cycle["completed_at_utc"]).split("T")[
+                0
+            ]
+            same_day_cycles = [
+                payload
+                for payload in service_cycle_payloads
+                if str(payload["completed_at_utc"]).startswith(latest_cycle_day)
+            ]
+            if same_day_cycles:
+                daily_pnl = Decimal(str(same_day_cycles[-1]["equity"])) - Decimal(
+                    str(same_day_cycles[0]["equity"])
+                )
+        recommendation_counts: dict[str, int] = {}
+        for payload in evaluation_payloads:
+            recommendation = str(payload.get("recommendation", "")).strip()
+            if not recommendation:
+                continue
+            recommendation_counts[recommendation] = (
+                recommendation_counts.get(recommendation, 0) + 1
+            )
         return {
             "counts": counts,
             "latest_artifacts": latest_artifacts,
+            "summary": {
+                "blocked_trade_count": sum(
+                    int(payload.get("blocked_trade_count", 0))
+                    for payload in service_cycle_payloads
+                ),
+                "reconciliation_failure_count": sum(
+                    int(payload.get("reconciliation_failure_count", 0))
+                    for payload in service_cycle_payloads
+                ),
+                "latest_open_positions": list(
+                    latest_service_cycle.get("open_position_symbols", ())
+                    if latest_service_cycle is not None
+                    else ()
+                ),
+                "latest_cash": (
+                    str(latest_service_cycle.get("cash", ""))
+                    if latest_service_cycle is not None
+                    else ""
+                ),
+                "latest_equity": (
+                    str(latest_service_cycle.get("equity", ""))
+                    if latest_service_cycle is not None
+                    else ""
+                ),
+                "daily_pnl": str(daily_pnl),
+                "evaluation_recommendations": recommendation_counts,
+            },
         }
+
+    def _read_category_payloads(self, category: str) -> list[dict[str, Any]]:
+        category_dir = self._root_dir / category
+        if not category_dir.exists():
+            return []
+        return [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(category_dir.glob("*.json"))
+        ]
 
 
 __all__ = ("FilesystemArtifactStore",)

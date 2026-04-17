@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-006
+author_session: SESS-2026-04-17-008
 ---
 
 # Quickstart
@@ -19,6 +19,8 @@ author_session: SESS-2026-04-17-006
    only.
 3. Fill `.env` with real `ALPACA_PAPER_API_KEY` and
    `ALPACA_PAPER_API_SECRET` only when you intend to run the smoke test.
+4. Add `TRADINGX_TELEGRAM_*` and `TRADINGX_SMTP_*` settings only if you
+   want real operator delivery; otherwise alerts still persist locally.
 
 ## 2. Install dependencies
 
@@ -36,7 +38,8 @@ uv run tradingx live-disable-status --env-file .env
 Expected behavior:
 
 - `config-summary` reports safe runtime settings without printing any
-  secrets.
+  secrets, including the configured service interval, symbol universe,
+  and whether real alert transports are enabled.
 - `live-disable-status` confirms paper-only mode and whether the manual
   kill switch is active.
 
@@ -60,6 +63,9 @@ Expected behavior:
 
 - The command prints category counts plus the most recent artifact name
   for each evidence bucket.
+- The summary section reports blocked-trade totals, the latest open
+  positions, the latest cash/equity snapshot, daily paper PnL, and
+  evaluation recommendation counts.
 
 ## 6. Run the paper round trip directly
 
@@ -91,6 +97,7 @@ Expected behavior:
 
 ```bash
 uv run tradingx paper-loop --env-file .env --symbol SPY --quantity 1
+uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx paper-recover --env-file .env --symbol SPY
 ```
 
@@ -98,6 +105,11 @@ Expected behavior:
 
 - `paper-loop` runs one regular-hours paper cycle and writes artifacts to
   `artifacts/paper_loop/`.
+- `run-paper-service` repeats the paper loop on a cadence, scans the
+  bounded symbol universe sequentially, and writes a service-cycle
+  summary under `artifacts/paper_loop/service_cycles/`.
+- Existing positions now exit deterministically when the baseline sees an
+  approximately 1% take-profit or 1% stop-loss threshold.
 - `paper-recover` resumes the latest persisted cycle for the symbol
   without creating a duplicate paper submission.
 
@@ -107,7 +119,8 @@ This quickstart was exercised on 2026-04-17 with:
 
 - `uv run tradingx config-summary --env-file .env`
 - `uv run tradingx live-disable-status --env-file .env`
+- `uv run pytest`
 - `./scripts/validate`
 
-Those runs passed in this session, including the real Alpaca paper smoke
-gate.
+Those runs passed in this session. Because regular US market hours were
+closed, the smoke gate skipped with an explicit closed-market message.

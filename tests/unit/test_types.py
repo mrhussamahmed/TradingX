@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from tradingx.types import (
     GateAssessment,
@@ -9,6 +10,9 @@ from tradingx.types import (
     PortfolioState,
     ReconciliationSnapshot,
     RiskControlEvent,
+    ServiceCycleSnapshot,
+    ServiceRunResult,
+    ServiceSymbolResult,
     StrategyCandidate,
     TradeIntent,
 )
@@ -90,3 +94,36 @@ def test_reconciliation_snapshot_and_operator_alert_hold_evidence_refs() -> None
     assert snapshot.resolved is True
     assert alert.delivery_targets == ("telegram", "smtp")
     assert gate.evidence_refs == ("artifacts/smoke/spy.json",)
+
+
+def test_service_cycle_and_run_result_capture_runtime_summary_fields() -> None:
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    cycle = ServiceCycleSnapshot(
+        cycle_id="cycle-1",
+        started_at_utc=timestamp,
+        completed_at_utc=timestamp,
+        cycle_status="executed",
+        symbols=("SPY", "QQQ"),
+        symbol_results=(
+            ServiceSymbolResult(
+                symbol="SPY",
+                terminal_state="reconciled_trade",
+                reason_code="baseline_long_entry",
+                recovered=False,
+            ),
+        ),
+        blocked_trade_count=0,
+        reconciliation_failure_count=0,
+        open_position_symbols=("SPY",),
+        cash=Decimal("10000"),
+        equity=Decimal("10010"),
+        buying_power=Decimal("20010"),
+    )
+    result = ServiceRunResult(
+        cycles_completed=1,
+        last_cycle=cycle,
+        artifact_paths=(Path("artifacts/service_cycles/cycle-1.json"),),
+    )
+
+    assert cycle.open_position_symbols == ("SPY",)
+    assert result.cycles_completed == 1

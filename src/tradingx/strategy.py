@@ -12,6 +12,7 @@ from tradingx.data import close_to_close_returns
 from tradingx.types import (
     MarketSnapshot,
     PortfolioState,
+    PositionSnapshot,
     StrategyCandidate,
     TradeIntent,
 )
@@ -78,6 +79,8 @@ def build_candidate_return_series(
 class DeterministicBaselineStrategy:
     candidate_id: str = DEFAULT_CANDIDATE_ID
     max_spread_bps: Decimal = MAX_SPREAD_BPS
+    take_profit_bps: Decimal = Decimal("100")
+    stop_loss_bps: Decimal = Decimal("100")
     now_provider: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def generate_trade_intent(
@@ -87,7 +90,32 @@ class DeterministicBaselineStrategy:
         portfolio_state: PortfolioState,
         quantity: Decimal,
     ) -> TradeIntent:
-        if self._has_open_position(portfolio_state, market_snapshot.symbol):
+        existing_position = self._position_for_symbol(
+            portfolio_state, market_snapshot.symbol
+        )
+        if existing_position is not None:
+            if market_snapshot.last_trade_price >= (
+                existing_position.average_entry_price
+                * (Decimal("1") + (self.take_profit_bps / Decimal("10000")))
+            ):
+                return self._build_intent(
+                    symbol=market_snapshot.symbol,
+                    side="sell",
+                    quantity=existing_position.quantity,
+                    reason_code="take_profit_exit",
+                    observation_timestamp=market_snapshot.timestamp,
+                )
+            if market_snapshot.last_trade_price <= (
+                existing_position.average_entry_price
+                * (Decimal("1") - (self.stop_loss_bps / Decimal("10000")))
+            ):
+                return self._build_intent(
+                    symbol=market_snapshot.symbol,
+                    side="sell",
+                    quantity=existing_position.quantity,
+                    reason_code="stop_loss_exit",
+                    observation_timestamp=market_snapshot.timestamp,
+                )
             return self._build_intent(
                 symbol=market_snapshot.symbol,
                 side="hold",
@@ -157,15 +185,15 @@ class DeterministicBaselineStrategy:
         )
         return str(uuid.uuid5(uuid.NAMESPACE_URL, payload))
 
-    def _has_open_position(
+    def _position_for_symbol(
         self,
         portfolio_state: PortfolioState,
         symbol: str,
-    ) -> bool:
-        return any(
-            position.symbol == symbol and position.quantity != Decimal("0")
-            for position in portfolio_state.positions
-        )
+    ) -> PositionSnapshot | None:
+        for position in portfolio_state.positions:
+            if position.symbol == symbol and position.quantity != Decimal("0"):
+                return position
+        return None
 
     def _spread_bps(self, market_snapshot: MarketSnapshot) -> Decimal:
         if market_snapshot.last_trade_price <= Decimal("0"):

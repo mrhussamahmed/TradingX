@@ -7,13 +7,13 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-007
+author_session: SESS-2026-04-17-008
 ---
 
 # Current project state
 
 - Active session: none
-- Active branch: main
+- Active branch: codex/paper-service-upgrades
 - Active phase: 6
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -29,18 +29,19 @@ author_session: SESS-2026-04-17-007
 - `ADR-0009` selects Nautilus Trader as the backtest engine.
 - `GATES-0001` defines the Stage 1 gate evidence baseline.
 - `TASKS-0001` implementation is complete and merged into `main`.
-- The current repository now provides:
+- The current working branch extends the Stage 1 bot with:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
+  - a recurring paper-service runtime that scans a bounded symbol
+    universe and persists service-cycle summaries
+  - deterministic exit logic for existing positions via take-profit and
+    stop-loss thresholds
   - an offline mandatory-candidate evaluation pipeline with persisted
     evidence packs
-  - bounded operator alerts, live-disable visibility, and evidence-report
-    commands
-- The review pass after implementation also hardened two real integration
-  edges:
-  - blocked trades now persist operator-alert artifacts even without an
-    external dispatcher configured
-  - the smoke gate now skips cleanly outside regular US market hours
-    instead of failing after the close
-- Next artifact step is longer paper validation on `main` plus future
-  gate-report work for Gates 1 through 3.
+  - richer operator alerts, including optional Telegram and SMTP
+    delivery and evidence-report summaries for paper-service runs
+- Validation is green on `codex/paper-service-upgrades`; `./scripts/validate`
+  passed with the expected closed-market smoke skip.
+- Next artifact step is to push and review `codex/paper-service-upgrades`,
+  then run the new paper service during regular US market hours with
+  real alert credentials if operator delivery is desired.

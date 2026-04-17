@@ -7,5 +7,6 @@ __all__ = [
     "execution",
     "portfolio",
     "risk",
+    "service",
     "types",
 ]

@@ -13,6 +13,7 @@ from alpaca.trading.enums import OrderSide
 
 from tradingx.alerts import (
     OperatorAlertDispatcher,
+    build_alert_dispatcher,
     build_evaluation_summary_alert,
     build_risk_control_alert,
 )
@@ -316,6 +317,7 @@ class PaperTradingLoopController:
         if risk_decision.event is not None:
             risk_path = self._artifacts.write_risk_control_event(risk_decision.event)
             self._metrics.record_evidence_artifact("risk_event")
+            self._metrics.record_blocked_trade(risk_decision.control_code)
             reconciliation = self._build_reconciliation(
                 trade_intent=trade_intent,
                 portfolio_state=portfolio_state,
@@ -348,10 +350,11 @@ class PaperTradingLoopController:
 
         existing_order = self._artifacts.read_order_record(trade_intent.intent_id)
         recovered = existing_order is not None
+        execution_quantity = trade_intent.quantity or quantity
         if existing_order is None:
             existing_order = self._execution.submit_market_order(
                 trade_intent.symbol,
-                quantity,
+                execution_quantity,
                 OrderSide.BUY if trade_intent.side == "buy" else OrderSide.SELL,
                 client_order_id=trade_intent.intent_id,
             )
@@ -565,6 +568,7 @@ class StrategyEvaluationController:
                 self._artifacts.write_operator_alert(alert)
                 self._metrics.record_operator_alert(alert.severity)
                 self._metrics.record_evidence_artifact("operator_alert")
+            self._metrics.record_candidate_recommendation(evidence_pack.recommendation)
             evidence_packs.append(evidence_pack)
         return tuple(evidence_packs)
 
@@ -605,6 +609,7 @@ def build_default_paper_trading_controller(
         strategy=DeterministicBaselineStrategy(),
         artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
+        alert_dispatcher=build_alert_dispatcher(config),
         regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
         command_timeout_seconds=config.runtime.command_timeout_seconds,
     )

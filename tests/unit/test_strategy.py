@@ -79,7 +79,7 @@ def test_baseline_strategy_holds_when_symbol_position_is_already_open() -> None:
     )
 
     intent = strategy.generate_trade_intent(
-        market_snapshot=make_market_snapshot(),
+        market_snapshot=make_market_snapshot(last_trade_price=Decimal("100.50")),
         portfolio_state=portfolio_state,
         quantity=Decimal("1"),
     )
@@ -87,6 +87,66 @@ def test_baseline_strategy_holds_when_symbol_position_is_already_open() -> None:
     assert intent.side == "hold"
     assert intent.quantity is None
     assert intent.reason_code == "existing_position_hold"
+
+
+def test_baseline_strategy_exits_on_take_profit_threshold() -> None:
+    strategy = DeterministicBaselineStrategy(
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)
+    )
+    portfolio_state = make_portfolio_state(
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("2"),
+                average_entry_price=Decimal("100.00"),
+                market_value=Decimal("202.00"),
+            ),
+        )
+    )
+
+    intent = strategy.generate_trade_intent(
+        market_snapshot=make_market_snapshot(
+            last_trade_price=Decimal("101.50"),
+            bid_price=Decimal("101.45"),
+            ask_price=Decimal("101.55"),
+        ),
+        portfolio_state=portfolio_state,
+        quantity=Decimal("1"),
+    )
+
+    assert intent.side == "sell"
+    assert intent.quantity == Decimal("2")
+    assert intent.reason_code == "take_profit_exit"
+
+
+def test_baseline_strategy_exits_on_stop_loss_threshold() -> None:
+    strategy = DeterministicBaselineStrategy(
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)
+    )
+    portfolio_state = make_portfolio_state(
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("2"),
+                average_entry_price=Decimal("100.00"),
+                market_value=Decimal("196.00"),
+            ),
+        )
+    )
+
+    intent = strategy.generate_trade_intent(
+        market_snapshot=make_market_snapshot(
+            last_trade_price=Decimal("98.50"),
+            bid_price=Decimal("98.45"),
+            ask_price=Decimal("98.55"),
+        ),
+        portfolio_state=portfolio_state,
+        quantity=Decimal("1"),
+    )
+
+    assert intent.side == "sell"
+    assert intent.quantity == Decimal("2")
+    assert intent.reason_code == "stop_loss_exit"
 
 
 def test_mandatory_candidate_registry_contains_required_families() -> None:

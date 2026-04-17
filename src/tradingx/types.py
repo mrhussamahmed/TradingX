@@ -163,6 +163,37 @@ class TradingLoopResult:
     recovered: bool = False
 
 
+@dataclass(frozen=True)
+class ServiceSymbolResult:
+    symbol: str
+    terminal_state: str
+    reason_code: str
+    recovered: bool
+
+
+@dataclass(frozen=True)
+class ServiceCycleSnapshot:
+    cycle_id: str
+    started_at_utc: datetime
+    completed_at_utc: datetime
+    cycle_status: str
+    symbols: tuple[str, ...]
+    symbol_results: tuple[ServiceSymbolResult, ...]
+    blocked_trade_count: int
+    reconciliation_failure_count: int
+    open_position_symbols: tuple[str, ...]
+    cash: Decimal
+    equity: Decimal
+    buying_power: Decimal
+
+
+@dataclass(frozen=True)
+class ServiceRunResult:
+    cycles_completed: int
+    last_cycle: ServiceCycleSnapshot
+    artifact_paths: tuple[Path, ...]
+
+
 __all__ = (
     "AccountSnapshot",
     "EvaluationEvidencePack",
@@ -177,6 +208,9 @@ __all__ = (
     "RiskControlEvent",
     "RoundTripResult",
     "ScalarValue",
+    "ServiceCycleSnapshot",
+    "ServiceRunResult",
+    "ServiceSymbolResult",
     "StrategyCandidate",
     "TradeIntent",
     "TradingLoopResult",
