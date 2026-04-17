@@ -14,15 +14,22 @@ from pydantic import BaseModel
 
 from tradingx.config import TradingConfig
 from tradingx.types import (
+    CommandCenterSnapshot,
     ConfigProposal,
+    DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    IncidentRecord,
+    ReplaySession,
+    ResearchStudioSnapshot,
     WebActionResult,
 )
 
 
 class ReadModelProtocol(Protocol):
     def build_dashboard_snapshot(self) -> DashboardSnapshot: ...
+
+    def build_command_center_snapshot(self) -> CommandCenterSnapshot: ...
 
     def list_documents(self) -> tuple[DocumentRecord, ...]: ...
 
@@ -31,6 +38,35 @@ class ReadModelProtocol(Protocol):
     def list_config_proposals(self) -> tuple[ConfigProposal, ...]: ...
 
     def get_service_state(self) -> object: ...
+
+    def list_timeline_events(
+        self,
+        *,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> tuple[object, ...]: ...
+
+    def list_incidents(self) -> tuple[IncidentRecord, ...]: ...
+
+    def build_research_snapshot(self) -> ResearchStudioSnapshot: ...
+
+    def build_replay_session(
+        self,
+        *,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> ReplaySession: ...
+
+    def search_records(
+        self,
+        *,
+        query: str = "",
+        category: str | None = None,
+    ) -> tuple[object, ...] | list[dict[str, object]]: ...
+
+    def get_latest_daily_digest(self) -> DailySessionDigest | None: ...
 
 
 class ActionRunnerProtocol(Protocol):
@@ -70,6 +106,14 @@ class ActionRunnerProtocol(Protocol):
     ) -> WebActionResult: ...
 
     def generate_decision_report(self, *, gate: str | None) -> WebActionResult: ...
+
+    def run_session_preopen(self) -> WebActionResult: ...
+
+    def run_session_heartbeat(self) -> WebActionResult: ...
+
+    def run_session_close(self) -> WebActionResult: ...
+
+    def acknowledge_incident(self, *, incident_id: str) -> WebActionResult: ...
 
     def create_config_proposal(
         self,
@@ -138,6 +182,73 @@ def create_app(
     @app.get("/api/overview")
     def get_overview() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.build_dashboard_snapshot()))
+
+    @app.get("/api/platform/command-center")
+    def get_command_center() -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(read_model.build_command_center_snapshot())
+        )
+
+    @app.get("/api/platform/timeline")
+    def get_timeline(
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(
+                read_model.list_timeline_events(
+                    symbol=symbol,
+                    cycle_id=cycle_id,
+                    incident_id=incident_id,
+                )
+            )
+        )
+
+    @app.get("/api/platform/incidents")
+    def get_incidents() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.list_incidents()))
+
+    @app.get("/api/platform/research")
+    def get_research() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.build_research_snapshot()))
+
+    @app.get("/api/platform/replay")
+    def get_replay(
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(
+                read_model.build_replay_session(
+                    symbol=symbol,
+                    cycle_id=cycle_id,
+                    incident_id=incident_id,
+                )
+            )
+        )
+
+    @app.get("/api/platform/explorer")
+    def get_explorer(
+        query: str = "",
+        category: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(
+                read_model.search_records(
+                    query=query,
+                    category=category,
+                )
+            )
+        )
+
+    @app.get("/api/platform/digests/latest")
+    def get_latest_digest() -> JSONResponse:
+        digest = read_model.get_latest_daily_digest()
+        if digest is None:
+            return JSONResponse(content=None)
+        return JSONResponse(content=_serialize(digest))
 
     @app.get("/api/documents")
     def get_documents() -> JSONResponse:
@@ -238,6 +349,30 @@ def create_app(
         return JSONResponse(
             content=_serialize(
                 action_runner.generate_decision_report(gate=payload.gate)
+            )
+        )
+
+    @app.post("/api/actions/session/preopen")
+    def post_session_preopen() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.run_session_preopen()))
+
+    @app.post("/api/actions/session/heartbeat")
+    def post_session_heartbeat() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.run_session_heartbeat()))
+
+    @app.post("/api/actions/session/close")
+    def post_session_close() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.run_session_close()))
+
+    @app.post("/api/actions/incidents/{incident_id}/acknowledge")
+    def post_incident_acknowledge(incident_id: str) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(
+                action_runner.acknowledge_incident(incident_id=incident_id)
             )
         )
 

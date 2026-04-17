@@ -5,16 +5,24 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx.types import (
+    CommandCenterSnapshot,
     ConfigProposal,
+    DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    ExplorerRecord,
     GateAssessment,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
     GateReportResult,
+    IncidentRecord,
     OperatorAlert,
+    OperatorTimelineEvent,
     PortfolioState,
     ReconciliationSnapshot,
+    ReplaySession,
+    ResearchCandidateSummary,
+    ResearchStudioSnapshot,
     RiskControlEvent,
     ServiceCycleSnapshot,
     ServiceRunResult,
@@ -270,3 +278,125 @@ def test_web_types_capture_dashboard_documents_and_actions() -> None:
     assert action.evidence_refs == ("artifacts/paper_loop/service_cycles/cycle-1.json",)
     assert proposal.output_path.name == "proposal-1.md"
     assert document.kind == "handover"
+
+
+def test_operator_platform_types_capture_command_center_and_research_state() -> None:
+    timestamp = datetime(2026, 4, 18, 9, 30, tzinfo=UTC)
+    command_center = CommandCenterSnapshot(
+        generated_at_utc=timestamp,
+        service_status=WebServiceState(
+            status="running",
+            active_symbols=("SPY", "QQQ"),
+            interval_seconds=300,
+            cycles_completed=8,
+            started_at_utc=timestamp,
+            last_completed_at_utc=timestamp,
+            last_error="",
+        ),
+        market_session_label="Regular session monitor",
+        session_mode="intraday",
+        account_summary={
+            "cash": "10025.00",
+            "equity": "10030.00",
+            "buying_power": "20030.00",
+            "daily_pnl": "5.00",
+        },
+        equity_curve=(
+            {"label": "09:30", "value": "10000.00"},
+            {"label": "10:00", "value": "10030.00"},
+        ),
+        exposure_breakdown=(
+            {"symbol": "SPY", "value": "65"},
+            {"symbol": "QQQ", "value": "35"},
+        ),
+        watchlist=({"symbol": "SPY", "status": "monitor"},),
+        gate_statuses={"1": "pass", "2": "pending"},
+        recommendations={"promote_candidate": 1},
+        headline_incidents=({"incident_id": "incident-1", "severity": "warning"},),
+    )
+    research = ResearchStudioSnapshot(
+        generated_at_utc=timestamp,
+        gate_summaries=({"gate_id": "1", "status": "pass"},),
+        candidate_summaries=(
+            ResearchCandidateSummary(
+                candidate_id="trend-following-v1",
+                family="trend_following",
+                recommendation="promote_candidate",
+                benchmark_metrics={"sharpe": "1.0"},
+                candidate_metrics={"sharpe": "1.4"},
+                adversarial_checks=("fee_stress",),
+                gate_statuses={"1": "pass"},
+                summary="Candidate beat the benchmark on Sharpe.",
+            ),
+        ),
+        decision_summary="Gate 1 passed for the leading candidate.",
+    )
+
+    assert command_center.market_session_label == "Regular session monitor"
+    assert command_center.equity_curve[1]["value"] == "10030.00"
+    assert research.candidate_summaries[0].candidate_id == "trend-following-v1"
+    assert research.gate_summaries[0]["status"] == "pass"
+
+
+def test_operator_platform_types_capture_incidents_replay_and_digests() -> None:
+    timestamp = datetime(2026, 4, 18, 16, 0, tzinfo=UTC)
+    event = OperatorTimelineEvent(
+        event_id="event-1",
+        event_type="operator_alert",
+        symbol="SPY",
+        severity="critical",
+        headline="Kill switch active",
+        details="A kill switch blocked a trade during the session.",
+        occurred_at_utc=timestamp,
+        artifact_path="artifacts/paper_loop/operator_alerts/alert-1.json",
+        related_ids=("alert-1",),
+    )
+    incident = IncidentRecord(
+        incident_id="incident-1",
+        title="Kill switch active",
+        severity="critical",
+        status="acknowledged",
+        category="risk",
+        summary="Trading remained blocked until operator review.",
+        first_seen_at_utc=timestamp,
+        latest_seen_at_utc=timestamp,
+        acknowledged_at_utc=timestamp,
+        acknowledged_by="local-operator",
+        related_event_ids=("event-1",),
+        evidence_refs=("artifacts/paper_loop/operator_alerts/alert-1.json",),
+        suggested_action="Review the kill switch cause before the next session.",
+    )
+    replay = ReplaySession(
+        replay_id="replay-1",
+        focus_type="symbol",
+        focus_value="SPY",
+        headline="SPY replay",
+        events=(event,),
+        summary="The replay captured a blocked trade and alert trail.",
+    )
+    digest = DailySessionDigest(
+        digest_id="digest-1",
+        generated_at_utc=timestamp,
+        session_label="session_close",
+        service_status="stopped",
+        blocked_trade_count=1,
+        reconciliation_failure_count=0,
+        latest_positions=("SPY",),
+        top_incidents=("incident-1",),
+        recommended_actions=("Review kill switch origin.",),
+        evidence_refs=("artifacts/operator_platform/daily_digests/digest-1.json",),
+    )
+    explorer = ExplorerRecord(
+        record_id="record-1",
+        category="validation_report",
+        title="Gate 1 report",
+        preview="Gate 1 passed with benchmark-relative edge.",
+        path="artifacts/validation/validation_reports/gate-1.json",
+        symbol="SPY",
+        recorded_at_utc=timestamp,
+    )
+
+    assert incident.acknowledged_by == "local-operator"
+    assert replay.events[0].event_type == "operator_alert"
+    assert digest.top_incidents == ("incident-1",)
+    assert explorer.category == "validation_report"

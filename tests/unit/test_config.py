@@ -89,6 +89,7 @@ def test_web_config_defaults_are_local_only_and_read_only() -> None:
     assert config.web.host == "127.0.0.1"
     assert config.web.port == 8765
     assert config.web.write_mode_enabled is False
+    assert config.web.refresh_interval_seconds == 15
 
 
 def test_web_config_overrides_are_parsed_from_mapping() -> None:
@@ -97,9 +98,11 @@ def test_web_config_overrides_are_parsed_from_mapping() -> None:
             "TRADINGX_WEB_HOST": "0.0.0.0",
             "TRADINGX_WEB_PORT": "9200",
             "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+            "TRADINGX_WEB_REFRESH_INTERVAL_SECONDS": "5",
         }
     )
 
     assert config.web.host == "0.0.0.0"
     assert config.web.port == 9200
     assert config.web.write_mode_enabled is True
+    assert config.web.refresh_interval_seconds == 5

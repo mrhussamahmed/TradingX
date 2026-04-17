@@ -1,11 +1,17 @@
 import type {
   ActionResult,
+  CommandCenterSnapshot,
   ConfigProposal,
   ConfigSummary,
+  DailySessionDigest,
   DashboardSnapshot,
   DocumentRecord,
   EvidenceCategory,
   EvidenceItem,
+  ExplorerRecord,
+  IncidentRecord,
+  ReplaySession,
+  ResearchStudioSnapshot,
 } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -29,6 +35,10 @@ export function getOverview() {
   return request<DashboardSnapshot>('/api/overview')
 }
 
+export function getCommandCenter() {
+  return request<CommandCenterSnapshot>('/api/platform/command-center')
+}
+
 export function getConfigSummary() {
   return request<ConfigSummary>('/api/config/summary')
 }
@@ -43,6 +53,47 @@ export function getConfigProposals() {
 
 export function getEvidence(category: EvidenceCategory) {
   return request<EvidenceItem[]>(`/api/evidence/${category}`)
+}
+
+export function getIncidents() {
+  return request<IncidentRecord[]>('/api/platform/incidents')
+}
+
+export function getResearch() {
+  return request<ResearchStudioSnapshot>('/api/platform/research')
+}
+
+export function getReplay(params: {
+  symbol?: string
+  cycle_id?: string
+  incident_id?: string
+}) {
+  const query = new URLSearchParams()
+  if (params.symbol) {
+    query.set('symbol', params.symbol)
+  }
+  if (params.cycle_id) {
+    query.set('cycle_id', params.cycle_id)
+  }
+  if (params.incident_id) {
+    query.set('incident_id', params.incident_id)
+  }
+  return request<ReplaySession>(`/api/platform/replay?${query.toString()}`)
+}
+
+export function getExplorer(params: { query?: string; category?: string }) {
+  const query = new URLSearchParams()
+  if (params.query) {
+    query.set('query', params.query)
+  }
+  if (params.category) {
+    query.set('category', params.category)
+  }
+  return request<ExplorerRecord[]>(`/api/platform/explorer?${query.toString()}`)
+}
+
+export function getLatestDigest() {
+  return request<DailySessionDigest | null>('/api/platform/digests/latest')
 }
 
 export function postPaperLoop(payload: { symbol: string; quantity: string }) {
@@ -105,6 +156,30 @@ export function postDecisionReport(payload: { gate: string | null }) {
   return request<ActionResult>('/api/actions/decision-report', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export function postSessionPreopen() {
+  return request<ActionResult>('/api/actions/session/preopen', {
+    method: 'POST',
+  })
+}
+
+export function postSessionHeartbeat() {
+  return request<ActionResult>('/api/actions/session/heartbeat', {
+    method: 'POST',
+  })
+}
+
+export function postSessionClose() {
+  return request<ActionResult>('/api/actions/session/close', {
+    method: 'POST',
+  })
+}
+
+export function postAcknowledgeIncident(incidentId: string) {
+  return request<ActionResult>(`/api/actions/incidents/${incidentId}/acknowledge`, {
+    method: 'POST',
   })
 }
 

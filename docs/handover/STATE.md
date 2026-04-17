@@ -4,17 +4,17 @@ title: Project state
 version: 1.0.0
 status: active
 created: 2026-04-17
-last_amended: 2026-04-17
+last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-013
+author_session: SESS-2026-04-18-014
 ---
 
 # Current project state
 
-- Active session: none
-- Active branch: main
-- Active phase: 6
+- Active session: SESS-2026-04-18-014
+- Active branch: codex/operator-platform
+- Active phase: 7
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -37,9 +37,15 @@ author_session: SESS-2026-04-17-013
   local control website implementation and its artifact chain.
 - `ADR-0010` selects FastAPI plus a minimal React SPA for the local
   control web app.
+- `ADR-0011` selects a normalized operator-event timeline with
+  polling-based refresh for the operator platform.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
+- `DESIGN-0001`, `SPEC-0003`, `PLAN-0003`, `TASKS-0003`,
+  `RESEARCH-0003`, `DATAMODEL-0003`, `QUICKSTART-0004`, and
+  `CONTRACT-0004` are active on `codex/operator-platform`, and the
+  operator-platform implementation is complete and validated there.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -61,20 +67,19 @@ author_session: SESS-2026-04-17-013
     delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
   for:
-  - paper-service and bounded loop controls behind an explicit write-mode
-    flag
+  - paper-service and bounded loop controls behind an explicit
+    write-mode flag
   - evidence browsing for operator alerts, service cycles, and
     validation reports
   - gate-state and recommendation visibility
   - project-intelligence panels for handovers and state
   - safe config proposals written under `config/proposals/`
-- Validation is green on `main`; `./scripts/validate` passed with the
-  expected closed-market smoke skip, plus frontend tests and frontend
-  build verification for the local website.
-- Next artifact step is to run the paper service during regular US
-  market hours, use the website to supervise the bot and review
-  evidence, verify real Telegram/SMTP delivery if desired, use
-  `prepare-benchmark-closes` to generate a real dividend-adjusted
-  benchmark artifact, produce real Gate 1 and Gate 2 reports from that
-  artifact, review them through `decision-report`, and begin collecting
-  the longer-lived evidence required for Gate 3.
+  - an operator-platform expansion with a command center, trade
+    intelligence, research studio, incident center, replay lab, records
+    explorer, daily session actions, and a command palette
+- Validation is green on `codex/operator-platform`; `./scripts/validate`
+  passed with the expected closed-market smoke skip, plus frontend
+  tests, frontend build verification, and a real local browser check of
+  `tradingx web`.
+- Next execution step on this branch is operator review and promotion of
+  `codex/operator-platform` into `main`.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import replace
@@ -171,6 +172,15 @@ class LocalWebActionRunner:
         self._config = config
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._paper_store = FilesystemArtifactStore(
+            self._config.runtime.artifact_root / "paper_loop"
+        )
+        self._validation_store = FilesystemArtifactStore(
+            self._config.runtime.artifact_root / "validation"
+        )
+        self._operator_platform_root = (
+            self._config.runtime.artifact_root / "operator_platform"
+        )
 
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult:
         controller = build_default_paper_trading_controller(self._config)
@@ -343,6 +353,128 @@ class LocalWebActionRunner:
             diff_preview=diff_preview,
             output_path=output_path,
         )
+
+    def run_session_preopen(self) -> WebActionResult:
+        return self._write_daily_digest(session_label="session_preopen")
+
+    def run_session_heartbeat(self) -> WebActionResult:
+        return self._write_daily_digest(session_label="session_heartbeat")
+
+    def run_session_close(self) -> WebActionResult:
+        return self._write_daily_digest(session_label="session_close")
+
+    def acknowledge_incident(self, *, incident_id: str) -> WebActionResult:
+        acknowledgement_dir = self._operator_platform_root / "incident_acknowledgements"
+        acknowledgement_dir.mkdir(parents=True, exist_ok=True)
+        output_path = acknowledgement_dir / f"{incident_id}.json"
+        payload = {
+            "incident_id": incident_id,
+            "acknowledged_at_utc": datetime.now(UTC).isoformat(),
+            "acknowledged_by": "local-operator",
+        }
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="incident_acknowledge",
+            status="completed",
+            message=f"Acknowledged {incident_id}.",
+            evidence_refs=(str(output_path),),
+        )
+
+    def _write_daily_digest(self, *, session_label: str) -> WebActionResult:
+        daily_digest_dir = self._operator_platform_root / "daily_digests"
+        daily_digest_dir.mkdir(parents=True, exist_ok=True)
+        generated_at = datetime.now(UTC)
+        digest_id = f"digest-{generated_at.strftime('%Y%m%d%H%M%S')}-{session_label}"
+        paper_report = self._paper_store.build_operator_evidence_report()
+        summary_payload = paper_report.get("summary", {})
+        paper_summary = summary_payload if isinstance(summary_payload, dict) else {}
+        latest_alerts = self._paper_store.list_artifact_payloads("operator_alerts")[-3:]
+        payload = {
+            "digest_id": digest_id,
+            "generated_at_utc": generated_at.isoformat(),
+            "session_label": session_label,
+            "service_status": self._service_manager.get_state().status,
+            "blocked_trade_count": int(paper_summary.get("blocked_trade_count", 0)),
+            "reconciliation_failure_count": int(
+                paper_summary.get("reconciliation_failure_count", 0)
+            ),
+            "latest_positions": list(paper_summary.get("latest_open_positions", ())),
+            "top_incidents": [
+                f"incident-{payload.get('alert_id', '')}"
+                for payload in latest_alerts
+                if str(payload.get("alert_id", "")).strip()
+            ],
+            "recommended_actions": self._recommended_actions(),
+            "evidence_refs": self._digest_evidence_refs(),
+        }
+        output_path = daily_digest_dir / f"{digest_id}.json"
+        output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type=session_label,
+            status="completed",
+            message=self._digest_message(session_label),
+            evidence_refs=(str(output_path),),
+        )
+
+    def _recommended_actions(self) -> list[str]:
+        recommendations: list[str] = []
+        gate_assessments = self._validation_store.list_artifact_payloads(
+            "gate_assessments"
+        )
+        latest_gate = gate_assessments[-1] if gate_assessments else None
+        if latest_gate is not None:
+            recommendations.append(str(latest_gate.get("decision_summary", "")))
+        service_state = self._service_manager.get_state()
+        if service_state.last_error:
+            recommendations.append(
+                "Review the latest service error before the next cycle."
+            )
+        if not recommendations:
+            recommendations.append(
+                "Continue collecting paper evidence and review incidents."
+            )
+        return recommendations
+
+    def _digest_evidence_refs(self) -> list[str]:
+        refs: list[str] = []
+        paper_cycles = self._paper_store.list_artifact_payloads("service_cycles")
+        if paper_cycles:
+            latest_cycle = paper_cycles[-1]
+            cycle_id = str(latest_cycle.get("cycle_id", "")).strip()
+            if cycle_id:
+                refs.append(
+                    str(
+                        self._config.runtime.artifact_root
+                        / "paper_loop"
+                        / "service_cycles"
+                        / f"{cycle_id}.json"
+                    )
+                )
+        gate_assessments = self._validation_store.list_artifact_payloads(
+            "gate_assessments"
+        )
+        if gate_assessments:
+            gate_id = str(gate_assessments[-1].get("gate_id", "")).strip()
+            if gate_id:
+                refs.append(
+                    str(
+                        self._config.runtime.artifact_root
+                        / "validation"
+                        / "gate_assessments"
+                        / f"gate-{gate_id}.json"
+                    )
+                )
+        return refs
+
+    def _digest_message(self, session_label: str) -> str:
+        messages = {
+            "session_preopen": "Pre-open checklist captured.",
+            "session_heartbeat": "Heartbeat captured.",
+            "session_close": "Session close digest generated.",
+        }
+        return messages.get(session_label, "Session digest generated.")
 
 
 def build_default_local_web_components(

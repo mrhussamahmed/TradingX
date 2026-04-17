@@ -33,11 +33,104 @@ export type DashboardSnapshot = {
   document_summary: Record<string, string | number>
 }
 
+export type CommandCenterSnapshot = {
+  generated_at_utc: string
+  service_status: DashboardSnapshot['service_status']
+  market_session_label: string
+  session_mode: string
+  account_summary: DashboardSnapshot['account_summary']
+  equity_curve: Array<{ label: string; value: string }>
+  exposure_breakdown: Array<{ symbol: string; value: string }>
+  watchlist: Array<{ symbol: string; status: string }>
+  gate_statuses: Record<string, string>
+  recommendations: Record<string, number>
+  headline_incidents: Array<{ incident_id: string; severity: string }>
+}
+
+export type IncidentRecord = {
+  incident_id: string
+  title: string
+  severity: string
+  status: string
+  category: string
+  summary: string
+  first_seen_at_utc: string
+  latest_seen_at_utc: string
+  acknowledged_at_utc: string | null
+  acknowledged_by: string
+  related_event_ids: string[]
+  evidence_refs: string[]
+  suggested_action: string
+}
+
+export type OperatorTimelineEvent = {
+  event_id: string
+  event_type: string
+  symbol: string
+  severity: string
+  headline: string
+  details: string
+  occurred_at_utc: string
+  artifact_path: string
+  related_ids: string[]
+}
+
+export type ReplaySession = {
+  replay_id: string
+  focus_type: string
+  focus_value: string
+  headline: string
+  events: OperatorTimelineEvent[]
+  summary: string
+}
+
+export type ResearchCandidateSummary = {
+  candidate_id: string
+  family: string
+  recommendation: string
+  benchmark_metrics: Record<string, string>
+  candidate_metrics: Record<string, string>
+  adversarial_checks: string[]
+  gate_statuses: Record<string, string>
+  summary: string
+}
+
+export type ResearchStudioSnapshot = {
+  generated_at_utc: string
+  gate_summaries: Array<Record<string, string>>
+  candidate_summaries: ResearchCandidateSummary[]
+  decision_summary: string
+}
+
+export type ExplorerRecord = {
+  record_id: string
+  category: string
+  title: string
+  preview: string
+  path: string
+  symbol: string
+  recorded_at_utc: string
+}
+
+export type DailySessionDigest = {
+  digest_id: string
+  generated_at_utc: string
+  session_label: string
+  service_status: string
+  blocked_trade_count: number
+  reconciliation_failure_count: number
+  latest_positions: string[]
+  top_incidents: string[]
+  recommended_actions: string[]
+  evidence_refs: string[]
+}
+
 export type ConfigSummary = {
   config: {
     web_write_mode_enabled: boolean
     symbol_universe: string[]
     service_interval_seconds: number
+    web_refresh_interval_seconds: number
   } & Record<string, unknown>
   live_disable_report: {
     paper_only_mode: boolean

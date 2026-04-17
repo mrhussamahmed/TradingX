@@ -321,6 +321,106 @@ class DocumentRecord:
     kind: str
 
 
+@dataclass(frozen=True)
+class OperatorTimelineEvent:
+    event_id: str
+    event_type: str
+    symbol: str
+    severity: str
+    headline: str
+    details: str
+    occurred_at_utc: datetime
+    artifact_path: str
+    related_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IncidentRecord:
+    incident_id: str
+    title: str
+    severity: str
+    status: str
+    category: str
+    summary: str
+    first_seen_at_utc: datetime
+    latest_seen_at_utc: datetime
+    acknowledged_at_utc: datetime | None
+    acknowledged_by: str
+    related_event_ids: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    suggested_action: str
+
+
+@dataclass(frozen=True)
+class ResearchCandidateSummary:
+    candidate_id: str
+    family: str
+    recommendation: str
+    benchmark_metrics: dict[str, ScalarValue]
+    candidate_metrics: dict[str, ScalarValue]
+    adversarial_checks: tuple[str, ...]
+    gate_statuses: dict[str, str]
+    summary: str
+
+
+@dataclass(frozen=True)
+class ResearchStudioSnapshot:
+    generated_at_utc: datetime
+    gate_summaries: tuple[dict[str, str], ...]
+    candidate_summaries: tuple[ResearchCandidateSummary, ...]
+    decision_summary: str
+
+
+@dataclass(frozen=True)
+class ReplaySession:
+    replay_id: str
+    focus_type: str
+    focus_value: str
+    headline: str
+    events: tuple[OperatorTimelineEvent, ...]
+    summary: str
+
+
+@dataclass(frozen=True)
+class DailySessionDigest:
+    digest_id: str
+    generated_at_utc: datetime
+    session_label: str
+    service_status: str
+    blocked_trade_count: int
+    reconciliation_failure_count: int
+    latest_positions: tuple[str, ...]
+    top_incidents: tuple[str, ...]
+    recommended_actions: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExplorerRecord:
+    record_id: str
+    category: str
+    title: str
+    preview: str
+    path: str
+    symbol: str
+    recorded_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class CommandCenterSnapshot:
+    generated_at_utc: datetime
+    service_status: WebServiceState
+    market_session_label: str
+    session_mode: str
+    account_summary: dict[str, str]
+    equity_curve: tuple[dict[str, str], ...]
+    exposure_breakdown: tuple[dict[str, str], ...]
+    watchlist: tuple[dict[str, str], ...]
+    gate_statuses: dict[str, str]
+    recommendations: dict[str, int]
+    headline_incidents: tuple[dict[str, str], ...]
+
+
 __all__ = (
     "AccountSnapshot",
     "BenchmarkCloseSeries",

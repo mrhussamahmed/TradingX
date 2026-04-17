@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.2
+version: 1.2.4
 status: active
 created: 2026-04-17
-last_amended: 2026-04-17
-supersedes: INDEX-0001@1.2.1
+last_amended: 2026-04-18
+supersedes: INDEX-0001@1.2.3
 superseded_by: null
-author_session: SESS-2026-04-17-013
+author_session: SESS-2026-04-18-014
 ---
 
 # Artifact index
@@ -71,7 +71,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.0   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.2   | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.4   | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -87,6 +87,13 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0008 | Require a real Alpaca paper round trip in Phase 0 | 1.0.0 | active | `docs/adrs/ADR-0008-walking-skeleton-deliverable.md` |
 | ADR-0009 | Use Nautilus Trader as the backtest engine | 1.0.0 | active | `docs/adrs/ADR-0009-backtest-engine-nautilus-trader.md` |
 | ADR-0010 | Use FastAPI with a minimal React SPA for the local control web app | 1.0.0 | active | `docs/adrs/ADR-0010-local-web-app-react-spa.md` |
+| ADR-0011 | Use a normalized operator event timeline with polling refresh for the operator platform | 1.0.0 | active | `docs/adrs/ADR-0011-operator-platform-event-timeline-polling.md` |
+
+### Design documents
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| DESIGN-0001 | TradingX operator platform design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-operator-platform-design.md` |
 
 ### Specifications (SPEC-NNNN)
 
@@ -94,6 +101,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | SPEC-0001 | TradingX Stage 1 paper trading bot specification | 1.0.0 | active | `specs/001-paper-trading-bot/spec.md` |
 | SPEC-0002 | TradingX local control web app specification | 1.0.0 | active | `specs/002-local-control-web-app/spec.md` |
+| SPEC-0003 | TradingX operator platform specification | 1.0.0 | active | `specs/003-operator-platform/spec.md` |
 
 ### Plans (PLAN-NNNN)
 
@@ -101,6 +109,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | PLAN-0001 | TradingX Stage 1 paper trading bot implementation plan | 1.0.0 | active | `specs/001-paper-trading-bot/plan.md` |
 | PLAN-0002 | TradingX local control web app implementation plan | 1.0.0 | active | `specs/002-local-control-web-app/plan.md` |
+| PLAN-0003 | TradingX operator platform implementation plan | 1.0.0 | active | `specs/003-operator-platform/plan.md` |
 
 ### Task lists (TASKS-NNNN)
 
@@ -108,6 +117,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | TASKS-0001 | TradingX Stage 1 paper trading bot task list | 1.0.0 | active | `specs/001-paper-trading-bot/tasks.md` |
 | TASKS-0002 | TradingX local control web app task list | 1.0.0 | active | `specs/002-local-control-web-app/tasks.md` |
+| TASKS-0003 | TradingX operator platform task list | 1.0.0 | active | `specs/003-operator-platform/tasks.md` |
 
 ### Research notes
 
@@ -115,6 +125,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | RESEARCH-0001 | TradingX Stage 1 planning research | 1.0.0 | active | `specs/001-paper-trading-bot/research.md` |
 | RESEARCH-0002 | TradingX local control web app research | 1.0.0 | active | `specs/002-local-control-web-app/research.md` |
+| RESEARCH-0003 | TradingX operator platform research | 1.0.0 | active | `specs/003-operator-platform/research.md` |
 
 ### Data models
 
@@ -122,6 +133,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | DATAMODEL-0001 | TradingX Stage 1 planning data model | 1.0.0 | active | `specs/001-paper-trading-bot/data-model.md` |
 | DATAMODEL-0002 | TradingX local control web app data model | 1.0.0 | active | `specs/002-local-control-web-app/data-model.md` |
+| DATAMODEL-0003 | TradingX operator platform data model | 1.0.0 | active | `specs/003-operator-platform/data-model.md` |
 
 ### Quickstarts
 
@@ -129,6 +141,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | QUICKSTART-0001 | TradingX Stage 1 planning quickstart | 1.0.0 | active | `specs/001-paper-trading-bot/quickstart.md` |
 | QUICKSTART-0003 | TradingX local control web app quickstart | 1.0.0 | active | `specs/002-local-control-web-app/quickstart.md` |
+| QUICKSTART-0004 | TradingX operator platform quickstart | 1.0.0 | active | `specs/003-operator-platform/quickstart.md` |
 
 ### Contracts (CONTRACT-NNNN)
 
@@ -137,6 +150,7 @@ field (session lifecycle). This index tracks `status` only.
 | CONTRACT-0001 | Trading loop contract | 1.0.0 | active | `specs/001-paper-trading-bot/contracts/trading_loop.md` |
 | CONTRACT-0002 | Operator alerts and evidence contract | 1.0.0 | active | `specs/001-paper-trading-bot/contracts/operator_evidence.md` |
 | CONTRACT-0003 | Local control web app API contract | 1.0.0 | active | `specs/002-local-control-web-app/contracts/web_app_api.md` |
+| CONTRACT-0004 | Operator platform API contract | 1.0.0 | active | `specs/003-operator-platform/contracts/operator_platform_api.md` |
 
 ### Validation gate definitions
 
@@ -172,7 +186,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 13              | SESS-2026-04-17-013    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 14              | SESS-2026-04-18-014    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

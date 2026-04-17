@@ -104,6 +104,7 @@ class WebAppConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     write_mode_enabled: bool = False
+    refresh_interval_seconds: int = 15
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,10 @@ class TradingConfig:
                     values.get("TRADINGX_WEB_WRITE_MODE_ENABLED"),
                     default=False,
                 ),
+                refresh_interval_seconds=_normalize_int(
+                    values.get("TRADINGX_WEB_REFRESH_INTERVAL_SECONDS"),
+                    default=15,
+                ),
             ),
         )
 
@@ -210,6 +215,7 @@ class TradingConfig:
             "web_host": self.web.host,
             "web_port": self.web.port,
             "web_write_mode_enabled": self.web.write_mode_enabled,
+            "web_refresh_interval_seconds": self.web.refresh_interval_seconds,
             "telegram_alerts_enabled": self.alerting.telegram_enabled(),
             "smtp_alerts_enabled": self.alerting.smtp_enabled(),
             "live_trading_enabled": self.live_controls.all_layers_enabled(),

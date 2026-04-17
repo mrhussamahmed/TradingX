@@ -114,3 +114,34 @@ def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
     assert "TRADINGX_SYMBOL_UNIVERSE" in proposal.output_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_local_web_action_runner_generates_session_digests_and_acknowledges_incidents(
+    tmp_path,
+) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            }
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    preopen = runner.run_session_preopen()
+    heartbeat = runner.run_session_heartbeat()
+    close_result = runner.run_session_close()
+    acknowledge = runner.acknowledge_incident(incident_id="incident-alert-1")
+
+    assert preopen.status == "completed"
+    assert heartbeat.status == "completed"
+    assert close_result.status == "completed"
+    assert acknowledge.status == "completed"
+    assert (
+        tmp_path
+        / "artifacts"
+        / "operator_platform"
+        / "incident_acknowledgements"
+        / "incident-alert-1.json"
+    ).exists()
