@@ -7,13 +7,13 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-008
+author_session: SESS-2026-04-17-009
 ---
 
 # Current project state
 
 - Active session: none
-- Active branch: codex/paper-service-upgrades
+- Active branch: main
 - Active phase: 6
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -29,7 +29,8 @@ author_session: SESS-2026-04-17-008
 - `ADR-0009` selects Nautilus Trader as the backtest engine.
 - `GATES-0001` defines the Stage 1 gate evidence baseline.
 - `TASKS-0001` implementation is complete and merged into `main`.
-- The current working branch extends the Stage 1 bot with:
+- `codex/paper-service-upgrades` has been merged into `main`.
+- The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
   - a recurring paper-service runtime that scans a bounded symbol
@@ -40,8 +41,8 @@ author_session: SESS-2026-04-17-008
     evidence packs
   - richer operator alerts, including optional Telegram and SMTP
     delivery and evidence-report summaries for paper-service runs
-- Validation is green on `codex/paper-service-upgrades`; `./scripts/validate`
-  passed with the expected closed-market smoke skip.
-- Next artifact step is to push and review `codex/paper-service-upgrades`,
-  then run the new paper service during regular US market hours with
-  real alert credentials if operator delivery is desired.
+- Validation is green on `main`; `./scripts/validate` passed with the
+  expected closed-market smoke skip.
+- Next artifact step is to run the paper service during regular US
+  market hours, verify real Telegram/SMTP delivery if desired, and begin
+  collecting the longer-lived evidence required for Gates 1 through 3.
