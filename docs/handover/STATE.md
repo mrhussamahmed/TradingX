@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-011
+author_session: SESS-2026-04-17-012
 ---
 
 # Current project state
@@ -32,6 +32,7 @@ author_session: SESS-2026-04-17-011
 - `codex/paper-service-upgrades` has been merged into `main`.
 - `codex/gate-validation-reporting` has been merged into `main`.
 - `codex/benchmark-series-prep` has been merged into `main`.
+- `codex/gate-decision-layer` has been merged into `main`.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -46,6 +47,9 @@ author_session: SESS-2026-04-17-011
   - a `prepare-benchmark-closes` workflow that fetches Alpaca daily
     benchmark closes into metadata-rich artifacts and lets `gate-report`
     infer dividend-adjusted status safely
+  - a `decision-report` workflow that combines the latest validation
+    artifacts with current paper-evidence summaries into one
+    operator-ready gate brief and alert preview
   - richer operator alerts, including optional Telegram and SMTP
     delivery and evidence-report summaries for paper-service runs
 - Validation is green on `main`; `./scripts/validate` passed with the
@@ -54,5 +58,5 @@ author_session: SESS-2026-04-17-011
   market hours, verify real Telegram/SMTP delivery if desired, use
   `prepare-benchmark-closes` to generate a real dividend-adjusted
   benchmark artifact, produce real Gate 1 and Gate 2 reports from that
-  artifact, and begin collecting the longer-lived evidence required for
-  Gate 3.
+  artifact, review them through `decision-report`, and begin collecting
+  the longer-lived evidence required for Gate 3.
