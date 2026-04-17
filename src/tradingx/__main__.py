@@ -12,10 +12,12 @@ from typing import Any
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_controller,
+    build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.service import build_default_paper_service
+from tradingx.validation import load_close_series
 
 
 def _serialize(value: Any) -> Any:
@@ -70,6 +72,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     evidence_parser = subparsers.add_parser("evidence-report")
     evidence_parser.add_argument("--artifact-root", default="artifacts/paper_loop")
+
+    gate_parser = subparsers.add_parser("gate-report")
+    gate_parser.add_argument("--env-file", default=".env")
+    gate_parser.add_argument("--gate", choices=("1", "2"), required=True)
+    gate_parser.add_argument("--benchmark-closes-file", required=True)
+    gate_parser.add_argument("--window-start", required=True)
+    gate_parser.add_argument("--window-end", required=True)
+    gate_parser.add_argument("--artifact-root", default="artifacts/validation")
+    gate_parser.add_argument("--universe", default=None)
+    gate_parser.add_argument("--benchmark-adjusted", action="store_true")
     return parser
 
 
@@ -132,6 +144,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        return 0
+
+    if args.command == "gate-report":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        controller = build_default_gate_validation_controller(
+            config,
+            artifact_root=Path(args.artifact_root),
+        )
+        universe = (
+            tuple(
+                item.strip().upper()
+                for item in args.universe.split(",")
+                if item.strip()
+            )
+            if args.universe
+            else config.runtime.symbol_universe
+        )
+        gate_result = controller.generate_gate_report(
+            gate_id=args.gate,
+            benchmark_closes=load_close_series(Path(args.benchmark_closes_file)),
+            window_start_utc=datetime.fromisoformat(args.window_start).replace(
+                tzinfo=UTC
+            ),
+            window_end_utc=datetime.fromisoformat(args.window_end).replace(tzinfo=UTC),
+            universe=universe,
+            benchmark_series_is_adjusted=args.benchmark_adjusted,
+        )
+        print(json.dumps(_serialize(gate_result), sort_keys=True))
         return 0
 
     config = TradingConfig.from_env_file(Path(args.env_file))

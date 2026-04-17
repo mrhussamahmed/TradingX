@@ -139,6 +139,46 @@ class GateAssessment:
 
 
 @dataclass(frozen=True)
+class ValidationCriterionResult:
+    criterion_id: str
+    passed: bool
+    threshold: str
+    details: str
+
+
+@dataclass(frozen=True)
+class ValidationCandidateResult:
+    candidate_id: str
+    gate_id: str
+    status: str
+    evidence_pack_id: str
+    criteria: tuple[ValidationCriterionResult, ...]
+    summary: str
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    report_id: str
+    gate_id: str
+    generated_at_utc: datetime
+    status: str
+    benchmark_symbol: str
+    window_start_utc: datetime
+    window_end_utc: datetime
+    candidate_results: tuple[ValidationCandidateResult, ...]
+    summary: str
+    assumptions: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GateReportResult:
+    report: ValidationReport
+    gate_assessment: GateAssessment
+    artifact_paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
 class RoundTripResult:
     symbol: str
     quantity: Decimal
@@ -198,6 +238,7 @@ __all__ = (
     "AccountSnapshot",
     "EvaluationEvidencePack",
     "GateAssessment",
+    "GateReportResult",
     "LatestQuote",
     "MarketSnapshot",
     "OperatorAlert",
@@ -214,4 +255,7 @@ __all__ = (
     "StrategyCandidate",
     "TradeIntent",
     "TradingLoopResult",
+    "ValidationCandidateResult",
+    "ValidationCriterionResult",
+    "ValidationReport",
 )

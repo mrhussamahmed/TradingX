@@ -113,6 +113,40 @@ class FakePaperServiceController:
         }
 
 
+class FakeGateValidationController:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def generate_gate_report(
+        self,
+        *,
+        gate_id: str,
+        benchmark_closes: tuple[Decimal, ...],
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        universe: tuple[str, ...],
+        benchmark_series_is_adjusted: bool,
+    ):
+        self.called_with = {
+            "gate_id": gate_id,
+            "benchmark_closes": benchmark_closes,
+            "window_start_utc": window_start_utc,
+            "window_end_utc": window_end_utc,
+            "universe": universe,
+            "benchmark_series_is_adjusted": benchmark_series_is_adjusted,
+        }
+        return {
+            "report": {
+                "gate_id": gate_id,
+                "status": "pass",
+            },
+            "gate_assessment": {
+                "gate_id": gate_id,
+                "status": "pass",
+            },
+        }
+
+
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -275,6 +309,58 @@ def test_main_prints_live_disable_status(tmp_path, capsys) -> None:
     assert payload["manual_kill_switch_active"] is True
 
 
+def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ\n",
+        encoding="utf-8",
+    )
+    benchmark_closes_file = tmp_path / "benchmark-closes.json"
+    benchmark_closes_file.write_text(
+        json.dumps(["100", "101", "102"]),
+        encoding="utf-8",
+    )
+    fake_controller = FakeGateValidationController()
+    monkeypatch.setattr(
+        cli,
+        "build_default_gate_validation_controller",
+        lambda config, artifact_root: fake_controller,
+    )
+
+    exit_code = cli.main(
+        [
+            "gate-report",
+            "--env-file",
+            str(env_file),
+            "--gate",
+            "1",
+            "--benchmark-closes-file",
+            str(benchmark_closes_file),
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+            "--artifact-root",
+            str(tmp_path / "validation"),
+            "--benchmark-adjusted",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert fake_controller.called_with == {
+        "gate_id": "1",
+        "benchmark_closes": (Decimal("100"), Decimal("101"), Decimal("102")),
+        "window_start_utc": datetime(2026, 4, 1, tzinfo=UTC),
+        "window_end_utc": datetime(2026, 4, 17, tzinfo=UTC),
+        "universe": ("SPY", "QQQ"),
+        "benchmark_series_is_adjusted": True,
+    }
+    assert payload["gate_assessment"]["status"] == "pass"
+
+
 def test_main_prints_operator_evidence_report(tmp_path, capsys) -> None:
     artifacts_dir = tmp_path / "artifacts"
     (artifacts_dir / "trade_intents").mkdir(parents=True)
@@ -306,3 +392,26 @@ def test_run_paper_service_parser_defaults() -> None:
     assert args.symbols is None
     assert args.interval_seconds is None
     assert args.max_cycles is None
+
+
+def test_gate_report_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(
+        [
+            "gate-report",
+            "--gate",
+            "1",
+            "--benchmark-closes-file",
+            "closes.json",
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+        ]
+    )
+
+    assert args.env_file == ".env"
+    assert args.artifact_root == "artifacts/validation"
+    assert args.universe is None
+    assert args.benchmark_adjusted is False

@@ -7,7 +7,7 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-008
+author_session: SESS-2026-04-17-010
 ---
 
 # Quickstart
@@ -66,6 +66,8 @@ Expected behavior:
 - The summary section reports blocked-trade totals, the latest open
   positions, the latest cash/equity snapshot, daily paper PnL, and
   evaluation recommendation counts.
+- When gate reports exist, the summary also includes the latest status
+  seen for each gate assessment.
 
 ## 6. Run the paper round trip directly
 
@@ -83,13 +85,14 @@ Expected behavior:
 ## 7. Inspect the current implementation boundary
 
 - `src/tradingx/controller.py` orchestrates the paper loop, recovery
-  flow, and evaluation pipeline.
+  flow, evaluation pipeline, and gate-report generation.
 - `src/tradingx/risk.py` enforces paper-only risk gates and auditable
   block decisions.
 - `src/tradingx/strategy.py` contains the live paper-loop baseline and
   the mandatory evaluation candidate registry.
-- `src/tradingx/evaluation.py` and `src/tradingx/alerts.py` produce the
-  offline evidence and operator-facing alert payloads.
+- `src/tradingx/evaluation.py`, `src/tradingx/validation.py`, and
+  `src/tradingx/alerts.py` produce the offline evidence and operator-
+  facing alert payloads.
 - `docs/validation/acceptance_gates.md` defines the evidence needed for
   later phase advancement.
 
@@ -113,12 +116,39 @@ Expected behavior:
 - `paper-recover` resumes the latest persisted cycle for the symbol
   without creating a duplicate paper submission.
 
-## 9. Quickstart verification status
+## 9. Generate Gate 1 or Gate 2 validation reports
+
+Create a benchmark close-series file first. The simplest accepted format
+is a JSON array of close prices:
+
+```json
+["100", "101.25", "102.10"]
+```
+
+Then run a report command:
+
+```bash
+uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file benchmark-closes.json --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted
+uv run tradingx gate-report --env-file .env --gate 2 --benchmark-closes-file benchmark-closes.json --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted
+```
+
+Expected behavior:
+
+- The command writes candidate evaluation evidence, a validation report,
+  and a gate assessment under `artifacts/validation/`.
+- Gate 1 reports the benchmark edge, drawdown, Calmar, out-of-sample
+  profile, and benchmark-adjustment criteria for each mandatory
+  candidate.
+- Gate 2 reports the 2x cost stress, parameter-perturbation, and
+  rolling walk-forward criteria for each mandatory candidate.
+
+## 10. Quickstart verification status
 
 This quickstart was exercised on 2026-04-17 with:
 
 - `uv run tradingx config-summary --env-file .env`
 - `uv run tradingx live-disable-status --env-file .env`
+- `uv run tradingx gate-report --gate 1 --benchmark-closes-file <fixture> --window-start 2023-01-01 --window-end 2026-04-17 --benchmark-adjusted`
 - `uv run pytest`
 - `./scripts/validate`
 

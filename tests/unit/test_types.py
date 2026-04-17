@@ -6,6 +6,7 @@ from pathlib import Path
 
 from tradingx.types import (
     GateAssessment,
+    GateReportResult,
     OperatorAlert,
     PortfolioState,
     ReconciliationSnapshot,
@@ -15,6 +16,9 @@ from tradingx.types import (
     ServiceSymbolResult,
     StrategyCandidate,
     TradeIntent,
+    ValidationCandidateResult,
+    ValidationCriterionResult,
+    ValidationReport,
 )
 
 
@@ -127,3 +131,50 @@ def test_service_cycle_and_run_result_capture_runtime_summary_fields() -> None:
 
     assert cycle.open_position_symbols == ("SPY",)
     assert result.cycles_completed == 1
+
+
+def test_validation_report_and_gate_report_result_capture_gate_evidence() -> None:
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    report = ValidationReport(
+        report_id="gate-1-20260417",
+        gate_id="1",
+        generated_at_utc=timestamp,
+        status="pass",
+        benchmark_symbol="SPY",
+        window_start_utc=timestamp,
+        window_end_utc=timestamp,
+        candidate_results=(
+            ValidationCandidateResult(
+                candidate_id="trend-following-v1",
+                gate_id="1",
+                status="pass",
+                evidence_pack_id="evaluation-1",
+                criteria=(
+                    ValidationCriterionResult(
+                        criterion_id="benchmark_edge",
+                        passed=True,
+                        threshold="Sharpe >= 1.0 and >= 1.3x SPY Sharpe",
+                        details="Sharpe edge satisfied.",
+                    ),
+                ),
+                summary="All criteria satisfied.",
+            ),
+        ),
+        summary="Gate 1 passed.",
+        assumptions=("benchmark series declared dividend-adjusted",),
+        evidence_refs=("artifacts/validation_reports/gate-1-20260417.json",),
+    )
+    gate_result = GateReportResult(
+        report=report,
+        gate_assessment=GateAssessment(
+            gate_id="1",
+            status="pass",
+            evidence_refs=("artifacts/validation_reports/gate-1-20260417.json",),
+            decision_summary="Gate 1 passed.",
+            recorded_at_utc=timestamp,
+        ),
+        artifact_paths=(Path("artifacts/validation_reports/gate-1-20260417.json"),),
+    )
+
+    assert report.candidate_results[0].criteria[0].passed is True
+    assert gate_result.gate_assessment.status == "pass"

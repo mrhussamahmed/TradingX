@@ -13,6 +13,9 @@ from tradingx.types import (
     ServiceCycleSnapshot,
     ServiceSymbolResult,
     TradeIntent,
+    ValidationCandidateResult,
+    ValidationCriterionResult,
+    ValidationReport,
 )
 
 
@@ -161,3 +164,57 @@ def test_filesystem_artifact_store_writes_service_cycle_and_builds_richer_summar
     assert report["summary"]["latest_cash"] == "10025.00"
     assert report["summary"]["latest_equity"] == "10030.00"
     assert report["summary"]["evaluation_recommendations"] == {"keep": 1}
+
+
+def test_filesystem_artifact_store_writes_validation_report_and_summarizes_gate_status(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+
+    report_path = store.write_validation_report(
+        ValidationReport(
+            report_id="gate-1-20260417",
+            gate_id="1",
+            generated_at_utc=timestamp,
+            status="pass",
+            benchmark_symbol="SPY",
+            window_start_utc=timestamp,
+            window_end_utc=timestamp,
+            candidate_results=(
+                ValidationCandidateResult(
+                    candidate_id="trend-following-v1",
+                    gate_id="1",
+                    status="pass",
+                    evidence_pack_id="evaluation-1",
+                    criteria=(
+                        ValidationCriterionResult(
+                            criterion_id="benchmark_edge",
+                            passed=True,
+                            threshold="Sharpe >= 1.0 and >= 1.3x SPY Sharpe",
+                            details="Sharpe edge satisfied.",
+                        ),
+                    ),
+                    summary="All Gate 1 criteria satisfied.",
+                ),
+            ),
+            summary="Gate 1 passed for trend-following-v1.",
+            assumptions=("benchmark series declared dividend-adjusted",),
+            evidence_refs=("evaluation_evidence/evaluation-1.json",),
+        )
+    )
+    store.write_gate_assessment(
+        GateAssessment(
+            gate_id="1",
+            status="pass",
+            evidence_refs=(str(report_path),),
+            decision_summary="Gate 1 passed for one mandatory candidate.",
+            recorded_at_utc=timestamp,
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert report_path == tmp_path / "validation_reports" / "gate-1-20260417.json"
+    assert report["counts"]["validation_reports"] == 1
+    assert report["summary"]["latest_gate_statuses"] == {"1": "pass"}

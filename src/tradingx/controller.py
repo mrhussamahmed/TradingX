@@ -18,7 +18,12 @@ from tradingx.alerts import (
     build_risk_control_alert,
 )
 from tradingx.config import TradingConfig
-from tradingx.data import AlpacaMarketDataGateway, AlpacaRegularHoursCalendar
+from tradingx.data import (
+    AlpacaMarketDataGateway,
+    AlpacaRegularHoursCalendar,
+    close_to_close_returns,
+)
+from tradingx.evaluation import evaluate_candidate
 from tradingx.execution import AlpacaPaperExecutionGateway
 from tradingx.monitoring import StageMetrics
 from tradingx.persistence import FilesystemArtifactStore
@@ -26,10 +31,13 @@ from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
 from tradingx.strategy import (
     DeterministicBaselineStrategy,
+    build_candidate_return_series,
     build_mandatory_candidate_registry,
 )
 from tradingx.types import (
     EvaluationEvidencePack,
+    GateAssessment,
+    GateReportResult,
     LatestQuote,
     PortfolioState,
     ReconciliationSnapshot,
@@ -38,6 +46,7 @@ from tradingx.types import (
     TradeIntent,
     TradingLoopResult,
 )
+from tradingx.validation import build_gate_report
 
 
 def _serialize(value: Any) -> Any:
@@ -573,6 +582,71 @@ class StrategyEvaluationController:
         return tuple(evidence_packs)
 
 
+class GateValidationController:
+    def __init__(
+        self,
+        *,
+        artifacts: FilesystemArtifactStore,
+        metrics: StageMetrics | None = None,
+    ) -> None:
+        self._artifacts = artifacts
+        self._metrics = metrics or StageMetrics()
+
+    def generate_gate_report(
+        self,
+        *,
+        gate_id: str,
+        benchmark_closes: tuple[Decimal, ...],
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        universe: tuple[str, ...],
+        benchmark_series_is_adjusted: bool,
+    ) -> GateReportResult:
+        candidates = build_mandatory_candidate_registry(universe)
+        benchmark_returns = close_to_close_returns(benchmark_closes)
+        evidence_paths: list[Path] = []
+        for candidate in candidates:
+            evidence_pack = evaluate_candidate(
+                candidate,
+                candidate_returns=build_candidate_return_series(
+                    candidate,
+                    benchmark_closes,
+                ),
+                benchmark_returns=benchmark_returns,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+            )
+            evidence_path = self._artifacts.write_evaluation_evidence(evidence_pack)
+            self._metrics.record_evidence_artifact("evaluation_evidence")
+            self._metrics.record_candidate_recommendation(evidence_pack.recommendation)
+            evidence_paths.append(evidence_path)
+
+        report = build_gate_report(
+            gate_id=gate_id,
+            benchmark_closes=benchmark_closes,
+            candidates=candidates,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            benchmark_series_is_adjusted=benchmark_series_is_adjusted,
+        )
+        report_path = self._artifacts.write_validation_report(report)
+        self._metrics.record_evidence_artifact("validation_report")
+        gate_assessment = GateAssessment(
+            gate_id=gate_id,
+            status=report.status,
+            evidence_refs=tuple(str(path) for path in evidence_paths + [report_path]),
+            decision_summary=report.summary,
+            recorded_at_utc=window_end_utc,
+        )
+        gate_path = self._artifacts.write_gate_assessment(gate_assessment)
+        self._metrics.record_evidence_artifact("gate_assessment")
+        return GateReportResult(
+            report=report,
+            gate_assessment=gate_assessment,
+            artifact_paths=tuple(evidence_paths + [report_path, gate_path]),
+        )
+
+
 def build_default_controller(config: TradingConfig) -> RoundTripController:
     trading_client = TradingClient(
         config.paper_credentials.api_key,
@@ -612,6 +686,17 @@ def build_default_paper_trading_controller(
         alert_dispatcher=build_alert_dispatcher(config),
         regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
         command_timeout_seconds=config.runtime.command_timeout_seconds,
+    )
+
+
+def build_default_gate_validation_controller(
+    config: TradingConfig,
+    *,
+    artifact_root: Path,
+) -> GateValidationController:
+    return GateValidationController(
+        artifacts=FilesystemArtifactStore(artifact_root),
+        metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
     )
 
 

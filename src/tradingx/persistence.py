@@ -20,6 +20,7 @@ from tradingx.types import (
     RiskControlEvent,
     ServiceCycleSnapshot,
     TradeIntent,
+    ValidationReport,
 )
 
 
@@ -81,6 +82,13 @@ class FilesystemArtifactStore:
             "service_cycles",
             f"{snapshot.cycle_id}.json",
             snapshot,
+        )
+
+    def write_validation_report(self, report: ValidationReport) -> Path:
+        return self._write_json(
+            "validation_reports",
+            f"{report.report_id}.json",
+            report,
         )
 
     def trade_intent_path(self, intent_id: str) -> Path:
@@ -210,6 +218,7 @@ class FilesystemArtifactStore:
             "operator_alerts",
             "gate_assessments",
             "service_cycles",
+            "validation_reports",
         )
         counts: dict[str, int] = {}
         latest_artifacts: dict[str, str] = {}
@@ -222,6 +231,7 @@ class FilesystemArtifactStore:
             latest_artifacts[category] = artifacts[-1].name if artifacts else ""
         service_cycle_payloads = self._read_category_payloads("service_cycles")
         evaluation_payloads = self._read_category_payloads("evaluation_evidence")
+        gate_payloads = self._read_category_payloads("gate_assessments")
         latest_service_cycle = (
             service_cycle_payloads[-1] if service_cycle_payloads else None
         )
@@ -276,6 +286,10 @@ class FilesystemArtifactStore:
                 ),
                 "daily_pnl": str(daily_pnl),
                 "evaluation_recommendations": recommendation_counts,
+                "latest_gate_statuses": {
+                    str(payload["gate_id"]): str(payload["status"])
+                    for payload in gate_payloads
+                },
             },
         }
 
