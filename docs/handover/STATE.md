@@ -7,13 +7,13 @@ created: 2026-04-17
 last_amended: 2026-04-17
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-006
+author_session: SESS-2026-04-17-007
 ---
 
 # Current project state
 
 - Active session: none
-- Active branch: 001-paper-trading-bot
+- Active branch: main
 - Active phase: 6
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -28,14 +28,19 @@ author_session: SESS-2026-04-17-006
 - `TASKS-0001` is active at `specs/001-paper-trading-bot/tasks.md`.
 - `ADR-0009` selects Nautilus Trader as the backtest engine.
 - `GATES-0001` defines the Stage 1 gate evidence baseline.
-- `TASKS-0001` implementation is complete and the branch validates
-  cleanly, including the real Alpaca paper smoke gate.
-- The current branch now provides:
+- `TASKS-0001` implementation is complete and merged into `main`.
+- The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
   - an offline mandatory-candidate evaluation pipeline with persisted
     evidence packs
   - bounded operator alerts, live-disable visibility, and evidence-report
     commands
-- Next artifact step is operator review of `001-paper-trading-bot` and
-  promotion or follow-up gate-report work.
+- The review pass after implementation also hardened two real integration
+  edges:
+  - blocked trades now persist operator-alert artifacts even without an
+    external dispatcher configured
+  - the smoke gate now skips cleanly outside regular US market hours
+    instead of failing after the close
+- Next artifact step is longer paper validation on `main` plus future
+  gate-report work for Gates 1 through 3.
