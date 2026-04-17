@@ -100,11 +100,19 @@ class RuntimeConfig:
 
 
 @dataclass(frozen=True)
+class WebAppConfig:
+    host: str = "127.0.0.1"
+    port: int = 8765
+    write_mode_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class TradingConfig:
     paper_credentials: PaperCredentials
     live_controls: LiveTradingControls
     alerting: AlertingConfig
     runtime: RuntimeConfig
+    web: WebAppConfig
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, str | None]) -> TradingConfig:
@@ -167,6 +175,17 @@ class TradingConfig:
                     _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
                 ),
             ),
+            web=WebAppConfig(
+                host=_normalize_value(values.get("TRADINGX_WEB_HOST")) or "127.0.0.1",
+                port=_normalize_int(
+                    values.get("TRADINGX_WEB_PORT"),
+                    default=8765,
+                ),
+                write_mode_enabled=_normalize_bool(
+                    values.get("TRADINGX_WEB_WRITE_MODE_ENABLED"),
+                    default=False,
+                ),
+            ),
         )
 
     @classmethod
@@ -188,6 +207,9 @@ class TradingConfig:
             "manual_kill_switch_active": self.runtime.manual_kill_switch_active,
             "service_interval_seconds": self.runtime.service_interval_seconds,
             "symbol_universe": list(self.runtime.symbol_universe),
+            "web_host": self.web.host,
+            "web_port": self.web.port,
+            "web_write_mode_enabled": self.web.write_mode_enabled,
             "telegram_alerts_enabled": self.alerting.telegram_enabled(),
             "smtp_alerts_enabled": self.alerting.smtp_enabled(),
             "live_trading_enabled": self.live_controls.all_layers_enabled(),

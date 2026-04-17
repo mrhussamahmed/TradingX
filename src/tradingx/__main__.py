@@ -26,6 +26,7 @@ from tradingx.validation import (
     load_benchmark_close_series,
     write_benchmark_close_series,
 )
+from tradingx.web.app import run_web_app
 
 
 def _serialize(value: Any) -> Any:
@@ -118,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--artifact-root", default="artifacts/validation")
     gate_parser.add_argument("--universe", default=None)
     gate_parser.add_argument("--benchmark-adjusted", action="store_true")
+
+    web_parser = subparsers.add_parser("web")
+    web_parser.add_argument("--env-file", default=".env")
+    web_parser.add_argument("--host", default=None)
+    web_parser.add_argument("--port", type=int, default=None)
     return parser
 
 
@@ -287,6 +293,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
         print(json.dumps(_serialize(gate_result), sort_keys=True))
+        return 0
+
+    if args.command == "web":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        run_web_app(
+            config,
+            host=args.host or config.web.host,
+            port=args.port or config.web.port,
+        )
         return 0
 
     config = TradingConfig.from_env_file(Path(args.env_file))

@@ -5,6 +5,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx.types import (
+    ConfigProposal,
+    DashboardSnapshot,
+    DocumentRecord,
     GateAssessment,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
@@ -21,6 +24,8 @@ from tradingx.types import (
     ValidationCandidateResult,
     ValidationCriterionResult,
     ValidationReport,
+    WebActionResult,
+    WebServiceState,
 )
 
 
@@ -210,3 +215,58 @@ def test_gate_decision_brief_captures_operator_ready_summary() -> None:
     assert brief.candidate_summaries[0].failed_criteria == ("cost_stress",)
     assert brief.latest_open_positions == ("SPY",)
     assert brief.blocked_trade_count == 3
+
+
+def test_web_types_capture_dashboard_documents_and_actions() -> None:
+    timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    service_state = WebServiceState(
+        status="running",
+        active_symbols=("SPY", "QQQ"),
+        interval_seconds=300,
+        cycles_completed=4,
+        started_at_utc=timestamp,
+        last_completed_at_utc=timestamp,
+        last_error="",
+    )
+    snapshot = DashboardSnapshot(
+        generated_at_utc=timestamp,
+        service_status=service_state,
+        account_summary={
+            "cash": "10025.00",
+            "equity": "10030.00",
+            "buying_power": "20030.00",
+            "daily_pnl": "5.00",
+        },
+        positions=({"symbol": "SPY", "quantity": "1", "market_value": "101.00"},),
+        alerts=("stale broker state blocked a trade",),
+        gate_statuses={"1": "pass", "2": "pending"},
+        recommendations={"promote_candidate": 1},
+        document_summary={"session_count": 2, "latest_state": "Gate 3 pending."},
+    )
+    action = WebActionResult(
+        action_id="action-1",
+        action_type="paper_service_start",
+        status="accepted",
+        message="Paper service started locally.",
+        evidence_refs=("artifacts/paper_loop/service_cycles/cycle-1.json",),
+    )
+    proposal = ConfigProposal(
+        proposal_id="proposal-1",
+        target_area="symbols",
+        proposed_values={"TRADINGX_SYMBOL_UNIVERSE": ["SPY", "QQQ"]},
+        diff_preview="+ TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ",
+        output_path=Path("config/proposals/proposal-1.md"),
+    )
+    document = DocumentRecord(
+        doc_id="SESS-2026-04-17-013",
+        title="Session 013 handover",
+        path=Path("docs/handover/SESSIONS/SESS-2026-04-17-013.md"),
+        preview="Local web app planning approved.",
+        kind="handover",
+    )
+
+    assert snapshot.service_status.status == "running"
+    assert snapshot.positions[0]["symbol"] == "SPY"
+    assert action.evidence_refs == ("artifacts/paper_loop/service_cycles/cycle-1.json",)
+    assert proposal.output_path.name == "proposal-1.md"
+    assert document.kind == "handover"

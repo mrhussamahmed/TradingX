@@ -9,6 +9,8 @@
 *.pyc
 __pycache__/
 artifacts/
+webapp/dist/
+webapp/node_modules/
 
 !.env.example
 !.env.research.example

@@ -271,9 +271,62 @@ class ServiceRunResult:
     artifact_paths: tuple[Path, ...]
 
 
+@dataclass(frozen=True)
+class WebServiceState:
+    status: str
+    active_symbols: tuple[str, ...]
+    interval_seconds: int
+    cycles_completed: int
+    started_at_utc: datetime | None
+    last_completed_at_utc: datetime | None
+    last_error: str
+
+
+@dataclass(frozen=True)
+class DashboardSnapshot:
+    generated_at_utc: datetime
+    service_status: WebServiceState
+    account_summary: dict[str, str]
+    positions: tuple[dict[str, str], ...]
+    alerts: tuple[str, ...]
+    gate_statuses: dict[str, str]
+    recommendations: dict[str, int]
+    document_summary: dict[str, str | int]
+
+
+@dataclass(frozen=True)
+class WebActionResult:
+    action_id: str
+    action_type: str
+    status: str
+    message: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ConfigProposal:
+    proposal_id: str
+    target_area: str
+    proposed_values: dict[str, object]
+    diff_preview: str
+    output_path: Path
+
+
+@dataclass(frozen=True)
+class DocumentRecord:
+    doc_id: str
+    title: str
+    path: Path
+    preview: str
+    kind: str
+
+
 __all__ = (
     "AccountSnapshot",
     "BenchmarkCloseSeries",
+    "ConfigProposal",
+    "DashboardSnapshot",
+    "DocumentRecord",
     "EvaluationEvidencePack",
     "GateAssessment",
     "GateDecisionBrief",
@@ -298,4 +351,6 @@ __all__ = (
     "ValidationCandidateResult",
     "ValidationCriterionResult",
     "ValidationReport",
+    "WebActionResult",
+    "WebServiceState",
 )

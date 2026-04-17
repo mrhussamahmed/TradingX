@@ -81,3 +81,25 @@ def test_alert_transport_config_is_parsed_from_mapping() -> None:
     assert config.alerting.smtp_password == "secret"
     assert config.alerting.smtp_from_email == "bot@example.com"
     assert config.alerting.smtp_to_email == "ops@example.com"
+
+
+def test_web_config_defaults_are_local_only_and_read_only() -> None:
+    config = TradingConfig.from_mapping({})
+
+    assert config.web.host == "127.0.0.1"
+    assert config.web.port == 8765
+    assert config.web.write_mode_enabled is False
+
+
+def test_web_config_overrides_are_parsed_from_mapping() -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "TRADINGX_WEB_HOST": "0.0.0.0",
+            "TRADINGX_WEB_PORT": "9200",
+            "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+        }
+    )
+
+    assert config.web.host == "0.0.0.0"
+    assert config.web.port == 9200
+    assert config.web.write_mode_enabled is True

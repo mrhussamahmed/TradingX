@@ -221,6 +221,18 @@ class FakeBenchmarkGateway:
         )
 
 
+class FakeWebRunner:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def __call__(self, config, *, host: str, port: int) -> None:
+        self.called_with = {
+            "config": config,
+            "host": host,
+            "port": port,
+        }
+
+
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -602,3 +614,33 @@ def test_prepare_benchmark_closes_parser_defaults() -> None:
     assert args.feed == "iex"
     assert args.adjustment == "dividend"
     assert args.output_file is None
+
+
+def test_main_runs_local_web_command(monkeypatch, tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_WEB_HOST=127.0.0.1\n"
+        "TRADINGX_WEB_PORT=9010\n",
+        encoding="utf-8",
+    )
+    fake_runner = FakeWebRunner()
+    monkeypatch.setattr(cli, "run_web_app", fake_runner, raising=False)
+
+    exit_code = cli.main(
+        [
+            "web",
+            "--env-file",
+            str(env_file),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9020",
+        ]
+    )
+
+    assert exit_code == 0
+    assert fake_runner.called_with is not None
+    assert fake_runner.called_with["host"] == "127.0.0.1"
+    assert fake_runner.called_with["port"] == 9020
