@@ -21,6 +21,7 @@ from tradingx.controller import (
 from tradingx.data import build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.service import build_default_paper_service
 from tradingx.validation import (
@@ -150,6 +151,16 @@ def build_parser() -> argparse.ArgumentParser:
     alert_drill_parser = subparsers.add_parser("alert-drill")
     alert_drill_parser.add_argument("--env-file", default=".env")
     alert_drill_parser.add_argument("--channel", default="smtp")
+
+    replay_slippage_parser = subparsers.add_parser("replay-slippage-report")
+    replay_slippage_parser.add_argument(
+        "--paper-artifact-root",
+        default="artifacts/paper_loop",
+    )
+    replay_slippage_parser.add_argument(
+        "--validation-artifact-root",
+        default="artifacts/validation",
+    )
 
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--env-file", default=".env")
@@ -364,6 +375,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             else action_runner.run_alert_drill(channel=args.channel)
         )
         print(json.dumps(_serialize(result), sort_keys=True))
+        return 0
+
+    if args.command == "replay-slippage-report":
+        replay_result = generate_replay_slippage_evidence(
+            paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
+            validation_store=FilesystemArtifactStore(
+                Path(args.validation_artifact_root)
+            ),
+        )
+        print(json.dumps(_serialize(replay_result), sort_keys=True))
         return 0
 
     if args.command == "web":

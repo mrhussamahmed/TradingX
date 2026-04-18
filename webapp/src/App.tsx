@@ -20,6 +20,7 @@ import {
   getGate3Readiness,
   getLatestDigest,
   getMarketSessions,
+  getReplaySlippageSummary,
   getRecoveryDrills,
   getIncidents,
   getOverview,
@@ -34,6 +35,7 @@ import {
   postPaperLoop,
   postPrepareBenchmark,
   postProposal,
+  postReplaySlippageReport,
   postRecover,
   postRecoveryDrill,
   postServiceStart,
@@ -56,6 +58,7 @@ import type {
   Gate3ReadinessReport,
   IncidentRecord,
   MarketSessionRecord,
+  ReplaySlippageSummary,
   ReplaySession,
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
@@ -150,6 +153,8 @@ const defaultReplay: ReplaySession = {
   summary: 'No replayable data is available yet.',
 }
 
+const defaultReplaySlippageSummary: ReplaySlippageSummary | null = null
+
 const viewOptions: Array<{ key: ViewKey; label: string; shortcut: string }> = [
   { key: 'command', label: 'Command Center', shortcut: '1' },
   { key: 'trade', label: 'Trade Intelligence', shortcut: '2' },
@@ -176,6 +181,8 @@ function App() {
     useState<Gate3ReadinessReport>(defaultGate3Readiness)
   const [gate3Package, setGate3Package] =
     useState<Gate3PromotionPackage | null>(null)
+  const [replaySlippageSummary, setReplaySlippageSummary] =
+    useState<ReplaySlippageSummary | null>(defaultReplaySlippageSummary)
   const [marketSessions, setMarketSessions] = useState<MarketSessionRecord[]>([])
   const [recoveryDrills, setRecoveryDrills] = useState<RecoveryDrillRecord[]>([])
   const [alertDrills, setAlertDrills] = useState<AlertDrillRecord[]>([])
@@ -234,6 +241,7 @@ function App() {
         nextResearch,
         nextGate3Readiness,
         nextGate3Package,
+        nextReplaySlippageSummary,
         nextMarketSessions,
         nextRecoveryDrills,
         nextAlertDrills,
@@ -248,6 +256,7 @@ function App() {
         getResearch(),
         getGate3Readiness(),
         getGate3PromotionPackage(),
+        getReplaySlippageSummary(),
         getMarketSessions(),
         getRecoveryDrills(),
         getAlertDrills(),
@@ -263,6 +272,7 @@ function App() {
         setResearch(nextResearch)
         setGate3Readiness(nextGate3Readiness)
         setGate3Package(nextGate3Package)
+        setReplaySlippageSummary(nextReplaySlippageSummary)
         setMarketSessions(nextMarketSessions)
         setRecoveryDrills(nextRecoveryDrills)
         setAlertDrills(nextAlertDrills)
@@ -770,6 +780,7 @@ function App() {
             <Gate3OpsView
               readiness={gate3Readiness}
               promotionPackage={gate3Package}
+              replaySlippageSummary={replaySlippageSummary}
               marketSessions={marketSessions}
               recoveryDrills={recoveryDrills}
               alertDrills={alertDrills}
@@ -777,6 +788,9 @@ function App() {
               onRecoverySymbolChange={setGate3RecoverySymbol}
               onGenerateGate3Report={() => runAction(() => postGate3Report())}
               onGenerateGate3Package={() => runAction(() => postGate3Package())}
+              onGenerateReplaySlippageReport={() =>
+                runAction(() => postReplaySlippageReport())
+              }
               onRunRecoveryDrill={() =>
                 runAction(() => postRecoveryDrill({ symbol: gate3RecoverySymbol }))
               }
@@ -1091,6 +1105,7 @@ function CommandCenterView(props: {
 function Gate3OpsView(props: {
   readiness: Gate3ReadinessReport
   promotionPackage: Gate3PromotionPackage | null
+  replaySlippageSummary: ReplaySlippageSummary | null
   marketSessions: MarketSessionRecord[]
   recoveryDrills: RecoveryDrillRecord[]
   alertDrills: AlertDrillRecord[]
@@ -1098,6 +1113,7 @@ function Gate3OpsView(props: {
   onRecoverySymbolChange: (value: string) => void
   onGenerateGate3Report: () => void
   onGenerateGate3Package: () => void
+  onGenerateReplaySlippageReport: () => void
   onRunRecoveryDrill: () => void
   onRunSmtpDrill: () => void
 }) {
@@ -1136,6 +1152,13 @@ function Gate3OpsView(props: {
           >
             Generate Promotion Package
           </button>
+          <button
+            type="button"
+            className="action-button secondary"
+            onClick={props.onGenerateReplaySlippageReport}
+          >
+            Refresh Replay Evidence
+          </button>
         </div>
       </Panel>
 
@@ -1156,6 +1179,39 @@ function Gate3OpsView(props: {
             <p className="muted">No Gate 3 criteria have been materialized yet.</p>
           )}
         </div>
+      </Panel>
+
+      <Panel title="Replay Cross-Check" subtitle="Paper fills versus replay model">
+        <div className="digest-grid">
+          <MiniStat
+            label="Replay Status"
+            value={props.replaySlippageSummary?.status ?? 'not generated'}
+          />
+          <MiniStat
+            label="Matched Executions"
+            value={String(props.replaySlippageSummary?.matched_execution_count ?? 0)}
+          />
+          <MiniStat
+            label="Paper Mean (bps)"
+            value={
+              props.replaySlippageSummary?.paper_mean_absolute_slippage_bps ?? 'n/a'
+            }
+          />
+          <MiniStat
+            label="Replay Mean (bps)"
+            value={
+              props.replaySlippageSummary?.replay_mean_absolute_slippage_bps ?? 'n/a'
+            }
+          />
+        </div>
+        <p className="section-lead">
+          Replay divergence{' '}
+          <strong>{props.replaySlippageSummary?.divergence_ratio ?? 'n/a'}x</strong>
+        </p>
+        <p className="muted">
+          {props.replaySlippageSummary?.details ??
+            'Replay-slippage evidence has not been generated yet.'}
+        </p>
       </Panel>
 
       <Panel title="Operational Drills" subtitle="Recovery and emergency evidence">

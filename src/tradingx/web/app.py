@@ -23,6 +23,7 @@ from tradingx.types import (
     Gate3ReadinessReport,
     IncidentRecord,
     ReplaySession,
+    ReplaySlippageSummary,
     ResearchStudioSnapshot,
     WebActionResult,
 )
@@ -56,6 +57,8 @@ class ReadModelProtocol(Protocol):
     def build_gate3_readiness(self) -> Gate3ReadinessReport: ...
 
     def get_latest_gate3_promotion_package(self) -> Gate3PromotionPackage | None: ...
+
+    def get_latest_replay_slippage_summary(self) -> ReplaySlippageSummary | None: ...
 
     def build_replay_session(
         self,
@@ -126,6 +129,8 @@ class ActionRunnerProtocol(Protocol):
     def generate_gate3_report(self) -> WebActionResult: ...
 
     def generate_gate3_package(self) -> WebActionResult: ...
+
+    def generate_replay_slippage_report(self) -> WebActionResult: ...
 
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult: ...
 
@@ -241,6 +246,13 @@ def create_app(
         if package is None:
             return JSONResponse(content=None)
         return JSONResponse(content=_serialize(package))
+
+    @app.get("/api/platform/gate3/replay-slippage/latest")
+    def get_latest_replay_slippage_summary() -> JSONResponse:
+        summary = read_model.get_latest_replay_slippage_summary()
+        if summary is None:
+            return JSONResponse(content=None)
+        return JSONResponse(content=_serialize(summary))
 
     @app.get("/api/platform/replay")
     def get_replay(
@@ -419,6 +431,13 @@ def create_app(
     def post_gate3_package() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.generate_gate3_package()))
+
+    @app.post("/api/actions/replay-slippage/generate")
+    def post_replay_slippage_report() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(action_runner.generate_replay_slippage_report())
+        )
 
     @app.post("/api/actions/incidents/{incident_id}/acknowledge")
     def post_incident_acknowledge(incident_id: str) -> JSONResponse:

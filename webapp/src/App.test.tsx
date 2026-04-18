@@ -198,6 +198,17 @@ const gate3PackagePayload = {
   evidence_refs: ['artifacts/validation/gate3_packages/gate3-package-1.json'],
 }
 
+const replaySlippageSummaryPayload = {
+  summary_id: 'replay-summary-1',
+  matched_execution_count: 12,
+  paper_mean_absolute_slippage_bps: '5.0',
+  replay_mean_absolute_slippage_bps: '7.5',
+  divergence_ratio: '1.5',
+  status: 'pass',
+  details: 'Replay divergence is within the allowed bound.',
+  generated_at_utc: '2026-04-18T18:05:00+00:00',
+}
+
 const marketSessionsPayload = [
   {
     session_id: 'session-1',
@@ -275,6 +286,9 @@ function mockFetch() {
       }
       if (url.endsWith('/api/platform/gate3/promotions/latest')) {
         return new Response(JSON.stringify(gate3PackagePayload))
+      }
+      if (url.endsWith('/api/platform/gate3/replay-slippage/latest')) {
+        return new Response(JSON.stringify(replaySlippageSummaryPayload))
       }
       if (url.endsWith('/api/evidence/operator_alerts')) {
         return new Response(JSON.stringify([]))
@@ -397,6 +411,19 @@ function mockFetch() {
         }),
       )
     }
+    if (url.endsWith('/api/actions/replay-slippage/generate')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-replay',
+          action_type: 'replay_slippage_report',
+          status: 'completed',
+          message: 'Replay slippage report generated.',
+          evidence_refs: [
+            'artifacts/validation/replay_slippage_summaries/replay-summary-1.json',
+          ],
+        }),
+      )
+    }
 
     return new Response('{}', { status: 404 })
   })
@@ -450,8 +477,12 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Gate 3 Ops' }))
     expect(await screen.findByText('Gate 3 evidence is still incomplete.')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: 'Replay Cross-Check' }),
+    ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Generate Gate 3 Report' }))
     await user.click(screen.getByRole('button', { name: 'Generate Promotion Package' }))
+    await user.click(screen.getByRole('button', { name: 'Refresh Replay Evidence' }))
     await user.click(screen.getByRole('button', { name: 'Run Recovery Drill' }))
     await user.click(screen.getByRole('button', { name: 'Run SMTP Drill' }))
 
@@ -496,6 +527,10 @@ describe('App', () => {
     )
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/actions/gate3/package',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/replay-slippage/generate',
       expect.objectContaining({ method: 'POST' }),
     )
     expect(fetchMock).toHaveBeenCalledWith(

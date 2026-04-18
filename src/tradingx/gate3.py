@@ -7,10 +7,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.replay_slippage import REPLAY_SLIPPAGE_DIVERGENCE_LIMIT
 from tradingx.types import (
     Gate3CriterionSnapshot,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
+    ReplaySlippageSummary,
 )
 from tradingx.validation import BASE_COST_PENALTY
 
@@ -19,7 +21,6 @@ GATE3_TRADE_COUNT = 100
 GATE3_SLIPPAGE_MULTIPLIER = Decimal("1.5")
 GATE3_HIT_RATE_DRIFT = Decimal("0.20")
 GATE3_REALIZED_SHARPE_MULTIPLIER = Decimal("0.5")
-GATE3_REPLAY_SLIPPAGE_MULTIPLIER = Decimal("2.0")
 P1_BUG_CATEGORIES = frozenset(
     {"runtime", "service_failure", "execution_failure", "automation_failure", "bug"}
 )
@@ -133,6 +134,31 @@ def _required_operator_action(status: str) -> str:
     return "Continue paper trading, drills, and evidence collection."
 
 
+def _latest_replay_slippage_summary(
+    validation_store: FilesystemArtifactStore,
+) -> ReplaySlippageSummary | None:
+    payloads = validation_store.list_artifact_payloads("replay_slippage_summaries")
+    if not payloads:
+        return None
+    latest = max(payloads, key=lambda payload: str(payload.get("generated_at_utc", "")))
+    return ReplaySlippageSummary(
+        summary_id=str(latest.get("summary_id", "")),
+        matched_execution_count=int(str(latest.get("matched_execution_count", 0))),
+        paper_mean_absolute_slippage_bps=Decimal(
+            str(latest.get("paper_mean_absolute_slippage_bps", "0"))
+        ),
+        replay_mean_absolute_slippage_bps=Decimal(
+            str(latest.get("replay_mean_absolute_slippage_bps", "0"))
+        ),
+        divergence_ratio=Decimal(str(latest.get("divergence_ratio", "0"))),
+        status=str(latest.get("status", "pending")),
+        details=str(latest.get("details", "")),
+        generated_at_utc=datetime.fromisoformat(
+            str(latest.get("generated_at_utc", ""))
+        ),
+    )
+
+
 def build_gate3_readiness_report(
     *,
     paper_store: FilesystemArtifactStore,
@@ -149,6 +175,7 @@ def build_gate3_readiness_report(
         validation_store,
         candidate_id=candidate_id,
     )
+    replay_summary = _latest_replay_slippage_summary(validation_store)
 
     closed_trade_count = len(closed_trade_payloads)
     calendar_days = _calendar_days_observed(closed_trade_payloads, service_cycles)
@@ -291,13 +318,25 @@ def build_gate3_readiness_report(
         ),
         Gate3CriterionSnapshot(
             criterion_id="replay_slippage_divergence",
-            status="pending",
+            status=(
+                "pending"
+                if replay_summary is None or replay_summary.matched_execution_count == 0
+                else replay_summary.status
+            ),
             threshold=(
                 "Replay-simulator slippage divergence <= "
-                f"{GATE3_REPLAY_SLIPPAGE_MULTIPLIER}x paper slippage"
+                f"{REPLAY_SLIPPAGE_DIVERGENCE_LIMIT}x paper slippage"
             ),
-            observed_value="not available",
-            details="Replay-simulator slippage evidence is not yet persisted.",
+            observed_value=(
+                "not available"
+                if replay_summary is None or replay_summary.matched_execution_count == 0
+                else f"{replay_summary.divergence_ratio}x"
+            ),
+            details=(
+                "Replay-simulator slippage evidence is not yet persisted."
+                if replay_summary is None
+                else replay_summary.details
+            ),
             evidence_refs=(),
         ),
     )

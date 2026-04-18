@@ -16,6 +16,8 @@ from tradingx.types import (
     GateAssessment,
     OperatorAlert,
     RecoveryDrillRecord,
+    ReplaySlippageRecord,
+    ReplaySlippageSummary,
     ServiceCycleSnapshot,
     ServiceSymbolResult,
     TradeIntent,
@@ -325,3 +327,51 @@ def test_filesystem_artifact_store_writes_gate3_artifacts_and_summarizes_them(
     assert report["counts"]["alert_drills"] == 1
     assert report["counts"]["gate3_reports"] == 1
     assert report["counts"]["gate3_packages"] == 1
+
+
+def test_filesystem_artifact_store_writes_replay_slippage_artifacts(tmp_path) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 18, 8, 30, tzinfo=UTC)
+
+    record_path = store.write_replay_slippage_record(
+        ReplaySlippageRecord(
+            replay_id="replay-execution-1",
+            execution_id="execution-1",
+            intent_id="intent-1",
+            symbol="SPY",
+            side="buy",
+            filled_qty=Decimal("1"),
+            reference_price=Decimal("500.00"),
+            paper_fill_price=Decimal("500.25"),
+            paper_slippage_bps=Decimal("5.0"),
+            simulated_fill_price=Decimal("500.40"),
+            simulated_slippage_bps=Decimal("8.0"),
+            divergence_ratio=Decimal("1.6"),
+            quoted_spread_bps=Decimal("8.0"),
+            participation_rate=Decimal("0.000001"),
+            generated_at_utc=timestamp,
+        )
+    )
+    summary_path = store.write_replay_slippage_summary(
+        ReplaySlippageSummary(
+            summary_id="replay-summary-1",
+            matched_execution_count=1,
+            paper_mean_absolute_slippage_bps=Decimal("5.0"),
+            replay_mean_absolute_slippage_bps=Decimal("8.0"),
+            divergence_ratio=Decimal("1.6"),
+            status="pass",
+            details="Replay divergence is within the bound.",
+            generated_at_utc=timestamp,
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert (
+        record_path == tmp_path / "replay_slippage_records" / "replay-execution-1.json"
+    )
+    assert (
+        summary_path == tmp_path / "replay_slippage_summaries" / "replay-summary-1.json"
+    )
+    assert report["counts"]["replay_slippage_records"] == 1
+    assert report["counts"]["replay_slippage_summaries"] == 1

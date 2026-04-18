@@ -41,6 +41,7 @@ from tradingx.types import (
     GateAssessment,
     GateReportResult,
     LatestQuote,
+    MarketSnapshot,
     PortfolioState,
     ReconciliationSnapshot,
     RiskControlEvent,
@@ -386,7 +387,7 @@ class PaperTradingLoopController:
         self._artifacts.write_order_record(trade_intent.intent_id, order_record)
         execution_record = self._build_execution_lifecycle_record(
             trade_intent=trade_intent,
-            market_reference_price=market_snapshot.last_trade_price,
+            market_snapshot=market_snapshot,
             order_record=order_record,
             recovered=recovered,
         )
@@ -563,11 +564,12 @@ class PaperTradingLoopController:
         self,
         *,
         trade_intent: TradeIntent,
-        market_reference_price: Decimal,
+        market_snapshot: MarketSnapshot,
         order_record: Any,
         recovered: bool,
     ) -> ExecutionLifecycleRecord:
         slippage = Decimal("0")
+        market_reference_price = market_snapshot.last_trade_price
         if market_reference_price > Decimal("0"):
             slippage = (
                 (order_record.filled_avg_price - market_reference_price)
@@ -586,6 +588,9 @@ class PaperTradingLoopController:
             submitted_at_utc=trade_intent.generated_at_utc,
             filled_at_utc=self._now_provider(),
             recovered=recovered,
+            bid_price=market_snapshot.bid_price,
+            ask_price=market_snapshot.ask_price,
+            average_daily_volume_30d=market_snapshot.average_daily_volume_30d,
         )
 
     def _write_closed_trade_record_if_available(

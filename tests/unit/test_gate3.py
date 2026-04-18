@@ -11,6 +11,7 @@ from tradingx.types import (
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
     RecoveryDrillRecord,
+    ReplaySlippageSummary,
 )
 
 
@@ -153,3 +154,38 @@ def test_gate3_readiness_report_rolls_up_trade_and_drill_evidence(tmp_path) -> N
     assert criterion_statuses["replay_slippage_divergence"] == "pending"
     assert package.status == "pending"
     assert "replay_slippage_divergence" in package.criteria_statuses
+
+
+def test_gate3_readiness_report_uses_latest_replay_slippage_summary(tmp_path) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 4, 18, 8, 0, tzinfo=UTC)
+
+    validation_store.write_replay_slippage_summary(
+        ReplaySlippageSummary(
+            summary_id="replay-summary-1",
+            matched_execution_count=12,
+            paper_mean_absolute_slippage_bps=Decimal("5.0"),
+            replay_mean_absolute_slippage_bps=Decimal("7.5"),
+            divergence_ratio=Decimal("1.5"),
+            status="pass",
+            details="Replay divergence is within the allowed bound.",
+            generated_at_utc=start,
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+
+    criterion_statuses = {
+        criterion.criterion_id: criterion.status for criterion in report.criteria
+    }
+    observed_values = {
+        criterion.criterion_id: criterion.observed_value
+        for criterion in report.criteria
+    }
+
+    assert criterion_statuses["replay_slippage_divergence"] == "pass"
+    assert observed_values["replay_slippage_divergence"] == "1.5x"

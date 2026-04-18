@@ -170,3 +170,22 @@ def test_local_web_action_runner_generates_gate3_artifacts(tmp_path) -> None:
     assert alert.status in {"completed", "pending"}
     assert (tmp_path / "artifacts" / "validation" / "gate3_reports").exists()
     assert (tmp_path / "artifacts" / "validation" / "gate3_packages").exists()
+
+
+def test_local_web_action_runner_generates_replay_slippage_artifacts(tmp_path) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            }
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    result = runner.generate_replay_slippage_report()
+
+    assert result.status in {"completed", "pending"}
+    assert (
+        tmp_path / "artifacts" / "validation" / "replay_slippage_summaries"
+    ).exists()

@@ -16,6 +16,7 @@ from tradingx.types import (
     Gate3ReadinessReport,
     IncidentRecord,
     ReplaySession,
+    ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
     WebActionResult,
@@ -144,6 +145,19 @@ class FakeReadModel:
             decision_summary="More paper evidence is required.",
             criteria_statuses={"duration_or_trade_count": "pending"},
             evidence_refs=("artifacts/validation/gate3_packages/gate3-package-1.json",),
+        )
+
+    def get_latest_replay_slippage_summary(self) -> ReplaySlippageSummary | None:
+        timestamp = datetime(2026, 4, 18, 18, 5, tzinfo=UTC)
+        return ReplaySlippageSummary(
+            summary_id="replay-summary-1",
+            matched_execution_count=12,
+            paper_mean_absolute_slippage_bps="5.0",
+            replay_mean_absolute_slippage_bps="7.5",
+            divergence_ratio="1.5",
+            status="pass",
+            details="Replay divergence is within the allowed bound.",
+            generated_at_utc=timestamp,
         )
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
@@ -381,6 +395,17 @@ class FakeActionRunner:
             evidence_refs=("artifacts/validation/gate3_packages/gate3-package-1.json",),
         )
 
+    def generate_replay_slippage_report(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-replay",
+            action_type="replay_slippage_report",
+            status="completed",
+            message="Replay slippage report generated.",
+            evidence_refs=(
+                "artifacts/validation/replay_slippage_summaries/replay-summary-1.json",
+            ),
+        )
+
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult:
         return WebActionResult(
             action_id="action-ack",
@@ -444,6 +469,27 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert explorer.json()[0]["title"] == "Gate 1 report"
     assert digest.status_code == 200
     assert digest.json()["digest_id"] == "digest-1"
+
+
+def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:
+    app = create_app(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+            }
+        ),
+        read_model=FakeReadModel(),
+        action_runner=FakeActionRunner(),
+    )
+    client = TestClient(app)
+
+    summary = client.get("/api/platform/gate3/replay-slippage/latest")
+    action = client.post("/api/actions/replay-slippage/generate")
+
+    assert summary.status_code == 200
+    assert summary.json()["summary_id"] == "replay-summary-1"
+    assert action.status_code == 200
+    assert action.json()["action_type"] == "replay_slippage_report"
 
 
 def test_local_web_app_blocks_mutations_when_write_mode_is_disabled() -> None:

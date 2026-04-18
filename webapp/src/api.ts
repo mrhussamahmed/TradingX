@@ -14,6 +14,7 @@ import type {
   Gate3ReadinessReport,
   IncidentRecord,
   MarketSessionRecord,
+  ReplaySlippageSummary,
   ReplaySession,
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
@@ -107,6 +108,10 @@ export function getGate3Readiness() {
 
 export function getGate3PromotionPackage() {
   return request<Gate3PromotionPackage | null>('/api/platform/gate3/promotions/latest')
+}
+
+export function getReplaySlippageSummary() {
+  return request<ReplaySlippageSummary | null>('/api/platform/gate3/replay-slippage/latest')
 }
 
 export function getMarketSessions() {
@@ -230,6 +235,12 @@ export function postGate3Report() {
 
 export function postGate3Package() {
   return request<ActionResult>('/api/actions/gate3/package', {
+    method: 'POST',
+  })
+}
+
+export function postReplaySlippageReport() {
+  return request<ActionResult>('/api/actions/replay-slippage/generate', {
     method: 'POST',
   })
 }

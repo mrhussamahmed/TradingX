@@ -22,6 +22,7 @@ from tradingx.types import (
     IncidentRecord,
     OperatorTimelineEvent,
     ReplaySession,
+    ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
     ScalarValue,
@@ -522,6 +523,30 @@ class LocalWebReadModel:
             )
         report = self.build_gate3_readiness()
         return build_gate3_promotion_package(report)
+
+    def get_latest_replay_slippage_summary(self) -> ReplaySlippageSummary | None:
+        payloads = self._validation_store.list_artifact_payloads(
+            "replay_slippage_summaries"
+        )
+        if not payloads:
+            return None
+        payload = max(payloads, key=lambda item: str(item.get("generated_at_utc", "")))
+        return ReplaySlippageSummary(
+            summary_id=str(payload.get("summary_id", "")),
+            matched_execution_count=int(str(payload.get("matched_execution_count", 0))),
+            paper_mean_absolute_slippage_bps=Decimal(
+                str(payload.get("paper_mean_absolute_slippage_bps", "0"))
+            ),
+            replay_mean_absolute_slippage_bps=Decimal(
+                str(payload.get("replay_mean_absolute_slippage_bps", "0"))
+            ),
+            divergence_ratio=Decimal(str(payload.get("divergence_ratio", "0"))),
+            status=str(payload.get("status", "pending")),
+            details=str(payload.get("details", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+        )
 
     def _preview_text(self, path: Path) -> str:
         text = path.read_text(encoding="utf-8")

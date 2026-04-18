@@ -9,6 +9,7 @@ from pathlib import Path
 from tradingx import __main__ as cli
 from tradingx.types import (
     AccountSnapshot,
+    ExecutionLifecycleRecord,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
     LatestQuote,
@@ -644,6 +645,43 @@ def test_main_runs_local_web_command(monkeypatch, tmp_path) -> None:
     assert fake_runner.called_with is not None
     assert fake_runner.called_with["host"] == "127.0.0.1"
     assert fake_runner.called_with["port"] == 9020
+
+
+def test_main_runs_replay_slippage_report_command(tmp_path, capsys) -> None:
+    paper_store = cli.FilesystemArtifactStore(tmp_path / "paper_loop")
+    paper_store.write_execution_lifecycle_record(
+        ExecutionLifecycleRecord(
+            execution_id="execution-1",
+            intent_id="intent-1",
+            symbol="SPY",
+            side="buy",
+            reason_code="baseline_long_entry",
+            reference_price=Decimal("500.00"),
+            fill_price=Decimal("500.25"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("5.0"),
+            bid_price=Decimal("499.80"),
+            ask_price=Decimal("500.20"),
+            average_daily_volume_30d=Decimal("1000000"),
+            submitted_at_utc=datetime(2026, 4, 18, 8, 0, tzinfo=UTC),
+            filled_at_utc=datetime(2026, 4, 18, 8, 0, tzinfo=UTC),
+            recovered=False,
+        )
+    )
+
+    exit_code = cli.main(
+        [
+            "replay-slippage-report",
+            "--paper-artifact-root",
+            str(tmp_path / "paper_loop"),
+            "--validation-artifact-root",
+            str(tmp_path / "validation"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["summary"]["matched_execution_count"] == 1
 
 
 def test_gate3_parser_defaults() -> None:

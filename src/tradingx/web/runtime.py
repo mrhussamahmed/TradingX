@@ -25,6 +25,7 @@ from tradingx.controller import (
 from tradingx.data import build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.service import PaperTradingService, build_default_paper_service
 from tradingx.types import (
@@ -486,6 +487,22 @@ class LocalWebActionRunner:
             status="completed",
             message="Gate 3 promotion package generated.",
             evidence_refs=(str(report_path), str(package_path)),
+        )
+
+    def generate_replay_slippage_report(self) -> WebActionResult:
+        result = generate_replay_slippage_evidence(
+            paper_store=self._paper_store,
+            validation_store=self._validation_store,
+        )
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="replay_slippage_report",
+            status=result.summary.status,
+            message="Replay slippage report generated.",
+            evidence_refs=(
+                *(str(path) for path in result.record_paths),
+                str(result.summary_path),
+            ),
         )
 
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult:

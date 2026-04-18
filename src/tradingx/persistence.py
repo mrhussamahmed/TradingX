@@ -24,6 +24,8 @@ from tradingx.types import (
     PositionSnapshot,
     ReconciliationSnapshot,
     RecoveryDrillRecord,
+    ReplaySlippageRecord,
+    ReplaySlippageSummary,
     RiskControlEvent,
     ServiceCycleSnapshot,
     TradeIntent,
@@ -157,6 +159,26 @@ class FilesystemArtifactStore:
             "gate3_packages",
             f"{package.package_id}.json",
             package,
+        )
+
+    def write_replay_slippage_record(
+        self,
+        record: ReplaySlippageRecord,
+    ) -> Path:
+        return self._write_json(
+            "replay_slippage_records",
+            f"{record.replay_id}.json",
+            record,
+        )
+
+    def write_replay_slippage_summary(
+        self,
+        summary: ReplaySlippageSummary,
+    ) -> Path:
+        return self._write_json(
+            "replay_slippage_summaries",
+            f"{summary.summary_id}.json",
+            summary,
         )
 
     def trade_intent_path(self, intent_id: str) -> Path:
@@ -294,6 +316,8 @@ class FilesystemArtifactStore:
             "market_sessions",
             "gate3_reports",
             "gate3_packages",
+            "replay_slippage_records",
+            "replay_slippage_summaries",
         )
         counts: dict[str, int] = {}
         latest_artifacts: dict[str, str] = {}

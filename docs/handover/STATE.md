@@ -7,14 +7,14 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-016
+author_session: SESS-2026-04-18-017
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-016
-- Active branch: codex/gate3-operations-evidence
-- Active phase: 8
+- Active session: SESS-2026-04-18-017
+- Active branch: codex/replay-slippage-evidence
+- Active phase: 9
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -41,6 +41,8 @@ author_session: SESS-2026-04-18-016
   polling-based refresh for the operator platform.
 - `ADR-0012` selects persisted trade-lifecycle and drill artifacts as
   the Gate 3 evidence source.
+- `ADR-0013` selects persisted execution context as the replay-slippage
+  evidence source.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
@@ -53,6 +55,11 @@ author_session: SESS-2026-04-18-016
   `CONTRACT-0005` are active on `codex/gate3-operations-evidence`, and
   the Gate 3 operations-and-evidence implementation is complete and
   validated there.
+- `DESIGN-0003`, `SPEC-0005`, `PLAN-0005`, `TASKS-0005`,
+  `RESEARCH-0005`, `DATAMODEL-0005`, `QUICKSTART-0006`, and
+  `CONTRACT-0006` are active on `codex/replay-slippage-evidence`, and
+  the replay-slippage evidence implementation is complete and validated
+  there.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -76,6 +83,9 @@ author_session: SESS-2026-04-18-016
     paper evidence into a readiness report and promotion package
   - dedicated recovery-drill and alert-drill commands for bounded
     operational exercises
+  - a `replay-slippage-report` workflow that persists replay-simulator
+    cross-check records and divergence summaries from paper execution
+    context
   - richer operator alerts, including optional Telegram and SMTP
     delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
@@ -91,11 +101,13 @@ author_session: SESS-2026-04-18-016
     intelligence, research studio, incident center, replay lab, records
     explorer, daily session actions, and a command palette
 - `tradingx web` now also exposes a dedicated `Gate 3 Ops` view for
-  readiness, drills, market-session checkpoints, and promotion actions.
-- Validation is green on `codex/gate3-operations-evidence`;
+  readiness, drills, market-session checkpoints, replay-slippage
+  divergence, and promotion actions.
+- Validation is green on `codex/replay-slippage-evidence`;
   `./scripts/validate` passed with the expected closed-market smoke
   skip, plus frontend tests and frontend build verification.
 - The operator-platform UI keeps the premium control-room redesign while
-  extending it with the Gate 3 operations-and-evidence surface.
+  extending it with replay-slippage cross-check status and refresh
+  controls.
 - Next execution step on this branch is operator review and promotion of
-  `codex/gate3-operations-evidence` into `main`.
+  `codex/replay-slippage-evidence` into `main`.

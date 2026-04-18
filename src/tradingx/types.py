@@ -285,6 +285,9 @@ class ExecutionLifecycleRecord:
     submitted_at_utc: datetime
     filled_at_utc: datetime
     recovered: bool
+    bid_price: Decimal | None = None
+    ask_price: Decimal | None = None
+    average_daily_volume_30d: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -337,6 +340,44 @@ class MarketSessionRecord:
     top_incidents: tuple[str, ...]
     recommended_actions: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReplaySlippageRecord:
+    replay_id: str
+    execution_id: str
+    intent_id: str
+    symbol: str
+    side: str
+    filled_qty: Decimal
+    reference_price: Decimal
+    paper_fill_price: Decimal
+    paper_slippage_bps: Decimal
+    simulated_fill_price: Decimal
+    simulated_slippage_bps: Decimal
+    divergence_ratio: Decimal
+    quoted_spread_bps: Decimal
+    participation_rate: Decimal
+    generated_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class ReplaySlippageSummary:
+    summary_id: str
+    matched_execution_count: int
+    paper_mean_absolute_slippage_bps: Decimal
+    replay_mean_absolute_slippage_bps: Decimal
+    divergence_ratio: Decimal
+    status: str
+    details: str
+    generated_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class ReplaySlippageGenerationResult:
+    summary: ReplaySlippageSummary
+    record_paths: tuple[Path, ...]
+    summary_path: Path
 
 
 @dataclass(frozen=True)
@@ -545,6 +586,9 @@ __all__ = (
     "OrderRecord",
     "PortfolioState",
     "PositionSnapshot",
+    "ReplaySlippageGenerationResult",
+    "ReplaySlippageRecord",
+    "ReplaySlippageSummary",
     "ReconciliationSnapshot",
     "RecoveryDrillRecord",
     "RiskControlEvent",

@@ -197,6 +197,17 @@ export type Gate3PromotionPackage = {
   evidence_refs: string[]
 }
 
+export type ReplaySlippageSummary = {
+  summary_id: string
+  matched_execution_count: number
+  paper_mean_absolute_slippage_bps: string
+  replay_mean_absolute_slippage_bps: string
+  divergence_ratio: string
+  status: string
+  details: string
+  generated_at_utc: string
+}
+
 export type MarketSessionRecord = {
   session_id: string
   session_label: string
