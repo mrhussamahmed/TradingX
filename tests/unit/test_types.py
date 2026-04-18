@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import tradingx.types as types_module
 from tradingx.types import (
     AlertDrillRecord,
     ClosedTradeRecord,
@@ -564,3 +565,8 @@ def test_market_day_automation_types_capture_run_artifacts() -> None:
     assert run_record.latest_gate3_package_id == "gate3-package-1"
     assert len(run_result.session_paths) == 4
     assert run_result.gate3_package_path.name == "gate3-package-1.json"
+
+
+def test_scheduler_types_are_available_for_runtime_and_persistence() -> None:
+    assert getattr(types_module, "MarketDayScheduleRecord", None) is not None
+    assert getattr(types_module, "MarketDaySchedulerState", None) is not None

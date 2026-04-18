@@ -7,14 +7,14 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-019
+author_session: SESS-2026-04-18-020
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-019
+- Active session: SESS-2026-04-18-020
 - Active branch: main
-- Active phase: 10
+- Active phase: 11
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -45,6 +45,8 @@ author_session: SESS-2026-04-18-019
   evidence source.
 - `ADR-0014` selects a dedicated market-day automation runner with
   persisted run artifacts.
+- `ADR-0015` selects a calendar-driven recurring scheduler above the
+  bounded market-day runner.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
@@ -65,6 +67,10 @@ author_session: SESS-2026-04-18-019
 - `DESIGN-0004`, `SPEC-0006`, `PLAN-0006`, `TASKS-0006`,
   `RESEARCH-0006`, `DATAMODEL-0006`, `QUICKSTART-0007`, and
   `CONTRACT-0007` are active and the market-day automation
+  implementation is now merged into `main`.
+- `DESIGN-0005`, `SPEC-0007`, `PLAN-0007`, `TASKS-0007`,
+  `RESEARCH-0007`, `DATAMODEL-0007`, `QUICKSTART-0008`, and
+  `CONTRACT-0008` are active and the recurring market-day scheduler
   implementation is now merged into `main`.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
@@ -95,8 +101,12 @@ author_session: SESS-2026-04-18-019
   - a `run-market-day` workflow that performs pre-open, bounded
     heartbeat, closeout, and automatic Gate 3 evidence refresh as one
     persisted automation run
-  - richer operator alerts, including optional Telegram and SMTP
-    delivery and evidence-report summaries for paper-service runs
+  - a `run-market-scheduler` workflow that polls the regular-hours
+    market calendar, launches at most one market-day automation run per
+    trading day, persists durable schedule artifacts, and exposes live
+    next-run status
+- richer operator alerts, including optional Telegram and SMTP
+  delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
   for:
   - paper-service and bounded loop controls behind an explicit
@@ -111,13 +121,17 @@ author_session: SESS-2026-04-18-019
     explorer, daily session actions, and a command palette
 - `tradingx web` now also exposes a dedicated `Gate 3 Ops` view for
   readiness, drills, market-session checkpoints, replay-slippage
-  divergence, automation history, and promotion actions.
+  divergence, automation history, recurring scheduler state, and
+  promotion actions.
 - Validation is green on `main`;
   `./scripts/validate` passed with the expected closed-market smoke
   skip, plus frontend tests and frontend build verification.
 - The operator-platform UI keeps the premium control-room redesign while
   extending it with replay-slippage cross-check status, automation
-  summary, and bounded market-day run controls.
-- Next execution step is to run `uv run tradingx run-market-day --env-file .env ...`
-  during regular US market hours on `main` so the promoted automation
-  flow can start accumulating fresh Gate 3 evidence.
+  summary, bounded market-day run controls, and recurring scheduler
+  controls.
+- Next execution step is to run
+  `uv run tradingx run-market-scheduler --env-file .env ...` on `main`
+  and keep that local process alive across market days so the promoted
+  scheduler can accumulate Gate 3 evidence without manual daily
+  launches.

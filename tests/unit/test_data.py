@@ -164,3 +164,28 @@ def test_regular_hours_calendar_reports_closed_session() -> None:
     )
 
     assert calendar.is_open(datetime(2026, 4, 17, 20, 30, tzinfo=UTC)) is False
+
+
+def test_regular_hours_calendar_returns_next_session_window_after_close() -> None:
+    calendar = AlpacaRegularHoursCalendar(
+        FakeCalendarClient(
+            [
+                FakeCalendarEntry(
+                    open_at=datetime(2026, 4, 17, 9, 30),
+                    close_at=datetime(2026, 4, 17, 16, 0),
+                ),
+                FakeCalendarEntry(
+                    open_at=datetime(2026, 4, 20, 9, 30),
+                    close_at=datetime(2026, 4, 20, 16, 0),
+                ),
+            ]
+        )
+    )
+
+    session = calendar.get_current_or_next_session(
+        datetime(2026, 4, 17, 20, 30, tzinfo=UTC)
+    )
+
+    assert session is not None
+    assert session.trading_day == "2026-04-20"
+    assert session.open_at_utc == datetime(2026, 4, 20, 13, 30, tzinfo=UTC)

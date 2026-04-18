@@ -14,6 +14,8 @@ import type {
   Gate3ReadinessReport,
   IncidentRecord,
   MarketAutomationRunRecord,
+  MarketDayScheduleRecord,
+  MarketDaySchedulerState,
   MarketSessionRecord,
   ReplaySlippageSummary,
   ReplaySession,
@@ -119,6 +121,14 @@ export function getMarketAutomationRun() {
   return request<MarketAutomationRunRecord | null>('/api/platform/gate3/automation/latest')
 }
 
+export function getSchedulerState() {
+  return request<MarketDaySchedulerState>('/api/platform/gate3/scheduler/state')
+}
+
+export function getLatestMarketDaySchedule() {
+  return request<MarketDayScheduleRecord | null>('/api/platform/gate3/scheduler/latest')
+}
+
 export function getMarketSessions() {
   return request<MarketSessionRecord[]>('/api/evidence/market_sessions')
 }
@@ -152,6 +162,25 @@ export function postServiceStart(payload: {
 
 export function postServiceStop() {
   return request<ActionResult>('/api/actions/service/stop', {
+    method: 'POST',
+  })
+}
+
+export function postSchedulerStart(payload: {
+  symbols: string[]
+  quantity: string
+  interval_seconds: number
+  poll_interval_seconds: number
+  max_scheduled_days: number | null
+}) {
+  return request<ActionResult>('/api/actions/scheduler/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function postSchedulerStop() {
+  return request<ActionResult>('/api/actions/scheduler/stop', {
     method: 'POST',
   })
 }

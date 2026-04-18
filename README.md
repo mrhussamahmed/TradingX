@@ -25,6 +25,9 @@ implementation that can:
   execution context
 - run a bounded market-day automation workflow that performs pre-open,
   heartbeat, closeout, and automatic Gate 3 evidence refresh
+- run a recurring market-day scheduler that launches the bounded
+  market-day workflow automatically on trading days and records one
+  durable schedule artifact per launched day
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
 
@@ -36,6 +39,7 @@ uv run tradingx live-disable-status --env-file .env
 uv run tradingx paper-loop --env-file .env --symbol SPY --quantity 1
 uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx run-market-day --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-heartbeats 3
+uv run tradingx run-market-scheduler --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --poll-interval-seconds 60 --max-scheduled-days 1
 uv run tradingx paper-recover --env-file .env --symbol SPY
 uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
@@ -60,6 +64,15 @@ pre-open checkpoint, runs repeated bounded heartbeats, refreshes
 replay-slippage evidence and Gate 3 readiness, then writes the closeout
 checkpoint and promotion package. Omit `--max-heartbeats` only when you
 want it to keep running until the market closes.
+
+`run-market-scheduler` sits above `run-market-day`: it polls the
+regular-hours market calendar, launches at most one market-day workflow
+per trading day, persists one schedule artifact under
+`artifacts/operator_platform/market_day_schedules/`, and exposes the
+next scheduled run time to the CLI and local website. Omit
+`--max-scheduled-days` to leave it running indefinitely, or use
+`TRADINGX_SCHEDULER_POLL_SECONDS` to control the default waiting
+cadence.
 
 If `TRADINGX_TELEGRAM_BOT_TOKEN` / `TRADINGX_TELEGRAM_CHAT_ID` or the
 `TRADINGX_SMTP_*` settings are present in `.env`, operator alerts are
@@ -104,7 +117,7 @@ the local controls enabled. The website exposes:
 - a gate cockpit for current gate states and recommendation counts
 - a Gate 3 operations surface for readiness status, drill history,
   market-session checkpoints, replay-slippage divergence, automation
-  history, and promotion workflow actions
+  history, recurring scheduler state, and promotion workflow actions
 - a project-intelligence panel for state and handover context
 - a proposal studio that writes safe config proposals under
   `config/proposals/`

@@ -19,6 +19,7 @@ from tradingx.types import (
     Gate3ReadinessReport,
     GateAssessment,
     MarketAutomationRunRecord,
+    MarketDayScheduleRecord,
     MarketSessionRecord,
     OperatorAlert,
     OrderRecord,
@@ -161,6 +162,16 @@ class FilesystemArtifactStore:
             "market_automation_runs",
             f"{run_record.run_id}.json",
             run_record,
+        )
+
+    def write_market_day_schedule_record(
+        self,
+        schedule_record: MarketDayScheduleRecord,
+    ) -> Path:
+        return self._write_json(
+            "market_day_schedules",
+            f"{schedule_record.schedule_id}.json",
+            schedule_record,
         )
 
     def write_gate3_readiness_report(self, report: Gate3ReadinessReport) -> Path:

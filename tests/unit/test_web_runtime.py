@@ -327,3 +327,18 @@ def test_local_web_action_runner_runs_market_day_automation(tmp_path) -> None:
 
     assert result.status == "completed"
     assert "market-day" in result.message.lower()
+
+
+def test_local_web_action_runner_exposes_market_scheduler_controls(tmp_path) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            }
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    assert hasattr(runner, "start_market_scheduler")
+    assert hasattr(runner, "stop_market_scheduler")

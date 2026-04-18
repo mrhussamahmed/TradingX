@@ -16,6 +16,8 @@ from tradingx.types import (
     Gate3ReadinessReport,
     IncidentRecord,
     MarketAutomationRunRecord,
+    MarketDayScheduleRecord,
+    MarketDaySchedulerState,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,
@@ -182,6 +184,35 @@ class FakeReadModel:
             ),
         )
 
+    def get_scheduler_state(self) -> MarketDaySchedulerState:
+        timestamp = datetime(2026, 4, 18, 18, 7, tzinfo=UTC)
+        return MarketDaySchedulerState(
+            status="waiting",
+            poll_interval_seconds=60,
+            active_symbols=("SPY", "QQQ"),
+            next_run_at_utc=timestamp,
+            last_started_at_utc=None,
+            last_completed_at_utc=None,
+            active_trading_day="2026-04-21",
+            last_error="",
+        )
+
+    def get_latest_market_day_schedule(self) -> MarketDayScheduleRecord | None:
+        timestamp = datetime(2026, 4, 18, 18, 7, tzinfo=UTC)
+        return MarketDayScheduleRecord(
+            schedule_id="schedule-1",
+            trading_day="2026-04-18",
+            scheduled_open_at_utc=timestamp,
+            launched_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            status="completed",
+            automation_run_id="automation-1",
+            summary="Scheduled market day completed.",
+            evidence_refs=(
+                "artifacts/operator_platform/market_day_schedules/schedule-1.json",
+            ),
+        )
+
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
         return ResearchStudioSnapshot(
@@ -275,6 +306,32 @@ class FakeActionRunner:
             action_type="paper_service_stop",
             status="accepted",
             message="Stop requested.",
+            evidence_refs=(),
+        )
+
+    def start_market_scheduler(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None = None,
+    ) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-scheduler-start",
+            action_type="market_scheduler_start",
+            status="accepted",
+            message=f"Started scheduler for {','.join(symbols)}.",
+            evidence_refs=(),
+        )
+
+    def stop_market_scheduler(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-scheduler-stop",
+            action_type="market_scheduler_stop",
+            status="accepted",
+            message="Scheduler stop requested.",
             evidence_refs=(),
         )
 
@@ -480,6 +537,8 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     explorer = client.get("/api/platform/explorer?query=Gate")
     digest = client.get("/api/platform/digests/latest")
     automation = client.get("/api/platform/gate3/automation/latest")
+    scheduler_state = client.get("/api/platform/gate3/scheduler/state")
+    scheduler_latest = client.get("/api/platform/gate3/scheduler/latest")
 
     assert overview.status_code == 200
     assert overview.json()["service_status"]["status"] == "running"
@@ -512,6 +571,10 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert digest.json()["digest_id"] == "digest-1"
     assert automation.status_code == 200
     assert automation.json()["run_id"] == "automation-1"
+    assert scheduler_state.status_code == 200
+    assert scheduler_state.json()["status"] == "waiting"
+    assert scheduler_latest.status_code == 200
+    assert scheduler_latest.json()["schedule_id"] == "schedule-1"
 
 
 def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:

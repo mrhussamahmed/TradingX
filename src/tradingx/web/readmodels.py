@@ -21,6 +21,8 @@ from tradingx.types import (
     Gate3ReadinessReport,
     IncidentRecord,
     MarketAutomationRunRecord,
+    MarketDayScheduleRecord,
+    MarketDaySchedulerState,
     OperatorTimelineEvent,
     ReplaySession,
     ReplaySlippageSummary,
@@ -35,6 +37,24 @@ class ServiceManagerProtocol(Protocol):
     def get_state(self) -> WebServiceState: ...
 
 
+class SchedulerManagerProtocol(Protocol):
+    def get_state(self) -> MarketDaySchedulerState: ...
+
+
+class _IdleSchedulerManager:
+    def get_state(self) -> MarketDaySchedulerState:
+        return MarketDaySchedulerState(
+            status="idle",
+            poll_interval_seconds=60,
+            active_symbols=(),
+            next_run_at_utc=None,
+            last_started_at_utc=None,
+            last_completed_at_utc=None,
+            active_trading_day="",
+            last_error="",
+        )
+
+
 class LocalWebReadModel:
     def __init__(
         self,
@@ -45,6 +65,7 @@ class LocalWebReadModel:
         docs_root: Path,
         repo_root: Path,
         service_manager: ServiceManagerProtocol,
+        scheduler_manager: SchedulerManagerProtocol | None = None,
     ) -> None:
         self._config = config
         self._paper_store = paper_store
@@ -52,6 +73,7 @@ class LocalWebReadModel:
         self._docs_root = docs_root
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._scheduler_manager = scheduler_manager or _IdleSchedulerManager()
         artifact_root = config.runtime.artifact_root
         self._operator_platform_root = artifact_root / "operator_platform"
 
@@ -499,6 +521,35 @@ class LocalWebReadModel:
             evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
         )
 
+    def get_scheduler_state(self) -> MarketDaySchedulerState:
+        return self._scheduler_manager.get_state()
+
+    def get_latest_market_day_schedule(self) -> MarketDayScheduleRecord | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "market_day_schedules"
+        )
+        if not payloads:
+            return None
+        payload = max(payloads, key=lambda item: str(item.get("launched_at_utc", "")))
+        completed_raw = payload.get("completed_at_utc")
+        return MarketDayScheduleRecord(
+            schedule_id=str(payload.get("schedule_id", "")),
+            trading_day=str(payload.get("trading_day", "")),
+            scheduled_open_at_utc=self._parse_datetime(
+                str(payload.get("scheduled_open_at_utc", ""))
+            ),
+            launched_at_utc=self._parse_datetime(
+                str(payload.get("launched_at_utc", ""))
+            ),
+            completed_at_utc=(
+                self._parse_datetime(str(completed_raw)) if completed_raw else None
+            ),
+            status=str(payload.get("status", "")),
+            automation_run_id=str(payload.get("automation_run_id", "")),
+            summary=str(payload.get("summary", "")),
+            evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+        )
+
     def build_gate3_readiness(self) -> Gate3ReadinessReport:
         payloads = self._validation_store.list_artifact_payloads("gate3_reports")
         if not payloads:
@@ -685,6 +736,9 @@ class LocalWebReadModel:
             payload = json.loads(path.read_text(encoding="utf-8"))
             payloads[str(payload.get("incident_id", path.stem))] = payload
         return payloads
+
+    def _operator_platform_store(self) -> FilesystemArtifactStore:
+        return FilesystemArtifactStore(self._operator_platform_root)
 
     def _service_cycle_events(self) -> list[OperatorTimelineEvent]:
         events: list[OperatorTimelineEvent] = []

@@ -35,6 +35,12 @@ def test_persistence_module_shell_is_importable() -> None:
     assert hasattr(module, "__all__")
 
 
+def test_filesystem_artifact_store_exposes_market_day_schedule_writer(tmp_path) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+
+    assert hasattr(store, "write_market_day_schedule_record")
+
+
 def test_filesystem_artifact_store_writes_trade_intent_json(tmp_path) -> None:
     store = FilesystemArtifactStore(tmp_path)
     intent = TradeIntent(

@@ -15,6 +15,7 @@ from tradingx.types import (
     LatestQuote,
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
+    MarketDaySchedulerRunResult,
     OrderRecord,
     RoundTripResult,
 )
@@ -171,6 +172,36 @@ class FakeMarketDayAutomationRunner:
         )
 
 
+class FakeMarketDayScheduler:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def run(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None,
+        stop_event=None,
+        state_callback=None,
+    ) -> MarketDaySchedulerRunResult:
+        self.called_with = {
+            "symbols": symbols,
+            "quantity": quantity,
+            "interval_seconds": interval_seconds,
+            "poll_interval_seconds": poll_interval_seconds,
+            "max_scheduled_days": max_scheduled_days,
+        }
+        return MarketDaySchedulerRunResult(
+            scheduled_days_completed=max_scheduled_days or 0,
+            latest_schedule_record_path=Path(
+                "artifacts/operator_platform/market_day_schedules/schedule-1.json"
+            ),
+        )
+
+
 class FakeGateValidationController:
     def __init__(self) -> None:
         self.called_with = None
@@ -286,6 +317,13 @@ class FakeWebRunner:
             "host": host,
             "port": port,
         }
+
+
+def test_parser_exposes_market_day_scheduler_command() -> None:
+    parser = cli.build_parser()
+    choices = parser._subparsers._group_actions[0].choices
+
+    assert "run-market-scheduler" in choices
 
 
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
@@ -768,6 +806,50 @@ def test_main_runs_market_day_automation_command(monkeypatch, capsys) -> None:
     assert fake_runner.called_with["symbols"] == ("SPY", "QQQ")
 
 
+def test_main_runs_market_day_scheduler_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ\n",
+        encoding="utf-8",
+    )
+    fake_scheduler = FakeMarketDayScheduler()
+    monkeypatch.setattr(
+        cli,
+        "build_default_market_day_scheduler",
+        lambda config: fake_scheduler,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "run-market-scheduler",
+            "--env-file",
+            str(env_file),
+            "--quantity",
+            "1",
+            "--interval-seconds",
+            "300",
+            "--poll-interval-seconds",
+            "120",
+            "--max-scheduled-days",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["scheduled_days_completed"] == 2
+    assert fake_scheduler.called_with == {
+        "symbols": ("SPY", "QQQ"),
+        "quantity": Decimal("1"),
+        "interval_seconds": 300,
+        "poll_interval_seconds": 120,
+        "max_scheduled_days": 2,
+    }
+
+
 def test_gate3_parser_defaults() -> None:
     parser = cli.build_parser()
 
@@ -776,6 +858,7 @@ def test_gate3_parser_defaults() -> None:
     recovery_args = parser.parse_args(["recovery-drill"])
     alert_args = parser.parse_args(["alert-drill"])
     automation_args = parser.parse_args(["run-market-day"])
+    scheduler_args = parser.parse_args(["run-market-scheduler"])
 
     assert report_args.env_file == ".env"
     assert report_args.paper_artifact_root == "artifacts/paper_loop"
@@ -786,3 +869,5 @@ def test_gate3_parser_defaults() -> None:
     assert alert_args.channel == "smtp"
     assert automation_args.interval_seconds is None
     assert automation_args.max_heartbeats is None
+    assert scheduler_args.poll_interval_seconds is None
+    assert scheduler_args.max_scheduled_days is None

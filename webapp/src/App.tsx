@@ -19,8 +19,10 @@ import {
   getGate3PromotionPackage,
   getGate3Readiness,
   getLatestDigest,
+  getLatestMarketDaySchedule,
   getMarketAutomationRun,
   getMarketSessions,
+  getSchedulerState,
   getReplaySlippageSummary,
   getRecoveryDrills,
   getIncidents,
@@ -40,6 +42,8 @@ import {
   postReplaySlippageReport,
   postRecover,
   postRecoveryDrill,
+  postSchedulerStart,
+  postSchedulerStop,
   postServiceStart,
   postServiceStop,
   postSessionClose,
@@ -60,6 +64,8 @@ import type {
   Gate3ReadinessReport,
   IncidentRecord,
   MarketAutomationRunRecord,
+  MarketDayScheduleRecord,
+  MarketDaySchedulerState,
   MarketSessionRecord,
   ReplaySlippageSummary,
   ReplaySession,
@@ -158,6 +164,17 @@ const defaultReplay: ReplaySession = {
 
 const defaultReplaySlippageSummary: ReplaySlippageSummary | null = null
 const defaultMarketAutomationRun: MarketAutomationRunRecord | null = null
+const defaultSchedulerState: MarketDaySchedulerState = {
+  status: 'idle',
+  poll_interval_seconds: 60,
+  active_symbols: [],
+  next_run_at_utc: null,
+  last_started_at_utc: null,
+  last_completed_at_utc: null,
+  active_trading_day: '',
+  last_error: '',
+}
+const defaultMarketDaySchedule: MarketDayScheduleRecord | null = null
 
 const viewOptions: Array<{ key: ViewKey; label: string; shortcut: string }> = [
   { key: 'command', label: 'Command Center', shortcut: '1' },
@@ -189,6 +206,10 @@ function App() {
     useState<ReplaySlippageSummary | null>(defaultReplaySlippageSummary)
   const [marketAutomationRun, setMarketAutomationRun] =
     useState<MarketAutomationRunRecord | null>(defaultMarketAutomationRun)
+  const [schedulerState, setSchedulerState] =
+    useState<MarketDaySchedulerState>(defaultSchedulerState)
+  const [latestMarketDaySchedule, setLatestMarketDaySchedule] =
+    useState<MarketDayScheduleRecord | null>(defaultMarketDaySchedule)
   const [marketSessions, setMarketSessions] = useState<MarketSessionRecord[]>([])
   const [recoveryDrills, setRecoveryDrills] = useState<RecoveryDrillRecord[]>([])
   const [alertDrills, setAlertDrills] = useState<AlertDrillRecord[]>([])
@@ -203,6 +224,7 @@ function App() {
   const [serviceSymbols, setServiceSymbols] = useState('SPY,QQQ')
   const [serviceQuantity, setServiceQuantity] = useState('1')
   const [serviceIntervalSeconds, setServiceIntervalSeconds] = useState('300')
+  const [schedulerPollSeconds, setSchedulerPollSeconds] = useState('60')
   const [marketDayHeartbeats, setMarketDayHeartbeats] = useState('2')
   const [loopSymbol, setLoopSymbol] = useState('SPY')
   const [loopQuantity, setLoopQuantity] = useState('1')
@@ -250,6 +272,8 @@ function App() {
         nextGate3Package,
         nextReplaySlippageSummary,
         nextMarketAutomationRun,
+        nextSchedulerState,
+        nextLatestMarketDaySchedule,
         nextMarketSessions,
         nextRecoveryDrills,
         nextAlertDrills,
@@ -266,6 +290,8 @@ function App() {
         getGate3PromotionPackage(),
         getReplaySlippageSummary(),
         getMarketAutomationRun(),
+        getSchedulerState(),
+        getLatestMarketDaySchedule(),
         getMarketSessions(),
         getRecoveryDrills(),
         getAlertDrills(),
@@ -283,6 +309,8 @@ function App() {
         setGate3Package(nextGate3Package)
         setReplaySlippageSummary(nextReplaySlippageSummary)
         setMarketAutomationRun(nextMarketAutomationRun)
+        setSchedulerState(nextSchedulerState)
+        setLatestMarketDaySchedule(nextLatestMarketDaySchedule)
         setMarketSessions(nextMarketSessions)
         setRecoveryDrills(nextRecoveryDrills)
         setAlertDrills(nextAlertDrills)
@@ -792,10 +820,13 @@ function App() {
               promotionPackage={gate3Package}
               replaySlippageSummary={replaySlippageSummary}
               marketAutomationRun={marketAutomationRun}
+              schedulerState={schedulerState}
+              latestMarketDaySchedule={latestMarketDaySchedule}
               marketSessions={marketSessions}
               serviceSymbols={serviceSymbols}
               serviceQuantity={serviceQuantity}
               serviceIntervalSeconds={serviceIntervalSeconds}
+              schedulerPollSeconds={schedulerPollSeconds}
               marketDayHeartbeats={marketDayHeartbeats}
               recoveryDrills={recoveryDrills}
               alertDrills={alertDrills}
@@ -803,6 +834,7 @@ function App() {
               onServiceSymbolsChange={setServiceSymbols}
               onServiceQuantityChange={setServiceQuantity}
               onServiceIntervalChange={setServiceIntervalSeconds}
+              onSchedulerPollSecondsChange={setSchedulerPollSeconds}
               onMarketDayHeartbeatsChange={setMarketDayHeartbeats}
               onRecoverySymbolChange={setGate3RecoverySymbol}
               onGenerateGate3Report={() => runAction(() => postGate3Report())}
@@ -829,6 +861,21 @@ function App() {
                   }),
                 )
               }
+              onStartScheduler={() =>
+                runAction(() =>
+                  postSchedulerStart({
+                    symbols: serviceSymbols
+                      .split(',')
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                    quantity: serviceQuantity,
+                    interval_seconds: Number(serviceIntervalSeconds),
+                    poll_interval_seconds: Number(schedulerPollSeconds),
+                    max_scheduled_days: null,
+                  }),
+                )
+              }
+              onStopScheduler={() => runAction(() => postSchedulerStop())}
             />
           ) : null}
 
@@ -1139,10 +1186,13 @@ function Gate3OpsView(props: {
   promotionPackage: Gate3PromotionPackage | null
   replaySlippageSummary: ReplaySlippageSummary | null
   marketAutomationRun: MarketAutomationRunRecord | null
+  schedulerState: MarketDaySchedulerState
+  latestMarketDaySchedule: MarketDayScheduleRecord | null
   marketSessions: MarketSessionRecord[]
   serviceSymbols: string
   serviceQuantity: string
   serviceIntervalSeconds: string
+  schedulerPollSeconds: string
   marketDayHeartbeats: string
   recoveryDrills: RecoveryDrillRecord[]
   alertDrills: AlertDrillRecord[]
@@ -1150,6 +1200,7 @@ function Gate3OpsView(props: {
   onServiceSymbolsChange: (value: string) => void
   onServiceQuantityChange: (value: string) => void
   onServiceIntervalChange: (value: string) => void
+  onSchedulerPollSecondsChange: (value: string) => void
   onMarketDayHeartbeatsChange: (value: string) => void
   onRecoverySymbolChange: (value: string) => void
   onGenerateGate3Report: () => void
@@ -1158,6 +1209,8 @@ function Gate3OpsView(props: {
   onRunRecoveryDrill: () => void
   onRunSmtpDrill: () => void
   onRunMarketDay: () => void
+  onStartScheduler: () => void
+  onStopScheduler: () => void
 }) {
   return (
     <div className="view-grid">
@@ -1314,6 +1367,49 @@ function Gate3OpsView(props: {
             onClick={props.onRunMarketDay}
           >
             Run Market Day
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="Scheduler Control" subtitle="Recurring unattended market-day launch">
+        <div className="digest-grid">
+          <MiniStat label="Scheduler status" value={props.schedulerState.status} />
+          <MiniStat label="Scheduler cadence" value={`${props.schedulerState.poll_interval_seconds}s`} />
+          <MiniStat
+            label="Next run"
+            value={props.schedulerState.next_run_at_utc ?? 'n/a'}
+          />
+          <MiniStat
+            label="Latest schedule"
+            value={props.latestMarketDaySchedule?.trading_day ?? 'n/a'}
+          />
+        </div>
+        <p className="section-lead">
+          {props.latestMarketDaySchedule?.summary ??
+            'No scheduled market day has been recorded yet.'}
+        </p>
+        <div className="field-grid compact">
+          <Field label="Scheduler Poll (seconds)">
+            <input
+              value={props.schedulerPollSeconds}
+              onChange={(event) => props.onSchedulerPollSecondsChange(event.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="button-row">
+          <button
+            type="button"
+            className="action-button primary"
+            onClick={props.onStartScheduler}
+          >
+            Start Scheduler
+          </button>
+          <button
+            type="button"
+            className="action-button secondary"
+            onClick={props.onStopScheduler}
+          >
+            Stop Scheduler
           </button>
         </div>
       </Panel>

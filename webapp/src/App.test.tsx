@@ -226,6 +226,29 @@ const marketAutomationPayload = {
   evidence_refs: ['artifacts/operator_platform/market_automation_runs/automation-1.json'],
 }
 
+const schedulerStatePayload = {
+  status: 'waiting',
+  poll_interval_seconds: 60,
+  active_symbols: ['SPY', 'QQQ'],
+  next_run_at_utc: '2026-04-21T13:30:00+00:00',
+  last_started_at_utc: null,
+  last_completed_at_utc: null,
+  active_trading_day: '2026-04-21',
+  last_error: '',
+}
+
+const schedulerLatestPayload = {
+  schedule_id: 'schedule-1',
+  trading_day: '2026-04-18',
+  scheduled_open_at_utc: '2026-04-18T13:30:00+00:00',
+  launched_at_utc: '2026-04-18T13:30:05+00:00',
+  completed_at_utc: '2026-04-18T20:00:00+00:00',
+  status: 'completed',
+  automation_run_id: 'automation-1',
+  summary: 'Scheduled market day completed.',
+  evidence_refs: ['artifacts/operator_platform/market_day_schedules/schedule-1.json'],
+}
+
 const marketSessionsPayload = [
   {
     session_id: 'session-1',
@@ -310,6 +333,12 @@ function mockFetch() {
       if (url.endsWith('/api/platform/gate3/automation/latest')) {
         return new Response(JSON.stringify(marketAutomationPayload))
       }
+      if (url.endsWith('/api/platform/gate3/scheduler/state')) {
+        return new Response(JSON.stringify(schedulerStatePayload))
+      }
+      if (url.endsWith('/api/platform/gate3/scheduler/latest')) {
+        return new Response(JSON.stringify(schedulerLatestPayload))
+      }
       if (url.endsWith('/api/evidence/operator_alerts')) {
         return new Response(JSON.stringify([]))
       }
@@ -373,6 +402,28 @@ function mockFetch() {
           evidence_refs: [
             'artifacts/operator_platform/market_automation_runs/automation-1.json',
           ],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/scheduler/start')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-scheduler-start',
+          action_type: 'market_scheduler_start',
+          status: 'accepted',
+          message: 'Scheduler started.',
+          evidence_refs: [],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/scheduler/stop')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-scheduler-stop',
+          action_type: 'market_scheduler_stop',
+          status: 'accepted',
+          message: 'Scheduler stop requested.',
+          evidence_refs: [],
         }),
       )
     }
@@ -511,6 +562,7 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Gate 3 Ops' }))
     expect(await screen.findByText('Gate 3 evidence is still incomplete.')).toBeInTheDocument()
     expect(await screen.findByText('Automation completed with fresh evidence.')).toBeInTheDocument()
+    expect(await screen.findByText('Scheduler cadence')).toBeInTheDocument()
     expect(
       await screen.findByRole('heading', { name: 'Replay Cross-Check' }),
     ).toBeInTheDocument()
@@ -520,6 +572,8 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Run Recovery Drill' }))
     await user.click(screen.getByRole('button', { name: 'Run SMTP Drill' }))
     await user.click(screen.getByRole('button', { name: 'Run Market Day' }))
+    await user.click(screen.getByRole('button', { name: 'Start Scheduler' }))
+    await user.click(screen.getByRole('button', { name: 'Stop Scheduler' }))
 
     await user.click(screen.getByRole('button', { name: 'Settings & Records' }))
     await user.type(screen.getByLabelText('Search records'), 'Gate')
@@ -578,6 +632,14 @@ describe('App', () => {
     )
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/actions/session/market-day',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/scheduler/start',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/scheduler/stop',
       expect.objectContaining({ method: 'POST' }),
     )
     expect(fetchMock).toHaveBeenCalledWith(

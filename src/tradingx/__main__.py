@@ -24,6 +24,7 @@ from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.scheduler import build_default_market_day_scheduler
 from tradingx.service import build_default_paper_service
 from tradingx.validation import (
     load_benchmark_close_series,
@@ -81,6 +82,18 @@ def build_parser() -> argparse.ArgumentParser:
     market_day_parser.add_argument("--quantity", default="1")
     market_day_parser.add_argument("--interval-seconds", type=int, default=None)
     market_day_parser.add_argument("--max-heartbeats", type=int, default=None)
+
+    market_scheduler_parser = subparsers.add_parser("run-market-scheduler")
+    market_scheduler_parser.add_argument("--env-file", default=".env")
+    market_scheduler_parser.add_argument("--symbols", default=None)
+    market_scheduler_parser.add_argument("--quantity", default="1")
+    market_scheduler_parser.add_argument("--interval-seconds", type=int, default=None)
+    market_scheduler_parser.add_argument(
+        "--poll-interval-seconds",
+        type=int,
+        default=None,
+    )
+    market_scheduler_parser.add_argument("--max-scheduled-days", type=int, default=None)
 
     recover_parser = subparsers.add_parser("paper-recover")
     recover_parser.add_argument("--env-file", default=".env")
@@ -235,6 +248,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_heartbeats=args.max_heartbeats,
         )
         print(json.dumps(_serialize(market_day_result), sort_keys=True))
+        return 0
+
+    if args.command == "run-market-scheduler":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        scheduler = build_default_market_day_scheduler(config)
+        symbols = (
+            tuple(
+                item.strip().upper() for item in args.symbols.split(",") if item.strip()
+            )
+            if args.symbols
+            else config.runtime.symbol_universe
+        )
+        scheduler_result = scheduler.run(
+            symbols=symbols,
+            quantity=Decimal(args.quantity),
+            interval_seconds=(
+                args.interval_seconds or config.runtime.service_interval_seconds
+            ),
+            poll_interval_seconds=(
+                args.poll_interval_seconds or config.runtime.scheduler_poll_seconds
+            ),
+            max_scheduled_days=args.max_scheduled_days,
+        )
+        print(json.dumps(_serialize(scheduler_result), sort_keys=True))
         return 0
 
     if args.command == "paper-recover":

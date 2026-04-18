@@ -361,6 +361,19 @@ class MarketAutomationRunRecord:
 
 
 @dataclass(frozen=True)
+class MarketDayScheduleRecord:
+    schedule_id: str
+    trading_day: str
+    scheduled_open_at_utc: datetime
+    launched_at_utc: datetime
+    completed_at_utc: datetime | None
+    status: str
+    automation_run_id: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ReplaySlippageRecord:
     replay_id: str
     execution_id: str
@@ -440,6 +453,18 @@ class WebServiceState:
     cycles_completed: int
     started_at_utc: datetime | None
     last_completed_at_utc: datetime | None
+    last_error: str
+
+
+@dataclass(frozen=True)
+class MarketDaySchedulerState:
+    status: str
+    poll_interval_seconds: int
+    active_symbols: tuple[str, ...]
+    next_run_at_utc: datetime | None
+    last_started_at_utc: datetime | None
+    last_completed_at_utc: datetime | None
+    active_trading_day: str
     last_error: str
 
 
@@ -568,6 +593,12 @@ class MarketAutomationRunResult:
 
 
 @dataclass(frozen=True)
+class MarketDaySchedulerRunResult:
+    scheduled_days_completed: int
+    latest_schedule_record_path: Path | None
+
+
+@dataclass(frozen=True)
 class ExplorerRecord:
     record_id: str
     category: str
@@ -611,6 +642,9 @@ __all__ = (
     "LatestQuote",
     "MarketAutomationRunRecord",
     "MarketAutomationRunResult",
+    "MarketDayScheduleRecord",
+    "MarketDaySchedulerRunResult",
+    "MarketDaySchedulerState",
     "MarketSessionRecord",
     "MarketSnapshot",
     "OperatorAlert",

@@ -225,6 +225,29 @@ export type MarketAutomationRunRecord = {
   evidence_refs: string[]
 }
 
+export type MarketDaySchedulerState = {
+  status: string
+  poll_interval_seconds: number
+  active_symbols: string[]
+  next_run_at_utc: string | null
+  last_started_at_utc: string | null
+  last_completed_at_utc: string | null
+  active_trading_day: string
+  last_error: string
+}
+
+export type MarketDayScheduleRecord = {
+  schedule_id: string
+  trading_day: string
+  scheduled_open_at_utc: string
+  launched_at_utc: string
+  completed_at_utc: string | null
+  status: string
+  automation_run_id: string
+  summary: string
+  evidence_refs: string[]
+}
+
 export type MarketSessionRecord = {
   session_id: string
   session_label: string

@@ -23,6 +23,8 @@ from tradingx.types import (
     Gate3ReadinessReport,
     IncidentRecord,
     MarketAutomationRunRecord,
+    MarketDayScheduleRecord,
+    MarketDaySchedulerState,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
@@ -80,6 +82,10 @@ class ReadModelProtocol(Protocol):
 
     def get_latest_market_automation_run(self) -> MarketAutomationRunRecord | None: ...
 
+    def get_scheduler_state(self) -> MarketDaySchedulerState: ...
+
+    def get_latest_market_day_schedule(self) -> MarketDayScheduleRecord | None: ...
+
 
 class ActionRunnerProtocol(Protocol):
     def start_service(
@@ -92,6 +98,18 @@ class ActionRunnerProtocol(Protocol):
     ) -> WebActionResult: ...
 
     def stop_service(self) -> WebActionResult: ...
+
+    def start_market_scheduler(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None = None,
+    ) -> WebActionResult: ...
+
+    def stop_market_scheduler(self) -> WebActionResult: ...
 
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult: ...
 
@@ -208,6 +226,14 @@ class MarketDayRequest(BaseModel):
     max_heartbeats: int | None = None
 
 
+class SchedulerStartRequest(BaseModel):
+    symbols: list[str]
+    quantity: str
+    interval_seconds: int
+    poll_interval_seconds: int
+    max_scheduled_days: int | None = None
+
+
 def create_app(
     *,
     config: TradingConfig,
@@ -317,6 +343,17 @@ def create_app(
             return JSONResponse(content=None)
         return JSONResponse(content=_serialize(run_record))
 
+    @app.get("/api/platform/gate3/scheduler/state")
+    def get_scheduler_state() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.get_scheduler_state()))
+
+    @app.get("/api/platform/gate3/scheduler/latest")
+    def get_latest_market_day_schedule() -> JSONResponse:
+        schedule_record = read_model.get_latest_market_day_schedule()
+        if schedule_record is None:
+            return JSONResponse(content=None)
+        return JSONResponse(content=_serialize(schedule_record))
+
     @app.get("/api/documents")
     def get_documents() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.list_documents()))
@@ -360,6 +397,26 @@ def create_app(
     def post_service_stop() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.stop_service()))
+
+    @app.post("/api/actions/scheduler/start")
+    def post_scheduler_start(payload: SchedulerStartRequest) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(
+                action_runner.start_market_scheduler(
+                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                    quantity=payload.quantity,
+                    interval_seconds=payload.interval_seconds,
+                    poll_interval_seconds=payload.poll_interval_seconds,
+                    max_scheduled_days=payload.max_scheduled_days,
+                )
+            )
+        )
+
+    @app.post("/api/actions/scheduler/stop")
+    def post_scheduler_stop() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.stop_market_scheduler()))
 
     @app.post("/api/actions/paper-loop")
     def post_paper_loop(payload: PaperLoopRequest) -> JSONResponse:

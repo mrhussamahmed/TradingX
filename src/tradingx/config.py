@@ -96,6 +96,7 @@ class RuntimeConfig:
     command_timeout_seconds: int = 30
     manual_kill_switch_active: bool = False
     service_interval_seconds: int = 300
+    scheduler_poll_seconds: int = 60
     symbol_universe: tuple[str, ...] = ("SPY",)
 
 
@@ -172,6 +173,10 @@ class TradingConfig:
                     values.get("TRADINGX_SERVICE_INTERVAL_SECONDS"),
                     default=300,
                 ),
+                scheduler_poll_seconds=_normalize_int(
+                    values.get("TRADINGX_SCHEDULER_POLL_SECONDS"),
+                    default=60,
+                ),
                 symbol_universe=(
                     _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
                 ),
@@ -211,6 +216,7 @@ class TradingConfig:
             "command_timeout_seconds": self.runtime.command_timeout_seconds,
             "manual_kill_switch_active": self.runtime.manual_kill_switch_active,
             "service_interval_seconds": self.runtime.service_interval_seconds,
+            "scheduler_poll_seconds": self.runtime.scheduler_poll_seconds,
             "symbol_universe": list(self.runtime.symbol_universe),
             "web_host": self.web.host,
             "web_port": self.web.port,

@@ -31,10 +31,12 @@ from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.scheduler import MarketDayScheduler, build_default_market_day_scheduler
 from tradingx.service import PaperTradingService, build_default_paper_service
 from tradingx.types import (
     AlertDrillRecord,
     ConfigProposal,
+    MarketDaySchedulerState,
     MarketSessionRecord,
     OperatorAlert,
     RecoveryDrillRecord,
@@ -54,6 +56,10 @@ class ServiceBuilderProtocol(Protocol):
 
 class AutomationRunnerBuilderProtocol(Protocol):
     def __call__(self) -> MarketDayAutomationRunner: ...
+
+
+class SchedulerBuilderProtocol(Protocol):
+    def __call__(self) -> MarketDayScheduler: ...
 
 
 class LocalServiceManager:
@@ -184,6 +190,131 @@ class LocalServiceManager:
             )
 
 
+class LocalSchedulerManager:
+    def __init__(
+        self,
+        *,
+        config: TradingConfig,
+        scheduler_builder: SchedulerBuilderProtocol | None = None,
+    ) -> None:
+        self._config = config
+        self._scheduler_builder = scheduler_builder or (
+            lambda: build_default_market_day_scheduler(config)
+        )
+        self._lock = threading.RLock()
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._state = MarketDaySchedulerState(
+            status="idle",
+            poll_interval_seconds=config.runtime.scheduler_poll_seconds,
+            active_symbols=(),
+            next_run_at_utc=None,
+            last_started_at_utc=None,
+            last_completed_at_utc=None,
+            active_trading_day="",
+            last_error="",
+        )
+
+    def get_state(self) -> MarketDaySchedulerState:
+        with self._lock:
+            return self._state
+
+    def start(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None = None,
+    ) -> WebActionResult:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="market_scheduler_start",
+                    status="blocked",
+                    message="Market-day scheduler is already running.",
+                    evidence_refs=(),
+                )
+            self._stop_event.clear()
+            self._state = MarketDaySchedulerState(
+                status="waiting",
+                poll_interval_seconds=poll_interval_seconds,
+                active_symbols=symbols,
+                next_run_at_utc=None,
+                last_started_at_utc=self._state.last_started_at_utc,
+                last_completed_at_utc=self._state.last_completed_at_utc,
+                active_trading_day=self._state.active_trading_day,
+                last_error="",
+            )
+            self._thread = threading.Thread(
+                target=self._run_scheduler_loop,
+                kwargs={
+                    "symbols": symbols,
+                    "quantity": quantity,
+                    "interval_seconds": interval_seconds,
+                    "poll_interval_seconds": poll_interval_seconds,
+                    "max_scheduled_days": max_scheduled_days,
+                },
+                daemon=True,
+            )
+            self._thread.start()
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="market_scheduler_start",
+            status="accepted",
+            message="Market-day scheduler started.",
+            evidence_refs=(),
+        )
+
+    def stop(self) -> WebActionResult:
+        self._stop_event.set()
+        with self._lock:
+            self._state = replace(self._state, status="stopping")
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="market_scheduler_stop",
+            status="accepted",
+            message="Market-day scheduler stop requested.",
+            evidence_refs=(),
+        )
+
+    def _run_scheduler_loop(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None,
+    ) -> None:
+        scheduler = self._scheduler_builder()
+        try:
+            scheduler.run(
+                symbols=symbols,
+                quantity=quantity,
+                interval_seconds=interval_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+                max_scheduled_days=max_scheduled_days,
+                stop_event=self._stop_event,
+                state_callback=self._update_state,
+            )
+        except Exception as exc:
+            with self._lock:
+                self._state = replace(self._state, status="error", last_error=str(exc))
+            return
+        with self._lock:
+            if self._stop_event.is_set():
+                self._state = replace(self._state, status="stopped")
+            elif self._state.status != "error":
+                self._state = replace(self._state, status="idle")
+
+    def _update_state(self, state: MarketDaySchedulerState) -> None:
+        with self._lock:
+            self._state = state
+
+
 class LocalWebActionRunner:
     def __init__(
         self,
@@ -191,11 +322,15 @@ class LocalWebActionRunner:
         config: TradingConfig,
         repo_root: Path,
         service_manager: LocalServiceManager,
+        scheduler_manager: LocalSchedulerManager | None = None,
         automation_runner_builder: AutomationRunnerBuilderProtocol | None = None,
     ) -> None:
         self._config = config
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._scheduler_manager = scheduler_manager or LocalSchedulerManager(
+            config=config
+        )
         self._automation_runner_builder = automation_runner_builder or (
             lambda: build_default_market_day_automation_runner(config)
         )
@@ -254,6 +389,26 @@ class LocalWebActionRunner:
 
     def stop_service(self) -> WebActionResult:
         return self._service_manager.stop()
+
+    def start_market_scheduler(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        poll_interval_seconds: int,
+        max_scheduled_days: int | None = None,
+    ) -> WebActionResult:
+        return self._scheduler_manager.start(
+            symbols=symbols,
+            quantity=Decimal(quantity),
+            interval_seconds=interval_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            max_scheduled_days=max_scheduled_days,
+        )
+
+    def stop_market_scheduler(self) -> WebActionResult:
+        return self._scheduler_manager.stop()
 
     def prepare_benchmark(
         self,
@@ -716,6 +871,7 @@ def build_default_local_web_components(
 ) -> tuple[LocalWebReadModel, LocalWebActionRunner]:
     repo_root = Path(__file__).resolve().parents[3]
     service_manager = LocalServiceManager(config=config)
+    scheduler_manager = LocalSchedulerManager(config=config)
     return (
         LocalWebReadModel(
             config=config,
@@ -728,16 +884,19 @@ def build_default_local_web_components(
             docs_root=repo_root / "docs",
             repo_root=repo_root,
             service_manager=service_manager,
+            scheduler_manager=scheduler_manager,
         ),
         LocalWebActionRunner(
             config=config,
             repo_root=repo_root,
             service_manager=service_manager,
+            scheduler_manager=scheduler_manager,
         ),
     )
 
 
 __all__ = (
+    "LocalSchedulerManager",
     "LocalServiceManager",
     "LocalWebActionRunner",
     "build_default_local_web_components",
