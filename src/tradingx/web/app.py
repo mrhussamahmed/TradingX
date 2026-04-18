@@ -22,6 +22,7 @@ from tradingx.types import (
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     IncidentRecord,
+    MarketAutomationRunRecord,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
@@ -77,6 +78,8 @@ class ReadModelProtocol(Protocol):
 
     def get_latest_daily_digest(self) -> DailySessionDigest | None: ...
 
+    def get_latest_market_automation_run(self) -> MarketAutomationRunRecord | None: ...
+
 
 class ActionRunnerProtocol(Protocol):
     def start_service(
@@ -121,6 +124,15 @@ class ActionRunnerProtocol(Protocol):
     def run_session_heartbeat(self) -> WebActionResult: ...
 
     def run_session_close(self) -> WebActionResult: ...
+
+    def run_market_day(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_heartbeats: int | None,
+    ) -> WebActionResult: ...
 
     def run_recovery_drill(self, *, symbol: str) -> WebActionResult: ...
 
@@ -187,6 +199,13 @@ class DecisionReportRequest(BaseModel):
 
 class AlertDrillRequest(BaseModel):
     channel: str = "smtp"
+
+
+class MarketDayRequest(BaseModel):
+    symbols: list[str]
+    quantity: str
+    interval_seconds: int
+    max_heartbeats: int | None = None
 
 
 def create_app(
@@ -290,6 +309,13 @@ def create_app(
         if digest is None:
             return JSONResponse(content=None)
         return JSONResponse(content=_serialize(digest))
+
+    @app.get("/api/platform/gate3/automation/latest")
+    def get_latest_market_automation_run() -> JSONResponse:
+        run_record = read_model.get_latest_market_automation_run()
+        if run_record is None:
+            return JSONResponse(content=None)
+        return JSONResponse(content=_serialize(run_record))
 
     @app.get("/api/documents")
     def get_documents() -> JSONResponse:
@@ -407,6 +433,20 @@ def create_app(
     def post_session_close() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.run_session_close()))
+
+    @app.post("/api/actions/session/market-day")
+    def post_market_day(payload: MarketDayRequest) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(
+                action_runner.run_market_day(
+                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                    quantity=payload.quantity,
+                    interval_seconds=payload.interval_seconds,
+                    max_heartbeats=payload.max_heartbeats,
+                )
+            )
+        )
 
     @app.post("/api/actions/recovery-drill")
     def post_recovery_drill(payload: RecoverRequest) -> JSONResponse:

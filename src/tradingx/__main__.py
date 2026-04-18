@@ -12,6 +12,7 @@ from typing import Any
 from alpaca.data.enums import Adjustment, DataFeed
 
 from tradingx.alerts import build_gate_decision_alert
+from tradingx.automation import build_default_market_day_automation_runner
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_controller,
@@ -73,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_service_parser.add_argument("--quantity", default="1")
     paper_service_parser.add_argument("--interval-seconds", type=int, default=None)
     paper_service_parser.add_argument("--max-cycles", type=int, default=None)
+
+    market_day_parser = subparsers.add_parser("run-market-day")
+    market_day_parser.add_argument("--env-file", default=".env")
+    market_day_parser.add_argument("--symbols", default=None)
+    market_day_parser.add_argument("--quantity", default="1")
+    market_day_parser.add_argument("--interval-seconds", type=int, default=None)
+    market_day_parser.add_argument("--max-heartbeats", type=int, default=None)
 
     recover_parser = subparsers.add_parser("paper-recover")
     recover_parser.add_argument("--env-file", default=".env")
@@ -206,6 +214,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_cycles=args.max_cycles,
         )
         print(json.dumps(_serialize(service_result), sort_keys=True))
+        return 0
+
+    if args.command == "run-market-day":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        runner = build_default_market_day_automation_runner(config)
+        symbols = (
+            tuple(
+                item.strip().upper() for item in args.symbols.split(",") if item.strip()
+            )
+            if args.symbols
+            else config.runtime.symbol_universe
+        )
+        market_day_result = runner.run_market_day(
+            symbols=symbols,
+            quantity=Decimal(args.quantity),
+            interval_seconds=(
+                args.interval_seconds or config.runtime.service_interval_seconds
+            ),
+            max_heartbeats=args.max_heartbeats,
+        )
+        print(json.dumps(_serialize(market_day_result), sort_keys=True))
         return 0
 
     if args.command == "paper-recover":

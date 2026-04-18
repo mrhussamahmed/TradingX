@@ -12,11 +12,13 @@ from typing import Any
 from tradingx.types import (
     AlertDrillRecord,
     ClosedTradeRecord,
+    DailySessionDigest,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     GateAssessment,
+    MarketAutomationRunRecord,
     MarketSessionRecord,
     OperatorAlert,
     OrderRecord,
@@ -142,6 +144,23 @@ class FilesystemArtifactStore:
             "market_sessions",
             f"{market_session.session_id}.json",
             market_session,
+        )
+
+    def write_daily_session_digest(self, digest: DailySessionDigest) -> Path:
+        return self._write_json(
+            "daily_digests",
+            f"{digest.digest_id}.json",
+            digest,
+        )
+
+    def write_market_automation_run_record(
+        self,
+        run_record: MarketAutomationRunRecord,
+    ) -> Path:
+        return self._write_json(
+            "market_automation_runs",
+            f"{run_record.run_id}.json",
+            run_record,
         )
 
     def write_gate3_readiness_report(self, report: Gate3ReadinessReport) -> Path:
@@ -314,6 +333,8 @@ class FilesystemArtifactStore:
             "recovery_drills",
             "alert_drills",
             "market_sessions",
+            "daily_digests",
+            "market_automation_runs",
             "gate3_reports",
             "gate3_packages",
             "replay_slippage_records",

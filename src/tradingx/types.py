@@ -343,6 +343,24 @@ class MarketSessionRecord:
 
 
 @dataclass(frozen=True)
+class MarketAutomationRunRecord:
+    run_id: str
+    started_at_utc: datetime
+    completed_at_utc: datetime
+    trading_day: str
+    status: str
+    heartbeat_count: int
+    preopen_session_id: str
+    heartbeat_session_ids: tuple[str, ...]
+    close_session_id: str
+    latest_replay_summary_id: str
+    latest_gate3_report_id: str
+    latest_gate3_package_id: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ReplaySlippageRecord:
     replay_id: str
     execution_id: str
@@ -539,6 +557,17 @@ class DailySessionDigest:
 
 
 @dataclass(frozen=True)
+class MarketAutomationRunResult:
+    run_record: MarketAutomationRunRecord
+    run_record_path: Path
+    session_paths: tuple[Path, ...]
+    daily_digest_paths: tuple[Path, ...]
+    replay_summary_path: Path | None
+    gate3_report_path: Path | None
+    gate3_package_path: Path | None
+
+
+@dataclass(frozen=True)
 class ExplorerRecord:
     record_id: str
     category: str
@@ -580,6 +609,8 @@ __all__ = (
     "GateDecisionCandidateSummary",
     "GateReportResult",
     "LatestQuote",
+    "MarketAutomationRunRecord",
+    "MarketAutomationRunResult",
     "MarketSessionRecord",
     "MarketSnapshot",
     "OperatorAlert",

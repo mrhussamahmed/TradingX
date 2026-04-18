@@ -208,6 +208,23 @@ export type ReplaySlippageSummary = {
   generated_at_utc: string
 }
 
+export type MarketAutomationRunRecord = {
+  run_id: string
+  started_at_utc: string
+  completed_at_utc: string
+  trading_day: string
+  status: string
+  heartbeat_count: number
+  preopen_session_id: string
+  heartbeat_session_ids: string[]
+  close_session_id: string
+  latest_replay_summary_id: string
+  latest_gate3_report_id: string
+  latest_gate3_package_id: string
+  summary: string
+  evidence_refs: string[]
+}
+
 export type MarketSessionRecord = {
   session_id: string
   session_label: string

@@ -45,6 +45,120 @@ class FakePaperService:
         )
 
 
+class FakeAutomationRunner:
+    def __init__(self, artifact_root: Path) -> None:
+        self._artifact_root = artifact_root
+
+    def run_preopen(self):
+        from tradingx.types import WebActionResult
+
+        path = (
+            self._artifact_root
+            / "operator_platform"
+            / "market_sessions"
+            / "session-preopen-1.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+        return WebActionResult(
+            action_id="action-preopen",
+            action_type="session_preopen",
+            status="completed",
+            message="Pre-open checklist captured.",
+            evidence_refs=("artifacts/operator_platform/daily_digests/preopen.json",),
+        )
+
+    def run_heartbeat(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+    ):
+        from tradingx.types import WebActionResult
+
+        path = (
+            self._artifact_root
+            / "operator_platform"
+            / "market_sessions"
+            / "session-heartbeat-1.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+        return WebActionResult(
+            action_id="action-heartbeat",
+            action_type="session_heartbeat",
+            status="completed",
+            message=f"Heartbeat executed for {','.join(symbols)}.",
+            evidence_refs=("artifacts/operator_platform/daily_digests/heartbeat.json",),
+        )
+
+    def run_close(self):
+        from tradingx.types import WebActionResult
+
+        path = (
+            self._artifact_root
+            / "operator_platform"
+            / "market_sessions"
+            / "session-close-1.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+
+        return WebActionResult(
+            action_id="action-close",
+            action_type="session_close",
+            status="completed",
+            message="Session close digest generated.",
+            evidence_refs=("artifacts/operator_platform/daily_digests/close.json",),
+        )
+
+    def run_market_day(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        max_heartbeats: int | None,
+    ):
+        from tradingx.types import MarketAutomationRunRecord, MarketAutomationRunResult
+
+        return MarketAutomationRunResult(
+            run_record=MarketAutomationRunRecord(
+                run_id="automation-1",
+                started_at_utc=datetime(2026, 4, 18, 8, 0, tzinfo=UTC),
+                completed_at_utc=datetime(2026, 4, 18, 8, 30, tzinfo=UTC),
+                trading_day="2026-04-18",
+                status="completed",
+                heartbeat_count=max_heartbeats or 1,
+                preopen_session_id="session-preopen-1",
+                heartbeat_session_ids=("session-heartbeat-1",),
+                close_session_id="session-close-1",
+                latest_replay_summary_id="replay-summary-1",
+                latest_gate3_report_id="gate3-1",
+                latest_gate3_package_id="gate3-package-1",
+                summary="Automation completed.",
+                evidence_refs=(
+                    "artifacts/operator_platform/market_automation_runs/automation-1.json",
+                ),
+            ),
+            run_record_path=Path(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json"
+            ),
+            session_paths=(),
+            daily_digest_paths=(),
+            replay_summary_path=Path(
+                "artifacts/validation/replay_slippage_summaries/replay-summary-1.json"
+            ),
+            gate3_report_path=Path("artifacts/validation/gate3_reports/gate3-1.json"),
+            gate3_package_path=Path(
+                "artifacts/validation/gate3_packages/gate3-package-1.json"
+            ),
+        )
+
+
 def _wait_for(predicate, *, timeout_seconds: float = 1.0) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -127,6 +241,7 @@ def test_local_web_action_runner_generates_session_digests_and_acknowledges_inci
         ),
         repo_root=tmp_path,
         service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+        automation_runner_builder=lambda: FakeAutomationRunner(tmp_path / "artifacts"),
     )
 
     preopen = runner.run_session_preopen()
@@ -189,3 +304,26 @@ def test_local_web_action_runner_generates_replay_slippage_artifacts(tmp_path) -
     assert (
         tmp_path / "artifacts" / "validation" / "replay_slippage_summaries"
     ).exists()
+
+
+def test_local_web_action_runner_runs_market_day_automation(tmp_path) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            }
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+        automation_runner_builder=lambda: FakeAutomationRunner(tmp_path / "artifacts"),
+    )
+
+    result = runner.run_market_day(
+        symbols=("SPY", "QQQ"),
+        quantity="1",
+        interval_seconds=300,
+        max_heartbeats=2,
+    )
+
+    assert result.status == "completed"
+    assert "market-day" in result.message.lower()

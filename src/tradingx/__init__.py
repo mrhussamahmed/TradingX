@@ -1,6 +1,7 @@
 """TradingX Phase 0 walking skeleton."""
 
 __all__ = [
+    "automation",
     "config",
     "controller",
     "data",

@@ -8,6 +8,7 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     EvaluationEvidencePack,
     GateAssessment,
+    MarketAutomationRunRecord,
     OperatorAlert,
     ServiceCycleSnapshot,
     ValidationCandidateResult,
@@ -345,6 +346,7 @@ def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
     replay = read_model.build_replay_session(symbol="SPY")
     explorer = read_model.search_records(query="Gate")
     digest = read_model.get_latest_daily_digest()
+    automation_run = read_model.get_latest_market_automation_run()
 
     assert command_center.session_mode == "intraday"
     assert len(command_center.equity_curve) == 1
@@ -354,3 +356,58 @@ def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
     assert any(item.category == "validation_report" for item in explorer)
     assert digest is not None
     assert digest.session_label == "session_close"
+    assert automation_run is None
+
+
+def test_local_web_read_model_reads_latest_market_automation_run(tmp_path) -> None:
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    timestamp = datetime(2026, 4, 18, 17, 0, tzinfo=UTC)
+    operator_store.write_market_automation_run_record(
+        MarketAutomationRunRecord(
+            run_id="automation-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            trading_day="2026-04-18",
+            status="completed",
+            heartbeat_count=2,
+            preopen_session_id="session-preopen-1",
+            heartbeat_session_ids=("session-heartbeat-1", "session-heartbeat-2"),
+            close_session_id="session-close-1",
+            latest_replay_summary_id="replay-summary-1",
+            latest_gate3_report_id="gate3-1",
+            latest_gate3_package_id="gate3-package-1",
+            summary="Automation completed.",
+            evidence_refs=(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json",
+            ),
+        )
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+    )
+
+    record = read_model.get_latest_market_automation_run()
+
+    assert record is not None
+    assert record.run_id == "automation-1"
+    assert record.heartbeat_count == 2

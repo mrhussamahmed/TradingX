@@ -14,6 +14,7 @@ from tradingx.types import (
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     GateAssessment,
+    MarketAutomationRunRecord,
     OperatorAlert,
     RecoveryDrillRecord,
     ReplaySlippageRecord,
@@ -375,3 +376,36 @@ def test_filesystem_artifact_store_writes_replay_slippage_artifacts(tmp_path) ->
     )
     assert report["counts"]["replay_slippage_records"] == 1
     assert report["counts"]["replay_slippage_summaries"] == 1
+
+
+def test_filesystem_artifact_store_writes_market_automation_run_artifacts(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 18, 17, 0, tzinfo=UTC)
+
+    run_path = store.write_market_automation_run_record(
+        MarketAutomationRunRecord(
+            run_id="automation-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            trading_day="2026-04-18",
+            status="completed",
+            heartbeat_count=2,
+            preopen_session_id="session-preopen-1",
+            heartbeat_session_ids=("session-heartbeat-1", "session-heartbeat-2"),
+            close_session_id="session-close-1",
+            latest_replay_summary_id="replay-summary-1",
+            latest_gate3_report_id="gate3-1",
+            latest_gate3_package_id="gate3-package-1",
+            summary="Automation completed with fresh evidence.",
+            evidence_refs=(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json",
+            ),
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert run_path == tmp_path / "market_automation_runs" / "automation-1.json"
+    assert report["counts"]["market_automation_runs"] == 1

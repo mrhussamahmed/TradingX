@@ -22,6 +22,8 @@ from tradingx.types import (
     GateDecisionCandidateSummary,
     GateReportResult,
     IncidentRecord,
+    MarketAutomationRunRecord,
+    MarketAutomationRunResult,
     MarketSessionRecord,
     OperatorAlert,
     OperatorTimelineEvent,
@@ -507,3 +509,58 @@ def test_gate3_types_capture_lifecycle_drills_and_readiness() -> None:
     assert session.session_label == "session_preopen"
     assert report.criteria[0].criterion_id == "duration_or_trade_count"
     assert package.criteria_statuses["duration_or_trade_count"] == "pending"
+
+
+def test_market_day_automation_types_capture_run_artifacts() -> None:
+    timestamp = datetime(2026, 4, 18, 8, 0, tzinfo=UTC)
+    run_record = MarketAutomationRunRecord(
+        run_id="automation-1",
+        started_at_utc=timestamp,
+        completed_at_utc=timestamp,
+        trading_day="2026-04-18",
+        status="completed",
+        heartbeat_count=2,
+        preopen_session_id="session-preopen-1",
+        heartbeat_session_ids=("session-heartbeat-1", "session-heartbeat-2"),
+        close_session_id="session-close-1",
+        latest_replay_summary_id="replay-summary-1",
+        latest_gate3_report_id="gate3-1",
+        latest_gate3_package_id="gate3-package-1",
+        summary="Automation completed with refreshed Gate 3 evidence.",
+        evidence_refs=(
+            "artifacts/operator_platform/market_automation_runs/automation-1.json",
+        ),
+    )
+    run_result = MarketAutomationRunResult(
+        run_record=run_record,
+        run_record_path=Path(
+            "artifacts/operator_platform/market_automation_runs/automation-1.json"
+        ),
+        session_paths=(
+            Path("artifacts/operator_platform/market_sessions/session-preopen-1.json"),
+            Path(
+                "artifacts/operator_platform/market_sessions/session-heartbeat-1.json"
+            ),
+            Path(
+                "artifacts/operator_platform/market_sessions/session-heartbeat-2.json"
+            ),
+            Path("artifacts/operator_platform/market_sessions/session-close-1.json"),
+        ),
+        daily_digest_paths=(
+            Path("artifacts/operator_platform/daily_digests/digest-preopen.json"),
+            Path("artifacts/operator_platform/daily_digests/digest-heartbeat.json"),
+            Path("artifacts/operator_platform/daily_digests/digest-close.json"),
+        ),
+        replay_summary_path=Path(
+            "artifacts/validation/replay_slippage_summaries/replay-summary-1.json"
+        ),
+        gate3_report_path=Path("artifacts/validation/gate3_reports/gate3-1.json"),
+        gate3_package_path=Path(
+            "artifacts/validation/gate3_packages/gate3-package-1.json"
+        ),
+    )
+
+    assert run_record.heartbeat_count == 2
+    assert run_record.latest_gate3_package_id == "gate3-package-1"
+    assert len(run_result.session_paths) == 4
+    assert run_result.gate3_package_path.name == "gate3-package-1.json"

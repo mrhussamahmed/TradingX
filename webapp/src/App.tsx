@@ -19,6 +19,7 @@ import {
   getGate3PromotionPackage,
   getGate3Readiness,
   getLatestDigest,
+  getMarketAutomationRun,
   getMarketSessions,
   getReplaySlippageSummary,
   getRecoveryDrills,
@@ -32,6 +33,7 @@ import {
   postGateReport,
   postGate3Package,
   postGate3Report,
+  postMarketDayAutomation,
   postPaperLoop,
   postPrepareBenchmark,
   postProposal,
@@ -57,6 +59,7 @@ import type {
   Gate3PromotionPackage,
   Gate3ReadinessReport,
   IncidentRecord,
+  MarketAutomationRunRecord,
   MarketSessionRecord,
   ReplaySlippageSummary,
   ReplaySession,
@@ -154,6 +157,7 @@ const defaultReplay: ReplaySession = {
 }
 
 const defaultReplaySlippageSummary: ReplaySlippageSummary | null = null
+const defaultMarketAutomationRun: MarketAutomationRunRecord | null = null
 
 const viewOptions: Array<{ key: ViewKey; label: string; shortcut: string }> = [
   { key: 'command', label: 'Command Center', shortcut: '1' },
@@ -183,6 +187,8 @@ function App() {
     useState<Gate3PromotionPackage | null>(null)
   const [replaySlippageSummary, setReplaySlippageSummary] =
     useState<ReplaySlippageSummary | null>(defaultReplaySlippageSummary)
+  const [marketAutomationRun, setMarketAutomationRun] =
+    useState<MarketAutomationRunRecord | null>(defaultMarketAutomationRun)
   const [marketSessions, setMarketSessions] = useState<MarketSessionRecord[]>([])
   const [recoveryDrills, setRecoveryDrills] = useState<RecoveryDrillRecord[]>([])
   const [alertDrills, setAlertDrills] = useState<AlertDrillRecord[]>([])
@@ -197,6 +203,7 @@ function App() {
   const [serviceSymbols, setServiceSymbols] = useState('SPY,QQQ')
   const [serviceQuantity, setServiceQuantity] = useState('1')
   const [serviceIntervalSeconds, setServiceIntervalSeconds] = useState('300')
+  const [marketDayHeartbeats, setMarketDayHeartbeats] = useState('2')
   const [loopSymbol, setLoopSymbol] = useState('SPY')
   const [loopQuantity, setLoopQuantity] = useState('1')
   const [recoverSymbol, setRecoverSymbol] = useState('SPY')
@@ -242,6 +249,7 @@ function App() {
         nextGate3Readiness,
         nextGate3Package,
         nextReplaySlippageSummary,
+        nextMarketAutomationRun,
         nextMarketSessions,
         nextRecoveryDrills,
         nextAlertDrills,
@@ -257,6 +265,7 @@ function App() {
         getGate3Readiness(),
         getGate3PromotionPackage(),
         getReplaySlippageSummary(),
+        getMarketAutomationRun(),
         getMarketSessions(),
         getRecoveryDrills(),
         getAlertDrills(),
@@ -273,6 +282,7 @@ function App() {
         setGate3Readiness(nextGate3Readiness)
         setGate3Package(nextGate3Package)
         setReplaySlippageSummary(nextReplaySlippageSummary)
+        setMarketAutomationRun(nextMarketAutomationRun)
         setMarketSessions(nextMarketSessions)
         setRecoveryDrills(nextRecoveryDrills)
         setAlertDrills(nextAlertDrills)
@@ -781,10 +791,19 @@ function App() {
               readiness={gate3Readiness}
               promotionPackage={gate3Package}
               replaySlippageSummary={replaySlippageSummary}
+              marketAutomationRun={marketAutomationRun}
               marketSessions={marketSessions}
+              serviceSymbols={serviceSymbols}
+              serviceQuantity={serviceQuantity}
+              serviceIntervalSeconds={serviceIntervalSeconds}
+              marketDayHeartbeats={marketDayHeartbeats}
               recoveryDrills={recoveryDrills}
               alertDrills={alertDrills}
               recoverySymbol={gate3RecoverySymbol}
+              onServiceSymbolsChange={setServiceSymbols}
+              onServiceQuantityChange={setServiceQuantity}
+              onServiceIntervalChange={setServiceIntervalSeconds}
+              onMarketDayHeartbeatsChange={setMarketDayHeartbeats}
               onRecoverySymbolChange={setGate3RecoverySymbol}
               onGenerateGate3Report={() => runAction(() => postGate3Report())}
               onGenerateGate3Package={() => runAction(() => postGate3Package())}
@@ -796,6 +815,19 @@ function App() {
               }
               onRunSmtpDrill={() =>
                 runAction(() => postAlertDrill({ channel: 'smtp' }))
+              }
+              onRunMarketDay={() =>
+                runAction(() =>
+                  postMarketDayAutomation({
+                    symbols: serviceSymbols
+                      .split(',')
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                    quantity: serviceQuantity,
+                    interval_seconds: Number(serviceIntervalSeconds),
+                    max_heartbeats: Number(marketDayHeartbeats),
+                  }),
+                )
               }
             />
           ) : null}
@@ -1106,16 +1138,26 @@ function Gate3OpsView(props: {
   readiness: Gate3ReadinessReport
   promotionPackage: Gate3PromotionPackage | null
   replaySlippageSummary: ReplaySlippageSummary | null
+  marketAutomationRun: MarketAutomationRunRecord | null
   marketSessions: MarketSessionRecord[]
+  serviceSymbols: string
+  serviceQuantity: string
+  serviceIntervalSeconds: string
+  marketDayHeartbeats: string
   recoveryDrills: RecoveryDrillRecord[]
   alertDrills: AlertDrillRecord[]
   recoverySymbol: string
+  onServiceSymbolsChange: (value: string) => void
+  onServiceQuantityChange: (value: string) => void
+  onServiceIntervalChange: (value: string) => void
+  onMarketDayHeartbeatsChange: (value: string) => void
   onRecoverySymbolChange: (value: string) => void
   onGenerateGate3Report: () => void
   onGenerateGate3Package: () => void
   onGenerateReplaySlippageReport: () => void
   onRunRecoveryDrill: () => void
   onRunSmtpDrill: () => void
+  onRunMarketDay: () => void
 }) {
   return (
     <div className="view-grid">
@@ -1212,6 +1254,68 @@ function Gate3OpsView(props: {
           {props.replaySlippageSummary?.details ??
             'Replay-slippage evidence has not been generated yet.'}
         </p>
+      </Panel>
+
+      <Panel title="Automation Runway" subtitle="Bounded market-day orchestration">
+        <div className="digest-grid">
+          <MiniStat
+            label="Automation Status"
+            value={props.marketAutomationRun?.status ?? 'not run'}
+          />
+          <MiniStat
+            label="Trading Day"
+            value={props.marketAutomationRun?.trading_day ?? 'n/a'}
+          />
+          <MiniStat
+            label="Heartbeats"
+            value={String(props.marketAutomationRun?.heartbeat_count ?? 0)}
+          />
+          <MiniStat
+            label="Latest Package"
+            value={props.marketAutomationRun?.latest_gate3_package_id ?? 'n/a'}
+          />
+        </div>
+        <p className="section-lead">
+          {props.marketAutomationRun?.summary ??
+            'No market-day automation run has been recorded yet.'}
+        </p>
+        <div className="field-grid compact">
+          <Field label="Symbols">
+            <input
+              value={props.serviceSymbols}
+              onChange={(event) => props.onServiceSymbolsChange(event.target.value)}
+            />
+          </Field>
+          <Field label="Quantity">
+            <input
+              value={props.serviceQuantity}
+              onChange={(event) => props.onServiceQuantityChange(event.target.value)}
+            />
+          </Field>
+          <Field label="Interval (seconds)">
+            <input
+              value={props.serviceIntervalSeconds}
+              onChange={(event) => props.onServiceIntervalChange(event.target.value)}
+            />
+          </Field>
+          <Field label="Max Heartbeats">
+            <input
+              value={props.marketDayHeartbeats}
+              onChange={(event) =>
+                props.onMarketDayHeartbeatsChange(event.target.value)
+              }
+            />
+          </Field>
+        </div>
+        <div className="button-row">
+          <button
+            type="button"
+            className="action-button primary"
+            onClick={props.onRunMarketDay}
+          >
+            Run Market Day
+          </button>
+        </div>
       </Panel>
 
       <Panel title="Operational Drills" subtitle="Recovery and emergency evidence">

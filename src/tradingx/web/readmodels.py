@@ -20,6 +20,7 @@ from tradingx.types import (
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     IncidentRecord,
+    MarketAutomationRunRecord,
     OperatorTimelineEvent,
     ReplaySession,
     ReplaySlippageSummary,
@@ -463,6 +464,38 @@ class LocalWebReadModel:
             recommended_actions=self._payload_strings(
                 payload.get("recommended_actions", ())
             ),
+            evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+        )
+
+    def get_latest_market_automation_run(self) -> MarketAutomationRunRecord | None:
+        run_dir = self._operator_platform_root / "market_automation_runs"
+        if not run_dir.exists():
+            return None
+        payloads = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(run_dir.glob("*.json"))
+        ]
+        if not payloads:
+            return None
+        payload = max(payloads, key=lambda item: str(item.get("completed_at_utc", "")))
+        return MarketAutomationRunRecord(
+            run_id=str(payload.get("run_id", "")),
+            started_at_utc=self._parse_datetime(str(payload.get("started_at_utc", ""))),
+            completed_at_utc=self._parse_datetime(
+                str(payload.get("completed_at_utc", ""))
+            ),
+            trading_day=str(payload.get("trading_day", "")),
+            status=str(payload.get("status", "pending")),
+            heartbeat_count=int(str(payload.get("heartbeat_count", 0))),
+            preopen_session_id=str(payload.get("preopen_session_id", "")),
+            heartbeat_session_ids=self._payload_strings(
+                payload.get("heartbeat_session_ids", ())
+            ),
+            close_session_id=str(payload.get("close_session_id", "")),
+            latest_replay_summary_id=str(payload.get("latest_replay_summary_id", "")),
+            latest_gate3_report_id=str(payload.get("latest_gate3_report_id", "")),
+            latest_gate3_package_id=str(payload.get("latest_gate3_package_id", "")),
+            summary=str(payload.get("summary", "")),
             evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
         )
 

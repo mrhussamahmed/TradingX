@@ -13,6 +13,8 @@ from tradingx.types import (
     GateDecisionBrief,
     GateDecisionCandidateSummary,
     LatestQuote,
+    MarketAutomationRunRecord,
+    MarketAutomationRunResult,
     OrderRecord,
     RoundTripResult,
 )
@@ -115,6 +117,58 @@ class FakePaperServiceController:
                 "symbols": list(symbols),
             },
         }
+
+
+class FakeMarketDayAutomationRunner:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def run_market_day(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        max_heartbeats: int | None,
+    ) -> MarketAutomationRunResult:
+        self.called_with = {
+            "symbols": symbols,
+            "quantity": quantity,
+            "interval_seconds": interval_seconds,
+            "max_heartbeats": max_heartbeats,
+        }
+        return MarketAutomationRunResult(
+            run_record=MarketAutomationRunRecord(
+                run_id="automation-1",
+                started_at_utc=datetime(2026, 4, 18, 13, 0, tzinfo=UTC),
+                completed_at_utc=datetime(2026, 4, 18, 13, 30, tzinfo=UTC),
+                trading_day="2026-04-18",
+                status="completed",
+                heartbeat_count=2,
+                preopen_session_id="session-preopen-1",
+                heartbeat_session_ids=("session-heartbeat-1", "session-heartbeat-2"),
+                close_session_id="session-close-1",
+                latest_replay_summary_id="replay-summary-1",
+                latest_gate3_report_id="gate3-1",
+                latest_gate3_package_id="gate3-package-1",
+                summary="Automation completed.",
+                evidence_refs=(
+                    "artifacts/operator_platform/market_automation_runs/automation-1.json",
+                ),
+            ),
+            run_record_path=Path(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json"
+            ),
+            session_paths=(),
+            daily_digest_paths=(),
+            replay_summary_path=Path(
+                "artifacts/validation/replay_slippage_summaries/replay-summary-1.json"
+            ),
+            gate3_report_path=Path("artifacts/validation/gate3_reports/gate3-1.json"),
+            gate3_package_path=Path(
+                "artifacts/validation/gate3_packages/gate3-package-1.json"
+            ),
+        )
 
 
 class FakeGateValidationController:
@@ -684,6 +738,36 @@ def test_main_runs_replay_slippage_report_command(tmp_path, capsys) -> None:
     assert payload["summary"]["matched_execution_count"] == 1
 
 
+def test_main_runs_market_day_automation_command(monkeypatch, capsys) -> None:
+    fake_runner = FakeMarketDayAutomationRunner()
+    monkeypatch.setattr(
+        cli,
+        "build_default_market_day_automation_runner",
+        lambda config: fake_runner,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "run-market-day",
+            "--symbols",
+            "SPY,QQQ",
+            "--quantity",
+            "1",
+            "--interval-seconds",
+            "300",
+            "--max-heartbeats",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["run_record"]["heartbeat_count"] == 2
+    assert fake_runner.called_with is not None
+    assert fake_runner.called_with["symbols"] == ("SPY", "QQQ")
+
+
 def test_gate3_parser_defaults() -> None:
     parser = cli.build_parser()
 
@@ -691,6 +775,7 @@ def test_gate3_parser_defaults() -> None:
     package_args = parser.parse_args(["gate3-package"])
     recovery_args = parser.parse_args(["recovery-drill"])
     alert_args = parser.parse_args(["alert-drill"])
+    automation_args = parser.parse_args(["run-market-day"])
 
     assert report_args.env_file == ".env"
     assert report_args.paper_artifact_root == "artifacts/paper_loop"
@@ -699,3 +784,5 @@ def test_gate3_parser_defaults() -> None:
     assert package_args.validation_artifact_root == "artifacts/validation"
     assert recovery_args.symbol == "SPY"
     assert alert_args.channel == "smtp"
+    assert automation_args.interval_seconds is None
+    assert automation_args.max_heartbeats is None

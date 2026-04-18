@@ -209,6 +209,23 @@ const replaySlippageSummaryPayload = {
   generated_at_utc: '2026-04-18T18:05:00+00:00',
 }
 
+const marketAutomationPayload = {
+  run_id: 'automation-1',
+  started_at_utc: '2026-04-18T08:00:00+00:00',
+  completed_at_utc: '2026-04-18T08:30:00+00:00',
+  trading_day: '2026-04-18',
+  status: 'completed',
+  heartbeat_count: 2,
+  preopen_session_id: 'session-preopen-1',
+  heartbeat_session_ids: ['session-heartbeat-1', 'session-heartbeat-2'],
+  close_session_id: 'session-close-1',
+  latest_replay_summary_id: 'replay-summary-1',
+  latest_gate3_report_id: 'gate3-1',
+  latest_gate3_package_id: 'gate3-package-1',
+  summary: 'Automation completed with fresh evidence.',
+  evidence_refs: ['artifacts/operator_platform/market_automation_runs/automation-1.json'],
+}
+
 const marketSessionsPayload = [
   {
     session_id: 'session-1',
@@ -290,6 +307,9 @@ function mockFetch() {
       if (url.endsWith('/api/platform/gate3/replay-slippage/latest')) {
         return new Response(JSON.stringify(replaySlippageSummaryPayload))
       }
+      if (url.endsWith('/api/platform/gate3/automation/latest')) {
+        return new Response(JSON.stringify(marketAutomationPayload))
+      }
       if (url.endsWith('/api/evidence/operator_alerts')) {
         return new Response(JSON.stringify([]))
       }
@@ -340,6 +360,19 @@ function mockFetch() {
           status: 'completed',
           message: 'Session close digest generated.',
           evidence_refs: ['artifacts/operator_platform/daily_digests/close.json'],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/session/market-day')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-market-day',
+          action_type: 'market_day_run',
+          status: 'completed',
+          message: 'Market-day automation completed.',
+          evidence_refs: [
+            'artifacts/operator_platform/market_automation_runs/automation-1.json',
+          ],
         }),
       )
     }
@@ -477,6 +510,7 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Gate 3 Ops' }))
     expect(await screen.findByText('Gate 3 evidence is still incomplete.')).toBeInTheDocument()
+    expect(await screen.findByText('Automation completed with fresh evidence.')).toBeInTheDocument()
     expect(
       await screen.findByRole('heading', { name: 'Replay Cross-Check' }),
     ).toBeInTheDocument()
@@ -485,6 +519,7 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'Refresh Replay Evidence' }))
     await user.click(screen.getByRole('button', { name: 'Run Recovery Drill' }))
     await user.click(screen.getByRole('button', { name: 'Run SMTP Drill' }))
+    await user.click(screen.getByRole('button', { name: 'Run Market Day' }))
 
     await user.click(screen.getByRole('button', { name: 'Settings & Records' }))
     await user.type(screen.getByLabelText('Search records'), 'Gate')
@@ -539,6 +574,10 @@ describe('App', () => {
     )
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/actions/alert-drill',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/session/market-day',
       expect.objectContaining({ method: 'POST' }),
     )
     expect(fetchMock).toHaveBeenCalledWith(

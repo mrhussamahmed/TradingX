@@ -13,6 +13,7 @@ import type {
   Gate3PromotionPackage,
   Gate3ReadinessReport,
   IncidentRecord,
+  MarketAutomationRunRecord,
   MarketSessionRecord,
   ReplaySlippageSummary,
   ReplaySession,
@@ -114,6 +115,10 @@ export function getReplaySlippageSummary() {
   return request<ReplaySlippageSummary | null>('/api/platform/gate3/replay-slippage/latest')
 }
 
+export function getMarketAutomationRun() {
+  return request<MarketAutomationRunRecord | null>('/api/platform/gate3/automation/latest')
+}
+
 export function getMarketSessions() {
   return request<MarketSessionRecord[]>('/api/evidence/market_sessions')
 }
@@ -204,6 +209,18 @@ export function postSessionHeartbeat() {
 export function postSessionClose() {
   return request<ActionResult>('/api/actions/session/close', {
     method: 'POST',
+  })
+}
+
+export function postMarketDayAutomation(payload: {
+  symbols: string[]
+  quantity: string
+  interval_seconds: number
+  max_heartbeats: number | null
+}) {
+  return request<ActionResult>('/api/actions/session/market-day', {
+    method: 'POST',
+    body: JSON.stringify(payload),
   })
 }
 

@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.7
+version: 1.2.8
 status: active
 created: 2026-04-17
 last_amended: 2026-04-18
-supersedes: INDEX-0001@1.2.6
+supersedes: INDEX-0001@1.2.7
 superseded_by: null
-author_session: SESS-2026-04-18-017
+author_session: SESS-2026-04-18-018
 ---
 
 # Artifact index
@@ -71,7 +71,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.0   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.7   | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.8   | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -90,6 +90,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0011 | Use a normalized operator event timeline with polling refresh for the operator platform | 1.0.0 | active | `docs/adrs/ADR-0011-operator-platform-event-timeline-polling.md` |
 | ADR-0012 | Use persisted trade lifecycle and drill artifacts as the Gate 3 evidence source | 1.0.0 | active | `docs/adrs/ADR-0012-gate3-evidence-lifecycle-artifacts.md` |
 | ADR-0013 | Use persisted execution context to generate replay-slippage cross-check evidence | 1.0.0 | active | `docs/adrs/ADR-0013-replay-slippage-cross-check-from-persisted-execution-context.md` |
+| ADR-0014 | Use a dedicated market-day automation runner with persisted run artifacts | 1.0.0 | active | `docs/adrs/ADR-0014-market-day-automation-runner.md` |
 
 ### Design documents
 
@@ -98,6 +99,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0001 | TradingX operator platform design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-operator-platform-design.md` |
 | DESIGN-0002 | TradingX Gate 3 operations and evidence design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-gate3-operations-evidence-design.md` |
 | DESIGN-0003 | TradingX replay-slippage evidence design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-replay-slippage-evidence-design.md` |
+| DESIGN-0004 | TradingX market-day automation design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-market-day-automation-design.md` |
 
 ### Specifications (SPEC-NNNN)
 
@@ -108,6 +110,7 @@ field (session lifecycle). This index tracks `status` only.
 | SPEC-0003 | TradingX operator platform specification | 1.0.0 | active | `specs/003-operator-platform/spec.md` |
 | SPEC-0004 | TradingX Gate 3 operations and evidence specification | 1.0.0 | active | `specs/004-gate3-operations-evidence/spec.md` |
 | SPEC-0005 | TradingX replay-slippage evidence specification | 1.0.0 | active | `specs/005-replay-slippage-evidence/spec.md` |
+| SPEC-0006 | TradingX market-day automation specification | 1.0.0 | active | `specs/006-market-day-automation/spec.md` |
 
 ### Plans (PLAN-NNNN)
 
@@ -118,6 +121,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0003 | TradingX operator platform implementation plan | 1.0.0 | active | `specs/003-operator-platform/plan.md` |
 | PLAN-0004 | TradingX Gate 3 operations and evidence implementation plan | 1.0.0 | active | `specs/004-gate3-operations-evidence/plan.md` |
 | PLAN-0005 | TradingX replay-slippage evidence implementation plan | 1.0.0 | active | `specs/005-replay-slippage-evidence/plan.md` |
+| PLAN-0006 | TradingX market-day automation implementation plan | 1.0.0 | active | `specs/006-market-day-automation/plan.md` |
 
 ### Task lists (TASKS-NNNN)
 
@@ -128,6 +132,7 @@ field (session lifecycle). This index tracks `status` only.
 | TASKS-0003 | TradingX operator platform task list | 1.0.0 | active | `specs/003-operator-platform/tasks.md` |
 | TASKS-0004 | TradingX Gate 3 operations and evidence task list | 1.0.0 | active | `specs/004-gate3-operations-evidence/tasks.md` |
 | TASKS-0005 | TradingX replay-slippage evidence task list | 1.0.0 | active | `specs/005-replay-slippage-evidence/tasks.md` |
+| TASKS-0006 | TradingX market-day automation task list | 1.0.0 | active | `specs/006-market-day-automation/tasks.md` |
 
 ### Research notes
 
@@ -138,6 +143,7 @@ field (session lifecycle). This index tracks `status` only.
 | RESEARCH-0003 | TradingX operator platform research | 1.0.0 | active | `specs/003-operator-platform/research.md` |
 | RESEARCH-0004 | TradingX Gate 3 operations and evidence research | 1.0.0 | active | `specs/004-gate3-operations-evidence/research.md` |
 | RESEARCH-0005 | TradingX replay-slippage evidence research | 1.0.0 | active | `specs/005-replay-slippage-evidence/research.md` |
+| RESEARCH-0006 | TradingX market-day automation research | 1.0.0 | active | `specs/006-market-day-automation/research.md` |
 
 ### Data models
 
@@ -148,6 +154,7 @@ field (session lifecycle). This index tracks `status` only.
 | DATAMODEL-0003 | TradingX operator platform data model | 1.0.0 | active | `specs/003-operator-platform/data-model.md` |
 | DATAMODEL-0004 | TradingX Gate 3 operations and evidence data model | 1.0.0 | active | `specs/004-gate3-operations-evidence/data-model.md` |
 | DATAMODEL-0005 | TradingX replay-slippage evidence data model | 1.0.0 | active | `specs/005-replay-slippage-evidence/data-model.md` |
+| DATAMODEL-0006 | TradingX market-day automation data model | 1.0.0 | active | `specs/006-market-day-automation/data-model.md` |
 
 ### Quickstarts
 
@@ -158,6 +165,7 @@ field (session lifecycle). This index tracks `status` only.
 | QUICKSTART-0004 | TradingX operator platform quickstart | 1.0.0 | active | `specs/003-operator-platform/quickstart.md` |
 | QUICKSTART-0005 | TradingX Gate 3 operations and evidence quickstart | 1.0.0 | active | `specs/004-gate3-operations-evidence/quickstart.md` |
 | QUICKSTART-0006 | TradingX replay-slippage evidence quickstart | 1.0.0 | active | `specs/005-replay-slippage-evidence/quickstart.md` |
+| QUICKSTART-0007 | TradingX market-day automation quickstart | 1.0.0 | active | `specs/006-market-day-automation/quickstart.md` |
 
 ### Contracts (CONTRACT-NNNN)
 
@@ -169,6 +177,7 @@ field (session lifecycle). This index tracks `status` only.
 | CONTRACT-0004 | Operator platform API contract | 1.0.0 | active | `specs/003-operator-platform/contracts/operator_platform_api.md` |
 | CONTRACT-0005 | Gate 3 operations and evidence API contract | 1.0.0 | active | `specs/004-gate3-operations-evidence/contracts/gate3_operations_api.md` |
 | CONTRACT-0006 | Replay slippage API contract | 1.0.0 | active | `specs/005-replay-slippage-evidence/contracts/replay_slippage_api.md` |
+| CONTRACT-0007 | Market-day automation API contract | 1.0.0 | active | `specs/006-market-day-automation/contracts/market_day_automation_api.md` |
 
 ### Validation gate definitions
 
@@ -204,7 +213,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 17              | SESS-2026-04-18-017    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 18              | SESS-2026-04-18-018    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

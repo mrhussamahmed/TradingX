@@ -15,6 +15,7 @@ from tradingx.types import (
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     IncidentRecord,
+    MarketAutomationRunRecord,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,
@@ -158,6 +159,27 @@ class FakeReadModel:
             status="pass",
             details="Replay divergence is within the allowed bound.",
             generated_at_utc=timestamp,
+        )
+
+    def get_latest_market_automation_run(self) -> MarketAutomationRunRecord | None:
+        timestamp = datetime(2026, 4, 18, 18, 6, tzinfo=UTC)
+        return MarketAutomationRunRecord(
+            run_id="automation-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            trading_day="2026-04-18",
+            status="completed",
+            heartbeat_count=2,
+            preopen_session_id="session-preopen-1",
+            heartbeat_session_ids=("session-heartbeat-1", "session-heartbeat-2"),
+            close_session_id="session-close-1",
+            latest_replay_summary_id="replay-summary-1",
+            latest_gate3_report_id="gate3-1",
+            latest_gate3_package_id="gate3-package-1",
+            summary="Automation completed.",
+            evidence_refs=(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json",
+            ),
         )
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
@@ -359,6 +381,24 @@ class FakeActionRunner:
             evidence_refs=("artifacts/operator_platform/daily_digests/close.json",),
         )
 
+    def run_market_day(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_heartbeats: int | None,
+    ) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-market-day",
+            action_type="market_day_run",
+            status="completed",
+            message=f"Market-day automation completed for {','.join(symbols)}.",
+            evidence_refs=(
+                "artifacts/operator_platform/market_automation_runs/automation-1.json",
+            ),
+        )
+
     def run_recovery_drill(self, *, symbol: str) -> WebActionResult:
         return WebActionResult(
             action_id="action-recovery-drill",
@@ -439,6 +479,7 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     replay = client.get("/api/platform/replay?symbol=SPY")
     explorer = client.get("/api/platform/explorer?query=Gate")
     digest = client.get("/api/platform/digests/latest")
+    automation = client.get("/api/platform/gate3/automation/latest")
 
     assert overview.status_code == 200
     assert overview.json()["service_status"]["status"] == "running"
@@ -469,6 +510,8 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert explorer.json()[0]["title"] == "Gate 1 report"
     assert digest.status_code == 200
     assert digest.json()["digest_id"] == "digest-1"
+    assert automation.status_code == 200
+    assert automation.json()["run_id"] == "automation-1"
 
 
 def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:
@@ -570,6 +613,15 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     preopen = client.post("/api/actions/session/preopen")
     heartbeat = client.post("/api/actions/session/heartbeat")
     close_result = client.post("/api/actions/session/close")
+    market_day = client.post(
+        "/api/actions/session/market-day",
+        json={
+            "symbols": ["SPY", "QQQ"],
+            "quantity": "1",
+            "interval_seconds": 300,
+            "max_heartbeats": 2,
+        },
+    )
     gate3_report = client.post("/api/actions/gate3/report")
     gate3_package = client.post("/api/actions/gate3/package")
     recovery_drill = client.post(
@@ -596,6 +648,8 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     assert preopen.status_code == 200
     assert heartbeat.status_code == 200
     assert close_result.status_code == 200
+    assert market_day.status_code == 200
+    assert market_day.json()["action_type"] == "market_day_run"
     assert gate3_report.status_code == 200
     assert gate3_package.status_code == 200
     assert recovery_drill.status_code == 200

@@ -23,6 +23,8 @@ implementation that can:
   persisted paper evidence trail
 - generate replay-slippage cross-check evidence from persisted paper
   execution context
+- run a bounded market-day automation workflow that performs pre-open,
+  heartbeat, closeout, and automatic Gate 3 evidence refresh
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
 
@@ -33,6 +35,7 @@ uv run tradingx config-summary --env-file .env
 uv run tradingx live-disable-status --env-file .env
 uv run tradingx paper-loop --env-file .env --symbol SPY --quantity 1
 uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
+uv run tradingx run-market-day --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-heartbeats 3
 uv run tradingx paper-recover --env-file .env --symbol SPY
 uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
@@ -51,6 +54,12 @@ only. `run-paper-service` repeats the loop across a bounded universe and
 persists a service-cycle summary on every pass; omit `--max-cycles` to
 leave it running. `paper-recover` resumes the latest persisted loop for
 a symbol without creating a duplicate submission.
+
+`run-market-day` performs one bounded automation workflow: it writes a
+pre-open checkpoint, runs repeated bounded heartbeats, refreshes
+replay-slippage evidence and Gate 3 readiness, then writes the closeout
+checkpoint and promotion package. Omit `--max-heartbeats` only when you
+want it to keep running until the market closes.
 
 If `TRADINGX_TELEGRAM_BOT_TOKEN` / `TRADINGX_TELEGRAM_CHAT_ID` or the
 `TRADINGX_SMTP_*` settings are present in `.env`, operator alerts are
@@ -94,8 +103,8 @@ the local controls enabled. The website exposes:
 - an evidence browser for alerts, service cycles, and validation reports
 - a gate cockpit for current gate states and recommendation counts
 - a Gate 3 operations surface for readiness status, drill history,
-  market-session checkpoints, replay-slippage divergence, and promotion
-  workflow actions
+  market-session checkpoints, replay-slippage divergence, automation
+  history, and promotion workflow actions
 - a project-intelligence panel for state and handover context
 - a proposal studio that writes safe config proposals under
   `config/proposals/`

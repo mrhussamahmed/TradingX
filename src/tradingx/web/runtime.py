@@ -17,6 +17,10 @@ from tradingx.alerts import (
     TelegramAlertTransport,
     build_gate_decision_alert,
 )
+from tradingx.automation import (
+    MarketDayAutomationRunner,
+    build_default_market_day_automation_runner,
+)
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_gate_validation_controller,
@@ -46,6 +50,10 @@ from tradingx.web.readmodels import LocalWebReadModel
 
 class ServiceBuilderProtocol(Protocol):
     def __call__(self) -> PaperTradingService: ...
+
+
+class AutomationRunnerBuilderProtocol(Protocol):
+    def __call__(self) -> MarketDayAutomationRunner: ...
 
 
 class LocalServiceManager:
@@ -183,10 +191,14 @@ class LocalWebActionRunner:
         config: TradingConfig,
         repo_root: Path,
         service_manager: LocalServiceManager,
+        automation_runner_builder: AutomationRunnerBuilderProtocol | None = None,
     ) -> None:
         self._config = config
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._automation_runner_builder = automation_runner_builder or (
+            lambda: build_default_market_day_automation_runner(config)
+        )
         self._paper_store = FilesystemArtifactStore(
             self._config.runtime.artifact_root / "paper_loop"
         )
@@ -373,13 +385,39 @@ class LocalWebActionRunner:
         )
 
     def run_session_preopen(self) -> WebActionResult:
-        return self._write_daily_digest(session_label="session_preopen")
+        return self._automation_runner_builder().run_preopen()
 
     def run_session_heartbeat(self) -> WebActionResult:
-        return self._write_daily_digest(session_label="session_heartbeat")
+        return self._automation_runner_builder().run_heartbeat(
+            symbols=self._config.runtime.symbol_universe,
+            quantity=Decimal("1"),
+            interval_seconds=self._config.runtime.service_interval_seconds,
+        )
 
     def run_session_close(self) -> WebActionResult:
-        return self._write_daily_digest(session_label="session_close")
+        return self._automation_runner_builder().run_close()
+
+    def run_market_day(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_heartbeats: int | None,
+    ) -> WebActionResult:
+        result = self._automation_runner_builder().run_market_day(
+            symbols=symbols,
+            quantity=Decimal(quantity),
+            interval_seconds=interval_seconds,
+            max_heartbeats=max_heartbeats,
+        )
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="market_day_run",
+            status=result.run_record.status,
+            message=f"Market-day automation: {result.run_record.summary}",
+            evidence_refs=(str(result.run_record_path),),
+        )
 
     def run_recovery_drill(self, *, symbol: str) -> WebActionResult:
         started_at = datetime.now(UTC)
