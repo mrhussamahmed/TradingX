@@ -7,12 +7,12 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-014
+author_session: SESS-2026-04-18-015
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-014
+- Active session: SESS-2026-04-18-015
 - Active branch: codex/operator-platform
 - Active phase: 7
 - Last completed gate: 0.5
@@ -81,5 +81,9 @@ author_session: SESS-2026-04-18-014
   passed with the expected closed-market smoke skip, plus frontend
   tests, frontend build verification, and a real local browser check of
   `tradingx web`.
+- The operator-platform UI has now been visually redesigned into a more
+  premium editorial control-room aesthetic with atmospheric gradients,
+  richer glass surfaces, stronger hero structure, and improved visual
+  hierarchy while preserving the same dashboards and controls.
 - Next execution step on this branch is operator review and promotion of
   `codex/operator-platform` into `main`.

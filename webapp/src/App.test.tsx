@@ -294,7 +294,8 @@ describe('App', () => {
     expect(screen.getByText('Incident Center')).toBeInTheDocument()
     expect(screen.getByText('Replay Lab')).toBeInTheDocument()
     expect(screen.getByText('Settings & Records')).toBeInTheDocument()
-    expect(await screen.findByText('Regular session monitor')).toBeInTheDocument()
+    expect(await screen.findByText('Mission profile')).toBeInTheDocument()
+    expect((await screen.findAllByText('Regular session monitor'))[0]).toBeInTheDocument()
     expect(screen.getByText('10030.00')).toBeInTheDocument()
   })
 
@@ -310,7 +311,9 @@ describe('App', () => {
     expect(await screen.findByText('trend-following-v1')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Incident Center' }))
-    expect(await screen.findByText('Stale broker state blocked a trade.')).toBeInTheDocument()
+    expect(
+      (await screen.findAllByText('Stale broker state blocked a trade.'))[0],
+    ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Acknowledge Incident' }))
 
     await user.click(screen.getByRole('button', { name: 'Replay Lab' }))

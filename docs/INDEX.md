@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.4
+version: 1.2.5
 status: active
 created: 2026-04-17
 last_amended: 2026-04-18
-supersedes: INDEX-0001@1.2.3
+supersedes: INDEX-0001@1.2.4
 superseded_by: null
-author_session: SESS-2026-04-18-014
+author_session: SESS-2026-04-18-015
 ---
 
 # Artifact index
@@ -71,7 +71,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.0   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.4   | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.5   | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -186,7 +186,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 14              | SESS-2026-04-18-014    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 15              | SESS-2026-04-18-015    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

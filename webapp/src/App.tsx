@@ -409,15 +409,73 @@ function App() {
 
   return (
     <main className="platform-shell">
+      <div className="ambient-orb ambient-orb-a" aria-hidden="true" />
+      <div className="ambient-orb ambient-orb-b" aria-hidden="true" />
+      <div className="ambient-grid" aria-hidden="true" />
       <header className="masthead">
-        <div className="masthead-copy">
-          <p className="eyebrow">Local-only operator workspace</p>
-          <h1>TradingX Operator Platform</h1>
-          <p className="hero-summary">
-            A dense command surface for paper trading supervision, trade
-            explainability, incident handling, replay, research, and records.
-          </p>
+        <div className="masthead-grid">
+          <div className="masthead-copy">
+            <p className="eyebrow">Local-only operator workspace</p>
+            <h1>TradingX Operator Platform</h1>
+            <p className="hero-summary">
+              A dense command surface for paper trading supervision, trade
+              explainability, incident handling, replay, research, and records.
+            </p>
+            <div className="hero-ribbon">
+              <article className="hero-ribbon-card">
+                <span>Mission profile</span>
+                <strong>{commandCenter.market_session_label}</strong>
+                <p>Paper-only supervision with operator-safe controls.</p>
+              </article>
+              <article className="hero-ribbon-card">
+                <span>Refresh cadence</span>
+                <strong>
+                  Every {configSummary.config.web_refresh_interval_seconds}s
+                </strong>
+                <p>
+                  {overview.service_status.cycles_completed} cycles recorded in
+                  the current service run.
+                </p>
+              </article>
+              <article className="hero-ribbon-card">
+                <span>Incident focus</span>
+                <strong>{currentIncident?.title || 'Clear board'}</strong>
+                <p>
+                  {currentIncident?.summary ||
+                    'No active incident is dominating the operator deck.'}
+                </p>
+              </article>
+            </div>
+          </div>
+
+          <aside className="hero-aside">
+            <div className="hero-aside-copy">
+              <p className="eyebrow">Operator cadence</p>
+              <h2>Run the desk like a control room.</h2>
+              <p>
+                Shortcuts, status, and intervention points stay visible while
+                the dashboards carry the deeper evidence trail.
+              </p>
+            </div>
+            <div className="hero-aside-stack">
+              <div className="hero-aside-card">
+                <span>Keyboard sweep</span>
+                <strong>1-6 views, Cmd/Ctrl+K palette</strong>
+              </div>
+              <div className="hero-aside-card">
+                <span>Write posture</span>
+                <strong>{writeModeEnabled ? 'Enabled' : 'Read-only'}</strong>
+              </div>
+              <div className="hero-aside-card">
+                <span>Active scan</span>
+                <strong>
+                  {overview.service_status.active_symbols.join(', ') || 'No active scan'}
+                </strong>
+              </div>
+            </div>
+          </aside>
         </div>
+
         <div className="masthead-meta">
           <StatusChip label={overview.service_status.status} tone="teal" />
           <StatusChip
@@ -440,6 +498,7 @@ function App() {
             Open command palette
           </button>
         </div>
+
         <div className="hero-metrics">
           <MetricCard label="Equity" value={commandCenter.account_summary.equity} />
           <MetricCard label="Cash" value={commandCenter.account_summary.cash} />

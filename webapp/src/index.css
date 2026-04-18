@@ -1,9 +1,22 @@
 :root {
-  --paper: #f6f1e6;
-  --mist: #eef3ef;
-  --ink: #162a31;
-  --ink-soft: #5a6f75;
-  --line: rgba(22, 42, 49, 0.12);
+  --shell-night: #071019;
+  --shell-midnight: #0f1b2c;
+  --shell-reef: #112b35;
+  --shell-card: rgba(11, 19, 31, 0.78);
+  --shell-card-strong: rgba(16, 25, 39, 0.9);
+  --shell-card-soft: rgba(19, 31, 47, 0.66);
+  --shell-line: rgba(255, 255, 255, 0.1);
+  --shell-line-strong: rgba(255, 255, 255, 0.18);
+  --glow-teal: rgba(65, 214, 194, 0.26);
+  --glow-gold: rgba(255, 196, 107, 0.24);
+  --glow-rose: rgba(255, 138, 138, 0.18);
+  --shadow-deep: 0 40px 90px rgba(3, 7, 16, 0.5);
+  --paper: #f5efe2;
+  --mist: #dfe9ea;
+  --ink: #f7f2e8;
+  --ink-soft: #a6b7c4;
+  --ink-muted: #7e91a3;
+  --line: rgba(255, 255, 255, 0.1);
   --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
   --body: 'Avenir Next', 'Trebuchet MS', sans-serif;
   --mono: 'IBM Plex Mono', 'SFMono-Regular', 'Menlo', monospace;
@@ -11,9 +24,9 @@
   font-family: var(--body);
   color: var(--ink);
   background:
-    radial-gradient(circle at top left, rgba(207, 160, 82, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(37, 118, 117, 0.16), transparent 24%),
-    linear-gradient(180deg, #f9f6ee 0%, #edf3f1 48%, #f7f3ea 100%);
+    radial-gradient(circle at top left, rgba(255, 196, 107, 0.18), transparent 24%),
+    radial-gradient(circle at top right, rgba(65, 214, 194, 0.16), transparent 26%),
+    linear-gradient(180deg, #09111c 0%, #0d1726 38%, #0b1420 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -27,6 +40,10 @@
 body {
   margin: 0;
   min-width: 320px;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(255, 196, 107, 0.1), transparent 20%),
+    radial-gradient(circle at 82% 12%, rgba(65, 214, 194, 0.12), transparent 18%),
+    linear-gradient(160deg, #071019 0%, #0b1727 45%, #09111c 100%);
 }
 
 button,
@@ -36,7 +53,8 @@ textarea {
 }
 
 h1,
-h2 {
+h2,
+h3 {
   font-family: var(--heading);
   color: var(--ink);
 }
@@ -53,6 +71,12 @@ h2 {
   letter-spacing: -0.03em;
 }
 
+h3 {
+  margin: 0;
+  font-size: 1.08rem;
+  letter-spacing: -0.02em;
+}
+
 p {
   line-height: 1.65;
 }
@@ -63,4 +87,9 @@ a {
 
 #root {
   min-height: 100vh;
+}
+
+::selection {
+  background: rgba(65, 214, 194, 0.28);
+  color: var(--paper);
 }
