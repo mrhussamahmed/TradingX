@@ -195,4 +195,3 @@ the local trading appliance becomes the primary operator workflow.
 - unit tests for activation-record loading and fallback behavior
 - API and runtime-manager tests for start/stop/state flows
 - frontend tests for the runtime-host panel and readiness states
-

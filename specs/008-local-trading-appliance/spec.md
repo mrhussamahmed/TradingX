@@ -136,4 +136,3 @@ snapshot does not change automatically.
   runtime automatically.
 - **SC-006**: Backend tests, frontend tests, build verification, and
   `./scripts/validate` pass after the feature lands.
-

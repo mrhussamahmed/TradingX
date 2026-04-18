@@ -70,4 +70,3 @@ Adopt a supervised local trading appliance model with:
 - Fully rewrite the runtime into many local daemons immediately.
   Rejected for this phase because it would add large migration risk and
   delay operator value.
-

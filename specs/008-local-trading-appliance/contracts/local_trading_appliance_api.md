@@ -56,4 +56,3 @@ author_session: SESS-2026-04-19-022
   broker exception payloads.
 - Read endpoints may expose only artifact-backed state and sanitized
   runtime summaries.
-

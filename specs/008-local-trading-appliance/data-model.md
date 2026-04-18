@@ -105,4 +105,3 @@ author_session: SESS-2026-04-19-022
 - `selected_symbol`: chosen symbol or empty for `NO_TRADE`
 - `decision`: `selected | no_trade`
 - `decision_reason`: deploy-threshold or eligibility explanation
-

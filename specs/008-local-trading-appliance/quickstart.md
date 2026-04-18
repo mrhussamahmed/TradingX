@@ -48,4 +48,3 @@ verification and diagnostics.
   `artifacts/operator_platform/opportunity_selections/`
 - learning proposals under
   `artifacts/operator_platform/model_weight_proposals/`
-

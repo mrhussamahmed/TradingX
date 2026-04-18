@@ -47,4 +47,3 @@ one session safely.
 - live trading enablement
 - runtime auto-promotion of learned weights
 - browser-owned trading decisions
-

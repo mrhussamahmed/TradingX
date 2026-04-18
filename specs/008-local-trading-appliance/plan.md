@@ -138,4 +138,3 @@ webapp/src/
 - Update README and operator manual for the new primary workflow.
 - Run repo validation, update state/index/handover artifacts, and
   prepare promotion into `main`.
-
