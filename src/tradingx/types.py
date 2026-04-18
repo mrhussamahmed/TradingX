@@ -446,6 +446,98 @@ class Gate3PromotionPackage:
 
 
 @dataclass(frozen=True)
+class BotRuntimeState:
+    status: str
+    status_reason: str
+    active_symbols: tuple[str, ...]
+    started_at_utc: datetime | None
+    updated_at_utc: datetime
+    last_error: str
+    active_strategy_id: str
+    active_model_snapshot_id: str
+    latest_selection_id: str
+
+
+@dataclass(frozen=True)
+class HistoricalWarmupRecord:
+    warmup_id: str
+    generated_at_utc: datetime
+    benchmark_symbol: str
+    symbols: tuple[str, ...]
+    window_start_utc: datetime
+    window_end_utc: datetime
+    required_bar_count: int
+    symbols_ready: tuple[str, ...]
+    symbols_blocked: dict[str, str]
+    return_summary: dict[str, dict[str, Decimal]]
+
+
+@dataclass(frozen=True)
+class StrategyActivationRecord:
+    activation_id: str
+    strategy_id: str
+    strategy_version: str
+    approved_symbols: tuple[str, ...]
+    deploy_threshold: Decimal
+    allow_fallback_weights: bool
+    status: str
+    activated_at_utc: datetime
+    notes: str
+
+
+@dataclass(frozen=True)
+class ModelWeightSnapshot:
+    snapshot_id: str
+    strategy_id: str
+    status: str
+    generated_at_utc: datetime
+    minimum_supporting_trades: int
+    weights: dict[str, Decimal]
+
+
+@dataclass(frozen=True)
+class ModelWeightProposal:
+    proposal_id: str
+    generated_at_utc: datetime
+    strategy_id: str
+    supporting_trade_count: int
+    baseline_snapshot_id: str
+    candidate_snapshot: ModelWeightSnapshot
+    improvement_score: Decimal
+    statistically_significant: bool
+    summary: str
+
+
+@dataclass(frozen=True)
+class OpportunityScore:
+    symbol: str
+    base_signal: Decimal
+    regime_weight: Decimal
+    model_weight: Decimal
+    liquidity_weight: Decimal
+    spread_penalty: Decimal
+    volatility_penalty: Decimal
+    portfolio_overlap_penalty: Decimal
+    execution_cost_penalty: Decimal
+    final_score: Decimal
+    eligible: bool
+    ineligibility_reason: str
+
+
+@dataclass(frozen=True)
+class OpportunitySelectionRecord:
+    selection_id: str
+    generated_at_utc: datetime
+    strategy_id: str
+    model_snapshot_id: str
+    symbols_considered: tuple[str, ...]
+    ranked_opportunities: tuple[OpportunityScore, ...]
+    selected_symbol: str
+    decision: str
+    decision_reason: str
+
+
+@dataclass(frozen=True)
 class WebServiceState:
     status: str
     active_symbols: tuple[str, ...]
@@ -626,7 +718,10 @@ class CommandCenterSnapshot:
 
 __all__ = (
     "AccountSnapshot",
+    "AlertDrillRecord",
     "BenchmarkCloseSeries",
+    "BotRuntimeState",
+    "ClosedTradeRecord",
     "ConfigProposal",
     "DashboardSnapshot",
     "DocumentRecord",
@@ -639,6 +734,7 @@ __all__ = (
     "GateDecisionBrief",
     "GateDecisionCandidateSummary",
     "GateReportResult",
+    "HistoricalWarmupRecord",
     "LatestQuote",
     "MarketAutomationRunRecord",
     "MarketAutomationRunResult",
@@ -647,6 +743,10 @@ __all__ = (
     "MarketDaySchedulerState",
     "MarketSessionRecord",
     "MarketSnapshot",
+    "ModelWeightProposal",
+    "ModelWeightSnapshot",
+    "OpportunityScore",
+    "OpportunitySelectionRecord",
     "OperatorAlert",
     "OrderRecord",
     "PortfolioState",
@@ -659,11 +759,10 @@ __all__ = (
     "RiskControlEvent",
     "RoundTripResult",
     "ScalarValue",
-    "AlertDrillRecord",
-    "ClosedTradeRecord",
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",
+    "StrategyActivationRecord",
     "StrategyCandidate",
     "TradeIntent",
     "TradingLoopResult",

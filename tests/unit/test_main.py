@@ -12,12 +12,18 @@ from tradingx.types import (
     ExecutionLifecycleRecord,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
+    HistoricalWarmupRecord,
     LatestQuote,
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketDaySchedulerRunResult,
+    ModelWeightSnapshot,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     OrderRecord,
+    PortfolioState,
     RoundTripResult,
+    StrategyActivationRecord,
 )
 
 
@@ -319,6 +325,91 @@ class FakeWebRunner:
         }
 
 
+class FakeRuntimeActivationGateway:
+    def __init__(
+        self,
+        activation: StrategyActivationRecord,
+        snapshot: ModelWeightSnapshot,
+    ) -> None:
+        self._activation = activation
+        self._snapshot = snapshot
+
+    def load_or_create_active_records(
+        self,
+        symbols: tuple[str, ...],
+    ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]:
+        return self._activation, self._snapshot
+
+
+class FakeRuntimeWarmupService:
+    def __init__(self, warmup: HistoricalWarmupRecord) -> None:
+        self._warmup = warmup
+
+    def build_warmup(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        benchmark_symbol: str,
+        warmup_days: int,
+        required_bar_count: int,
+    ) -> HistoricalWarmupRecord:
+        return self._warmup
+
+
+class FakeRuntimePortfolioGateway:
+    def get_portfolio_state(self) -> PortfolioState:
+        return PortfolioState(
+            as_of_utc=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+            cash=Decimal("100000"),
+            equity=Decimal("100000"),
+            buying_power=Decimal("200000"),
+            positions=(),
+            open_orders=(),
+        )
+
+
+class FakeRuntimeOpportunityPlanner:
+    def __init__(self, selection: OpportunitySelectionRecord) -> None:
+        self._selection = selection
+
+    def plan(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+        activation: StrategyActivationRecord,
+        model_snapshot: ModelWeightSnapshot,
+        warmup: HistoricalWarmupRecord,
+    ) -> OpportunitySelectionRecord:
+        return self._selection
+
+
+class FakeRuntimeService:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def run(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        max_cycles: int | None,
+    ) -> dict[str, object]:
+        self.called_with = {
+            "symbols": symbols,
+            "quantity": quantity,
+            "interval_seconds": interval_seconds,
+            "max_cycles": max_cycles,
+        }
+        return {"cycles_completed": max_cycles or 0}
+
+
+class FakeLearningService:
+    def generate_from_artifact_store(self, **kwargs):
+        return None
+
+
 def test_parser_exposes_market_day_scheduler_command() -> None:
     parser = cli.build_parser()
     choices = parser._subparsers._group_actions[0].choices
@@ -470,6 +561,151 @@ def test_main_runs_paper_service_command(monkeypatch, tmp_path, capsys) -> None:
         "max_cycles": 2,
     }
     assert payload["cycles_completed"] == 2
+
+
+def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+    activation = StrategyActivationRecord(
+        activation_id="activation-1",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY", "QQQ"),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Baseline activation.",
+    )
+    snapshot = ModelWeightSnapshot(
+        snapshot_id="snapshot-1",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 5, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={
+            "signal": Decimal("1.0"),
+            "regime": Decimal("1.0"),
+            "liquidity": Decimal("1.0"),
+            "spread_penalty": Decimal("1.0"),
+            "volatility_penalty": Decimal("1.0"),
+            "portfolio_overlap_penalty": Decimal("1.0"),
+            "execution_cost_penalty": Decimal("1.0"),
+        },
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-1",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY", "QQQ"),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY",),
+        symbols_blocked={"QQQ": "insufficient_bars"},
+        return_summary={"SPY": {"cumulative_return": Decimal("0.02")}},
+    )
+    selection = OpportunitySelectionRecord(
+        selection_id="selection-1",
+        generated_at_utc=datetime(2026, 4, 19, 11, 35, tzinfo=UTC),
+        strategy_id="baseline-long-only-v1",
+        model_snapshot_id="snapshot-1",
+        symbols_considered=("SPY", "QQQ"),
+        ranked_opportunities=(
+            OpportunityScore(
+                symbol="SPY",
+                base_signal=Decimal("0.5"),
+                regime_weight=Decimal("1.0"),
+                model_weight=Decimal("1.0"),
+                liquidity_weight=Decimal("1.0"),
+                spread_penalty=Decimal("0.1"),
+                volatility_penalty=Decimal("0.1"),
+                portfolio_overlap_penalty=Decimal("0.0"),
+                execution_cost_penalty=Decimal("0.0"),
+                final_score=Decimal("0.6"),
+                eligible=True,
+                ineligibility_reason="",
+            ),
+        ),
+        selected_symbol="SPY",
+        decision="selected",
+        decision_reason="Top-ranked eligible opportunity.",
+    )
+    fake_service = FakeRuntimeService()
+
+    monkeypatch.setattr(
+        cli,
+        "build_default_market_data_gateway",
+        lambda config: object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "LocalActivationGateway",
+        lambda *, store: FakeRuntimeActivationGateway(activation, snapshot),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "HistoricalWarmupService",
+        lambda market_data_gateway: FakeRuntimeWarmupService(warmup),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "AlpacaPortfolioGateway",
+        lambda trading_client: FakeRuntimePortfolioGateway(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "RuntimeOpportunityPlanner",
+        lambda market_data_gateway: FakeRuntimeOpportunityPlanner(selection),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "PostTradeLearningService",
+        lambda: FakeLearningService(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_runtime_host_paper_service",
+        lambda config: fake_service,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime-start",
+            "--env-file",
+            str(env_file),
+            "--symbols",
+            "SPY,QQQ",
+            "--quantity",
+            "1",
+            "--interval-seconds",
+            "300",
+            "--max-cycles",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["runtime_state"]["status"] == "halted"
+    assert (
+        payload["runtime_state"]["last_error"] == "Warmup incomplete for symbols: QQQ"
+    )
+    assert payload["service_result"] is None
+    assert fake_service.called_with is None
 
 
 def test_main_prints_live_disable_status(tmp_path, capsys) -> None:

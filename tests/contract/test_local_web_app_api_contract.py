@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from tradingx.config import TradingConfig
 from tradingx.types import (
+    BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
     DailySessionDigest,
@@ -18,10 +19,15 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
+    StrategyActivationRecord,
     WebActionResult,
     WebServiceState,
 )
@@ -213,6 +219,105 @@ class FakeReadModel:
             ),
         )
 
+    def get_runtime_host_state(self) -> BotRuntimeState:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return BotRuntimeState(
+            status="trading_ready",
+            status_reason="Runtime boot complete.",
+            active_symbols=("SPY", "QQQ"),
+            started_at_utc=timestamp,
+            updated_at_utc=timestamp,
+            last_error="",
+            active_strategy_id="baseline-long-only-v1",
+            active_model_snapshot_id="snapshot-1",
+            latest_selection_id="selection-1",
+        )
+
+    def get_latest_historical_warmup(self):
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return {
+            "warmup_id": "warmup-1",
+            "generated_at_utc": timestamp,
+            "benchmark_symbol": "SPY",
+            "symbols": ("SPY", "QQQ"),
+            "window_start_utc": timestamp,
+            "window_end_utc": timestamp,
+            "required_bar_count": 30,
+            "symbols_ready": ("SPY", "QQQ"),
+            "symbols_blocked": {},
+            "return_summary": {"SPY": {"cumulative_return": "0.02"}},
+        }
+
+    def get_latest_strategy_activation(self) -> StrategyActivationRecord | None:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return StrategyActivationRecord(
+            activation_id="activation-1",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY", "QQQ"),
+            deploy_threshold="0.5",
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=timestamp,
+            notes="Baseline activation.",
+        )
+
+    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return ModelWeightSnapshot(
+            snapshot_id="snapshot-1",
+            strategy_id="baseline-long-only-v1",
+            status="approved",
+            generated_at_utc=timestamp,
+            minimum_supporting_trades=5,
+            weights={"signal": "1.0"},
+        )
+
+    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        snapshot = self.get_latest_model_weight_snapshot()
+        assert snapshot is not None
+        return ModelWeightProposal(
+            proposal_id="proposal-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            supporting_trade_count=12,
+            baseline_snapshot_id="snapshot-1",
+            candidate_snapshot=snapshot,
+            improvement_score="0.15",
+            statistically_significant=True,
+            summary="Increase signal emphasis.",
+        )
+
+    def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="snapshot-1",
+            symbols_considered=("SPY", "QQQ"),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal="1.0",
+                    regime_weight="1.0",
+                    model_weight="1.0",
+                    liquidity_weight="1.0",
+                    spread_penalty="0.1",
+                    volatility_penalty="0.1",
+                    portfolio_overlap_penalty="0.0",
+                    execution_cost_penalty="0.0",
+                    final_score="0.8",
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="Top ranked.",
+        )
+
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
         return ResearchStudioSnapshot(
@@ -333,6 +438,42 @@ class FakeActionRunner:
             status="accepted",
             message="Scheduler stop requested.",
             evidence_refs=(),
+        )
+
+    def start_runtime_host(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_cycles: int | None = None,
+    ) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-runtime-start",
+            action_type="runtime_host_start",
+            status="accepted",
+            message=f"Runtime host started for {','.join(symbols)}.",
+            evidence_refs=(),
+        )
+
+    def stop_runtime_host(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-runtime-stop",
+            action_type="runtime_host_stop",
+            status="accepted",
+            message="Runtime host stop requested.",
+            evidence_refs=(),
+        )
+
+    def generate_learning_proposal(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-runtime-learn",
+            action_type="runtime_host_learn",
+            status="completed",
+            message="Learning proposal generated.",
+            evidence_refs=(
+                "artifacts/operator_platform/model_weight_proposals/proposal-1.json",
+            ),
         )
 
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult:
@@ -539,6 +680,12 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     automation = client.get("/api/platform/gate3/automation/latest")
     scheduler_state = client.get("/api/platform/gate3/scheduler/state")
     scheduler_latest = client.get("/api/platform/gate3/scheduler/latest")
+    runtime_state = client.get("/api/runtime-host/state")
+    runtime_warmup = client.get("/api/runtime-host/warmup/latest")
+    runtime_activation = client.get("/api/runtime-host/activation/latest")
+    runtime_model = client.get("/api/runtime-host/model/latest")
+    runtime_selection = client.get("/api/runtime-host/selection/latest")
+    runtime_proposal = client.get("/api/runtime-host/proposal/latest")
 
     assert overview.status_code == 200
     assert overview.json()["service_status"]["status"] == "running"
@@ -575,6 +722,18 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert scheduler_state.json()["status"] == "waiting"
     assert scheduler_latest.status_code == 200
     assert scheduler_latest.json()["schedule_id"] == "schedule-1"
+    assert runtime_state.status_code == 200
+    assert runtime_state.json()["status"] == "trading_ready"
+    assert runtime_warmup.status_code == 200
+    assert runtime_warmup.json()["warmup_id"] == "warmup-1"
+    assert runtime_activation.status_code == 200
+    assert runtime_activation.json()["activation_id"] == "activation-1"
+    assert runtime_model.status_code == 200
+    assert runtime_model.json()["snapshot_id"] == "snapshot-1"
+    assert runtime_selection.status_code == 200
+    assert runtime_selection.json()["selected_symbol"] == "SPY"
+    assert runtime_proposal.status_code == 200
+    assert runtime_proposal.json()["proposal_id"] == "proposal-1"
 
 
 def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:
@@ -639,6 +798,17 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
         },
     )
     service_stop = client.post("/api/actions/service/stop")
+    runtime_start = client.post(
+        "/api/actions/runtime-host/start",
+        json={
+            "symbols": ["SPY", "QQQ"],
+            "quantity": "1",
+            "interval_seconds": 300,
+            "max_cycles": 1,
+        },
+    )
+    runtime_stop = client.post("/api/actions/runtime-host/stop")
+    runtime_learn = client.post("/api/actions/runtime-host/learn")
     recover = client.post(
         "/api/actions/recover",
         json={"symbol": "SPY"},
@@ -702,6 +872,10 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     assert service_start.status_code == 200
     assert service_start.json()["status"] == "accepted"
     assert service_stop.status_code == 200
+    assert runtime_start.status_code == 200
+    assert runtime_start.json()["action_type"] == "runtime_host_start"
+    assert runtime_stop.status_code == 200
+    assert runtime_learn.status_code == 200
     assert recover.status_code == 200
     assert benchmark.status_code == 200
     assert gate.status_code == 200

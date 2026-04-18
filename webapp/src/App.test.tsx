@@ -249,6 +249,91 @@ const schedulerLatestPayload = {
   evidence_refs: ['artifacts/operator_platform/market_day_schedules/schedule-1.json'],
 }
 
+const runtimeStatePayload = {
+  status: 'trading_ready',
+  status_reason: 'Runtime boot complete.',
+  active_symbols: ['SPY', 'QQQ'],
+  started_at_utc: '2026-04-19T12:00:00+00:00',
+  updated_at_utc: '2026-04-19T12:01:00+00:00',
+  last_error: '',
+  active_strategy_id: 'baseline-long-only-v1',
+  active_model_snapshot_id: 'snapshot-1',
+  latest_selection_id: 'selection-1',
+}
+
+const warmupPayload = {
+  warmup_id: 'warmup-1',
+  generated_at_utc: '2026-04-19T12:00:00+00:00',
+  benchmark_symbol: 'SPY',
+  symbols: ['SPY', 'QQQ'],
+  window_start_utc: '2026-02-01T00:00:00+00:00',
+  window_end_utc: '2026-04-18T00:00:00+00:00',
+  required_bar_count: 30,
+  symbols_ready: ['SPY', 'QQQ'],
+  symbols_blocked: {},
+  return_summary: { SPY: { cumulative_return: '0.02' } },
+}
+
+const activationPayload = {
+  activation_id: 'activation-1',
+  strategy_id: 'baseline-long-only-v1',
+  strategy_version: '1.0.0',
+  approved_symbols: ['SPY', 'QQQ'],
+  deploy_threshold: '0.5',
+  allow_fallback_weights: true,
+  status: 'approved',
+  activated_at_utc: '2026-04-19T12:00:00+00:00',
+  notes: 'Baseline activation.',
+}
+
+const modelSnapshotPayload = {
+  snapshot_id: 'snapshot-1',
+  strategy_id: 'baseline-long-only-v1',
+  status: 'approved',
+  generated_at_utc: '2026-04-19T12:00:00+00:00',
+  minimum_supporting_trades: 5,
+  weights: { signal: '1.0' },
+}
+
+const selectionPayload = {
+  selection_id: 'selection-1',
+  generated_at_utc: '2026-04-19T12:01:00+00:00',
+  strategy_id: 'baseline-long-only-v1',
+  model_snapshot_id: 'snapshot-1',
+  symbols_considered: ['SPY', 'QQQ'],
+  ranked_opportunities: [
+    {
+      symbol: 'SPY',
+      base_signal: '1.0',
+      regime_weight: '1.0',
+      model_weight: '1.0',
+      liquidity_weight: '1.0',
+      spread_penalty: '0.1',
+      volatility_penalty: '0.1',
+      portfolio_overlap_penalty: '0.0',
+      execution_cost_penalty: '0.0',
+      final_score: '0.8',
+      eligible: true,
+      ineligibility_reason: '',
+    },
+  ],
+  selected_symbol: 'SPY',
+  decision: 'selected',
+  decision_reason: 'Top ranked.',
+}
+
+const proposalPayload = {
+  proposal_id: 'proposal-1',
+  generated_at_utc: '2026-04-19T12:02:00+00:00',
+  strategy_id: 'baseline-long-only-v1',
+  supporting_trade_count: 12,
+  baseline_snapshot_id: 'snapshot-1',
+  candidate_snapshot: modelSnapshotPayload,
+  improvement_score: '0.15',
+  statistically_significant: true,
+  summary: 'Increase signal emphasis.',
+}
+
 const marketSessionsPayload = [
   {
     session_id: 'session-1',
@@ -339,6 +424,24 @@ function mockFetch() {
       if (url.endsWith('/api/platform/gate3/scheduler/latest')) {
         return new Response(JSON.stringify(schedulerLatestPayload))
       }
+      if (url.endsWith('/api/runtime-host/state')) {
+        return new Response(JSON.stringify(runtimeStatePayload))
+      }
+      if (url.endsWith('/api/runtime-host/warmup/latest')) {
+        return new Response(JSON.stringify(warmupPayload))
+      }
+      if (url.endsWith('/api/runtime-host/activation/latest')) {
+        return new Response(JSON.stringify(activationPayload))
+      }
+      if (url.endsWith('/api/runtime-host/model/latest')) {
+        return new Response(JSON.stringify(modelSnapshotPayload))
+      }
+      if (url.endsWith('/api/runtime-host/selection/latest')) {
+        return new Response(JSON.stringify(selectionPayload))
+      }
+      if (url.endsWith('/api/runtime-host/proposal/latest')) {
+        return new Response(JSON.stringify(proposalPayload))
+      }
       if (url.endsWith('/api/evidence/operator_alerts')) {
         return new Response(JSON.stringify([]))
       }
@@ -424,6 +527,39 @@ function mockFetch() {
           status: 'accepted',
           message: 'Scheduler stop requested.',
           evidence_refs: [],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/runtime-host/start')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-runtime-start',
+          action_type: 'runtime_host_start',
+          status: 'accepted',
+          message: 'Runtime host started.',
+          evidence_refs: [],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/runtime-host/stop')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-runtime-stop',
+          action_type: 'runtime_host_stop',
+          status: 'accepted',
+          message: 'Runtime host stop requested.',
+          evidence_refs: [],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/runtime-host/learn')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-runtime-learn',
+          action_type: 'runtime_host_learn',
+          status: 'completed',
+          message: 'Learning proposal generated.',
+          evidence_refs: ['artifacts/operator_platform/model_weight_proposals/proposal-1.json'],
         }),
       )
     }
@@ -537,6 +673,8 @@ describe('App', () => {
     expect(await screen.findByText('Mission profile')).toBeInTheDocument()
     expect((await screen.findAllByText('Regular session monitor'))[0]).toBeInTheDocument()
     expect(screen.getByText('10030.00')).toBeInTheDocument()
+    expect(await screen.findByText('Runtime Host')).toBeInTheDocument()
+    expect(screen.getByText('baseline-long-only-v1')).toBeInTheDocument()
   })
 
   it('navigates operator views and runs bounded operator actions', async () => {
@@ -580,6 +718,9 @@ describe('App', () => {
     expect(await screen.findByText('Gate 1 report')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Command Center' }))
+    await user.click(screen.getByRole('button', { name: 'Start Bot' }))
+    await user.click(screen.getByRole('button', { name: 'Refresh Learning Proposal' }))
+    await user.click(screen.getByRole('button', { name: 'Stop Bot' }))
     await user.click(screen.getByRole('button', { name: 'Session Pre-Open' }))
     await user.click(screen.getByRole('button', { name: 'Session Heartbeat' }))
     await user.click(screen.getByRole('button', { name: 'Session Close' }))
@@ -594,6 +735,18 @@ describe('App', () => {
       expect(screen.getAllByText('proposal-2')[0]).toBeInTheDocument()
     })
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/runtime-host/start',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/runtime-host/learn',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/runtime-host/stop',
+      expect.objectContaining({ method: 'POST' }),
+    )
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/actions/session/preopen',
       expect.objectContaining({ method: 'POST' }),

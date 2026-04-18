@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Protocol
 
 from alpaca.data.enums import Adjustment, DataFeed
+from alpaca.trading.client import TradingClient
 
+from tradingx.activation import LocalActivationGateway
 from tradingx.alerts import (
     OperatorAlertDispatcher,
     SmtpAlertTransport,
@@ -28,13 +30,22 @@ from tradingx.controller import (
 )
 from tradingx.data import build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
+from tradingx.historical import HistoricalWarmupService
+from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.scheduler import MarketDayScheduler, build_default_market_day_scheduler
-from tradingx.service import PaperTradingService, build_default_paper_service
+from tradingx.service import (
+    PaperTradingService,
+    build_default_paper_service,
+    build_runtime_host_paper_service,
+)
 from tradingx.types import (
     AlertDrillRecord,
+    BotRuntimeState,
     ConfigProposal,
     MarketDaySchedulerState,
     MarketSessionRecord,
@@ -60,6 +71,23 @@ class AutomationRunnerBuilderProtocol(Protocol):
 
 class SchedulerBuilderProtocol(Protocol):
     def __call__(self) -> MarketDayScheduler: ...
+
+
+class RuntimeHostManagerProtocol(Protocol):
+    def get_state(self) -> BotRuntimeState: ...
+
+    def start(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        interval_seconds: int,
+        max_cycles: int | None = None,
+    ) -> WebActionResult: ...
+
+    def stop(self) -> WebActionResult: ...
+
+    def generate_learning_proposal(self) -> WebActionResult: ...
 
 
 class LocalServiceManager:
@@ -322,12 +350,14 @@ class LocalWebActionRunner:
         config: TradingConfig,
         repo_root: Path,
         service_manager: LocalServiceManager,
+        runtime_host_manager: RuntimeHostManagerProtocol | None = None,
         scheduler_manager: LocalSchedulerManager | None = None,
         automation_runner_builder: AutomationRunnerBuilderProtocol | None = None,
     ) -> None:
         self._config = config
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._runtime_host_manager = runtime_host_manager
         self._scheduler_manager = scheduler_manager or LocalSchedulerManager(
             config=config
         )
@@ -389,6 +419,51 @@ class LocalWebActionRunner:
 
     def stop_service(self) -> WebActionResult:
         return self._service_manager.stop()
+
+    def start_runtime_host(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_cycles: int | None = None,
+    ) -> WebActionResult:
+        if self._runtime_host_manager is None:
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_host_start",
+                status="blocked",
+                message="Runtime host manager is unavailable.",
+                evidence_refs=(),
+            )
+        return self._runtime_host_manager.start(
+            symbols=symbols,
+            quantity=Decimal(quantity),
+            interval_seconds=interval_seconds,
+            max_cycles=max_cycles,
+        )
+
+    def stop_runtime_host(self) -> WebActionResult:
+        if self._runtime_host_manager is None:
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_host_stop",
+                status="blocked",
+                message="Runtime host manager is unavailable.",
+                evidence_refs=(),
+            )
+        return self._runtime_host_manager.stop()
+
+    def generate_learning_proposal(self) -> WebActionResult:
+        if self._runtime_host_manager is None:
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_host_learn",
+                status="blocked",
+                message="Runtime host manager is unavailable.",
+                evidence_refs=(),
+            )
+        return self._runtime_host_manager.generate_learning_proposal()
 
     def start_market_scheduler(
         self,
@@ -872,6 +947,33 @@ def build_default_local_web_components(
     repo_root = Path(__file__).resolve().parents[3]
     service_manager = LocalServiceManager(config=config)
     scheduler_manager = LocalSchedulerManager(config=config)
+    runtime_service_manager = LocalServiceManager(
+        config=config,
+        service_builder=lambda: build_runtime_host_paper_service(config),
+    )
+    operator_store_root = config.runtime.artifact_root / "operator_platform"
+    market_data_gateway = build_default_market_data_gateway(config)
+    trading_client = TradingClient(
+        config.paper_credentials.api_key,
+        config.paper_credentials.api_secret,
+        paper=True,
+    )
+    activation_gateway = LocalActivationGateway(
+        store=FilesystemArtifactStore(operator_store_root)
+    )
+    runtime_host_manager = LocalRuntimeHostManager(
+        config=config,
+        operator_store_root=operator_store_root,
+        service_manager=runtime_service_manager,
+        warmup_service=HistoricalWarmupService(
+            market_data_gateway=market_data_gateway,
+        ),
+        activation_gateway=activation_gateway,
+        opportunity_planner=RuntimeOpportunityPlanner(
+            market_data_gateway=market_data_gateway,
+        ),
+        portfolio_gateway=AlpacaPortfolioGateway(trading_client=trading_client),
+    )
     return (
         LocalWebReadModel(
             config=config,
@@ -884,12 +986,14 @@ def build_default_local_web_components(
             docs_root=repo_root / "docs",
             repo_root=repo_root,
             service_manager=service_manager,
+            runtime_host_manager=runtime_host_manager,
             scheduler_manager=scheduler_manager,
         ),
         LocalWebActionRunner(
             config=config,
             repo_root=repo_root,
             service_manager=service_manager,
+            runtime_host_manager=runtime_host_manager,
             scheduler_manager=scheduler_manager,
         ),
     )

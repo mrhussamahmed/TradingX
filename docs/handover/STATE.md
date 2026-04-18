@@ -4,17 +4,17 @@ title: Project state
 version: 1.0.0
 status: active
 created: 2026-04-17
-last_amended: 2026-04-18
+last_amended: 2026-04-19
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-021
+author_session: SESS-2026-04-19-022
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-021
+- Active session: SESS-2026-04-19-022
 - Active branch: main
-- Active phase: 11
+- Active phase: 12
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -47,6 +47,9 @@ author_session: SESS-2026-04-18-021
   persisted run artifacts.
 - `ADR-0015` selects a calendar-driven recurring scheduler above the
   bounded market-day runner.
+- `ADR-0016` selects a supervised local trading appliance runtime with
+  governed activation records, deterministic first-run selection, and
+  proposal-only learning outputs.
 - `RUNBOOK-0003` is now the official operator instruction manual and
   must be updated whenever startup, operation, dashboard, validation, or
   recovery behavior changes.
@@ -74,6 +77,10 @@ author_session: SESS-2026-04-18-021
 - `DESIGN-0005`, `SPEC-0007`, `PLAN-0007`, `TASKS-0007`,
   `RESEARCH-0007`, `DATAMODEL-0007`, `QUICKSTART-0008`, and
   `CONTRACT-0008` are active and the recurring market-day scheduler
+  implementation is now merged into `main`.
+- `DESIGN-0006`, `SPEC-0008`, `PLAN-0008`, `TASKS-0008`,
+  `RESEARCH-0008`, `DATAMODEL-0008`, `QUICKSTART-0009`, and
+  `CONTRACT-0009` are active and the local trading appliance
   implementation is now merged into `main`.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
@@ -108,6 +115,11 @@ author_session: SESS-2026-04-18-021
     market calendar, launches at most one market-day automation run per
     trading day, persists durable schedule artifacts, and exposes live
     next-run status
+  - a supervised local trading appliance runtime host with explicit
+    startup states, governed strategy activation records, approved
+    model-weight snapshots, historical warmup artifacts, deterministic
+    opportunity selection records, and proposal-only post-trade
+    learning artifacts
 - richer operator alerts, including optional Telegram and SMTP
   delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
@@ -126,6 +138,10 @@ author_session: SESS-2026-04-18-021
   readiness, drills, market-session checkpoints, replay-slippage
   divergence, automation history, recurring scheduler state, and
   promotion actions.
+- `tradingx web` now also exposes a `Runtime Host` panel in the
+  command center for one-click local bot start/stop, warmup readiness,
+  active strategy/model visibility, ranked opportunity inspection, and
+  bounded learning-proposal refresh.
 - Validation is green on `main`;
   `./scripts/validate` passed with the expected closed-market smoke
   skip, plus frontend tests and frontend build verification.
@@ -133,8 +149,11 @@ author_session: SESS-2026-04-18-021
   extending it with replay-slippage cross-check status, automation
   summary, bounded market-day run controls, and recurring scheduler
   controls.
-- Next execution step is to run
-  `uv run tradingx run-market-scheduler --env-file .env ...` on `main`
-  and keep that local process alive across market days so the promoted
-  scheduler can accumulate Gate 3 evidence without manual daily
-  launches.
+- Next execution step is to start
+  `uv run tradingx web --env-file .env`, open
+  `http://127.0.0.1:8765`, enable
+  `TRADINGX_WEB_WRITE_MODE_ENABLED=true` if you want live local controls,
+  and use the `Runtime Host` panel to start the appliance. For
+  unattended evidence accumulation, pair that with
+  `uv run tradingx run-market-scheduler --env-file .env ...` during
+  regular US market hours.

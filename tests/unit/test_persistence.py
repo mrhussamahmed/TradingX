@@ -8,19 +8,26 @@ from decimal import Decimal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     AlertDrillRecord,
+    BotRuntimeState,
     ClosedTradeRecord,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     GateAssessment,
+    HistoricalWarmupRecord,
     MarketAutomationRunRecord,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
     OperatorAlert,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     RecoveryDrillRecord,
     ReplaySlippageRecord,
     ReplaySlippageSummary,
     ServiceCycleSnapshot,
     ServiceSymbolResult,
+    StrategyActivationRecord,
     TradeIntent,
     ValidationCandidateResult,
     ValidationCriterionResult,
@@ -39,6 +46,111 @@ def test_filesystem_artifact_store_exposes_market_day_schedule_writer(tmp_path) 
     store = FilesystemArtifactStore(tmp_path)
 
     assert hasattr(store, "write_market_day_schedule_record")
+
+
+def test_filesystem_artifact_store_writes_local_trading_appliance_artifacts(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+
+    runtime_path = store.write_runtime_host_state(
+        BotRuntimeState(
+            status="trading_ready",
+            status_reason="Runtime boot complete.",
+            active_symbols=("SPY", "QQQ"),
+            started_at_utc=timestamp,
+            updated_at_utc=timestamp,
+            last_error="",
+            active_strategy_id="baseline-long-only-v1",
+            active_model_snapshot_id="snapshot-1",
+            latest_selection_id="selection-1",
+        )
+    )
+    warmup_path = store.write_historical_warmup_record(
+        HistoricalWarmupRecord(
+            warmup_id="warmup-1",
+            generated_at_utc=timestamp,
+            benchmark_symbol="SPY",
+            symbols=("SPY", "QQQ"),
+            window_start_utc=timestamp,
+            window_end_utc=timestamp,
+            required_bar_count=30,
+            symbols_ready=("SPY", "QQQ"),
+            symbols_blocked={},
+            return_summary={"SPY": {"cumulative_return": Decimal("0.02")}},
+        )
+    )
+    activation_path = store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-1",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY", "QQQ"),
+            deploy_threshold=Decimal("0.5"),
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=timestamp,
+            notes="Baseline activation.",
+        )
+    )
+    snapshot = ModelWeightSnapshot(
+        snapshot_id="snapshot-1",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=timestamp,
+        minimum_supporting_trades=5,
+        weights={"signal": Decimal("1.0")},
+    )
+    snapshot_path = store.write_model_weight_snapshot(snapshot)
+    proposal_path = store.write_model_weight_proposal(
+        ModelWeightProposal(
+            proposal_id="proposal-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            supporting_trade_count=12,
+            baseline_snapshot_id="snapshot-1",
+            candidate_snapshot=snapshot,
+            improvement_score=Decimal("0.15"),
+            statistically_significant=True,
+            summary="Increase signal emphasis.",
+        )
+    )
+    selection_path = store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="snapshot-1",
+            symbols_considered=("SPY", "QQQ"),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("1.0"),
+                    regime_weight=Decimal("1.0"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.0"),
+                    spread_penalty=Decimal("0.1"),
+                    volatility_penalty=Decimal("0.1"),
+                    portfolio_overlap_penalty=Decimal("0.0"),
+                    execution_cost_penalty=Decimal("0.0"),
+                    final_score=Decimal("0.8"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="Top ranked.",
+        )
+    )
+
+    assert runtime_path == tmp_path / "runtime_host" / "state.json"
+    assert warmup_path == tmp_path / "historical_warmups" / "warmup-1.json"
+    assert activation_path == tmp_path / "strategy_activations" / "activation-1.json"
+    assert snapshot_path == tmp_path / "model_weight_snapshots" / "snapshot-1.json"
+    assert proposal_path == tmp_path / "model_weight_proposals" / "proposal-1.json"
+    assert selection_path == tmp_path / "opportunity_selections" / "selection-1.json"
 
 
 def test_filesystem_artifact_store_writes_trade_intent_json(tmp_path) -> None:

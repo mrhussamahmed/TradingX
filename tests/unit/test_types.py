@@ -7,6 +7,7 @@ from pathlib import Path
 import tradingx.types as types_module
 from tradingx.types import (
     AlertDrillRecord,
+    BotRuntimeState,
     ClosedTradeRecord,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -22,12 +23,17 @@ from tradingx.types import (
     GateDecisionBrief,
     GateDecisionCandidateSummary,
     GateReportResult,
+    HistoricalWarmupRecord,
     IncidentRecord,
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketSessionRecord,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
     OperatorAlert,
     OperatorTimelineEvent,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     PortfolioState,
     ReconciliationSnapshot,
     RecoveryDrillRecord,
@@ -38,6 +44,7 @@ from tradingx.types import (
     ServiceCycleSnapshot,
     ServiceRunResult,
     ServiceSymbolResult,
+    StrategyActivationRecord,
     StrategyCandidate,
     TradeIntent,
     ValidationCandidateResult,
@@ -289,6 +296,97 @@ def test_web_types_capture_dashboard_documents_and_actions() -> None:
     assert action.evidence_refs == ("artifacts/paper_loop/service_cycles/cycle-1.json",)
     assert proposal.output_path.name == "proposal-1.md"
     assert document.kind == "handover"
+
+
+def test_local_trading_appliance_types_capture_runtime_activation_and_selection() -> (
+    None
+):
+    timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-1",
+        generated_at_utc=timestamp,
+        benchmark_symbol="SPY",
+        symbols=("SPY", "QQQ"),
+        window_start_utc=timestamp,
+        window_end_utc=timestamp,
+        required_bar_count=30,
+        symbols_ready=("SPY", "QQQ"),
+        symbols_blocked={},
+        return_summary={"SPY": {"cumulative_return": Decimal("0.02")}},
+    )
+    activation = StrategyActivationRecord(
+        activation_id="activation-1",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY", "QQQ"),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=timestamp,
+        notes="Baseline activation.",
+    )
+    snapshot = ModelWeightSnapshot(
+        snapshot_id="snapshot-1",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=timestamp,
+        minimum_supporting_trades=5,
+        weights={"signal": Decimal("1.0")},
+    )
+    proposal = ModelWeightProposal(
+        proposal_id="proposal-1",
+        generated_at_utc=timestamp,
+        strategy_id="baseline-long-only-v1",
+        supporting_trade_count=12,
+        baseline_snapshot_id="snapshot-1",
+        candidate_snapshot=snapshot,
+        improvement_score=Decimal("0.15"),
+        statistically_significant=True,
+        summary="Increase signal emphasis.",
+    )
+    selection = OpportunitySelectionRecord(
+        selection_id="selection-1",
+        generated_at_utc=timestamp,
+        strategy_id="baseline-long-only-v1",
+        model_snapshot_id="snapshot-1",
+        symbols_considered=("SPY", "QQQ"),
+        ranked_opportunities=(
+            OpportunityScore(
+                symbol="SPY",
+                base_signal=Decimal("1.0"),
+                regime_weight=Decimal("1.0"),
+                model_weight=Decimal("1.0"),
+                liquidity_weight=Decimal("1.0"),
+                spread_penalty=Decimal("0.1"),
+                volatility_penalty=Decimal("0.1"),
+                portfolio_overlap_penalty=Decimal("0.0"),
+                execution_cost_penalty=Decimal("0.0"),
+                final_score=Decimal("0.8"),
+                eligible=True,
+                ineligibility_reason="",
+            ),
+        ),
+        selected_symbol="SPY",
+        decision="selected",
+        decision_reason="Top ranked.",
+    )
+    runtime = BotRuntimeState(
+        status="trading_ready",
+        status_reason="Runtime boot complete.",
+        active_symbols=("SPY", "QQQ"),
+        started_at_utc=timestamp,
+        updated_at_utc=timestamp,
+        last_error="",
+        active_strategy_id="baseline-long-only-v1",
+        active_model_snapshot_id="snapshot-1",
+        latest_selection_id="selection-1",
+    )
+
+    assert warmup.symbols_ready == ("SPY", "QQQ")
+    assert activation.deploy_threshold == Decimal("0.5")
+    assert proposal.statistically_significant is True
+    assert selection.ranked_opportunities[0].symbol == "SPY"
+    assert runtime.status == "trading_ready"
 
 
 def test_operator_platform_types_capture_command_center_and_research_state() -> None:

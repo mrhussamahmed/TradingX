@@ -158,6 +158,91 @@ export type ActionResult = {
   evidence_refs: string[]
 }
 
+export type BotRuntimeState = {
+  status: string
+  status_reason: string
+  active_symbols: string[]
+  started_at_utc: string | null
+  updated_at_utc: string
+  last_error: string
+  active_strategy_id: string
+  active_model_snapshot_id: string
+  latest_selection_id: string
+}
+
+export type HistoricalWarmupRecord = {
+  warmup_id: string
+  generated_at_utc: string
+  benchmark_symbol: string
+  symbols: string[]
+  window_start_utc: string
+  window_end_utc: string
+  required_bar_count: number
+  symbols_ready: string[]
+  symbols_blocked: Record<string, string>
+  return_summary: Record<string, Record<string, string>>
+}
+
+export type StrategyActivationRecord = {
+  activation_id: string
+  strategy_id: string
+  strategy_version: string
+  approved_symbols: string[]
+  deploy_threshold: string
+  allow_fallback_weights: boolean
+  status: string
+  activated_at_utc: string
+  notes: string
+}
+
+export type ModelWeightSnapshot = {
+  snapshot_id: string
+  strategy_id: string
+  status: string
+  generated_at_utc: string
+  minimum_supporting_trades: number
+  weights: Record<string, string>
+}
+
+export type OpportunityScore = {
+  symbol: string
+  base_signal: string
+  regime_weight: string
+  model_weight: string
+  liquidity_weight: string
+  spread_penalty: string
+  volatility_penalty: string
+  portfolio_overlap_penalty: string
+  execution_cost_penalty: string
+  final_score: string
+  eligible: boolean
+  ineligibility_reason: string
+}
+
+export type OpportunitySelectionRecord = {
+  selection_id: string
+  generated_at_utc: string
+  strategy_id: string
+  model_snapshot_id: string
+  symbols_considered: string[]
+  ranked_opportunities: OpportunityScore[]
+  selected_symbol: string
+  decision: string
+  decision_reason: string
+}
+
+export type ModelWeightProposal = {
+  proposal_id: string
+  generated_at_utc: string
+  strategy_id: string
+  supporting_trade_count: number
+  baseline_snapshot_id: string
+  candidate_snapshot: ModelWeightSnapshot
+  improvement_score: string
+  statistically_significant: boolean
+  summary: string
+}
+
 export type ConfigProposal = {
   proposal_id: string
   target_area: string

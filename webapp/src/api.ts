@@ -1,6 +1,7 @@
 import type {
   ActionResult,
   AlertDrillRecord,
+  BotRuntimeState,
   CommandCenterSnapshot,
   ConfigProposal,
   ConfigSummary,
@@ -12,15 +13,20 @@ import type {
   ExplorerRecord,
   Gate3PromotionPackage,
   Gate3ReadinessReport,
+  HistoricalWarmupRecord,
   IncidentRecord,
   MarketAutomationRunRecord,
   MarketDayScheduleRecord,
   MarketDaySchedulerState,
+  ModelWeightProposal,
+  ModelWeightSnapshot,
+  OpportunitySelectionRecord,
   MarketSessionRecord,
   ReplaySlippageSummary,
   ReplaySession,
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
+  StrategyActivationRecord,
 } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -54,6 +60,30 @@ export function getConfigSummary() {
 
 export function getDocuments() {
   return request<DocumentRecord[]>('/api/documents')
+}
+
+export function getRuntimeHostState() {
+  return request<BotRuntimeState>('/api/runtime-host/state')
+}
+
+export function getRuntimeHostWarmup() {
+  return request<HistoricalWarmupRecord | null>('/api/runtime-host/warmup/latest')
+}
+
+export function getRuntimeHostActivation() {
+  return request<StrategyActivationRecord | null>('/api/runtime-host/activation/latest')
+}
+
+export function getRuntimeHostModel() {
+  return request<ModelWeightSnapshot | null>('/api/runtime-host/model/latest')
+}
+
+export function getRuntimeHostSelection() {
+  return request<OpportunitySelectionRecord | null>('/api/runtime-host/selection/latest')
+}
+
+export function getRuntimeHostProposal() {
+  return request<ModelWeightProposal | null>('/api/runtime-host/proposal/latest')
 }
 
 export function getConfigProposals() {
@@ -162,6 +192,30 @@ export function postServiceStart(payload: {
 
 export function postServiceStop() {
   return request<ActionResult>('/api/actions/service/stop', {
+    method: 'POST',
+  })
+}
+
+export function postRuntimeHostStart(payload: {
+  symbols: string[]
+  quantity: string
+  interval_seconds: number
+  max_cycles: number | null
+}) {
+  return request<ActionResult>('/api/actions/runtime-host/start', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function postRuntimeHostStop() {
+  return request<ActionResult>('/api/actions/runtime-host/stop', {
+    method: 'POST',
+  })
+}
+
+export function postRuntimeHostLearn() {
+  return request<ActionResult>('/api/actions/runtime-host/learn', {
     method: 'POST',
   })
 }

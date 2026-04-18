@@ -15,6 +15,12 @@ import {
   getConfigProposals,
   getConfigSummary,
   getDocuments,
+  getRuntimeHostActivation,
+  getRuntimeHostModel,
+  getRuntimeHostProposal,
+  getRuntimeHostSelection,
+  getRuntimeHostState,
+  getRuntimeHostWarmup,
   getExplorer,
   getGate3PromotionPackage,
   getGate3Readiness,
@@ -38,6 +44,9 @@ import {
   postMarketDayAutomation,
   postPaperLoop,
   postPrepareBenchmark,
+  postRuntimeHostLearn,
+  postRuntimeHostStart,
+  postRuntimeHostStop,
   postProposal,
   postReplaySlippageReport,
   postRecover,
@@ -53,6 +62,7 @@ import {
 import type {
   ActionResult,
   AlertDrillRecord,
+  BotRuntimeState,
   CommandCenterSnapshot,
   ConfigProposal,
   ConfigSummary,
@@ -62,15 +72,20 @@ import type {
   ExplorerRecord,
   Gate3PromotionPackage,
   Gate3ReadinessReport,
+  HistoricalWarmupRecord,
   IncidentRecord,
   MarketAutomationRunRecord,
   MarketDayScheduleRecord,
   MarketDaySchedulerState,
   MarketSessionRecord,
+  ModelWeightProposal,
+  ModelWeightSnapshot,
+  OpportunitySelectionRecord,
   ReplaySlippageSummary,
   ReplaySession,
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
+  StrategyActivationRecord,
 } from './types'
 
 type ViewKey =
@@ -175,6 +190,22 @@ const defaultSchedulerState: MarketDaySchedulerState = {
   last_error: '',
 }
 const defaultMarketDaySchedule: MarketDayScheduleRecord | null = null
+const defaultRuntimeState: BotRuntimeState = {
+  status: 'idle',
+  status_reason: 'Runtime host is idle.',
+  active_symbols: [],
+  started_at_utc: null,
+  updated_at_utc: '',
+  last_error: '',
+  active_strategy_id: '',
+  active_model_snapshot_id: '',
+  latest_selection_id: '',
+}
+const defaultRuntimeWarmup: HistoricalWarmupRecord | null = null
+const defaultRuntimeActivation: StrategyActivationRecord | null = null
+const defaultRuntimeModel: ModelWeightSnapshot | null = null
+const defaultRuntimeSelection: OpportunitySelectionRecord | null = null
+const defaultRuntimeProposal: ModelWeightProposal | null = null
 
 const viewOptions: Array<{ key: ViewKey; label: string; shortcut: string }> = [
   { key: 'command', label: 'Command Center', shortcut: '1' },
@@ -210,6 +241,18 @@ function App() {
     useState<MarketDaySchedulerState>(defaultSchedulerState)
   const [latestMarketDaySchedule, setLatestMarketDaySchedule] =
     useState<MarketDayScheduleRecord | null>(defaultMarketDaySchedule)
+  const [runtimeState, setRuntimeState] =
+    useState<BotRuntimeState>(defaultRuntimeState)
+  const [runtimeWarmup, setRuntimeWarmup] =
+    useState<HistoricalWarmupRecord | null>(defaultRuntimeWarmup)
+  const [runtimeActivation, setRuntimeActivation] =
+    useState<StrategyActivationRecord | null>(defaultRuntimeActivation)
+  const [runtimeModel, setRuntimeModel] =
+    useState<ModelWeightSnapshot | null>(defaultRuntimeModel)
+  const [runtimeSelection, setRuntimeSelection] =
+    useState<OpportunitySelectionRecord | null>(defaultRuntimeSelection)
+  const [runtimeProposal, setRuntimeProposal] =
+    useState<ModelWeightProposal | null>(defaultRuntimeProposal)
   const [marketSessions, setMarketSessions] = useState<MarketSessionRecord[]>([])
   const [recoveryDrills, setRecoveryDrills] = useState<RecoveryDrillRecord[]>([])
   const [alertDrills, setAlertDrills] = useState<AlertDrillRecord[]>([])
@@ -274,6 +317,12 @@ function App() {
         nextMarketAutomationRun,
         nextSchedulerState,
         nextLatestMarketDaySchedule,
+        nextRuntimeState,
+        nextRuntimeWarmup,
+        nextRuntimeActivation,
+        nextRuntimeModel,
+        nextRuntimeSelection,
+        nextRuntimeProposal,
         nextMarketSessions,
         nextRecoveryDrills,
         nextAlertDrills,
@@ -292,6 +341,12 @@ function App() {
         getMarketAutomationRun(),
         getSchedulerState(),
         getLatestMarketDaySchedule(),
+        getRuntimeHostState(),
+        getRuntimeHostWarmup(),
+        getRuntimeHostActivation(),
+        getRuntimeHostModel(),
+        getRuntimeHostSelection(),
+        getRuntimeHostProposal(),
         getMarketSessions(),
         getRecoveryDrills(),
         getAlertDrills(),
@@ -311,6 +366,12 @@ function App() {
         setMarketAutomationRun(nextMarketAutomationRun)
         setSchedulerState(nextSchedulerState)
         setLatestMarketDaySchedule(nextLatestMarketDaySchedule)
+        setRuntimeState(nextRuntimeState)
+        setRuntimeWarmup(nextRuntimeWarmup)
+        setRuntimeActivation(nextRuntimeActivation)
+        setRuntimeModel(nextRuntimeModel)
+        setRuntimeSelection(nextRuntimeSelection)
+        setRuntimeProposal(nextRuntimeProposal)
         setMarketSessions(nextMarketSessions)
         setRecoveryDrills(nextRecoveryDrills)
         setAlertDrills(nextAlertDrills)
@@ -707,6 +768,12 @@ function App() {
               digest={digest}
               incidents={incidents}
               documents={documents}
+              runtimeState={runtimeState}
+              runtimeWarmup={runtimeWarmup}
+              runtimeActivation={runtimeActivation}
+              runtimeModel={runtimeModel}
+              runtimeSelection={runtimeSelection}
+              runtimeProposal={runtimeProposal}
               loopSymbol={loopSymbol}
               loopQuantity={loopQuantity}
               recoverSymbol={recoverSymbol}
@@ -738,6 +805,23 @@ function App() {
                 )
               }
               onStopService={() => runAction(() => postServiceStop())}
+              onStartBot={() =>
+                runAction(() =>
+                  postRuntimeHostStart({
+                    symbols: serviceSymbols
+                      .split(',')
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                    quantity: serviceQuantity,
+                    interval_seconds: Number(serviceIntervalSeconds),
+                    max_cycles: 1,
+                  }),
+                )
+              }
+              onStopBot={() => runAction(() => postRuntimeHostStop())}
+              onRefreshLearningProposal={() =>
+                runAction(() => postRuntimeHostLearn(), { refreshExplorer: true })
+              }
               onRecover={() =>
                 runAction(
                   () => postRecover({ symbol: recoverSymbol }),
@@ -964,6 +1048,12 @@ function CommandCenterView(props: {
   digest: DailySessionDigest | null
   incidents: IncidentRecord[]
   documents: DocumentRecord[]
+  runtimeState: BotRuntimeState
+  runtimeWarmup: HistoricalWarmupRecord | null
+  runtimeActivation: StrategyActivationRecord | null
+  runtimeModel: ModelWeightSnapshot | null
+  runtimeSelection: OpportunitySelectionRecord | null
+  runtimeProposal: ModelWeightProposal | null
   loopSymbol: string
   loopQuantity: string
   recoverSymbol: string
@@ -979,6 +1069,9 @@ function CommandCenterView(props: {
   onRunPaperLoop: () => void
   onStartService: () => void
   onStopService: () => void
+  onStartBot: () => void
+  onStopBot: () => void
+  onRefreshLearningProposal: () => void
   onRecover: () => void
   onSessionPreopen: () => void
   onSessionHeartbeat: () => void
@@ -1021,6 +1114,61 @@ function CommandCenterView(props: {
               )}
             </ul>
           </div>
+        </div>
+      </Panel>
+
+      <Panel title="Runtime Host" subtitle={props.runtimeState.status_reason}>
+        <div className="digest-grid">
+          <MiniStat label="State" value={props.runtimeState.status} />
+          <MiniStat
+            label="Strategy"
+            value={props.runtimeActivation?.strategy_id || 'Unassigned'}
+          />
+          <MiniStat
+            label="Model"
+            value={props.runtimeModel?.snapshot_id || 'Fallback only'}
+          />
+          <MiniStat
+            label="Selected Symbol"
+            value={props.runtimeSelection?.selected_symbol || 'No trade'}
+          />
+        </div>
+        <div className="button-row">
+          <button type="button" className="action-button primary" onClick={props.onStartBot}>
+            Start Bot
+          </button>
+          <button
+            type="button"
+            className="action-button secondary"
+            onClick={props.onRefreshLearningProposal}
+          >
+            Refresh Learning Proposal
+          </button>
+          <button type="button" className="action-button ghost" onClick={props.onStopBot}>
+            Stop Bot
+          </button>
+        </div>
+        <div className="mini-stack">
+          <MiniStat
+            label="Warmup"
+            value={
+              props.runtimeWarmup
+                ? `${props.runtimeWarmup.symbols_ready.length}/${props.runtimeWarmup.symbols.length} ready`
+                : 'No warmup artifact yet'
+            }
+          />
+          <MiniStat
+            label="Selection"
+            value={props.runtimeSelection?.decision_reason || 'No selection artifact yet'}
+          />
+          <MiniStat
+            label="Learning"
+            value={
+              props.runtimeProposal
+                ? props.runtimeProposal.summary
+                : 'No learning proposal has been generated yet.'
+            }
+          />
         </div>
       </Panel>
 

@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0003
 title: TradingX operator manual
-version: 1.0.0
+version: 1.1.0
 status: active
 created: 2026-04-18
-last_amended: 2026-04-18
-supersedes: null
+last_amended: 2026-04-19
+supersedes: RUNBOOK-0003@1.0.0
 superseded_by: null
-author_session: SESS-2026-04-18-021
+author_session: SESS-2026-04-19-022
 ---
 
 # TradingX Operator Manual
@@ -124,16 +124,60 @@ What to confirm:
 
 ## Main ways to operate TradingX
 
-There are four primary operating modes:
+There are five primary operating modes:
 
-1. Single manual cycle
-2. Recurring paper service
-3. One bounded market day
-4. Recurring market-day scheduler
+1. Local trading appliance from the website
+2. Single manual cycle
+3. Recurring paper service
+4. One bounded market day
+5. Recurring market-day scheduler
 
 Use the smallest mode that fits what you need.
 
-## Mode 1: Run one manual paper cycle
+## Mode 1: Start the local trading appliance
+
+This is now the preferred operator workflow.
+
+1. Start the local website:
+
+```bash
+uv run tradingx web --env-file .env
+```
+
+2. Open [http://127.0.0.1:8765](http://127.0.0.1:8765)
+3. Enable `TRADINGX_WEB_WRITE_MODE_ENABLED=true` in `.env` if you want
+   action buttons live.
+4. Use the `Runtime Host` panel in the `Command Center` view:
+   - `Start Bot`
+   - `Refresh Learning Proposal`
+   - `Stop Bot`
+
+What the runtime host does before it starts the bot:
+
+- loads or creates the active strategy activation record
+- loads or creates the approved model-weight snapshot
+- builds historical warmup for the configured universe
+- synchronizes broker/account state
+- ranks the current universe and records the latest opportunity
+  selection
+- fails closed if warmup or activation prerequisites are not ready
+
+Operator outputs created by this mode:
+
+- runtime state under `artifacts/operator_platform/runtime_host/`
+- warmup artifacts under `artifacts/operator_platform/historical_warmups/`
+- opportunity selection artifacts under
+  `artifacts/operator_platform/opportunity_selections/`
+- model-weight proposals under
+  `artifacts/operator_platform/model_weight_proposals/`
+
+CLI equivalent for bounded diagnostics:
+
+```bash
+uv run tradingx runtime-start --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
+```
+
+## Mode 2: Run one manual paper cycle
 
 Use this when you want one bounded pass for a single symbol.
 
@@ -153,7 +197,7 @@ If the loop is interrupted and you need to resume safely:
 uv run tradingx paper-recover --env-file .env --symbol SPY
 ```
 
-## Mode 2: Run the recurring paper service
+## Mode 3: Run the recurring paper service
 
 Use this when you want repeated bounded cycles across a symbol universe.
 
@@ -172,7 +216,7 @@ What it does:
 - runs the paper loop repeatedly
 - writes service-cycle artifacts under `artifacts/paper_loop/`
 
-## Mode 3: Run one bounded market day
+## Mode 4: Run one bounded market day
 
 Use this when you want one full automation workflow for a trading day.
 
@@ -192,7 +236,7 @@ Helpful option:
 - `--max-heartbeats 3`
   Good for bounded local verification
 
-## Mode 4: Run the recurring market-day scheduler
+## Mode 5: Run the recurring market-day scheduler
 
 Use this when you want unattended recurring operation across future
 trading days.
@@ -251,6 +295,17 @@ Use this for:
 - starting or stopping the paper service
 - triggering recoveries
 
+### Runtime Host
+
+Use this for the supervised bot workflow:
+
+- start the bot from one control surface
+- inspect runtime readiness and fail-closed reasons
+- inspect the active strategy activation record
+- inspect the active model-weight snapshot
+- inspect the latest ranked opportunity and selected symbol
+- trigger a bounded learning proposal refresh
+
 ### Gate cockpit
 
 Use this to inspect:
@@ -301,14 +356,16 @@ Use this for:
 uv run tradingx config-summary --env-file .env
 uv run tradingx live-disable-status --env-file .env
 ```
-2. Start the website if you want visibility.
+2. Start the website.
 ```bash
 uv run tradingx web --env-file .env
 ```
-3. Run either `paper-loop`, `run-paper-service`, or `run-market-day`
-   depending on how much automation you want.
-4. Review evidence in the website and under `artifacts/`.
-5. If needed, run `paper-recover`.
+3. Open the `Command Center` and use `Start Bot` in the `Runtime Host`
+   panel if you want the supervised appliance workflow.
+4. If you want lower-level control instead, run `paper-loop`,
+   `run-paper-service`, or `run-market-day`.
+5. Review evidence in the website and under `artifacts/`.
+6. If needed, run `paper-recover`.
 
 ### Option B: Unattended recurring operation
 

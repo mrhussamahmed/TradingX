@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from alpaca.data.enums import Adjustment, DataFeed
+from alpaca.trading.client import TradingClient
 
+from tradingx.activation import LocalActivationGateway
 from tradingx.alerts import build_gate_decision_alert
 from tradingx.automation import build_default_market_day_automation_runner
 from tradingx.config import TradingConfig
@@ -21,11 +23,19 @@ from tradingx.controller import (
 )
 from tradingx.data import build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
+from tradingx.historical import HistoricalWarmupService
+from tradingx.learning import PostTradeLearningService
+from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.scheduler import build_default_market_day_scheduler
-from tradingx.service import build_default_paper_service
+from tradingx.service import (
+    build_default_paper_service,
+    build_runtime_host_paper_service,
+)
+from tradingx.types import BotRuntimeState
 from tradingx.validation import (
     load_benchmark_close_series,
     write_benchmark_close_series,
@@ -75,6 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_service_parser.add_argument("--quantity", default="1")
     paper_service_parser.add_argument("--interval-seconds", type=int, default=None)
     paper_service_parser.add_argument("--max-cycles", type=int, default=None)
+
+    runtime_start_parser = subparsers.add_parser("runtime-start")
+    runtime_start_parser.add_argument("--env-file", default=".env")
+    runtime_start_parser.add_argument("--symbols", default=None)
+    runtime_start_parser.add_argument("--quantity", default="1")
+    runtime_start_parser.add_argument("--interval-seconds", type=int, default=None)
+    runtime_start_parser.add_argument("--max-cycles", type=int, default=1)
 
     market_day_parser = subparsers.add_parser("run-market-day")
     market_day_parser.add_argument("--env-file", default=".env")
@@ -227,6 +244,111 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_cycles=args.max_cycles,
         )
         print(json.dumps(_serialize(service_result), sort_keys=True))
+        return 0
+
+    if args.command == "runtime-start":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        symbols = (
+            tuple(
+                item.strip().upper() for item in args.symbols.split(",") if item.strip()
+            )
+            if args.symbols
+            else config.runtime.symbol_universe
+        )
+        operator_store = FilesystemArtifactStore(
+            config.runtime.artifact_root / "operator_platform"
+        )
+        market_data_gateway = build_default_market_data_gateway(config)
+        activation_gateway = LocalActivationGateway(store=operator_store)
+        activation, snapshot = activation_gateway.load_or_create_active_records(symbols)
+        warmup = HistoricalWarmupService(
+            market_data_gateway=market_data_gateway,
+        ).build_warmup(
+            symbols=symbols,
+            benchmark_symbol="SPY",
+            warmup_days=60,
+            required_bar_count=30,
+        )
+        warmup_path = operator_store.write_historical_warmup_record(warmup)
+        trading_client = TradingClient(
+            config.paper_credentials.api_key,
+            config.paper_credentials.api_secret,
+            paper=True,
+        )
+        portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
+        selection = RuntimeOpportunityPlanner(
+            market_data_gateway=market_data_gateway,
+        ).plan(
+            symbols=symbols,
+            portfolio_state=portfolio_gateway.get_portfolio_state(),
+            activation=activation,
+            model_snapshot=snapshot,
+            warmup=warmup,
+        )
+        selection_path = operator_store.write_opportunity_selection_record(selection)
+        warmup_complete = all(symbol in warmup.symbols_ready for symbol in symbols)
+        runtime_state = BotRuntimeState(
+            status="trading_ready" if warmup_complete else "halted",
+            status_reason=(
+                "Runtime boot complete."
+                if warmup_complete
+                else "Warmup incomplete for one or more configured symbols."
+            ),
+            active_symbols=symbols,
+            started_at_utc=datetime.now(UTC),
+            updated_at_utc=datetime.now(UTC),
+            last_error=(
+                ""
+                if warmup_complete
+                else "Warmup incomplete for symbols: "
+                + ", ".join(
+                    symbol for symbol in symbols if symbol not in warmup.symbols_ready
+                )
+            ),
+            active_strategy_id=activation.strategy_id,
+            active_model_snapshot_id=snapshot.snapshot_id,
+            latest_selection_id=selection.selection_id,
+        )
+        runtime_state_path = operator_store.write_runtime_host_state(runtime_state)
+        learning_proposal = PostTradeLearningService().generate_from_artifact_store(
+            paper_store=FilesystemArtifactStore(
+                config.runtime.artifact_root / "paper_loop"
+            ),
+            activation=activation,
+            baseline_snapshot=snapshot,
+            minimum_supporting_trades=snapshot.minimum_supporting_trades,
+        )
+        if learning_proposal is not None:
+            operator_store.write_model_weight_proposal(learning_proposal)
+        runtime_service_result: Any | None = None
+        if warmup_complete:
+            runtime_service_result = build_runtime_host_paper_service(config).run(
+                symbols=symbols,
+                quantity=Decimal(args.quantity),
+                interval_seconds=(
+                    args.interval_seconds or config.runtime.service_interval_seconds
+                ),
+                max_cycles=args.max_cycles,
+            )
+        print(
+            json.dumps(
+                _serialize(
+                    {
+                        "runtime_state": runtime_state,
+                        "runtime_state_path": runtime_state_path,
+                        "warmup": warmup,
+                        "warmup_path": warmup_path,
+                        "activation": activation,
+                        "model_snapshot": snapshot,
+                        "selection": selection,
+                        "selection_path": selection_path,
+                        "learning_proposal": learning_proposal,
+                        "service_result": runtime_service_result,
+                    }
+                ),
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.command == "run-market-day":

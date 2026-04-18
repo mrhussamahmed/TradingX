@@ -11,6 +11,7 @@ from typing import Any
 
 from tradingx.types import (
     AlertDrillRecord,
+    BotRuntimeState,
     ClosedTradeRecord,
     DailySessionDigest,
     EvaluationEvidencePack,
@@ -18,10 +19,14 @@ from tradingx.types import (
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     GateAssessment,
+    HistoricalWarmupRecord,
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketSessionRecord,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
     OperatorAlert,
+    OpportunitySelectionRecord,
     OrderRecord,
     PortfolioState,
     PositionSnapshot,
@@ -31,6 +36,7 @@ from tradingx.types import (
     ReplaySlippageSummary,
     RiskControlEvent,
     ServiceCycleSnapshot,
+    StrategyActivationRecord,
     TradeIntent,
     ValidationReport,
 )
@@ -94,6 +100,51 @@ class FilesystemArtifactStore:
             "service_cycles",
             f"{snapshot.cycle_id}.json",
             snapshot,
+        )
+
+    def write_runtime_host_state(self, state: BotRuntimeState) -> Path:
+        return self._write_json("runtime_host", "state.json", state)
+
+    def write_historical_warmup_record(
+        self,
+        record: HistoricalWarmupRecord,
+    ) -> Path:
+        return self._write_json(
+            "historical_warmups", f"{record.warmup_id}.json", record
+        )
+
+    def write_strategy_activation_record(
+        self,
+        record: StrategyActivationRecord,
+    ) -> Path:
+        return self._write_json(
+            "strategy_activations",
+            f"{record.activation_id}.json",
+            record,
+        )
+
+    def write_model_weight_snapshot(self, snapshot: ModelWeightSnapshot) -> Path:
+        return self._write_json(
+            "model_weight_snapshots",
+            f"{snapshot.snapshot_id}.json",
+            snapshot,
+        )
+
+    def write_model_weight_proposal(self, proposal: ModelWeightProposal) -> Path:
+        return self._write_json(
+            "model_weight_proposals",
+            f"{proposal.proposal_id}.json",
+            proposal,
+        )
+
+    def write_opportunity_selection_record(
+        self,
+        record: OpportunitySelectionRecord,
+    ) -> Path:
+        return self._write_json(
+            "opportunity_selections",
+            f"{record.selection_id}.json",
+            record,
         )
 
     def write_validation_report(self, report: ValidationReport) -> Path:
@@ -343,6 +394,12 @@ class FilesystemArtifactStore:
             "closed_trades",
             "recovery_drills",
             "alert_drills",
+            "runtime_host",
+            "historical_warmups",
+            "strategy_activations",
+            "model_weight_snapshots",
+            "model_weight_proposals",
+            "opportunity_selections",
             "market_sessions",
             "daily_digests",
             "market_automation_runs",

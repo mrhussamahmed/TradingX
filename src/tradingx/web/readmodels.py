@@ -10,6 +10,7 @@ from tradingx.config import TradingConfig
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
     DailySessionDigest,
@@ -19,16 +20,22 @@ from tradingx.types import (
     Gate3CriterionSnapshot,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
+    HistoricalWarmupRecord,
     IncidentRecord,
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
     OperatorTimelineEvent,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
     ScalarValue,
+    StrategyActivationRecord,
     WebServiceState,
 )
 
@@ -39,6 +46,10 @@ class ServiceManagerProtocol(Protocol):
 
 class SchedulerManagerProtocol(Protocol):
     def get_state(self) -> MarketDaySchedulerState: ...
+
+
+class RuntimeHostManagerProtocol(Protocol):
+    def get_state(self) -> BotRuntimeState: ...
 
 
 class _IdleSchedulerManager:
@@ -55,6 +66,21 @@ class _IdleSchedulerManager:
         )
 
 
+class _IdleRuntimeHostManager:
+    def get_state(self) -> BotRuntimeState:
+        return BotRuntimeState(
+            status="idle",
+            status_reason="Runtime host is idle.",
+            active_symbols=(),
+            started_at_utc=None,
+            updated_at_utc=datetime.now(UTC),
+            last_error="",
+            active_strategy_id="",
+            active_model_snapshot_id="",
+            latest_selection_id="",
+        )
+
+
 class LocalWebReadModel:
     def __init__(
         self,
@@ -65,6 +91,7 @@ class LocalWebReadModel:
         docs_root: Path,
         repo_root: Path,
         service_manager: ServiceManagerProtocol,
+        runtime_host_manager: RuntimeHostManagerProtocol | None = None,
         scheduler_manager: SchedulerManagerProtocol | None = None,
     ) -> None:
         self._config = config
@@ -73,6 +100,7 @@ class LocalWebReadModel:
         self._docs_root = docs_root
         self._repo_root = repo_root
         self._service_manager = service_manager
+        self._runtime_host_manager = runtime_host_manager or _IdleRuntimeHostManager()
         self._scheduler_manager = scheduler_manager or _IdleSchedulerManager()
         artifact_root = config.runtime.artifact_root
         self._operator_platform_root = artifact_root / "operator_platform"
@@ -251,6 +279,49 @@ class LocalWebReadModel:
 
     def get_service_state(self) -> WebServiceState:
         return self._service_manager.get_state()
+
+    def get_runtime_host_state(self) -> BotRuntimeState:
+        return self._runtime_host_manager.get_state()
+
+    def get_latest_historical_warmup(self) -> HistoricalWarmupRecord | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "historical_warmups"
+        )
+        if not payloads:
+            return None
+        return self._historical_warmup_from_payload(payloads[-1])
+
+    def get_latest_strategy_activation(self) -> StrategyActivationRecord | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "strategy_activations"
+        )
+        if not payloads:
+            return None
+        return self._activation_from_payload(payloads[-1])
+
+    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "model_weight_snapshots"
+        )
+        if not payloads:
+            return None
+        return self._model_snapshot_from_payload(payloads[-1])
+
+    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "model_weight_proposals"
+        )
+        if not payloads:
+            return None
+        return self._model_proposal_from_payload(payloads[-1])
+
+    def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None:
+        payloads = self._operator_platform_store().list_artifact_payloads(
+            "opportunity_selections"
+        )
+        if not payloads:
+            return None
+        return self._opportunity_selection_from_payload(payloads[-1])
 
     def list_timeline_events(
         self,
@@ -630,6 +701,149 @@ class LocalWebReadModel:
             generated_at_utc=self._parse_datetime(
                 str(payload.get("generated_at_utc", ""))
             ),
+        )
+
+    def _historical_warmup_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> HistoricalWarmupRecord:
+        return HistoricalWarmupRecord(
+            warmup_id=str(payload.get("warmup_id", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+            benchmark_symbol=str(payload.get("benchmark_symbol", "")),
+            symbols=self._payload_strings(payload.get("symbols", ())),
+            window_start_utc=self._parse_datetime(
+                str(payload.get("window_start_utc", ""))
+            ),
+            window_end_utc=self._parse_datetime(str(payload.get("window_end_utc", ""))),
+            required_bar_count=int(str(payload.get("required_bar_count", 0))),
+            symbols_ready=self._payload_strings(payload.get("symbols_ready", ())),
+            symbols_blocked={
+                str(key): str(value)
+                for key, value in self._ensure_mapping(
+                    payload.get("symbols_blocked", {})
+                ).items()
+            },
+            return_summary={
+                str(symbol): {
+                    str(metric): Decimal(str(metric_value))
+                    for metric, metric_value in self._ensure_mapping(summary).items()
+                }
+                for symbol, summary in self._ensure_mapping(
+                    payload.get("return_summary", {})
+                ).items()
+            },
+        )
+
+    def _activation_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> StrategyActivationRecord:
+        return StrategyActivationRecord(
+            activation_id=str(payload.get("activation_id", "")),
+            strategy_id=str(payload.get("strategy_id", "")),
+            strategy_version=str(payload.get("strategy_version", "")),
+            approved_symbols=self._payload_strings(payload.get("approved_symbols", ())),
+            deploy_threshold=Decimal(str(payload.get("deploy_threshold", "0"))),
+            allow_fallback_weights=bool(payload.get("allow_fallback_weights", False)),
+            status=str(payload.get("status", "")),
+            activated_at_utc=self._parse_datetime(
+                str(payload.get("activated_at_utc", ""))
+            ),
+            notes=str(payload.get("notes", "")),
+        )
+
+    def _model_snapshot_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> ModelWeightSnapshot:
+        return ModelWeightSnapshot(
+            snapshot_id=str(payload.get("snapshot_id", "")),
+            strategy_id=str(payload.get("strategy_id", "")),
+            status=str(payload.get("status", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+            minimum_supporting_trades=int(
+                str(payload.get("minimum_supporting_trades", 0))
+            ),
+            weights={
+                str(key): Decimal(str(value))
+                for key, value in self._ensure_mapping(
+                    payload.get("weights", {})
+                ).items()
+            },
+        )
+
+    def _model_proposal_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> ModelWeightProposal:
+        return ModelWeightProposal(
+            proposal_id=str(payload.get("proposal_id", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+            strategy_id=str(payload.get("strategy_id", "")),
+            supporting_trade_count=int(str(payload.get("supporting_trade_count", 0))),
+            baseline_snapshot_id=str(payload.get("baseline_snapshot_id", "")),
+            candidate_snapshot=self._model_snapshot_from_payload(
+                self._ensure_mapping(payload.get("candidate_snapshot", {}))
+            ),
+            improvement_score=Decimal(str(payload.get("improvement_score", "0"))),
+            statistically_significant=bool(
+                payload.get("statistically_significant", False)
+            ),
+            summary=str(payload.get("summary", "")),
+        )
+
+    def _opportunity_selection_from_payload(
+        self,
+        payload: dict[str, object],
+    ) -> OpportunitySelectionRecord:
+        ranked_payloads = payload.get("ranked_opportunities", [])
+        ranked_opportunities: tuple[OpportunityScore, ...] = ()
+        if isinstance(ranked_payloads, list):
+            ranked_opportunities = tuple(
+                OpportunityScore(
+                    symbol=str(item.get("symbol", "")),
+                    base_signal=Decimal(str(item.get("base_signal", "0"))),
+                    regime_weight=Decimal(str(item.get("regime_weight", "0"))),
+                    model_weight=Decimal(str(item.get("model_weight", "0"))),
+                    liquidity_weight=Decimal(str(item.get("liquidity_weight", "0"))),
+                    spread_penalty=Decimal(str(item.get("spread_penalty", "0"))),
+                    volatility_penalty=Decimal(
+                        str(item.get("volatility_penalty", "0"))
+                    ),
+                    portfolio_overlap_penalty=Decimal(
+                        str(item.get("portfolio_overlap_penalty", "0"))
+                    ),
+                    execution_cost_penalty=Decimal(
+                        str(item.get("execution_cost_penalty", "0"))
+                    ),
+                    final_score=Decimal(str(item.get("final_score", "0"))),
+                    eligible=bool(item.get("eligible", False)),
+                    ineligibility_reason=str(item.get("ineligibility_reason", "")),
+                )
+                for item in ranked_payloads
+                if isinstance(item, dict)
+            )
+        return OpportunitySelectionRecord(
+            selection_id=str(payload.get("selection_id", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+            strategy_id=str(payload.get("strategy_id", "")),
+            model_snapshot_id=str(payload.get("model_snapshot_id", "")),
+            symbols_considered=self._payload_strings(
+                payload.get("symbols_considered", ())
+            ),
+            ranked_opportunities=ranked_opportunities,
+            selected_symbol=str(payload.get("selected_symbol", "")),
+            decision=str(payload.get("decision", "")),
+            decision_reason=str(payload.get("decision_reason", "")),
         )
 
     def _preview_text(self, path: Path) -> str:

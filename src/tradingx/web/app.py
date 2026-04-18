@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from tradingx.config import TradingConfig
 from tradingx.types import (
+    BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
     DailySessionDigest,
@@ -21,13 +22,18 @@ from tradingx.types import (
     DocumentRecord,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
+    HistoricalWarmupRecord,
     IncidentRecord,
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
+    ModelWeightProposal,
+    ModelWeightSnapshot,
+    OpportunitySelectionRecord,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
+    StrategyActivationRecord,
     WebActionResult,
 )
 
@@ -44,6 +50,18 @@ class ReadModelProtocol(Protocol):
     def list_config_proposals(self) -> tuple[ConfigProposal, ...]: ...
 
     def get_service_state(self) -> object: ...
+
+    def get_runtime_host_state(self) -> BotRuntimeState: ...
+
+    def get_latest_historical_warmup(self) -> HistoricalWarmupRecord | None: ...
+
+    def get_latest_strategy_activation(self) -> StrategyActivationRecord | None: ...
+
+    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None: ...
+
+    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None: ...
+
+    def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None: ...
 
     def list_timeline_events(
         self,
@@ -98,6 +116,19 @@ class ActionRunnerProtocol(Protocol):
     ) -> WebActionResult: ...
 
     def stop_service(self) -> WebActionResult: ...
+
+    def start_runtime_host(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: str,
+        interval_seconds: int,
+        max_cycles: int | None = None,
+    ) -> WebActionResult: ...
+
+    def stop_runtime_host(self) -> WebActionResult: ...
+
+    def generate_learning_proposal(self) -> WebActionResult: ...
 
     def start_market_scheduler(
         self,
@@ -185,6 +216,13 @@ class ConfigProposalRequest(BaseModel):
 
 
 class ServiceStartRequest(BaseModel):
+    symbols: list[str]
+    quantity: str
+    interval_seconds: int
+    max_cycles: int | None = None
+
+
+class RuntimeHostStartRequest(BaseModel):
     symbols: list[str]
     quantity: str
     interval_seconds: int
@@ -366,6 +404,43 @@ def create_app(
     def get_service_state() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.get_service_state()))
 
+    @app.get("/api/runtime-host/state")
+    def get_runtime_host_state() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.get_runtime_host_state()))
+
+    @app.get("/api/runtime-host/warmup/latest")
+    def get_runtime_host_warmup() -> JSONResponse:
+        warmup = read_model.get_latest_historical_warmup()
+        return JSONResponse(content=_serialize(warmup) if warmup is not None else None)
+
+    @app.get("/api/runtime-host/activation/latest")
+    def get_runtime_host_activation() -> JSONResponse:
+        activation = read_model.get_latest_strategy_activation()
+        return JSONResponse(
+            content=_serialize(activation) if activation is not None else None
+        )
+
+    @app.get("/api/runtime-host/model/latest")
+    def get_runtime_host_model() -> JSONResponse:
+        snapshot = read_model.get_latest_model_weight_snapshot()
+        return JSONResponse(
+            content=_serialize(snapshot) if snapshot is not None else None
+        )
+
+    @app.get("/api/runtime-host/selection/latest")
+    def get_runtime_host_selection() -> JSONResponse:
+        selection = read_model.get_latest_opportunity_selection()
+        return JSONResponse(
+            content=_serialize(selection) if selection is not None else None
+        )
+
+    @app.get("/api/runtime-host/proposal/latest")
+    def get_runtime_host_proposal() -> JSONResponse:
+        proposal = read_model.get_latest_model_weight_proposal()
+        return JSONResponse(
+            content=_serialize(proposal) if proposal is not None else None
+        )
+
     @app.get("/api/config/summary")
     def get_config_summary() -> JSONResponse:
         return JSONResponse(
@@ -397,6 +472,32 @@ def create_app(
     def post_service_stop() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.stop_service()))
+
+    @app.post("/api/actions/runtime-host/start")
+    def post_runtime_host_start(payload: RuntimeHostStartRequest) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(
+                action_runner.start_runtime_host(
+                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                    quantity=payload.quantity,
+                    interval_seconds=payload.interval_seconds,
+                    max_cycles=payload.max_cycles,
+                )
+            )
+        )
+
+    @app.post("/api/actions/runtime-host/stop")
+    def post_runtime_host_stop() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.stop_runtime_host()))
+
+    @app.post("/api/actions/runtime-host/learn")
+    def post_runtime_host_learn() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(action_runner.generate_learning_proposal())
+        )
 
     @app.post("/api/actions/scheduler/start")
     def post_scheduler_start(payload: SchedulerStartRequest) -> JSONResponse:

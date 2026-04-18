@@ -30,6 +30,9 @@ implementation that can:
   durable schedule artifact per launched day
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
+- expose a supervised local trading appliance runtime host that the
+  website can start, stop, and monitor through explicit warmup,
+  activation, selection, and learning artifacts
 
 For the full step-by-step startup and operating guide, use the
 [TradingX Operator Manual](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1).
@@ -40,6 +43,7 @@ For the full step-by-step startup and operating guide, use the
 uv run tradingx config-summary --env-file .env
 uv run tradingx live-disable-status --env-file .env
 uv run tradingx paper-loop --env-file .env --symbol SPY --quantity 1
+uv run tradingx runtime-start --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx run-market-day --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-heartbeats 3
 uv run tradingx run-market-scheduler --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --poll-interval-seconds 60 --max-scheduled-days 1
@@ -61,6 +65,11 @@ only. `run-paper-service` repeats the loop across a bounded universe and
 persists a service-cycle summary on every pass; omit `--max-cycles` to
 leave it running. `paper-recover` resumes the latest persisted loop for
 a symbol without creating a duplicate submission.
+
+`runtime-start` is the bounded CLI diagnostic for the local trading
+appliance. It writes the latest activation, warmup, and opportunity
+selection artifacts, optionally refreshes a learning proposal, then runs
+ the runtime-aware paper service for the requested bounded cycle count.
 
 `run-market-day` performs one bounded automation workflow: it writes a
 pre-open checkpoint, runs repeated bounded heartbeats, refreshes
@@ -116,6 +125,9 @@ dashboard, and keeps all write actions disabled. Set
 the local controls enabled. The website exposes:
 
 - an operations deck for bounded paper actions and service control
+- a runtime-host panel for one-click supervised bot start/stop,
+  readiness state, activation, warmup, ranked opportunity, and learning
+  proposal visibility
 - an evidence browser for alerts, service cycles, and validation reports
 - a gate cockpit for current gate states and recommendation counts
 - a Gate 3 operations surface for readiness status, drill history,
