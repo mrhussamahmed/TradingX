@@ -7,13 +7,13 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-018
+author_session: SESS-2026-04-18-019
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-018
-- Active branch: codex/gate3-market-automation
+- Active session: SESS-2026-04-18-019
+- Active branch: main
 - Active phase: 10
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -64,9 +64,8 @@ author_session: SESS-2026-04-18-018
   there.
 - `DESIGN-0004`, `SPEC-0006`, `PLAN-0006`, `TASKS-0006`,
   `RESEARCH-0006`, `DATAMODEL-0006`, `QUICKSTART-0007`, and
-  `CONTRACT-0007` are active on `codex/gate3-market-automation`, and
-  the market-day automation implementation is complete and validated
-  there.
+  `CONTRACT-0007` are active and the market-day automation
+  implementation is now merged into `main`.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -113,11 +112,12 @@ author_session: SESS-2026-04-18-018
 - `tradingx web` now also exposes a dedicated `Gate 3 Ops` view for
   readiness, drills, market-session checkpoints, replay-slippage
   divergence, automation history, and promotion actions.
-- Validation is green on `codex/gate3-market-automation`;
+- Validation is green on `main`;
   `./scripts/validate` passed with the expected closed-market smoke
   skip, plus frontend tests and frontend build verification.
 - The operator-platform UI keeps the premium control-room redesign while
   extending it with replay-slippage cross-check status, automation
   summary, and bounded market-day run controls.
-- Next execution step on this branch is operator review and promotion of
-  `codex/gate3-market-automation` into `main`.
+- Next execution step is to run `uv run tradingx run-market-day --env-file .env ...`
+  during regular US market hours on `main` so the promoted automation
+  flow can start accumulating fresh Gate 3 evidence.
