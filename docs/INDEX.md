@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.10
+version: 1.2.11
 status: active
 created: 2026-04-17
 last_amended: 2026-04-18
-supersedes: INDEX-0001@1.2.9
+supersedes: INDEX-0001@1.2.10
 superseded_by: null
-author_session: SESS-2026-04-18-020
+author_session: SESS-2026-04-18-021
 ---
 
 # Artifact index
@@ -65,13 +65,14 @@ field (session lifecycle). This index tracks `status` only.
 | --------------- | ----------------------- | ------- | ------ | ------------------------------------------- |
 | RUNBOOK-0001    | Session recovery        | 1.1.1   | active | `docs/operations/session_recovery.md`       |
 | RUNBOOK-0002    | Bootstrap install       | 1.0.1   | active | `docs/operations/bootstrap_install.md`      |
+| RUNBOOK-0003    | TradingX operator manual | 1.0.0  | active | `docs/operations/operator_manual.md`        |
 
 ### State files
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.0   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.10  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.11  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -222,7 +223,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 20              | SESS-2026-04-18-020    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 21              | SESS-2026-04-18-021    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

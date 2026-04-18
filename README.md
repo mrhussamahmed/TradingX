@@ -31,6 +31,9 @@ implementation that can:
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
 
+For the full step-by-step startup and operating guide, use the
+[TradingX Operator Manual](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1).
+
 ## Core commands
 
 ```bash

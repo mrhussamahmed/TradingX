@@ -7,12 +7,12 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-020
+author_session: SESS-2026-04-18-021
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-020
+- Active session: SESS-2026-04-18-021
 - Active branch: main
 - Active phase: 11
 - Last completed gate: 0.5
@@ -47,6 +47,9 @@ author_session: SESS-2026-04-18-020
   persisted run artifacts.
 - `ADR-0015` selects a calendar-driven recurring scheduler above the
   bounded market-day runner.
+- `RUNBOOK-0003` is now the official operator instruction manual and
+  must be updated whenever startup, operation, dashboard, validation, or
+  recovery behavior changes.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
