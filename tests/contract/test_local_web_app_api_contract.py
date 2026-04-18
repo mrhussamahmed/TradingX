@@ -12,6 +12,8 @@ from tradingx.types import (
     DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     IncidentRecord,
     ReplaySession,
     ResearchCandidateSummary,
@@ -116,6 +118,32 @@ class FakeReadModel:
                 evidence_refs=("artifacts/paper_loop/operator_alerts/alert-1.json",),
                 suggested_action="Review broker state freshness.",
             ),
+        )
+
+    def build_gate3_readiness(self) -> Gate3ReadinessReport:
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        return Gate3ReadinessReport(
+            report_id="gate3-1",
+            generated_at_utc=timestamp,
+            status="pending",
+            closed_trade_count=4,
+            calendar_days_observed=7,
+            criteria=(),
+            summary="Gate 3 is still collecting evidence.",
+            required_operator_action="Continue paper trading and drills.",
+            evidence_refs=("artifacts/validation/gate3_reports/gate3-1.json",),
+        )
+
+    def get_latest_gate3_promotion_package(self) -> Gate3PromotionPackage | None:
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        return Gate3PromotionPackage(
+            package_id="gate3-package-1",
+            generated_at_utc=timestamp,
+            status="pending",
+            headline="Gate 3 is not ready for promotion.",
+            decision_summary="More paper evidence is required.",
+            criteria_statuses={"duration_or_trade_count": "pending"},
+            evidence_refs=("artifacts/validation/gate3_packages/gate3-package-1.json",),
         )
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
@@ -317,6 +345,42 @@ class FakeActionRunner:
             evidence_refs=("artifacts/operator_platform/daily_digests/close.json",),
         )
 
+    def run_recovery_drill(self, *, symbol: str) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-recovery-drill",
+            action_type="recovery_drill",
+            status="completed",
+            message=f"Recovery drill completed for {symbol}.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/recovery-1.json",),
+        )
+
+    def run_alert_drill(self, *, channel: str) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-alert-drill",
+            action_type="alert_drill",
+            status="completed",
+            message=f"Alert drill completed for {channel}.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/alert-1.json",),
+        )
+
+    def generate_gate3_report(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-gate3-report",
+            action_type="gate3_report",
+            status="completed",
+            message="Gate 3 readiness report generated.",
+            evidence_refs=("artifacts/validation/gate3_reports/gate3-1.json",),
+        )
+
+    def generate_gate3_package(self) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-gate3-package",
+            action_type="gate3_package",
+            status="completed",
+            message="Gate 3 promotion package generated.",
+            evidence_refs=("artifacts/validation/gate3_packages/gate3-package-1.json",),
+        )
+
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult:
         return WebActionResult(
             action_id="action-ack",
@@ -344,6 +408,8 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     evidence = client.get("/api/evidence/operator_alerts")
     command_center = client.get("/api/platform/command-center")
     incidents = client.get("/api/platform/incidents")
+    gate3 = client.get("/api/platform/gate3/readiness")
+    gate3_package = client.get("/api/platform/gate3/promotions/latest")
     research = client.get("/api/platform/research")
     replay = client.get("/api/platform/replay?symbol=SPY")
     explorer = client.get("/api/platform/explorer?query=Gate")
@@ -363,6 +429,10 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert command_center.json()["market_session_label"] == "Regular session monitor"
     assert incidents.status_code == 200
     assert incidents.json()[0]["status"] == "open"
+    assert gate3.status_code == 200
+    assert gate3.json()["status"] == "pending"
+    assert gate3_package.status_code == 200
+    assert gate3_package.json()["package_id"] == "gate3-package-1"
     assert research.status_code == 200
     assert (
         research.json()["candidate_summaries"][0]["candidate_id"]
@@ -454,6 +524,16 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     preopen = client.post("/api/actions/session/preopen")
     heartbeat = client.post("/api/actions/session/heartbeat")
     close_result = client.post("/api/actions/session/close")
+    gate3_report = client.post("/api/actions/gate3/report")
+    gate3_package = client.post("/api/actions/gate3/package")
+    recovery_drill = client.post(
+        "/api/actions/recovery-drill",
+        json={"symbol": "SPY"},
+    )
+    alert_drill = client.post(
+        "/api/actions/alert-drill",
+        json={"channel": "smtp"},
+    )
     acknowledge = client.post("/api/actions/incidents/incident-alert-1/acknowledge")
 
     assert action.status_code == 200
@@ -470,4 +550,8 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     assert preopen.status_code == 200
     assert heartbeat.status_code == 200
     assert close_result.status_code == 200
+    assert gate3_report.status_code == 200
+    assert gate3_package.status_code == 200
+    assert recovery_drill.status_code == 200
+    assert alert_drill.status_code == 200
     assert acknowledge.status_code == 200

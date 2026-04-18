@@ -11,17 +11,31 @@ from typing import Protocol
 
 from alpaca.data.enums import Adjustment, DataFeed
 
-from tradingx.alerts import build_gate_decision_alert
+from tradingx.alerts import (
+    OperatorAlertDispatcher,
+    SmtpAlertTransport,
+    TelegramAlertTransport,
+    build_gate_decision_alert,
+)
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
 from tradingx.data import build_default_market_data_gateway
+from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.service import PaperTradingService, build_default_paper_service
-from tradingx.types import ConfigProposal, WebActionResult, WebServiceState
+from tradingx.types import (
+    AlertDrillRecord,
+    ConfigProposal,
+    MarketSessionRecord,
+    OperatorAlert,
+    RecoveryDrillRecord,
+    WebActionResult,
+    WebServiceState,
+)
 from tradingx.validation import (
     load_benchmark_close_series,
     write_benchmark_close_series,
@@ -180,6 +194,9 @@ class LocalWebActionRunner:
         )
         self._operator_platform_root = (
             self._config.runtime.artifact_root / "operator_platform"
+        )
+        self._operator_platform_store = FilesystemArtifactStore(
+            self._operator_platform_root
         )
 
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult:
@@ -363,6 +380,114 @@ class LocalWebActionRunner:
     def run_session_close(self) -> WebActionResult:
         return self._write_daily_digest(session_label="session_close")
 
+    def run_recovery_drill(self, *, symbol: str) -> WebActionResult:
+        started_at = datetime.now(UTC)
+        result = None
+        status = "pending"
+        summary = f"No recoverable cycle was found for {symbol}."
+        evidence_refs: tuple[str, ...] = ()
+        try:
+            controller = build_default_paper_trading_controller(self._config)
+            result = controller.recover_trading_cycle(symbol)
+        except Exception:
+            summary = f"Recovery drill could not run for {symbol}."
+        else:
+            if result is not None:
+                status = "completed"
+                summary = f"Recovery drill completed for {symbol}."
+                evidence_refs = tuple(str(path) for path in result.artifact_paths)
+        recovery = RecoveryDrillRecord(
+            drill_id=f"recovery-{started_at.strftime('%Y%m%d%H%M%S')}",
+            symbol=symbol,
+            started_at_utc=started_at,
+            completed_at_utc=datetime.now(UTC),
+            status=status,
+            summary=summary,
+            evidence_refs=evidence_refs,
+        )
+        output_path = self._paper_store.write_recovery_drill_record(recovery)
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="recovery_drill",
+            status=status,
+            message=summary,
+            evidence_refs=(str(output_path),) + evidence_refs,
+        )
+
+    def run_alert_drill(self, *, channel: str) -> WebActionResult:
+        recorded_at = datetime.now(UTC)
+        channel_normalized = channel.strip().lower() or "smtp"
+        dispatcher = self._dispatcher_for_channel(channel_normalized)
+        evidence_refs: tuple[str, ...] = ()
+        status = "pending"
+        summary = f"{channel_normalized.upper()} alert drill is not configured."
+        if dispatcher is not None:
+            alert = dispatcher.dispatch(
+                OperatorAlert(
+                    alert_id=f"alert-drill-{channel_normalized}-{recorded_at.strftime('%Y%m%d%H%M%S')}",
+                    severity="critical",
+                    category="operations",
+                    summary=f"Gate 3 {channel_normalized.upper()} alert drill",
+                    evidence_refs=(),
+                    delivery_targets=(),
+                    sent_at_utc=recorded_at,
+                )
+            )
+            if channel_normalized in alert.delivery_targets:
+                alert_path = self._paper_store.write_operator_alert(alert)
+                evidence_refs = (str(alert_path),)
+                status = "completed"
+                summary = f"{channel_normalized.upper()} alert drill completed."
+            else:
+                status = "fail"
+                summary = f"{channel_normalized.upper()} alert drill did not deliver."
+        drill = AlertDrillRecord(
+            drill_id=f"alert-{channel_normalized}-{recorded_at.strftime('%Y%m%d%H%M%S')}",
+            channel=channel_normalized,
+            recorded_at_utc=recorded_at,
+            status=status,
+            summary=summary,
+            evidence_refs=evidence_refs,
+        )
+        output_path = self._paper_store.write_alert_drill_record(drill)
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="alert_drill",
+            status=status,
+            message=summary,
+            evidence_refs=(str(output_path),) + evidence_refs,
+        )
+
+    def generate_gate3_report(self) -> WebActionResult:
+        report = build_gate3_readiness_report(
+            paper_store=self._paper_store,
+            validation_store=self._validation_store,
+        )
+        output_path = self._validation_store.write_gate3_readiness_report(report)
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="gate3_report",
+            status="completed",
+            message="Gate 3 readiness report generated.",
+            evidence_refs=(str(output_path),),
+        )
+
+    def generate_gate3_package(self) -> WebActionResult:
+        report = build_gate3_readiness_report(
+            paper_store=self._paper_store,
+            validation_store=self._validation_store,
+        )
+        report_path = self._validation_store.write_gate3_readiness_report(report)
+        package = build_gate3_promotion_package(report)
+        package_path = self._validation_store.write_gate3_promotion_package(package)
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="gate3_package",
+            status="completed",
+            message="Gate 3 promotion package generated.",
+            evidence_refs=(str(report_path), str(package_path)),
+        )
+
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult:
         acknowledgement_dir = self._operator_platform_root / "incident_acknowledgements"
         acknowledgement_dir.mkdir(parents=True, exist_ok=True)
@@ -408,8 +533,28 @@ class LocalWebActionRunner:
             "recommended_actions": self._recommended_actions(),
             "evidence_refs": self._digest_evidence_refs(),
         }
+        blocked_trade_count = int(str(payload["blocked_trade_count"]))
+        reconciliation_failure_count = int(str(payload["reconciliation_failure_count"]))
+        latest_positions = self._string_items(payload["latest_positions"])
+        top_incidents = self._string_items(payload["top_incidents"])
+        recommended_actions = self._string_items(payload["recommended_actions"])
+        evidence_refs = self._string_items(payload["evidence_refs"])
         output_path = daily_digest_dir / f"{digest_id}.json"
         output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self._operator_platform_store.write_market_session_record(
+            MarketSessionRecord(
+                session_id=digest_id,
+                session_label=session_label,
+                recorded_at_utc=generated_at,
+                service_status=str(payload["service_status"]),
+                blocked_trade_count=blocked_trade_count,
+                reconciliation_failure_count=reconciliation_failure_count,
+                open_positions=tuple(latest_positions),
+                top_incidents=tuple(top_incidents),
+                recommended_actions=tuple(recommended_actions),
+                evidence_refs=tuple(evidence_refs),
+            )
+        )
         return WebActionResult(
             action_id=f"action-{uuid.uuid4()}",
             action_type=session_label,
@@ -417,6 +562,35 @@ class LocalWebActionRunner:
             message=self._digest_message(session_label),
             evidence_refs=(str(output_path),),
         )
+
+    def _dispatcher_for_channel(
+        self,
+        channel: str,
+    ) -> OperatorAlertDispatcher | None:
+        if channel == "smtp" and self._config.alerting.smtp_enabled():
+            return OperatorAlertDispatcher(
+                transports=(
+                    SmtpAlertTransport(
+                        host=self._config.alerting.smtp_host,
+                        port=self._config.alerting.smtp_port,
+                        username=self._config.alerting.smtp_username,
+                        password=self._config.alerting.smtp_password,
+                        from_email=self._config.alerting.smtp_from_email,
+                        to_email=self._config.alerting.smtp_to_email,
+                        use_starttls=self._config.alerting.smtp_use_starttls,
+                    ),
+                )
+            )
+        if channel == "telegram" and self._config.alerting.telegram_enabled():
+            return OperatorAlertDispatcher(
+                transports=(
+                    TelegramAlertTransport(
+                        bot_token=self._config.alerting.telegram_bot_token,
+                        chat_id=self._config.alerting.telegram_chat_id,
+                    ),
+                )
+            )
+        return None
 
     def _recommended_actions(self) -> list[str]:
         recommendations: list[str] = []
@@ -475,6 +649,11 @@ class LocalWebActionRunner:
             "session_close": "Session close digest generated.",
         }
         return messages.get(session_label, "Session digest generated.")
+
+    def _string_items(self, value: object) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return []
 
 
 def build_default_local_web_components(

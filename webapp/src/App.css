@@ -456,6 +456,7 @@
 .chart-header,
 .candidate-header,
 .timeline-topline,
+.record-card-header,
 .exposure-copy,
 .feed-item,
 .record-card > div,
@@ -470,6 +471,7 @@
 .chart-header strong,
 .candidate-header strong,
 .timeline-topline strong,
+.record-card-header strong,
 .record-card strong {
   color: var(--paper);
 }
@@ -477,6 +479,7 @@
 .chart-header span,
 .candidate-header span,
 .timeline-topline span,
+.record-card-header span,
 .record-card > div span,
 .position-row span,
 .safety-row span,
@@ -486,7 +489,8 @@
 
 .split-grid,
 .candidate-grid,
-.metric-grid {
+.metric-grid,
+.record-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
@@ -498,6 +502,17 @@
 
 .metric-grid {
   margin-top: 0.95rem;
+}
+
+.record-grid {
+  margin-top: 1rem;
+}
+
+.section-lead {
+  margin: 0.75rem 0 0.4rem;
+  color: var(--paper);
+  font-size: 1.02rem;
+  line-height: 1.6;
 }
 
 .candidate-grid {
@@ -890,7 +905,8 @@
   .field-grid.compact,
   .split-grid,
   .candidate-grid,
-  .metric-grid {
+  .metric-grid,
+  .record-grid {
     grid-template-columns: 1fr;
   }
 }

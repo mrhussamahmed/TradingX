@@ -145,3 +145,28 @@ def test_local_web_action_runner_generates_session_digests_and_acknowledges_inci
         / "incident_acknowledgements"
         / "incident-alert-1.json"
     ).exists()
+    assert (tmp_path / "artifacts" / "operator_platform" / "market_sessions").exists()
+
+
+def test_local_web_action_runner_generates_gate3_artifacts(tmp_path) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            }
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    report = runner.generate_gate3_report()
+    package = runner.generate_gate3_package()
+    recovery = runner.run_recovery_drill(symbol="SPY")
+    alert = runner.run_alert_drill(channel="smtp")
+
+    assert report.status == "completed"
+    assert package.status == "completed"
+    assert recovery.status in {"completed", "pending"}
+    assert alert.status in {"completed", "pending"}
+    assert (tmp_path / "artifacts" / "validation" / "gate3_reports").exists()
+    assert (tmp_path / "artifacts" / "validation" / "gate3_packages").exists()

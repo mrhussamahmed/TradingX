@@ -19,6 +19,8 @@ from tradingx.types import (
     DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     IncidentRecord,
     ReplaySession,
     ResearchStudioSnapshot,
@@ -50,6 +52,10 @@ class ReadModelProtocol(Protocol):
     def list_incidents(self) -> tuple[IncidentRecord, ...]: ...
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot: ...
+
+    def build_gate3_readiness(self) -> Gate3ReadinessReport: ...
+
+    def get_latest_gate3_promotion_package(self) -> Gate3PromotionPackage | None: ...
 
     def build_replay_session(
         self,
@@ -113,6 +119,14 @@ class ActionRunnerProtocol(Protocol):
 
     def run_session_close(self) -> WebActionResult: ...
 
+    def run_recovery_drill(self, *, symbol: str) -> WebActionResult: ...
+
+    def run_alert_drill(self, *, channel: str) -> WebActionResult: ...
+
+    def generate_gate3_report(self) -> WebActionResult: ...
+
+    def generate_gate3_package(self) -> WebActionResult: ...
+
     def acknowledge_incident(self, *, incident_id: str) -> WebActionResult: ...
 
     def create_config_proposal(
@@ -166,6 +180,10 @@ class DecisionReportRequest(BaseModel):
     gate: str | None = None
 
 
+class AlertDrillRequest(BaseModel):
+    channel: str = "smtp"
+
+
 def create_app(
     *,
     config: TradingConfig,
@@ -212,6 +230,17 @@ def create_app(
     @app.get("/api/platform/research")
     def get_research() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.build_research_snapshot()))
+
+    @app.get("/api/platform/gate3/readiness")
+    def get_gate3_readiness() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.build_gate3_readiness()))
+
+    @app.get("/api/platform/gate3/promotions/latest")
+    def get_gate3_promotion_package() -> JSONResponse:
+        package = read_model.get_latest_gate3_promotion_package()
+        if package is None:
+            return JSONResponse(content=None)
+        return JSONResponse(content=_serialize(package))
 
     @app.get("/api/platform/replay")
     def get_replay(
@@ -366,6 +395,30 @@ def create_app(
     def post_session_close() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.run_session_close()))
+
+    @app.post("/api/actions/recovery-drill")
+    def post_recovery_drill(payload: RecoverRequest) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(action_runner.run_recovery_drill(symbol=payload.symbol))
+        )
+
+    @app.post("/api/actions/alert-drill")
+    def post_alert_drill(payload: AlertDrillRequest) -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(
+            content=_serialize(action_runner.run_alert_drill(channel=payload.channel))
+        )
+
+    @app.post("/api/actions/gate3/report")
+    def post_gate3_report() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.generate_gate3_report()))
+
+    @app.post("/api/actions/gate3/package")
+    def post_gate3_package() -> JSONResponse:
+        _ensure_write_mode(config)
+        return JSONResponse(content=_serialize(action_runner.generate_gate3_package()))
 
     @app.post("/api/actions/incidents/{incident_id}/acknowledge")
     def post_incident_acknowledge(incident_id: str) -> JSONResponse:

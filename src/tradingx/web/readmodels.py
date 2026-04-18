@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from tradingx.config import TradingConfig
+from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     CommandCenterSnapshot,
@@ -15,6 +16,9 @@ from tradingx.types import (
     DashboardSnapshot,
     DocumentRecord,
     ExplorerRecord,
+    Gate3CriterionSnapshot,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     IncidentRecord,
     OperatorTimelineEvent,
     ReplaySession,
@@ -460,6 +464,64 @@ class LocalWebReadModel:
             ),
             evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
         )
+
+    def build_gate3_readiness(self) -> Gate3ReadinessReport:
+        payloads = self._validation_store.list_artifact_payloads("gate3_reports")
+        if not payloads:
+            return build_gate3_readiness_report(
+                paper_store=self._paper_store,
+                validation_store=self._validation_store,
+            )
+        payload = max(payloads, key=lambda item: str(item.get("generated_at_utc", "")))
+        return Gate3ReadinessReport(
+            report_id=str(payload.get("report_id", "")),
+            generated_at_utc=self._parse_datetime(
+                str(payload.get("generated_at_utc", ""))
+            ),
+            status=str(payload.get("status", "pending")),
+            closed_trade_count=int(str(payload.get("closed_trade_count", 0))),
+            calendar_days_observed=int(str(payload.get("calendar_days_observed", 0))),
+            criteria=tuple(
+                Gate3CriterionSnapshot(
+                    criterion_id=str(item.get("criterion_id", "")),
+                    status=str(item.get("status", "pending")),
+                    threshold=str(item.get("threshold", "")),
+                    observed_value=str(item.get("observed_value", "")),
+                    details=str(item.get("details", "")),
+                    evidence_refs=self._payload_strings(item.get("evidence_refs", ())),
+                )
+                for item in self._ensure_list(payload.get("criteria", ()))
+            ),
+            summary=str(payload.get("summary", "")),
+            required_operator_action=str(payload.get("required_operator_action", "")),
+            evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+        )
+
+    def get_latest_gate3_promotion_package(self) -> Gate3PromotionPackage | None:
+        payloads = self._validation_store.list_artifact_payloads("gate3_packages")
+        if payloads:
+            payload = max(
+                payloads,
+                key=lambda item: str(item.get("generated_at_utc", "")),
+            )
+            return Gate3PromotionPackage(
+                package_id=str(payload.get("package_id", "")),
+                generated_at_utc=self._parse_datetime(
+                    str(payload.get("generated_at_utc", ""))
+                ),
+                status=str(payload.get("status", "pending")),
+                headline=str(payload.get("headline", "")),
+                decision_summary=str(payload.get("decision_summary", "")),
+                criteria_statuses={
+                    str(key): str(value)
+                    for key, value in self._ensure_mapping(
+                        payload.get("criteria_statuses", {})
+                    ).items()
+                },
+                evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+            )
+        report = self.build_gate3_readiness()
+        return build_gate3_promotion_package(report)
 
     def _preview_text(self, path: Path) -> str:
         text = path.read_text(encoding="utf-8")

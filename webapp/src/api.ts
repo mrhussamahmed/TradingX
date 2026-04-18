@@ -1,5 +1,6 @@
 import type {
   ActionResult,
+  AlertDrillRecord,
   CommandCenterSnapshot,
   ConfigProposal,
   ConfigSummary,
@@ -9,8 +10,12 @@ import type {
   EvidenceCategory,
   EvidenceItem,
   ExplorerRecord,
+  Gate3PromotionPackage,
+  Gate3ReadinessReport,
   IncidentRecord,
+  MarketSessionRecord,
   ReplaySession,
+  RecoveryDrillRecord,
   ResearchStudioSnapshot,
 } from './types'
 
@@ -96,6 +101,26 @@ export function getLatestDigest() {
   return request<DailySessionDigest | null>('/api/platform/digests/latest')
 }
 
+export function getGate3Readiness() {
+  return request<Gate3ReadinessReport>('/api/platform/gate3/readiness')
+}
+
+export function getGate3PromotionPackage() {
+  return request<Gate3PromotionPackage | null>('/api/platform/gate3/promotions/latest')
+}
+
+export function getMarketSessions() {
+  return request<MarketSessionRecord[]>('/api/evidence/market_sessions')
+}
+
+export function getRecoveryDrills() {
+  return request<RecoveryDrillRecord[]>('/api/evidence/recovery_drills')
+}
+
+export function getAlertDrills() {
+  return request<AlertDrillRecord[]>('/api/evidence/alert_drills')
+}
+
 export function postPaperLoop(payload: { symbol: string; quantity: string }) {
   return request<ActionResult>('/api/actions/paper-loop', {
     method: 'POST',
@@ -179,6 +204,32 @@ export function postSessionClose() {
 
 export function postAcknowledgeIncident(incidentId: string) {
   return request<ActionResult>(`/api/actions/incidents/${incidentId}/acknowledge`, {
+    method: 'POST',
+  })
+}
+
+export function postRecoveryDrill(payload: { symbol: string }) {
+  return request<ActionResult>('/api/actions/recovery-drill', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function postAlertDrill(payload: { channel: string }) {
+  return request<ActionResult>('/api/actions/alert-drill', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function postGate3Report() {
+  return request<ActionResult>('/api/actions/gate3/report', {
+    method: 'POST',
+  })
+}
+
+export function postGate3Package() {
+  return request<ActionResult>('/api/actions/gate3/package', {
     method: 'POST',
   })
 }

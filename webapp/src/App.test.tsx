@@ -167,6 +167,75 @@ const digestPayload = {
   evidence_refs: ['artifacts/operator_platform/daily_digests/digest-1.json'],
 }
 
+const gate3ReadinessPayload = {
+  report_id: 'gate3-1',
+  generated_at_utc: '2026-04-18T18:00:00+00:00',
+  status: 'pending',
+  closed_trade_count: 12,
+  calendar_days_observed: 21,
+  criteria: [
+    {
+      criterion_id: 'duration_or_trade_count',
+      status: 'pending',
+      threshold: 'At least 180 calendar days or 100 closed trades',
+      observed_value: '12 trades / 21 days',
+      details: 'Paper evidence is still accumulating.',
+      evidence_refs: ['artifacts/paper_loop/closed_trades/trade-1.json'],
+    },
+  ],
+  summary: 'Gate 3 evidence is still incomplete.',
+  required_operator_action: 'Continue paper trading and rerun Gate 3.',
+  evidence_refs: ['artifacts/validation/gate3_reports/gate3-1.json'],
+}
+
+const gate3PackagePayload = {
+  package_id: 'gate3-package-1',
+  generated_at_utc: '2026-04-18T18:00:00+00:00',
+  status: 'pending',
+  headline: 'Gate 3 is not ready for promotion.',
+  decision_summary: 'More paper evidence is required.',
+  criteria_statuses: { duration_or_trade_count: 'pending' },
+  evidence_refs: ['artifacts/validation/gate3_packages/gate3-package-1.json'],
+}
+
+const marketSessionsPayload = [
+  {
+    session_id: 'session-1',
+    session_label: 'session_preopen',
+    recorded_at_utc: '2026-04-18T08:00:00+00:00',
+    service_status: 'idle',
+    blocked_trade_count: 0,
+    reconciliation_failure_count: 0,
+    open_positions: ['SPY'],
+    top_incidents: ['incident-alert-1'],
+    recommended_actions: ['Continue paper evidence collection.'],
+    evidence_refs: ['artifacts/operator_platform/market_sessions/session-1.json'],
+  },
+]
+
+const recoveryDrillsPayload = [
+  {
+    drill_id: 'recovery-1',
+    symbol: 'SPY',
+    started_at_utc: '2026-04-18T08:00:00+00:00',
+    completed_at_utc: '2026-04-18T08:05:00+00:00',
+    status: 'completed',
+    summary: 'Recovery succeeded.',
+    evidence_refs: ['artifacts/paper_loop/recovery_drills/recovery-1.json'],
+  },
+]
+
+const alertDrillsPayload = [
+  {
+    drill_id: 'alert-1',
+    channel: 'smtp',
+    recorded_at_utc: '2026-04-18T08:06:00+00:00',
+    status: 'completed',
+    summary: 'SMTP delivered.',
+    evidence_refs: ['artifacts/paper_loop/alert_drills/alert-1.json'],
+  },
+]
+
 function mockFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -201,6 +270,12 @@ function mockFetch() {
       if (url.endsWith('/api/platform/digests/latest')) {
         return new Response(JSON.stringify(digestPayload))
       }
+      if (url.endsWith('/api/platform/gate3/readiness')) {
+        return new Response(JSON.stringify(gate3ReadinessPayload))
+      }
+      if (url.endsWith('/api/platform/gate3/promotions/latest')) {
+        return new Response(JSON.stringify(gate3PackagePayload))
+      }
       if (url.endsWith('/api/evidence/operator_alerts')) {
         return new Response(JSON.stringify([]))
       }
@@ -209,6 +284,15 @@ function mockFetch() {
       }
       if (url.endsWith('/api/evidence/validation_reports')) {
         return new Response(JSON.stringify([]))
+      }
+      if (url.endsWith('/api/evidence/market_sessions')) {
+        return new Response(JSON.stringify(marketSessionsPayload))
+      }
+      if (url.endsWith('/api/evidence/recovery_drills')) {
+        return new Response(JSON.stringify(recoveryDrillsPayload))
+      }
+      if (url.endsWith('/api/evidence/alert_drills')) {
+        return new Response(JSON.stringify(alertDrillsPayload))
       }
     }
 
@@ -269,6 +353,50 @@ function mockFetch() {
         }),
       )
     }
+    if (url.endsWith('/api/actions/recovery-drill')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-recovery-drill',
+          action_type: 'recovery_drill',
+          status: 'completed',
+          message: 'Recovery drill completed for SPY.',
+          evidence_refs: ['artifacts/paper_loop/recovery_drills/recovery-1.json'],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/alert-drill')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-alert-drill',
+          action_type: 'alert_drill',
+          status: 'completed',
+          message: 'Alert drill completed for smtp.',
+          evidence_refs: ['artifacts/paper_loop/alert_drills/alert-1.json'],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/gate3/report')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-gate3-report',
+          action_type: 'gate3_report',
+          status: 'completed',
+          message: 'Gate 3 readiness report generated.',
+          evidence_refs: ['artifacts/validation/gate3_reports/gate3-1.json'],
+        }),
+      )
+    }
+    if (url.endsWith('/api/actions/gate3/package')) {
+      return new Response(
+        JSON.stringify({
+          action_id: 'action-gate3-package',
+          action_type: 'gate3_package',
+          status: 'completed',
+          message: 'Gate 3 promotion package generated.',
+          evidence_refs: ['artifacts/validation/gate3_packages/gate3-package-1.json'],
+        }),
+      )
+    }
 
     return new Response('{}', { status: 404 })
   })
@@ -291,6 +419,7 @@ describe('App', () => {
     expect(await screen.findByText('TradingX Operator Platform')).toBeInTheDocument()
     expect(screen.getByText('Command Center')).toBeInTheDocument()
     expect(screen.getByText('Research Studio')).toBeInTheDocument()
+    expect(screen.getByText('Gate 3 Ops')).toBeInTheDocument()
     expect(screen.getByText('Incident Center')).toBeInTheDocument()
     expect(screen.getByText('Replay Lab')).toBeInTheDocument()
     expect(screen.getByText('Settings & Records')).toBeInTheDocument()
@@ -318,6 +447,13 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Replay Lab' }))
     expect(await screen.findByText('SPY replay')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Gate 3 Ops' }))
+    expect(await screen.findByText('Gate 3 evidence is still incomplete.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Generate Gate 3 Report' }))
+    await user.click(screen.getByRole('button', { name: 'Generate Promotion Package' }))
+    await user.click(screen.getByRole('button', { name: 'Run Recovery Drill' }))
+    await user.click(screen.getByRole('button', { name: 'Run SMTP Drill' }))
 
     await user.click(screen.getByRole('button', { name: 'Settings & Records' }))
     await user.type(screen.getByLabelText('Search records'), 'Gate')
@@ -352,6 +488,22 @@ describe('App', () => {
     )
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/actions/incidents/incident-alert-1/acknowledge',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/gate3/report',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/gate3/package',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/recovery-drill',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/actions/alert-drill',
       expect.objectContaining({ method: 'POST' }),
     )
     expect(fetchMock).toHaveBeenCalledWith(

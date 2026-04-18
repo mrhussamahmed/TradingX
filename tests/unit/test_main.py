@@ -644,3 +644,20 @@ def test_main_runs_local_web_command(monkeypatch, tmp_path) -> None:
     assert fake_runner.called_with is not None
     assert fake_runner.called_with["host"] == "127.0.0.1"
     assert fake_runner.called_with["port"] == 9020
+
+
+def test_gate3_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    report_args = parser.parse_args(["gate3-report"])
+    package_args = parser.parse_args(["gate3-package"])
+    recovery_args = parser.parse_args(["recovery-drill"])
+    alert_args = parser.parse_args(["alert-drill"])
+
+    assert report_args.env_file == ".env"
+    assert report_args.paper_artifact_root == "artifacts/paper_loop"
+    assert report_args.validation_artifact_root == "artifacts/validation"
+    assert package_args.paper_artifact_root == "artifacts/paper_loop"
+    assert package_args.validation_artifact_root == "artifacts/validation"
+    assert recovery_args.symbol == "SPY"
+    assert alert_args.channel == "smtp"

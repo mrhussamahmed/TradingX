@@ -7,9 +7,15 @@ from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    AlertDrillRecord,
+    ClosedTradeRecord,
     EvaluationEvidencePack,
+    ExecutionLifecycleRecord,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     GateAssessment,
     OperatorAlert,
+    RecoveryDrillRecord,
     ServiceCycleSnapshot,
     ServiceSymbolResult,
     TradeIntent,
@@ -218,3 +224,104 @@ def test_filesystem_artifact_store_writes_validation_report_and_summarizes_gate_
     assert report_path == tmp_path / "validation_reports" / "gate-1-20260417.json"
     assert report["counts"]["validation_reports"] == 1
     assert report["summary"]["latest_gate_statuses"] == {"1": "pass"}
+
+
+def test_filesystem_artifact_store_writes_gate3_artifacts_and_summarizes_them(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 18, 8, 0, tzinfo=UTC)
+
+    execution_path = store.write_execution_lifecycle_record(
+        ExecutionLifecycleRecord(
+            execution_id="execution-1",
+            intent_id="intent-1",
+            symbol="SPY",
+            side="buy",
+            reason_code="baseline_long_entry",
+            reference_price=Decimal("500.00"),
+            fill_price=Decimal("500.25"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("5"),
+            submitted_at_utc=timestamp,
+            filled_at_utc=timestamp,
+            recovered=False,
+        )
+    )
+    closed_trade_path = store.write_closed_trade_record(
+        ClosedTradeRecord(
+            trade_id="trade-1",
+            symbol="SPY",
+            entry_intent_id="intent-1",
+            exit_intent_id="intent-2",
+            opened_at_utc=timestamp,
+            closed_at_utc=timestamp,
+            quantity=Decimal("1"),
+            entry_price=Decimal("500.25"),
+            exit_price=Decimal("505.25"),
+            gross_pnl=Decimal("5.00"),
+            return_pct=Decimal("0.01"),
+            outcome="win",
+            holding_period_seconds=300,
+        )
+    )
+    recovery_path = store.write_recovery_drill_record(
+        RecoveryDrillRecord(
+            drill_id="recovery-1",
+            symbol="SPY",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            status="completed",
+            summary="Recovered reconciliation.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/recovery-1.json",),
+        )
+    )
+    alert_path = store.write_alert_drill_record(
+        AlertDrillRecord(
+            drill_id="alert-1",
+            channel="smtp",
+            recorded_at_utc=timestamp,
+            status="completed",
+            summary="SMTP delivered.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/alert-1.json",),
+        )
+    )
+    report_path = store.write_gate3_readiness_report(
+        Gate3ReadinessReport(
+            report_id="gate3-1",
+            generated_at_utc=timestamp,
+            status="pending",
+            closed_trade_count=1,
+            calendar_days_observed=1,
+            criteria=(),
+            summary="Gate 3 pending.",
+            required_operator_action="Collect more paper evidence.",
+            evidence_refs=(str(closed_trade_path),),
+        )
+    )
+    package_path = store.write_gate3_promotion_package(
+        Gate3PromotionPackage(
+            package_id="gate3-package-1",
+            generated_at_utc=timestamp,
+            status="pending",
+            headline="Gate 3 not ready.",
+            decision_summary="More evidence required.",
+            criteria_statuses={"duration_or_trade_count": "pending"},
+            evidence_refs=(str(report_path),),
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert execution_path == tmp_path / "execution_lifecycles" / "execution-1.json"
+    assert closed_trade_path == tmp_path / "closed_trades" / "trade-1.json"
+    assert recovery_path == tmp_path / "recovery_drills" / "recovery-1.json"
+    assert alert_path == tmp_path / "alert_drills" / "alert-1.json"
+    assert report_path == tmp_path / "gate3_reports" / "gate3-1.json"
+    assert package_path == tmp_path / "gate3_packages" / "gate3-package-1.json"
+    assert report["counts"]["execution_lifecycles"] == 1
+    assert report["counts"]["closed_trades"] == 1
+    assert report["counts"]["recovery_drills"] == 1
+    assert report["counts"]["alert_drills"] == 1
+    assert report["counts"]["gate3_reports"] == 1
+    assert report["counts"]["gate3_packages"] == 1

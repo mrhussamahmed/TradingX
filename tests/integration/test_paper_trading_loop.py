@@ -12,7 +12,13 @@ from tradingx.monitoring import StageMetrics
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.risk import PaperOnlyRiskEngine
 from tradingx.strategy import DeterministicBaselineStrategy
-from tradingx.types import MarketSnapshot, OrderRecord, PortfolioState, PositionSnapshot
+from tradingx.types import (
+    ExecutionLifecycleRecord,
+    MarketSnapshot,
+    OrderRecord,
+    PortfolioState,
+    PositionSnapshot,
+)
 
 
 class FakeMarketData:
@@ -100,6 +106,69 @@ class FakePortfolio:
         return self._states.pop(0)
 
 
+class ExitMarketData:
+    def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
+        return MarketSnapshot(
+            symbol=symbol,
+            last_trade_price=Decimal("103.00"),
+            bid_price=Decimal("102.95"),
+            ask_price=Decimal("103.05"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=datetime(2026, 4, 17, 17, 30, tzinfo=UTC),
+        )
+
+
+class ExitExecution(FakeExecution):
+    def wait_for_fill(
+        self,
+        order_id: str,
+        *,
+        timeout_seconds: float = 30,
+        poll_interval_seconds: float = 1,
+    ) -> OrderRecord:
+        return OrderRecord(
+            order_id=order_id,
+            client_order_id="cid-sell",
+            symbol="SPY",
+            side="sell",
+            status="filled",
+            filled_qty=Decimal("1"),
+            filled_avg_price=Decimal("103.00"),
+        )
+
+
+class ExitPortfolio:
+    def __init__(self) -> None:
+        self._states = [
+            PortfolioState(
+                as_of_utc=datetime(2026, 4, 17, 17, 30, tzinfo=UTC),
+                cash=Decimal("9900.00"),
+                equity=Decimal("10005.00"),
+                buying_power=Decimal("19900.00"),
+                positions=(
+                    PositionSnapshot(
+                        symbol="SPY",
+                        quantity=Decimal("1"),
+                        average_entry_price=Decimal("101.00"),
+                        market_value=Decimal("103.00"),
+                    ),
+                ),
+                open_orders=(),
+            ),
+            PortfolioState(
+                as_of_utc=datetime(2026, 4, 17, 17, 30, 1, tzinfo=UTC),
+                cash=Decimal("10003.00"),
+                equity=Decimal("10003.00"),
+                buying_power=Decimal("20003.00"),
+                positions=(),
+                open_orders=(),
+            ),
+        ]
+
+    def get_portfolio_state(self) -> PortfolioState:
+        return self._states.pop(0)
+
+
 def test_paper_trading_loop_persists_trade_order_and_reconciliation(tmp_path) -> None:
     config = TradingConfig.from_mapping(
         {
@@ -126,13 +195,69 @@ def test_paper_trading_loop_persists_trade_order_and_reconciliation(tmp_path) ->
 
     result = controller.run_trading_cycle("SPY", Decimal("1"))
 
-    trade_path, order_path, reconciliation_path = result.artifact_paths
+    trade_path, order_path, execution_path, reconciliation_path = result.artifact_paths
     assert trade_path.exists()
     assert order_path.exists()
+    assert execution_path.exists()
     assert reconciliation_path.exists()
     assert result.terminal_state == "reconciled_trade"
 
     order_payload = json.loads(order_path.read_text(encoding="utf-8"))
+    execution_payload = json.loads(execution_path.read_text(encoding="utf-8"))
     reconciliation_payload = json.loads(reconciliation_path.read_text(encoding="utf-8"))
     assert order_payload["client_order_id"] == result.trade_intent.intent_id
+    assert execution_payload["intent_id"] == result.trade_intent.intent_id
     assert reconciliation_payload["resolved"] is True
+
+
+def test_paper_trading_loop_writes_closed_trade_for_exit_cycles(tmp_path) -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_PAPER_API_KEY": "pk-paper",
+            "ALPACA_PAPER_API_SECRET": "sk-paper",
+        }
+    )
+    artifacts = FilesystemArtifactStore(tmp_path)
+    artifacts.write_execution_lifecycle_record(
+        ExecutionLifecycleRecord(
+            execution_id="execution-entry",
+            intent_id="intent-entry",
+            symbol="SPY",
+            side="buy",
+            reason_code="baseline_long_entry",
+            reference_price=Decimal("101.00"),
+            fill_price=Decimal("101.00"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("0"),
+            submitted_at_utc=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+            filled_at_utc=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+            recovered=False,
+        )
+    )
+    controller = PaperTradingLoopController(
+        market_data=ExitMarketData(),
+        execution=ExitExecution(),
+        portfolio=ExitPortfolio(),
+        risk=PaperOnlyRiskEngine(
+            config,
+            now_provider=lambda: datetime(2026, 4, 17, 17, 30, tzinfo=UTC),
+        ),
+        strategy=DeterministicBaselineStrategy(
+            now_provider=lambda: datetime(2026, 4, 17, 17, 30, tzinfo=UTC),
+        ),
+        artifacts=artifacts,
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 17, 30, tzinfo=UTC),
+    )
+
+    result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    closed_trade_paths = [
+        path for path in result.artifact_paths if "closed_trades" in str(path)
+    ]
+
+    assert closed_trade_paths
+    payload = json.loads(closed_trade_paths[0].read_text(encoding="utf-8"))
+    assert payload["outcome"] == "win"
+    assert payload["entry_intent_id"] == "intent-entry"

@@ -272,6 +272,108 @@ class ServiceRunResult:
 
 
 @dataclass(frozen=True)
+class ExecutionLifecycleRecord:
+    execution_id: str
+    intent_id: str
+    symbol: str
+    side: str
+    reason_code: str
+    reference_price: Decimal
+    fill_price: Decimal
+    filled_qty: Decimal
+    slippage_bps: Decimal
+    submitted_at_utc: datetime
+    filled_at_utc: datetime
+    recovered: bool
+
+
+@dataclass(frozen=True)
+class ClosedTradeRecord:
+    trade_id: str
+    symbol: str
+    entry_intent_id: str
+    exit_intent_id: str
+    opened_at_utc: datetime
+    closed_at_utc: datetime
+    quantity: Decimal
+    entry_price: Decimal
+    exit_price: Decimal
+    gross_pnl: Decimal
+    return_pct: Decimal
+    outcome: str
+    holding_period_seconds: int
+
+
+@dataclass(frozen=True)
+class RecoveryDrillRecord:
+    drill_id: str
+    symbol: str
+    started_at_utc: datetime
+    completed_at_utc: datetime | None
+    status: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AlertDrillRecord:
+    drill_id: str
+    channel: str
+    recorded_at_utc: datetime
+    status: str
+    summary: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MarketSessionRecord:
+    session_id: str
+    session_label: str
+    recorded_at_utc: datetime
+    service_status: str
+    blocked_trade_count: int
+    reconciliation_failure_count: int
+    open_positions: tuple[str, ...]
+    top_incidents: tuple[str, ...]
+    recommended_actions: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Gate3CriterionSnapshot:
+    criterion_id: str
+    status: str
+    threshold: str
+    observed_value: str
+    details: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Gate3ReadinessReport:
+    report_id: str
+    generated_at_utc: datetime
+    status: str
+    closed_trade_count: int
+    calendar_days_observed: int
+    criteria: tuple[Gate3CriterionSnapshot, ...]
+    summary: str
+    required_operator_action: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Gate3PromotionPackage:
+    package_id: str
+    generated_at_utc: datetime
+    status: str
+    headline: str
+    decision_summary: str
+    criteria_statuses: dict[str, str]
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class WebServiceState:
     status: str
     active_symbols: tuple[str, ...]
@@ -427,21 +529,29 @@ __all__ = (
     "ConfigProposal",
     "DashboardSnapshot",
     "DocumentRecord",
+    "ExecutionLifecycleRecord",
     "EvaluationEvidencePack",
+    "Gate3CriterionSnapshot",
+    "Gate3PromotionPackage",
+    "Gate3ReadinessReport",
     "GateAssessment",
     "GateDecisionBrief",
     "GateDecisionCandidateSummary",
     "GateReportResult",
     "LatestQuote",
+    "MarketSessionRecord",
     "MarketSnapshot",
     "OperatorAlert",
     "OrderRecord",
     "PortfolioState",
     "PositionSnapshot",
     "ReconciliationSnapshot",
+    "RecoveryDrillRecord",
     "RiskControlEvent",
     "RoundTripResult",
     "ScalarValue",
+    "AlertDrillRecord",
+    "ClosedTradeRecord",
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",

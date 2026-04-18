@@ -5,21 +5,29 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx.types import (
+    AlertDrillRecord,
+    ClosedTradeRecord,
     CommandCenterSnapshot,
     ConfigProposal,
     DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    ExecutionLifecycleRecord,
     ExplorerRecord,
+    Gate3CriterionSnapshot,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     GateAssessment,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
     GateReportResult,
     IncidentRecord,
+    MarketSessionRecord,
     OperatorAlert,
     OperatorTimelineEvent,
     PortfolioState,
     ReconciliationSnapshot,
+    RecoveryDrillRecord,
     ReplaySession,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
@@ -400,3 +408,102 @@ def test_operator_platform_types_capture_incidents_replay_and_digests() -> None:
     assert replay.events[0].event_type == "operator_alert"
     assert digest.top_incidents == ("incident-1",)
     assert explorer.category == "validation_report"
+
+
+def test_gate3_types_capture_lifecycle_drills_and_readiness() -> None:
+    timestamp = datetime(2026, 4, 18, 8, 0, tzinfo=UTC)
+    execution = ExecutionLifecycleRecord(
+        execution_id="execution-1",
+        intent_id="intent-1",
+        symbol="SPY",
+        side="buy",
+        reason_code="baseline_long_entry",
+        reference_price=Decimal("500.00"),
+        fill_price=Decimal("500.25"),
+        filled_qty=Decimal("1"),
+        slippage_bps=Decimal("5.0"),
+        submitted_at_utc=timestamp,
+        filled_at_utc=timestamp,
+        recovered=False,
+    )
+    trade = ClosedTradeRecord(
+        trade_id="trade-1",
+        symbol="SPY",
+        entry_intent_id="intent-1",
+        exit_intent_id="intent-2",
+        opened_at_utc=timestamp,
+        closed_at_utc=timestamp,
+        quantity=Decimal("1"),
+        entry_price=Decimal("500.25"),
+        exit_price=Decimal("505.25"),
+        gross_pnl=Decimal("5.00"),
+        return_pct=Decimal("0.01"),
+        outcome="win",
+        holding_period_seconds=300,
+    )
+    recovery = RecoveryDrillRecord(
+        drill_id="recovery-1",
+        symbol="SPY",
+        started_at_utc=timestamp,
+        completed_at_utc=timestamp,
+        status="completed",
+        summary="Recovered a pending reconciliation.",
+        evidence_refs=("artifacts/paper_loop/recovery_drills/recovery-1.json",),
+    )
+    alert = AlertDrillRecord(
+        drill_id="alert-1",
+        channel="smtp",
+        recorded_at_utc=timestamp,
+        status="completed",
+        summary="SMTP drill delivered successfully.",
+        evidence_refs=("artifacts/paper_loop/alert_drills/alert-1.json",),
+    )
+    session = MarketSessionRecord(
+        session_id="session-1",
+        session_label="session_preopen",
+        recorded_at_utc=timestamp,
+        service_status="idle",
+        blocked_trade_count=0,
+        reconciliation_failure_count=0,
+        open_positions=("SPY",),
+        top_incidents=("incident-1",),
+        recommended_actions=("Continue paper evidence collection.",),
+        evidence_refs=("artifacts/operator_platform/market_sessions/session-1.json",),
+    )
+    report = Gate3ReadinessReport(
+        report_id="gate3-1",
+        generated_at_utc=timestamp,
+        status="pending",
+        closed_trade_count=1,
+        calendar_days_observed=1,
+        criteria=(
+            Gate3CriterionSnapshot(
+                criterion_id="duration_or_trade_count",
+                status="pending",
+                threshold="At least 180 calendar days or 100 closed trades",
+                observed_value="1 trade / 1 day",
+                details="Not enough paper history yet.",
+                evidence_refs=("artifacts/paper_loop/closed_trades/trade-1.json",),
+            ),
+        ),
+        summary="Gate 3 evidence is still incomplete.",
+        required_operator_action="Continue paper trading and rerun Gate 3.",
+        evidence_refs=("artifacts/validation/gate3_reports/gate3-1.json",),
+    )
+    package = Gate3PromotionPackage(
+        package_id="gate3-package-1",
+        generated_at_utc=timestamp,
+        status="pending",
+        headline="Gate 3 is not ready for promotion.",
+        decision_summary="More paper evidence is required.",
+        criteria_statuses={"duration_or_trade_count": "pending"},
+        evidence_refs=("artifacts/validation/gate3_packages/gate3-package-1.json",),
+    )
+
+    assert execution.slippage_bps == Decimal("5.0")
+    assert trade.outcome == "win"
+    assert recovery.status == "completed"
+    assert alert.channel == "smtp"
+    assert session.session_label == "session_preopen"
+    assert report.criteria[0].criterion_id == "duration_or_trade_count"
+    assert package.criteria_statuses["duration_or_trade_count"] == "pending"

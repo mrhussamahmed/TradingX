@@ -7,14 +7,14 @@ created: 2026-04-17
 last_amended: 2026-04-18
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-18-015
+author_session: SESS-2026-04-18-016
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-18-015
-- Active branch: codex/operator-platform
-- Active phase: 7
+- Active session: SESS-2026-04-18-016
+- Active branch: codex/gate3-operations-evidence
+- Active phase: 8
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -39,6 +39,8 @@ author_session: SESS-2026-04-18-015
   control web app.
 - `ADR-0011` selects a normalized operator-event timeline with
   polling-based refresh for the operator platform.
+- `ADR-0012` selects persisted trade-lifecycle and drill artifacts as
+  the Gate 3 evidence source.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
@@ -46,6 +48,11 @@ author_session: SESS-2026-04-18-015
   `RESEARCH-0003`, `DATAMODEL-0003`, `QUICKSTART-0004`, and
   `CONTRACT-0004` are active on `codex/operator-platform`, and the
   operator-platform implementation is complete and validated there.
+- `DESIGN-0002`, `SPEC-0004`, `PLAN-0004`, `TASKS-0004`,
+  `RESEARCH-0004`, `DATAMODEL-0004`, `QUICKSTART-0005`, and
+  `CONTRACT-0005` are active on `codex/gate3-operations-evidence`, and
+  the Gate 3 operations-and-evidence implementation is complete and
+  validated there.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions
@@ -63,6 +70,12 @@ author_session: SESS-2026-04-18-015
   - a `decision-report` workflow that combines the latest validation
     artifacts with current paper-evidence summaries into one
     operator-ready gate brief and alert preview
+  - Gate 3 execution-lifecycle, closed-trade, recovery-drill,
+    alert-drill, and market-session artifacts
+  - `gate3-report` and `gate3-package` workflows that turn persisted
+    paper evidence into a readiness report and promotion package
+  - dedicated recovery-drill and alert-drill commands for bounded
+    operational exercises
   - richer operator alerts, including optional Telegram and SMTP
     delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
@@ -77,13 +90,12 @@ author_session: SESS-2026-04-18-015
   - an operator-platform expansion with a command center, trade
     intelligence, research studio, incident center, replay lab, records
     explorer, daily session actions, and a command palette
-- Validation is green on `codex/operator-platform`; `./scripts/validate`
-  passed with the expected closed-market smoke skip, plus frontend
-  tests, frontend build verification, and a real local browser check of
-  `tradingx web`.
-- The operator-platform UI has now been visually redesigned into a more
-  premium editorial control-room aesthetic with atmospheric gradients,
-  richer glass surfaces, stronger hero structure, and improved visual
-  hierarchy while preserving the same dashboards and controls.
+- `tradingx web` now also exposes a dedicated `Gate 3 Ops` view for
+  readiness, drills, market-session checkpoints, and promotion actions.
+- Validation is green on `codex/gate3-operations-evidence`;
+  `./scripts/validate` passed with the expected closed-market smoke
+  skip, plus frontend tests and frontend build verification.
+- The operator-platform UI keeps the premium control-room redesign while
+  extending it with the Gate 3 operations-and-evidence surface.
 - Next execution step on this branch is operator review and promotion of
-  `codex/operator-platform` into `main`.
+  `codex/gate3-operations-evidence` into `main`.

@@ -17,6 +17,10 @@ implementation that can:
 - report richer paper-service evidence, including blocked-trade counts,
   latest portfolio state, evaluation recommendation summaries, and gate
   assessment status
+- persist Gate 3 execution-lifecycle, closed-trade, recovery-drill,
+  alert-drill, and market-session evidence
+- generate Gate 3 readiness reports and promotion packages from the
+  persisted paper evidence trail
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
 
@@ -32,6 +36,10 @@ uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
 uv run tradingx gate-report --env-file .env --gate 1 --benchmark-closes-file artifacts/validation/benchmarks/spy-2023-01-01-2026-04-17-dividend.json --window-start 2023-01-01 --window-end 2026-04-17
 uv run tradingx decision-report --gate 1
+uv run tradingx recovery-drill --env-file .env --symbol SPY
+uv run tradingx alert-drill --env-file .env --channel smtp
+uv run tradingx gate3-report --env-file .env
+uv run tradingx gate3-package --env-file .env
 uv run tradingx web --env-file .env
 ```
 
@@ -60,6 +68,11 @@ gate-decision alert preview. It is meant to answer the practical next
 question after a gate run: should the operator advance, wait for more
 evidence, or send the strategy back for changes?
 
+`recovery-drill` and `alert-drill` persist explicit operational-drill
+artifacts for Gate 3. `gate3-report` writes a readiness report from the
+current paper evidence, and `gate3-package` writes the matching
+promotion package.
+
 ## Local website
 
 ```bash
@@ -76,6 +89,8 @@ the local controls enabled. The website exposes:
 - an operations deck for bounded paper actions and service control
 - an evidence browser for alerts, service cycles, and validation reports
 - a gate cockpit for current gate states and recommendation counts
+- a Gate 3 operations surface for readiness status, drill history,
+  market-session checkpoints, and promotion workflow actions
 - a project-intelligence panel for state and handover context
 - a proposal studio that writes safe config proposals under
   `config/proposals/`

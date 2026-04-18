@@ -10,13 +10,20 @@ from pathlib import Path
 from typing import Any
 
 from tradingx.types import (
+    AlertDrillRecord,
+    ClosedTradeRecord,
     EvaluationEvidencePack,
+    ExecutionLifecycleRecord,
+    Gate3PromotionPackage,
+    Gate3ReadinessReport,
     GateAssessment,
+    MarketSessionRecord,
     OperatorAlert,
     OrderRecord,
     PortfolioState,
     PositionSnapshot,
     ReconciliationSnapshot,
+    RecoveryDrillRecord,
     RiskControlEvent,
     ServiceCycleSnapshot,
     TradeIntent,
@@ -89,6 +96,67 @@ class FilesystemArtifactStore:
             "validation_reports",
             f"{report.report_id}.json",
             report,
+        )
+
+    def write_execution_lifecycle_record(
+        self,
+        execution: ExecutionLifecycleRecord,
+    ) -> Path:
+        return self._write_json(
+            "execution_lifecycles",
+            f"{execution.execution_id}.json",
+            execution,
+        )
+
+    def write_closed_trade_record(self, closed_trade: ClosedTradeRecord) -> Path:
+        return self._write_json(
+            "closed_trades",
+            f"{closed_trade.trade_id}.json",
+            closed_trade,
+        )
+
+    def write_recovery_drill_record(
+        self,
+        recovery_drill: RecoveryDrillRecord,
+    ) -> Path:
+        return self._write_json(
+            "recovery_drills",
+            f"{recovery_drill.drill_id}.json",
+            recovery_drill,
+        )
+
+    def write_alert_drill_record(self, alert_drill: AlertDrillRecord) -> Path:
+        return self._write_json(
+            "alert_drills",
+            f"{alert_drill.drill_id}.json",
+            alert_drill,
+        )
+
+    def write_market_session_record(
+        self,
+        market_session: MarketSessionRecord,
+    ) -> Path:
+        return self._write_json(
+            "market_sessions",
+            f"{market_session.session_id}.json",
+            market_session,
+        )
+
+    def write_gate3_readiness_report(self, report: Gate3ReadinessReport) -> Path:
+        return self._write_json(
+            "gate3_reports",
+            f"{report.report_id}.json",
+            report,
+        )
+
+    def write_gate3_promotion_package(
+        self,
+        package: Gate3PromotionPackage,
+    ) -> Path:
+        return self._write_json(
+            "gate3_packages",
+            f"{package.package_id}.json",
+            package,
         )
 
     def trade_intent_path(self, intent_id: str) -> Path:
@@ -219,6 +287,13 @@ class FilesystemArtifactStore:
             "gate_assessments",
             "service_cycles",
             "validation_reports",
+            "execution_lifecycles",
+            "closed_trades",
+            "recovery_drills",
+            "alert_drills",
+            "market_sessions",
+            "gate3_reports",
+            "gate3_packages",
         )
         counts: dict[str, int] = {}
         latest_artifacts: dict[str, str] = {}

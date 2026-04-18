@@ -35,7 +35,9 @@ from tradingx.strategy import (
     build_mandatory_candidate_registry,
 )
 from tradingx.types import (
+    ClosedTradeRecord,
     EvaluationEvidencePack,
+    ExecutionLifecycleRecord,
     GateAssessment,
     GateReportResult,
     LatestQuote,
@@ -382,6 +384,15 @@ class PaperTradingLoopController:
         )
         order_record = self._merge_order_records(existing_order, order_record)
         self._artifacts.write_order_record(trade_intent.intent_id, order_record)
+        execution_record = self._build_execution_lifecycle_record(
+            trade_intent=trade_intent,
+            market_reference_price=market_snapshot.last_trade_price,
+            order_record=order_record,
+            recovered=recovered,
+        )
+        execution_path = self._artifacts.write_execution_lifecycle_record(
+            execution_record
+        )
         final_portfolio_state = self._portfolio.get_portfolio_state()
         reconciliation = self._build_reconciliation(
             trade_intent=trade_intent,
@@ -390,6 +401,10 @@ class PaperTradingLoopController:
         )
         reconciliation_path = self._artifacts.write_reconciliation_snapshot(
             reconciliation
+        )
+        closed_trade_path = self._write_closed_trade_record_if_available(
+            trade_intent=trade_intent,
+            order_record=order_record,
         )
         self._metrics.record_evidence_artifact("reconciliation")
         self._metrics.record_trade_terminal_state("reconciled_trade")
@@ -402,7 +417,17 @@ class PaperTradingLoopController:
             order_record=order_record,
             risk_event=None,
             reconciliation=reconciliation,
-            artifact_paths=(trade_path, order_path, reconciliation_path),
+            artifact_paths=tuple(
+                path
+                for path in (
+                    trade_path,
+                    order_path,
+                    execution_path,
+                    reconciliation_path,
+                    closed_trade_path,
+                )
+                if path is not None
+            ),
             recovered=recovered,
         )
 
@@ -533,6 +558,110 @@ class PaperTradingLoopController:
         self._metrics.record_operator_alert(alert.severity)
         self._metrics.record_evidence_artifact("operator_alert")
         return self._artifacts.write_operator_alert(alert)
+
+    def _build_execution_lifecycle_record(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        market_reference_price: Decimal,
+        order_record: Any,
+        recovered: bool,
+    ) -> ExecutionLifecycleRecord:
+        slippage = Decimal("0")
+        if market_reference_price > Decimal("0"):
+            slippage = (
+                (order_record.filled_avg_price - market_reference_price)
+                / market_reference_price
+            ) * Decimal("10000")
+        return ExecutionLifecycleRecord(
+            execution_id=f"execution-{trade_intent.intent_id}",
+            intent_id=trade_intent.intent_id,
+            symbol=trade_intent.symbol,
+            side=str(order_record.side),
+            reason_code=trade_intent.reason_code,
+            reference_price=market_reference_price,
+            fill_price=order_record.filled_avg_price,
+            filled_qty=order_record.filled_qty,
+            slippage_bps=slippage,
+            submitted_at_utc=trade_intent.generated_at_utc,
+            filled_at_utc=self._now_provider(),
+            recovered=recovered,
+        )
+
+    def _write_closed_trade_record_if_available(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        order_record: Any,
+    ) -> Path | None:
+        if trade_intent.side != "sell":
+            return None
+        closed_trades = self._artifacts.list_artifact_payloads("closed_trades")
+        used_entry_ids = {
+            str(payload.get("entry_intent_id", ""))
+            for payload in closed_trades
+            if str(payload.get("entry_intent_id", "")).strip()
+        }
+        candidate_entries = [
+            payload
+            for payload in self._artifacts.list_artifact_payloads(
+                "execution_lifecycles"
+            )
+            if str(payload.get("symbol", "")) == trade_intent.symbol
+            and str(payload.get("side", "")).lower() == "buy"
+            and str(payload.get("intent_id", "")) not in used_entry_ids
+        ]
+        if not candidate_entries:
+            return None
+        entry_payload = max(
+            candidate_entries,
+            key=lambda payload: str(payload.get("filled_at_utc", "")),
+        )
+        entry_price = Decimal(str(entry_payload.get("fill_price", "0")))
+        quantity = Decimal(str(order_record.filled_qty))
+        gross_pnl = (order_record.filled_avg_price - entry_price) * quantity
+        closed_trade = ClosedTradeRecord(
+            trade_id=f"trade-{trade_intent.intent_id}",
+            symbol=trade_intent.symbol,
+            entry_intent_id=str(entry_payload.get("intent_id", "")),
+            exit_intent_id=trade_intent.intent_id,
+            opened_at_utc=datetime.fromisoformat(
+                str(
+                    entry_payload.get(
+                        "filled_at_utc",
+                        trade_intent.generated_at_utc.isoformat(),
+                    )
+                )
+            ),
+            closed_at_utc=self._now_provider(),
+            quantity=quantity,
+            entry_price=entry_price,
+            exit_price=order_record.filled_avg_price,
+            gross_pnl=gross_pnl,
+            return_pct=(
+                Decimal("0")
+                if entry_price == Decimal("0")
+                else (order_record.filled_avg_price - entry_price) / entry_price
+            ),
+            outcome="win" if gross_pnl > Decimal("0") else "loss",
+            holding_period_seconds=max(
+                0,
+                int(
+                    (
+                        self._now_provider()
+                        - datetime.fromisoformat(
+                            str(
+                                entry_payload.get(
+                                    "filled_at_utc",
+                                    trade_intent.generated_at_utc.isoformat(),
+                                )
+                            )
+                        )
+                    ).total_seconds()
+                ),
+            ),
+        )
+        return self._artifacts.write_closed_trade_record(closed_trade)
 
 
 class StrategyEvaluationController:

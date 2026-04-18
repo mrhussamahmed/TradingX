@@ -19,6 +19,7 @@ from tradingx.controller import (
     build_default_paper_trading_controller,
 )
 from tradingx.data import build_default_market_data_gateway
+from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.service import build_default_paper_service
@@ -119,6 +120,36 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--artifact-root", default="artifacts/validation")
     gate_parser.add_argument("--universe", default=None)
     gate_parser.add_argument("--benchmark-adjusted", action="store_true")
+
+    gate3_report_parser = subparsers.add_parser("gate3-report")
+    gate3_report_parser.add_argument("--env-file", default=".env")
+    gate3_report_parser.add_argument(
+        "--paper-artifact-root",
+        default="artifacts/paper_loop",
+    )
+    gate3_report_parser.add_argument(
+        "--validation-artifact-root",
+        default="artifacts/validation",
+    )
+
+    gate3_package_parser = subparsers.add_parser("gate3-package")
+    gate3_package_parser.add_argument("--env-file", default=".env")
+    gate3_package_parser.add_argument(
+        "--paper-artifact-root",
+        default="artifacts/paper_loop",
+    )
+    gate3_package_parser.add_argument(
+        "--validation-artifact-root",
+        default="artifacts/validation",
+    )
+
+    recovery_drill_parser = subparsers.add_parser("recovery-drill")
+    recovery_drill_parser.add_argument("--env-file", default=".env")
+    recovery_drill_parser.add_argument("--symbol", default="SPY")
+
+    alert_drill_parser = subparsers.add_parser("alert-drill")
+    alert_drill_parser.add_argument("--env-file", default=".env")
+    alert_drill_parser.add_argument("--channel", default="smtp")
 
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--env-file", default=".env")
@@ -293,6 +324,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
         print(json.dumps(_serialize(gate_result), sort_keys=True))
+        return 0
+
+    if args.command == "gate3-report":
+        validation_store = FilesystemArtifactStore(Path(args.validation_artifact_root))
+        report = build_gate3_readiness_report(
+            paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
+            validation_store=validation_store,
+        )
+        validation_store.write_gate3_readiness_report(report)
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
+    if args.command == "gate3-package":
+        validation_store = FilesystemArtifactStore(Path(args.validation_artifact_root))
+        report = build_gate3_readiness_report(
+            paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
+            validation_store=validation_store,
+        )
+        validation_store.write_gate3_readiness_report(report)
+        package = build_gate3_promotion_package(report)
+        validation_store.write_gate3_promotion_package(package)
+        print(
+            json.dumps(
+                _serialize({"report": report, "package": package}),
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    if args.command in {"recovery-drill", "alert-drill"}:
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        from tradingx.web.runtime import build_default_local_web_components
+
+        _, action_runner = build_default_local_web_components(config)
+        result = (
+            action_runner.run_recovery_drill(symbol=args.symbol)
+            if args.command == "recovery-drill"
+            else action_runner.run_alert_drill(channel=args.channel)
+        )
+        print(json.dumps(_serialize(result), sort_keys=True))
         return 0
 
     if args.command == "web":

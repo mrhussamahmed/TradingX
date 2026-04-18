@@ -2,6 +2,9 @@ export type EvidenceCategory =
   | 'operator_alerts'
   | 'service_cycles'
   | 'validation_reports'
+  | 'market_sessions'
+  | 'recovery_drills'
+  | 'alert_drills'
 
 export type EvidenceItem = Record<string, unknown>
 
@@ -161,4 +164,67 @@ export type ConfigProposal = {
   proposed_values: Record<string, unknown>
   diff_preview: string
   output_path: string
+}
+
+export type Gate3CriterionSnapshot = {
+  criterion_id: string
+  status: string
+  threshold: string
+  observed_value: string
+  details: string
+  evidence_refs: string[]
+}
+
+export type Gate3ReadinessReport = {
+  report_id: string
+  generated_at_utc: string
+  status: string
+  closed_trade_count: number
+  calendar_days_observed: number
+  criteria: Gate3CriterionSnapshot[]
+  summary: string
+  required_operator_action: string
+  evidence_refs: string[]
+}
+
+export type Gate3PromotionPackage = {
+  package_id: string
+  generated_at_utc: string
+  status: string
+  headline: string
+  decision_summary: string
+  criteria_statuses: Record<string, string>
+  evidence_refs: string[]
+}
+
+export type MarketSessionRecord = {
+  session_id: string
+  session_label: string
+  recorded_at_utc: string
+  service_status: string
+  blocked_trade_count: number
+  reconciliation_failure_count: number
+  open_positions: string[]
+  top_incidents: string[]
+  recommended_actions: string[]
+  evidence_refs: string[]
+}
+
+export type RecoveryDrillRecord = {
+  drill_id: string
+  symbol: string
+  started_at_utc: string
+  completed_at_utc: string | null
+  status: string
+  summary: string
+  evidence_refs: string[]
+}
+
+export type AlertDrillRecord = {
+  drill_id: string
+  channel: string
+  recorded_at_utc: string
+  status: string
+  summary: string
+  evidence_refs: string[]
 }

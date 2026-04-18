@@ -10,23 +10,32 @@ import type { ReactNode } from 'react'
 
 import './App.css'
 import {
+  getAlertDrills,
   getCommandCenter,
   getConfigProposals,
   getConfigSummary,
   getDocuments,
   getExplorer,
+  getGate3PromotionPackage,
+  getGate3Readiness,
   getLatestDigest,
+  getMarketSessions,
+  getRecoveryDrills,
   getIncidents,
   getOverview,
   getReplay,
   getResearch,
   postAcknowledgeIncident,
+  postAlertDrill,
   postDecisionReport,
   postGateReport,
+  postGate3Package,
+  postGate3Report,
   postPaperLoop,
   postPrepareBenchmark,
   postProposal,
   postRecover,
+  postRecoveryDrill,
   postServiceStart,
   postServiceStop,
   postSessionClose,
@@ -35,6 +44,7 @@ import {
 } from './api'
 import type {
   ActionResult,
+  AlertDrillRecord,
   CommandCenterSnapshot,
   ConfigProposal,
   ConfigSummary,
@@ -42,8 +52,12 @@ import type {
   DashboardSnapshot,
   DocumentRecord,
   ExplorerRecord,
+  Gate3PromotionPackage,
+  Gate3ReadinessReport,
   IncidentRecord,
+  MarketSessionRecord,
   ReplaySession,
+  RecoveryDrillRecord,
   ResearchStudioSnapshot,
 } from './types'
 
@@ -51,6 +65,7 @@ type ViewKey =
   | 'command'
   | 'trade'
   | 'research'
+  | 'gate3'
   | 'incidents'
   | 'replay'
   | 'records'
@@ -114,6 +129,18 @@ const defaultResearch: ResearchStudioSnapshot = {
   decision_summary: '',
 }
 
+const defaultGate3Readiness: Gate3ReadinessReport = {
+  report_id: '',
+  generated_at_utc: '',
+  status: 'pending',
+  closed_trade_count: 0,
+  calendar_days_observed: 0,
+  criteria: [],
+  summary: 'No Gate 3 readiness report is available yet.',
+  required_operator_action: 'Generate a Gate 3 report to begin the evidence trail.',
+  evidence_refs: [],
+}
+
 const defaultReplay: ReplaySession = {
   replay_id: '',
   focus_type: 'symbol',
@@ -127,9 +154,10 @@ const viewOptions: Array<{ key: ViewKey; label: string; shortcut: string }> = [
   { key: 'command', label: 'Command Center', shortcut: '1' },
   { key: 'trade', label: 'Trade Intelligence', shortcut: '2' },
   { key: 'research', label: 'Research Studio', shortcut: '3' },
-  { key: 'incidents', label: 'Incident Center', shortcut: '4' },
-  { key: 'replay', label: 'Replay Lab', shortcut: '5' },
-  { key: 'records', label: 'Settings & Records', shortcut: '6' },
+  { key: 'gate3', label: 'Gate 3 Ops', shortcut: '4' },
+  { key: 'incidents', label: 'Incident Center', shortcut: '5' },
+  { key: 'replay', label: 'Replay Lab', shortcut: '6' },
+  { key: 'records', label: 'Settings & Records', shortcut: '7' },
 ]
 
 function App() {
@@ -144,6 +172,13 @@ function App() {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [research, setResearch] =
     useState<ResearchStudioSnapshot>(defaultResearch)
+  const [gate3Readiness, setGate3Readiness] =
+    useState<Gate3ReadinessReport>(defaultGate3Readiness)
+  const [gate3Package, setGate3Package] =
+    useState<Gate3PromotionPackage | null>(null)
+  const [marketSessions, setMarketSessions] = useState<MarketSessionRecord[]>([])
+  const [recoveryDrills, setRecoveryDrills] = useState<RecoveryDrillRecord[]>([])
+  const [alertDrills, setAlertDrills] = useState<AlertDrillRecord[]>([])
   const [replay, setReplay] = useState<ReplaySession>(defaultReplay)
   const [explorer, setExplorer] = useState<ExplorerRecord[]>([])
   const [digest, setDigest] = useState<DailySessionDigest | null>(null)
@@ -167,6 +202,7 @@ function App() {
   const [gateWindowStart, setGateWindowStart] = useState('2023-01-01')
   const [gateWindowEnd, setGateWindowEnd] = useState('2026-04-17')
   const [gateUniverse, setGateUniverse] = useState('SPY,QQQ')
+  const [gate3RecoverySymbol, setGate3RecoverySymbol] = useState('SPY')
   const [replaySymbol, setReplaySymbol] = useState('SPY')
   const [selectedIncidentId, setSelectedIncidentId] = useState('')
   const [explorerQuery, setExplorerQuery] = useState('')
@@ -196,6 +232,11 @@ function App() {
         nextProposals,
         nextIncidents,
         nextResearch,
+        nextGate3Readiness,
+        nextGate3Package,
+        nextMarketSessions,
+        nextRecoveryDrills,
+        nextAlertDrills,
         nextDigest,
       ] = await Promise.all([
         getOverview(),
@@ -205,6 +246,11 @@ function App() {
         getConfigProposals(),
         getIncidents(),
         getResearch(),
+        getGate3Readiness(),
+        getGate3PromotionPackage(),
+        getMarketSessions(),
+        getRecoveryDrills(),
+        getAlertDrills(),
         getLatestDigest(),
       ])
       startTransition(() => {
@@ -215,6 +261,11 @@ function App() {
         setProposals(nextProposals)
         setIncidents(nextIncidents)
         setResearch(nextResearch)
+        setGate3Readiness(nextGate3Readiness)
+        setGate3Package(nextGate3Package)
+        setMarketSessions(nextMarketSessions)
+        setRecoveryDrills(nextRecoveryDrills)
+        setAlertDrills(nextAlertDrills)
         setDigest(nextDigest)
         setSelectedIncidentId((current) => current || nextIncidents[0]?.incident_id || '')
       })
@@ -307,7 +358,7 @@ function App() {
         setPaletteOpen((current) => !current)
         return
       }
-      if (!event.metaKey && !event.ctrlKey && /^[1-6]$/.test(event.key)) {
+      if (!event.metaKey && !event.ctrlKey && /^[1-7]$/.test(event.key)) {
         const nextView = viewOptions.find((option) => option.shortcut === event.key)
         if (nextView) {
           setActiveView(nextView.key)
@@ -715,6 +766,26 @@ function App() {
             />
           ) : null}
 
+          {activeView === 'gate3' ? (
+            <Gate3OpsView
+              readiness={gate3Readiness}
+              promotionPackage={gate3Package}
+              marketSessions={marketSessions}
+              recoveryDrills={recoveryDrills}
+              alertDrills={alertDrills}
+              recoverySymbol={gate3RecoverySymbol}
+              onRecoverySymbolChange={setGate3RecoverySymbol}
+              onGenerateGate3Report={() => runAction(() => postGate3Report())}
+              onGenerateGate3Package={() => runAction(() => postGate3Package())}
+              onRunRecoveryDrill={() =>
+                runAction(() => postRecoveryDrill({ symbol: gate3RecoverySymbol }))
+              }
+              onRunSmtpDrill={() =>
+                runAction(() => postAlertDrill({ channel: 'smtp' }))
+              }
+            />
+          ) : null}
+
           {activeView === 'incidents' ? (
             <IncidentCenterView
               incidents={incidents}
@@ -1011,6 +1082,162 @@ function CommandCenterView(props: {
           <button type="button" className="action-button primary" onClick={props.onProposalSubmit}>
             Save Proposal
           </button>
+        </div>
+      </Panel>
+    </div>
+  )
+}
+
+function Gate3OpsView(props: {
+  readiness: Gate3ReadinessReport
+  promotionPackage: Gate3PromotionPackage | null
+  marketSessions: MarketSessionRecord[]
+  recoveryDrills: RecoveryDrillRecord[]
+  alertDrills: AlertDrillRecord[]
+  recoverySymbol: string
+  onRecoverySymbolChange: (value: string) => void
+  onGenerateGate3Report: () => void
+  onGenerateGate3Package: () => void
+  onRunRecoveryDrill: () => void
+  onRunSmtpDrill: () => void
+}) {
+  return (
+    <div className="view-grid">
+      <Panel title="Gate 3 Readiness" subtitle="Paper-operations advancement">
+        <div className="digest-grid">
+          <MiniStat label="Status" value={props.readiness.status} />
+          <MiniStat
+            label="Closed Trades"
+            value={String(props.readiness.closed_trade_count)}
+          />
+          <MiniStat
+            label="Observed Days"
+            value={String(props.readiness.calendar_days_observed)}
+          />
+          <MiniStat
+            label="Package"
+            value={props.promotionPackage?.status ?? 'not generated'}
+          />
+        </div>
+        <p className="section-lead">{props.readiness.summary}</p>
+        <p className="muted">{props.readiness.required_operator_action}</p>
+        <div className="button-row">
+          <button
+            type="button"
+            className="action-button primary"
+            onClick={props.onGenerateGate3Report}
+          >
+            Generate Gate 3 Report
+          </button>
+          <button
+            type="button"
+            className="action-button secondary"
+            onClick={props.onGenerateGate3Package}
+          >
+            Generate Promotion Package
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="Criteria Matrix" subtitle="Every gate condition in view">
+        <div className="record-grid">
+          {props.readiness.criteria.length ? (
+            props.readiness.criteria.map((criterion) => (
+              <article key={criterion.criterion_id} className="record-card">
+                <div className="record-card-header">
+                  <strong>{criterion.criterion_id.replaceAll('_', ' ')}</strong>
+                  <StatusChip label={criterion.status} tone={toneForStatus(criterion.status)} />
+                </div>
+                <p>{criterion.details}</p>
+                <span>{criterion.observed_value || criterion.threshold}</span>
+              </article>
+            ))
+          ) : (
+            <p className="muted">No Gate 3 criteria have been materialized yet.</p>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Operational Drills" subtitle="Recovery and emergency evidence">
+        <div className="field-grid compact">
+          <Field label="Recovery Symbol">
+            <input
+              value={props.recoverySymbol}
+              onChange={(event) => props.onRecoverySymbolChange(event.target.value)}
+            />
+          </Field>
+        </div>
+        <div className="button-row">
+          <button
+            type="button"
+            className="action-button primary"
+            onClick={props.onRunRecoveryDrill}
+          >
+            Run Recovery Drill
+          </button>
+          <button
+            type="button"
+            className="action-button secondary"
+            onClick={props.onRunSmtpDrill}
+          >
+            Run SMTP Drill
+          </button>
+        </div>
+        <div className="split-grid">
+          <div className="subpanel">
+            <h3>Recovery drills</h3>
+            <ul className="watchlist">
+              {props.recoveryDrills.length ? (
+                props.recoveryDrills.slice(0, 4).map((drill) => (
+                  <li key={drill.drill_id}>
+                    <strong>{drill.symbol}</strong>
+                    <span>{drill.status}</span>
+                  </li>
+                ))
+              ) : (
+                <li className="muted">No recovery drills recorded yet.</li>
+              )}
+            </ul>
+          </div>
+          <div className="subpanel">
+            <h3>Alert drills</h3>
+            <ul className="watchlist">
+              {props.alertDrills.length ? (
+                props.alertDrills.slice(0, 4).map((drill) => (
+                  <li key={drill.drill_id}>
+                    <strong>{drill.channel}</strong>
+                    <span>{drill.status}</span>
+                  </li>
+                ))
+              ) : (
+                <li className="muted">No alert drills recorded yet.</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Market Sessions" subtitle="Latest operating checkpoints">
+        <div className="record-grid">
+          {props.marketSessions.length ? (
+            props.marketSessions.slice(0, 4).map((session) => (
+              <article key={session.session_id} className="record-card">
+                <div className="record-card-header">
+                  <strong>{session.session_label.replaceAll('_', ' ')}</strong>
+                  <StatusChip label={session.service_status} tone="ink" />
+                </div>
+                <p>
+                  {session.recommended_actions[0] || 'No operator recommendation recorded.'}
+                </p>
+                <span>
+                  blocked {session.blocked_trade_count} / reconciliation{' '}
+                  {session.reconciliation_failure_count}
+                </span>
+              </article>
+            ))
+          ) : (
+            <p className="muted">No market-session checkpoints have been captured yet.</p>
+          )}
         </div>
       </Panel>
     </div>
@@ -1489,6 +1716,19 @@ function toneForSeverity(severity: string) {
     return 'crimson'
   }
   if (severity === 'warning') {
+    return 'gold'
+  }
+  return 'fog'
+}
+
+function toneForStatus(status: string) {
+  if (status === 'pass' || status === 'completed') {
+    return 'teal'
+  }
+  if (status === 'fail') {
+    return 'crimson'
+  }
+  if (status === 'pending') {
     return 'gold'
   }
   return 'fog'
