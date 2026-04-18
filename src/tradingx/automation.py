@@ -336,6 +336,7 @@ class MarketDayAutomationRunner:
         gate3_package_id: str = "",
     ) -> _AutomationStepArtifacts:
         generated_at = self._now_provider()
+        checkpoint_suffix = uuid.uuid4().hex[:8]
         paper_report = self._paper_store.build_operator_evidence_report()
         summary_payload = paper_report.get("summary", {})
         paper_summary = summary_payload if isinstance(summary_payload, dict) else {}
@@ -353,7 +354,10 @@ class MarketDayAutomationRunner:
             service_status=service_status,
         )
         digest = DailySessionDigest(
-            digest_id=f"digest-{generated_at.strftime('%Y%m%d%H%M%S')}-{session_label}",
+            digest_id=(
+                f"digest-{generated_at.strftime('%Y%m%d%H%M%S')}-"
+                f"{session_label}-{checkpoint_suffix}"
+            ),
             generated_at_utc=generated_at,
             session_label=session_label,
             service_status=service_status,
@@ -368,7 +372,10 @@ class MarketDayAutomationRunner:
         )
         digest_path = self._operator_store.write_daily_session_digest(digest)
         session_record = MarketSessionRecord(
-            session_id=f"session-{generated_at.strftime('%Y%m%d%H%M%S')}-{session_label}",
+            session_id=(
+                f"session-{generated_at.strftime('%Y%m%d%H%M%S')}-"
+                f"{session_label}-{checkpoint_suffix}"
+            ),
             session_label=session_label,
             recorded_at_utc=generated_at,
             service_status=service_status,

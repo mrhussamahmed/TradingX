@@ -12,9 +12,9 @@ author_session: SESS-2026-04-18-018
 
 # Feature Specification: TradingX market-day automation
 
-**Feature Branch**: `006-market-day-automation`  
-**Created**: 2026-04-18  
-**Status**: Active  
+**Feature Branch**: `006-market-day-automation`
+**Created**: 2026-04-18
+**Status**: Active
 **Input**: Operator request to build the next production-quality phase:
 automated market-day execution and Gate 3 evidence refresh.
 

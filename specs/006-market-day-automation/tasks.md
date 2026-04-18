@@ -12,7 +12,7 @@ author_session: SESS-2026-04-18-018
 
 # Tasks: TradingX market-day automation
 
-**Input**: Design documents from `/specs/006-market-day-automation/`  
+**Input**: Design documents from `/specs/006-market-day-automation/`
 **Prerequisites**: `plan.md`, `spec.md`, `research.md`, `data-model.md`,
 `contracts/`
 

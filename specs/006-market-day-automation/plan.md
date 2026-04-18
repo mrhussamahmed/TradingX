@@ -12,7 +12,7 @@ author_session: SESS-2026-04-18-018
 
 # Implementation Plan: TradingX market-day automation
 
-**Branch**: `006-market-day-automation` | **Date**: 2026-04-18 | **Spec**: `specs/006-market-day-automation/spec.md`  
+**Branch**: `006-market-day-automation` | **Date**: 2026-04-18 | **Spec**: `specs/006-market-day-automation/spec.md`
 **Input**: Feature specification from `/specs/006-market-day-automation/spec.md`
 
 ## Summary
@@ -26,17 +26,17 @@ shows run status, checkpoints, and evidence freshness.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11 for backend, TypeScript/React for frontend  
+**Language/Version**: Python 3.11 for backend, TypeScript/React for frontend
 **Primary Dependencies**: existing `fastapi`, `pydantic`, `uvicorn`,
-`react`, `vite`, `vitest`; no new framework dependency required  
+`react`, `vite`, `vitest`; no new framework dependency required
 **Storage**: existing artifact directories under `artifacts/`, plus new
-`operator_platform/market_automation_runs/` records  
+`operator_platform/market_automation_runs/` records
 **Testing**: `pytest`, FastAPI contract tests, frontend tests,
-`mypy --strict`, `ruff`, `black`, `./scripts/validate`  
-**Target Platform**: Local machine and local browser only  
-**Project Type**: Single Python backend plus one local React SPA  
+`mypy --strict`, `ruff`, `black`, `./scripts/validate`
+**Target Platform**: Local machine and local browser only
+**Project Type**: Single Python backend plus one local React SPA
 **Constraints**: local-only, read-only by default, no live trading,
-explicit evidence artifacts, bounded actions only  
+explicit evidence artifacts, bounded actions only
 **Scale/Scope**: One operator, one paper account, one local automation
 workflow
 

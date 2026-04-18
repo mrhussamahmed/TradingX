@@ -143,3 +143,11 @@ def test_market_day_automation_runner_writes_run_record_and_refreshes_gate3(
     assert result.gate3_report_path is not None
     assert result.gate3_package_path is not None
     assert len(result.session_paths) == 4
+    assert len({path.name for path in result.session_paths}) == 4
+    assert len({path.name for path in result.daily_digest_paths}) == 4
+    market_sessions = list(
+        (tmp_path / "artifacts" / "operator_platform" / "market_sessions").glob(
+            "*.json"
+        )
+    )
+    assert len(market_sessions) == 4
