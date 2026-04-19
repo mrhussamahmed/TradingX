@@ -39,7 +39,12 @@ def build_mandatory_candidate_registry(
             family="trend_following",
             benchmark_symbol=benchmark_symbol,
             universe=normalized_universe,
-            parameter_set={"lookback_days": 20, "signal": "long_only"},
+            parameter_set={
+                "lookback_days": 252,
+                "sma_window_days": 200,
+                "skip_recent_days": 1,
+                "signal": "long_only",
+            },
             status="under_evaluation",
         ),
         StrategyCandidate(
@@ -47,7 +52,11 @@ def build_mandatory_candidate_registry(
             family="vol_target",
             benchmark_symbol=benchmark_symbol,
             universe=normalized_universe,
-            parameter_set={"target_volatility": Decimal("0.10")},
+            parameter_set={
+                "target_volatility": Decimal("0.12"),
+                "realized_vol_window_days": 20,
+                "max_gross_leverage": Decimal("1.0"),
+            },
             status="under_evaluation",
         ),
         StrategyCandidate(
@@ -55,7 +64,12 @@ def build_mandatory_candidate_registry(
             family="mean_reversion",
             benchmark_symbol=benchmark_symbol,
             universe=normalized_universe,
-            parameter_set={"lookback_days": 5, "zscore_threshold": Decimal("1.0")},
+            parameter_set={
+                "beta_window_days": 60,
+                "residual_sum_days": 5,
+                "zscore_window_days": 60,
+                "zscore_threshold": Decimal("2.0"),
+            },
             status="under_evaluation",
         ),
     )

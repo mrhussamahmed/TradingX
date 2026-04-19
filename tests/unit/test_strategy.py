@@ -159,3 +159,28 @@ def test_mandatory_candidate_registry_contains_required_families() -> None:
     ]
     assert all(candidate.benchmark_symbol == "SPY" for candidate in candidates)
     assert all(candidate.universe == ("SPY", "QQQ") for candidate in candidates)
+
+
+def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
+    candidates = {
+        candidate.family: candidate
+        for candidate in build_mandatory_candidate_registry(("SPY",))
+    }
+
+    assert candidates["trend_following"].parameter_set == {
+        "lookback_days": 252,
+        "sma_window_days": 200,
+        "skip_recent_days": 1,
+        "signal": "long_only",
+    }
+    assert candidates["vol_target"].parameter_set == {
+        "target_volatility": Decimal("0.12"),
+        "realized_vol_window_days": 20,
+        "max_gross_leverage": Decimal("1.0"),
+    }
+    assert candidates["mean_reversion"].parameter_set == {
+        "beta_window_days": 60,
+        "residual_sum_days": 5,
+        "zscore_window_days": 60,
+        "zscore_threshold": Decimal("2.0"),
+    }
