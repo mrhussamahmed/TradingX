@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -151,3 +152,39 @@ def test_market_day_automation_runner_writes_run_record_and_refreshes_gate3(
         )
     )
     assert len(market_sessions) == 4
+
+
+def test_market_day_automation_runner_stops_before_next_heartbeat_when_requested(
+    tmp_path,
+) -> None:
+    validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    fake_service = FakePaperService()
+    stop_event = threading.Event()
+    sleep_calls: list[int] = []
+
+    runner = MarketDayAutomationRunner(
+        paper_store=paper_store,
+        validation_store=validation_store,
+        operator_store=operator_store,
+        service_builder=lambda: fake_service,
+        now_provider=lambda: datetime(2026, 4, 18, 13, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: sleep_calls.append(seconds),
+    )
+
+    stop_event.set()
+    result = runner.run_market_day(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_heartbeats=2,
+        stop_event=stop_event,
+    )
+
+    assert fake_service.calls == 0
+    assert sleep_calls == []
+    assert result.run_record.status == "stopped"
+    assert result.run_record.heartbeat_count == 0

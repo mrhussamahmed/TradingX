@@ -217,6 +217,25 @@ class FakeMarketDayScheduler:
         )
 
 
+class FakeOperatorSupervisor:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def run(
+        self,
+        *,
+        poll_interval_seconds: int,
+        telegram_poll_seconds: int,
+        max_loops: int | None,
+    ):
+        self.called_with = {
+            "poll_interval_seconds": poll_interval_seconds,
+            "telegram_poll_seconds": telegram_poll_seconds,
+            "max_loops": max_loops,
+        }
+        return {"status": "running", "child_status": "running"}
+
+
 class FakeGateValidationController:
     def __init__(self) -> None:
         self.called_with = None
@@ -1344,3 +1363,60 @@ def test_gate3_parser_defaults() -> None:
     assert automation_args.max_heartbeats is None
     assert scheduler_args.poll_interval_seconds is None
     assert scheduler_args.max_scheduled_days is None
+
+
+def test_operator_supervisor_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["run-operator-supervisor"])
+
+    assert args.env_file == ".env"
+    assert args.interval_seconds is None
+    assert args.poll_interval_seconds is None
+    assert args.telegram_poll_seconds is None
+    assert args.max_loops is None
+
+
+def test_main_runs_operator_supervisor_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=placeholder\nALPACA_PAPER_API_SECRET=placeholder\n",
+        encoding="utf-8",
+    )
+    fake_supervisor = FakeOperatorSupervisor()
+
+    def _build_fake_supervisor(
+        config,
+        env_file,
+        symbols,
+        quantity,
+        interval_seconds,
+        poll_interval_seconds,
+    ):
+        del config, env_file, symbols, quantity, interval_seconds, poll_interval_seconds
+        return fake_supervisor
+
+    monkeypatch.setattr(
+        cli,
+        "build_default_operator_supervisor",
+        _build_fake_supervisor,
+    )
+
+    exit_code = cli.main(
+        [
+            "run-operator-supervisor",
+            "--env-file",
+            str(env_file),
+            "--max-loops",
+            "1",
+        ]
+    )
+
+    assert exit_code == 0
+    assert fake_supervisor.called_with == {
+        "poll_interval_seconds": 60,
+        "telegram_poll_seconds": 5,
+        "max_loops": 1,
+    }
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "running"

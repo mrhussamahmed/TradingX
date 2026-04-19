@@ -14,6 +14,7 @@ from tradingx.controller import build_default_paper_trading_controller
 from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
 from tradingx.historical import HistoricalWarmupService
 from tradingx.monitoring import StageMetrics
+from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
@@ -62,6 +63,7 @@ class PaperTradingService:
         cycle_budget_seconds: int = 30,
         broker_failure_threshold: int = 2,
         broker_staleness_seconds: int = 60,
+        operator_control_store: OperatorControlStore | None = None,
     ) -> None:
         self._loop_controller = loop_controller
         self._portfolio = portfolio
@@ -75,6 +77,7 @@ class PaperTradingService:
         self._cycle_budget_seconds = cycle_budget_seconds
         self._broker_failure_threshold = broker_failure_threshold
         self._broker_staleness_seconds = broker_staleness_seconds
+        self._operator_control_store = operator_control_store
         self._session_start_equity: Decimal | None = None
         self._last_successful_broker_call_at: datetime | None = None
         self._last_known_portfolio_state: PortfolioState | None = None
@@ -99,6 +102,8 @@ class PaperTradingService:
                 self._artifacts.write_service_cycle_snapshot(last_cycle)
             )
             cycles_completed += 1
+            if last_cycle.cycle_status == "kill_requested":
+                break
             if max_cycles is not None and cycles_completed >= max_cycles:
                 break
             self._sleep_fn(interval_seconds)
@@ -122,7 +127,15 @@ class PaperTradingService:
         blocked_trade_count = 0
         reconciliation_failure_count = 0
         cycle_status = "market_closed"
-        if not self._regular_hours_checker(started_at):
+        if (
+            self._operator_control_store is not None
+            and self._operator_control_store.read_state().kill_requested
+        ):
+            portfolio_state = (
+                self._last_known_portfolio_state or self._empty_portfolio_state()
+            )
+            cycle_status = "kill_requested"
+        elif not self._regular_hours_checker(started_at):
             initial_portfolio_state = (
                 self._last_known_portfolio_state or self._empty_portfolio_state()
             )
@@ -337,6 +350,9 @@ def build_default_paper_service(
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         opportunity_selector=opportunity_selector,
+        operator_control_store=OperatorControlStore(
+            config.runtime.data_root / "control"
+        ),
     )
 
 

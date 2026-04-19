@@ -28,6 +28,9 @@ implementation that can:
 - run a recurring market-day scheduler that launches the bounded
   market-day workflow automatically on trading days and records one
   durable schedule artifact per launched day
+- run a local operator supervisor with optional single-chat Telegram
+  commands for week-1 halt, resume, flatten, kill, status, and daily
+  summaries
 - serve a local control website with a React dashboard over the existing
   paper-trading and evidence pipeline
 - expose a supervised local trading appliance runtime host that the
@@ -57,6 +60,7 @@ uv run tradingx runtime-start --env-file .env --symbols SPY,QQQ,IWM --quantity 1
 uv run tradingx run-paper-service --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 uv run tradingx run-market-day --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-heartbeats 3
 uv run tradingx run-market-scheduler --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --poll-interval-seconds 60 --max-scheduled-days 1
+uv run tradingx run-operator-supervisor --env-file .env --symbols SPY --quantity 1 --interval-seconds 300
 uv run tradingx paper-recover --env-file .env --symbol SPY
 uv run tradingx evidence-report --artifact-root artifacts/paper_loop
 uv run tradingx prepare-benchmark-closes --env-file .env --window-start 2023-01-01 --window-end 2026-04-17
@@ -97,10 +101,19 @@ next scheduled run time to the CLI and local website. Omit
 `TRADINGX_SCHEDULER_POLL_SECONDS` to control the default waiting
 cadence.
 
+`run-operator-supervisor` is the new week-1 operator parent process. It
+holds the runtime lock for the session, supervises the long-running
+trading child, persists state under
+`artifacts/operator_platform/supervisor/`, and optionally polls Telegram
+for the single authorized operator chat when
+`TRADINGX_TELEGRAM_BOT_TOKEN` and `TRADINGX_TELEGRAM_CHAT_ID` are set.
+
 If `TRADINGX_TELEGRAM_BOT_TOKEN` / `TRADINGX_TELEGRAM_CHAT_ID` or the
 `TRADINGX_SMTP_*` settings are present in `.env`, operator alerts are
 delivered through those transports in addition to being persisted under
-`artifacts/paper_loop/operator_alerts/`.
+`artifacts/paper_loop/operator_alerts/`. The same Telegram credentials
+also enable the week-1 operator command plane with `/status`,
+`/positions`, `/today`, `/halt`, `/resume`, `/flatten`, and `/kill`.
 
 `prepare-benchmark-closes` fetches daily closes from Alpaca market data
 and writes a metadata-rich artifact under `artifacts/validation/benchmarks/`

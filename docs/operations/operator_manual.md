@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0003
 title: TradingX operator manual
-version: 1.3.0
+version: 1.4.0
 status: active
 created: 2026-04-18
 last_amended: 2026-04-19
-supersedes: RUNBOOK-0003@1.2.0
+supersedes: RUNBOOK-0003@1.3.0
 superseded_by: null
-author_session: SESS-2026-04-19-025
+author_session: SESS-2026-04-19-026
 ---
 
 # TradingX Operator Manual
@@ -157,17 +157,54 @@ What to confirm:
 
 ## Main ways to operate TradingX
 
-There are five primary operating modes:
+There are six primary operating modes:
 
-1. Local trading appliance from the website
-2. Single manual cycle
-3. Recurring paper service
-4. One bounded market day
-5. Recurring market-day scheduler
+1. Week-1 operator supervisor
+2. Local trading appliance from the website
+3. Single manual cycle
+4. Recurring paper service
+5. One bounded market day
+6. Recurring market-day scheduler
 
 Use the smallest mode that fits what you need.
 
-## Mode 1: Start the local trading appliance
+## Mode 1: Run the week-1 operator supervisor
+
+This is the preferred week-1 control surface when you want one local
+parent process plus Telegram or CLI fallback controls.
+
+```bash
+uv run tradingx run-operator-supervisor --env-file .env --symbols SPY --quantity 1 --interval-seconds 300
+```
+
+What it does:
+
+- holds the week-1 runtime lock for the entire session
+- supervises the long-running trading child process
+- persists state under `artifacts/operator_platform/supervisor/`
+- reads control files under `data/control/`
+- optionally polls Telegram if the bot token and chat id are configured
+
+Telegram commands when enabled:
+
+- `/status`
+- `/positions`
+- `/today`
+- `/halt`
+- `/resume`
+- `/flatten`
+- `/kill`
+
+Important semantics:
+
+- `/kill` stops decisioning without flattening
+- `/flatten` cancels working orders and attempts to flatten positions
+  independently of the child
+- `/resume` clears halt/kill requests and records a clearance request
+- if Telegram is not configured, the CLI/file-based fallback controls
+  from `week1_rehearsal_and_gates.md` remain valid
+
+## Mode 2: Start the local trading appliance
 
 This is now the preferred operator workflow.
 
@@ -210,7 +247,7 @@ CLI equivalent for bounded diagnostics:
 uv run tradingx runtime-start --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300 --max-cycles 1
 ```
 
-## Mode 2: Run one manual paper cycle
+## Mode 3: Run one manual paper cycle
 
 Use this when you want one bounded pass for a single symbol.
 
@@ -235,7 +272,7 @@ lock on `data/runtime.pid`. If a second process attempts to start
 against the same data root, TradingX refuses to run and returns a
 blocked error instead of risking duplicate paper orders.
 
-## Mode 3: Run the recurring paper service
+## Mode 4: Run the recurring paper service
 
 Use this when you want repeated bounded cycles across a symbol universe.
 
@@ -254,7 +291,7 @@ What it does:
 - runs the paper loop repeatedly
 - writes service-cycle artifacts under `artifacts/paper_loop/`
 
-## Mode 4: Run one bounded market day
+## Mode 5: Run one bounded market day
 
 Use this when you want one full automation workflow for a trading day.
 
@@ -274,7 +311,7 @@ Helpful option:
 - `--max-heartbeats 3`
   Good for bounded local verification
 
-## Mode 5: Run the recurring market-day scheduler
+## Mode 6: Run the recurring market-day scheduler
 
 Use this when you want unattended recurring operation across future
 trading days.
@@ -409,13 +446,20 @@ uv run tradingx web --env-file .env
 
 1. Verify `.env` and intervals.
 2. Start the website if desired.
-3. Start the recurring scheduler.
+3. Start the operator supervisor if you want Telegram or fallback control
+   over the unattended session.
+```bash
+uv run tradingx run-operator-supervisor --env-file .env --symbols SPY --quantity 1 --interval-seconds 300
+```
+4. Or start the recurring scheduler directly if you only need the
+   scheduler loop.
 ```bash
 uv run tradingx run-market-scheduler --env-file .env --symbols SPY,QQQ,IWM --quantity 1 --interval-seconds 300
 ```
-4. Keep that process alive.
-5. Monitor scheduler state in the website `Gate 3 Ops` panel.
-6. Review the latest schedule and automation artifacts after each run.
+5. Keep that process alive.
+6. Monitor scheduler state in the website `Gate 3 Ops` panel or via
+   Telegram `/status`.
+7. Review the latest schedule and automation artifacts after each run.
 
 ## Validation and evidence workflows
 

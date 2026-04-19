@@ -1,20 +1,20 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.3
+version: 1.0.4
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.2
+supersedes: STATE-0001@1.0.3
 superseded_by: null
-author_session: SESS-2026-04-19-025
+author_session: SESS-2026-04-19-026
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-025
-- Active branch: codex/week1-safety-pack
-- Active phase: 13
+- Active session: SESS-2026-04-19-026
+- Active branch: main
+- Active phase: 14
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -52,6 +52,8 @@ author_session: SESS-2026-04-19-025
   proposal-only learning outputs.
 - `ADR-0017` selects policy snapshots and an append-only SQLite journal
   as the week-1 dry-run safety control plane.
+- `ADR-0018` selects a local supervisor plus a single-chat Telegram
+  command plane for week-1 operator control.
 - `ARCHMAP-0001` is the canonical one-page runtime/appliance
   architecture pointer for future development and must be updated when
   canonical architecture files or precedence change.
@@ -97,8 +99,12 @@ author_session: SESS-2026-04-19-025
   implementation is now merged into `main`.
 - `DESIGN-0007`, `SPEC-0009`, `PLAN-0009`, `TASKS-0009`,
   `RESEARCH-0009`, `DATAMODEL-0009`, `QUICKSTART-0010`, and
-  `CONTRACT-0010` are active on `codex/week1-safety-pack` and define
-  the week-1 dry-run safety pack now in implementation.
+  `CONTRACT-0010` are active and the week-1 dry-run safety pack is now
+  merged into `main`.
+- `DESIGN-0008`, `SPEC-0010`, `PLAN-0010`, `TASKS-0010`,
+  `RESEARCH-0010`, `DATAMODEL-0010`, `QUICKSTART-0011`, and
+  `CONTRACT-0011` are active and define the week-1 operator control
+  plane with a local supervisor, control files, and Telegram commands.
 - Week-1 runtime entry points now enforce a single-writer process lock
   on `data/runtime.pid` so a second process cannot silently operate
   against the same local data root.
@@ -162,6 +168,15 @@ author_session: SESS-2026-04-19-025
   command center for one-click local bot start/stop, warmup readiness,
   active strategy/model visibility, ranked opportunity inspection, and
   bounded learning-proposal refresh.
+- `tradingx run-operator-supervisor` now owns the week-1 unattended
+  parent process: it holds the runtime lock, supervises the long-running
+  market-day child process, persists state under
+  `artifacts/operator_platform/supervisor/`, and optionally polls
+  Telegram for `/status`, `/positions`, `/today`, `/halt`, `/resume`,
+  `/flatten`, and `/kill` when Telegram credentials are configured.
+- Week-1 control files now live under `data/control/` and are consumed
+  by the paper trading controller so operator halts block new entry
+  intents without blocking exits.
 - Validation is green on `main`;
   `./scripts/validate` passed with the expected closed-market smoke
   skip, plus frontend tests and frontend build verification.
@@ -169,11 +184,7 @@ author_session: SESS-2026-04-19-025
   extending it with replay-slippage cross-check status, automation
   summary, bounded market-day run controls, and recurring scheduler
   controls.
-- Next execution step is to start
-  `uv run tradingx web --env-file .env`, open
-  `http://127.0.0.1:8765`, enable
-  `TRADINGX_WEB_WRITE_MODE_ENABLED=true` if you want live local controls,
-  and use the `Runtime Host` panel to start the appliance. For
-  unattended evidence accumulation, pair that with
-  `uv run tradingx run-market-scheduler --env-file .env ...` during
-  regular US market hours.
+- The next execution step is to run
+  `uv run tradingx run-operator-supervisor --env-file .env --symbols SPY --quantity 1 --interval-seconds 300`
+  for week-1 unattended dry-run control, or keep using the website
+  runtime-host path if Telegram is not needed.

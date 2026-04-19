@@ -30,6 +30,7 @@ class AutomationRunnerProtocol(Protocol):
         quantity: Decimal,
         interval_seconds: int,
         max_heartbeats: int | None,
+        stop_event: threading.Event | None = None,
     ) -> MarketAutomationRunResult: ...
 
 
@@ -164,6 +165,7 @@ class MarketDayScheduler:
                     quantity=quantity,
                     interval_seconds=interval_seconds,
                     max_heartbeats=None,
+                    stop_event=stop_event,
                 )
             except Exception as exc:
                 completed_at = self._now_provider()

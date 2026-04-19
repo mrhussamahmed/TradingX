@@ -33,6 +33,7 @@ from tradingx.execution import (
 )
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
+from tradingx.operator_control import OperatorControlStore
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.policy import (
     PolicySnapshot,
@@ -254,6 +255,7 @@ class PaperTradingLoopController:
         journal: SqliteOmsJournal | None = None,
         git_sha: str = "unknown",
         dry_run: bool = False,
+        operator_control_store: OperatorControlStore | None = None,
     ) -> None:
         self._market_data = market_data
         self._execution = execution
@@ -272,6 +274,7 @@ class PaperTradingLoopController:
         self._journal = journal
         self._git_sha = git_sha
         self._dry_run = dry_run
+        self._operator_control_store = operator_control_store
         self._session_start_equity: Decimal | None = None
         self._policy_path: Path | None = None
         if self._policy_store is not None and self._policy_snapshot is not None:
@@ -335,6 +338,64 @@ class PaperTradingLoopController:
                         trade_path,
                         self._policy_path,
                         decision_path,
+                        reconciliation_path,
+                    )
+                    if path is not None
+                ),
+            )
+
+        operator_state = (
+            self._operator_control_store.read_state()
+            if self._operator_control_store is not None
+            else None
+        )
+        if (
+            operator_state is not None
+            and trade_intent.side == "buy"
+            and operator_state.halt_requested
+        ):
+            risk_event = self._build_manual_risk_event(
+                trade_intent,
+                control_code="operator_halt",
+            )
+            decision_path = self._write_decision_snapshot(
+                trade_intent=trade_intent,
+                session_start_equity=portfolio_state.equity,
+                risk_verdict_id=risk_event.event_id,
+                final_action="blocked",
+            )
+            self._append_journal_event(
+                event_type="intent",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id="",
+                broker_order_id="",
+                payload={"terminal_reason": risk_event.control_type},
+            )
+            risk_path = self._artifacts.write_risk_control_event(risk_event)
+            reconciliation = self._build_reconciliation(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                differences=(risk_event.control_type,),
+            )
+            reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+                reconciliation
+            )
+            self._metrics.record_evidence_artifact("reconciliation")
+            self._metrics.record_trade_terminal_state("blocked_trade")
+            return TradingLoopResult(
+                terminal_state="blocked_trade",
+                trade_intent=trade_intent,
+                order_record=None,
+                risk_event=risk_event,
+                reconciliation=reconciliation,
+                artifact_paths=tuple(
+                    path
+                    for path in (
+                        trade_path,
+                        self._policy_path,
+                        decision_path,
+                        risk_path,
                         reconciliation_path,
                     )
                     if path is not None
@@ -1265,6 +1326,9 @@ def build_default_paper_trading_controller(
         journal=SqliteOmsJournal(config.runtime.data_root / "journal.db"),
         git_sha=_resolve_git_sha(),
         dry_run=config.runtime.dry_run,
+        operator_control_store=OperatorControlStore(
+            config.runtime.data_root / "control"
+        ),
     )
 
 

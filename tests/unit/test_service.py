@@ -7,6 +7,7 @@ from pathlib import Path
 from prometheus_client import CollectorRegistry
 
 from tradingx.monitoring import StageMetrics
+from tradingx.operator_control import OperatorControlStore
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.service import PaperTradingService
 from tradingx.types import (
@@ -371,3 +372,30 @@ def test_paper_trading_service_marks_data_unavailable_on_stale_market_veto(
     )
 
     assert result.last_cycle.cycle_status == "data_unavailable"
+
+
+def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> None:
+    loop_controller = FakeLoopController()
+    control_store = OperatorControlStore(tmp_path / "data" / "control")
+    control_store.request_kill(now=datetime(2026, 4, 17, 18, 0, tzinfo=UTC))
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=FilesystemArtifactStore(tmp_path),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        operator_control_store=control_store,
+    )
+
+    result = service.run(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=2,
+    )
+
+    assert loop_controller.calls == []
+    assert result.cycles_completed == 1
+    assert result.last_cycle.cycle_status == "kill_requested"

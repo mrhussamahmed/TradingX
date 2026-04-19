@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.16
+version: 1.2.17
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: INDEX-0001@1.2.15
+supersedes: INDEX-0001@1.2.16
 superseded_by: null
-author_session: SESS-2026-04-19-025
+author_session: SESS-2026-04-19-026
 ---
 
 # Artifact index
@@ -65,22 +65,22 @@ field (session lifecycle). This index tracks `status` only.
 | --------------- | ----------------------- | ------- | ------ | ------------------------------------------- |
 | RUNBOOK-0001    | Session recovery        | 1.1.1   | active | `docs/operations/session_recovery.md`       |
 | RUNBOOK-0002    | Bootstrap install       | 1.0.1   | active | `docs/operations/bootstrap_install.md`      |
-| RUNBOOK-0003    | TradingX operator manual | 1.3.0  | active | `docs/operations/operator_manual.md`        |
+| RUNBOOK-0003    | TradingX operator manual | 1.4.0  | active | `docs/operations/operator_manual.md`        |
 | RUNBOOK-0004    | Week 1 premortem       | 1.0.0   | active | `docs/operations/week1_premortem.md`        |
-| RUNBOOK-0005    | Week 1 rehearsal and gates | 1.1.0 | active | `docs/operations/week1_rehearsal_and_gates.md` |
+| RUNBOOK-0005    | Week 1 rehearsal and gates | 1.2.0 | active | `docs/operations/week1_rehearsal_and_gates.md` |
 
 ### State files
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
-| STATE-0001  | Project state     | 1.0.3   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.16  | active | `docs/INDEX.md` (this file)   |
+| STATE-0001  | Project state     | 1.0.4   | active | `docs/handover/STATE.md`      |
+| INDEX-0001  | Artifact index    | 1.2.17  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
 | id           | title                    | version | status | path                                    |
 | ------------ | ------------------------ | ------- | ------ | --------------------------------------- |
-| ARCHMAP-0001 | Current architecture map | 1.3.0   | active | `docs/architecture/CURRENT_ARCHITECTURE.md` |
+| ARCHMAP-0001 | Current architecture map | 1.4.0   | active | `docs/architecture/CURRENT_ARCHITECTURE.md` |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -103,6 +103,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0015 | Use a calendar-driven recurring scheduler above the bounded market-day runner | 1.0.0 | active | `docs/adrs/ADR-0015-calendar-driven-market-day-scheduler.md` |
 | ADR-0016 | Use a supervised local trading appliance runtime with governed activation records | 1.0.0 | active | `docs/adrs/ADR-0016-local-trading-appliance-runtime-host.md` |
 | ADR-0017 | Use policy snapshots and an append-only SQLite journal for week-1 dry-run safety | 1.0.0 | active | `docs/adrs/ADR-0017-week1-dry-run-safety-control-plane.md` |
+| ADR-0018 | Use a local supervisor with a single-chat Telegram operator command plane | 1.0.0 | active | `docs/adrs/ADR-0018-telegram-operator-supervisor-control-plane.md` |
 
 ### Design documents
 
@@ -115,6 +116,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0005 | TradingX recurring market-day scheduler design | 1.0.0 | active | `docs/superpowers/specs/2026-04-18-market-day-scheduler-design.md` |
 | DESIGN-0006 | TradingX local trading appliance design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-local-trading-appliance-design.md` |
 | DESIGN-0007 | TradingX week-1 dry-run controls design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-week1-dry-run-controls-design.md` |
+| DESIGN-0008 | TradingX operator control plane design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-operator-control-plane-design.md` |
 
 ### Specifications (SPEC-NNNN)
 
@@ -129,6 +131,7 @@ field (session lifecycle). This index tracks `status` only.
 | SPEC-0007 | TradingX recurring market-day scheduler specification | 1.0.0 | active | `specs/007-market-day-scheduler/spec.md` |
 | SPEC-0008 | TradingX local trading appliance specification | 1.0.0 | active | `specs/008-local-trading-appliance/spec.md` |
 | SPEC-0009 | TradingX week-1 dry-run controls specification | 1.0.0 | active | `specs/009-week1-dry-run-controls/spec.md` |
+| SPEC-0010 | TradingX operator control plane specification | 1.0.0 | active | `specs/010-operator-control-plane/spec.md` |
 
 ### Plans (PLAN-NNNN)
 
@@ -143,6 +146,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0007 | TradingX recurring market-day scheduler implementation plan | 1.0.0 | active | `specs/007-market-day-scheduler/plan.md` |
 | PLAN-0008 | TradingX local trading appliance implementation plan | 1.0.0 | active | `specs/008-local-trading-appliance/plan.md` |
 | PLAN-0009 | TradingX week-1 dry-run controls implementation plan | 1.0.0 | active | `specs/009-week1-dry-run-controls/plan.md` |
+| PLAN-0010 | TradingX operator control plane implementation plan | 1.0.0 | active | `specs/010-operator-control-plane/plan.md` |
 
 ### Task lists (TASKS-NNNN)
 
@@ -157,6 +161,7 @@ field (session lifecycle). This index tracks `status` only.
 | TASKS-0007 | TradingX recurring market-day scheduler task list | 1.0.0 | active | `specs/007-market-day-scheduler/tasks.md` |
 | TASKS-0008 | TradingX local trading appliance task list | 1.0.0 | active | `specs/008-local-trading-appliance/tasks.md` |
 | TASKS-0009 | TradingX week-1 dry-run controls task list | 1.0.0 | active | `specs/009-week1-dry-run-controls/tasks.md` |
+| TASKS-0010 | TradingX operator control plane task list | 1.0.0 | active | `specs/010-operator-control-plane/tasks.md` |
 
 ### Research notes
 
@@ -171,6 +176,7 @@ field (session lifecycle). This index tracks `status` only.
 | RESEARCH-0007 | TradingX recurring market-day scheduler research | 1.0.0 | active | `specs/007-market-day-scheduler/research.md` |
 | RESEARCH-0008 | TradingX local trading appliance research | 1.0.0 | active | `specs/008-local-trading-appliance/research.md` |
 | RESEARCH-0009 | TradingX week-1 dry-run controls research | 1.0.0 | active | `specs/009-week1-dry-run-controls/research.md` |
+| RESEARCH-0010 | TradingX operator control plane research | 1.0.0 | active | `specs/010-operator-control-plane/research.md` |
 
 ### Data models
 
@@ -185,6 +191,7 @@ field (session lifecycle). This index tracks `status` only.
 | DATAMODEL-0007 | TradingX recurring market-day scheduler data model | 1.0.0 | active | `specs/007-market-day-scheduler/data-model.md` |
 | DATAMODEL-0008 | TradingX local trading appliance data model | 1.0.0 | active | `specs/008-local-trading-appliance/data-model.md` |
 | DATAMODEL-0009 | TradingX week-1 dry-run controls data model | 1.0.0 | active | `specs/009-week1-dry-run-controls/data-model.md` |
+| DATAMODEL-0010 | TradingX operator control plane data model | 1.0.0 | active | `specs/010-operator-control-plane/data-model.md` |
 
 ### Quickstarts
 
@@ -199,6 +206,7 @@ field (session lifecycle). This index tracks `status` only.
 | QUICKSTART-0008 | TradingX recurring market-day scheduler quickstart | 1.0.0 | active | `specs/007-market-day-scheduler/quickstart.md` |
 | QUICKSTART-0009 | TradingX local trading appliance quickstart | 1.0.0 | active | `specs/008-local-trading-appliance/quickstart.md` |
 | QUICKSTART-0010 | TradingX week-1 dry-run controls quickstart | 1.0.0 | active | `specs/009-week1-dry-run-controls/quickstart.md` |
+| QUICKSTART-0011 | TradingX operator control plane quickstart | 1.0.0 | active | `specs/010-operator-control-plane/quickstart.md` |
 
 ### Contracts (CONTRACT-NNNN)
 
@@ -214,6 +222,7 @@ field (session lifecycle). This index tracks `status` only.
 | CONTRACT-0008 | Market-day scheduler API contract | 1.0.0 | active | `specs/007-market-day-scheduler/contracts/market_day_scheduler_api.md` |
 | CONTRACT-0009 | Local trading appliance API contract | 1.0.0 | active | `specs/008-local-trading-appliance/contracts/local_trading_appliance_api.md` |
 | CONTRACT-0010 | Week-1 dry-run controls contract | 1.0.0 | active | `specs/009-week1-dry-run-controls/contracts/week1_dry_run_controls.md` |
+| CONTRACT-0011 | Operator control plane contract | 1.0.0 | active | `specs/010-operator-control-plane/contracts/operator_control_plane.md` |
 
 ### Validation gate definitions
 
@@ -249,7 +258,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 23              | SESS-2026-04-19-023    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 25              | SESS-2026-04-19-026    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

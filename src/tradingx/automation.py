@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -118,6 +119,7 @@ class MarketDayAutomationRunner:
         quantity: Decimal,
         interval_seconds: int,
         max_heartbeats: int | None,
+        stop_event: threading.Event | None = None,
     ) -> MarketAutomationRunResult:
         started_at = self._now_provider()
         preopen_step: _AutomationStepArtifacts | None = None
@@ -129,6 +131,8 @@ class MarketDayAutomationRunner:
             preopen_step = self._execute_preopen()
             heartbeats_remaining = max_heartbeats
             while heartbeats_remaining is None or heartbeats_remaining > 0:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 heartbeat_step = self._execute_heartbeat(
                     symbols=symbols,
                     quantity=quantity,
@@ -141,8 +145,11 @@ class MarketDayAutomationRunner:
                     heartbeats_remaining -= 1
                     if heartbeats_remaining <= 0:
                         break
+                if stop_event is not None and stop_event.is_set():
+                    break
                 self._sleep_fn(interval_seconds)
-            close_step = self._execute_close()
+            if stop_event is None or not stop_event.is_set():
+                close_step = self._execute_close()
         except Exception:
             failed = True
 
@@ -154,11 +161,15 @@ class MarketDayAutomationRunner:
             "failed"
             if failed
             else (
-                "skipped"
-                if heartbeat_steps
-                and executed_heartbeats == 0
-                and heartbeat_steps[-1].action_result.status == "skipped"
-                else "completed"
+                "stopped"
+                if stop_event is not None and stop_event.is_set()
+                else (
+                    "skipped"
+                    if heartbeat_steps
+                    and executed_heartbeats == 0
+                    and heartbeat_steps[-1].action_result.status == "skipped"
+                    else "completed"
+                )
             )
         )
         run_summary = self._run_summary(

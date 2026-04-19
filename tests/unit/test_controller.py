@@ -12,6 +12,7 @@ from tradingx.controller import PaperTradingLoopController, RoundTripController
 from tradingx.execution import OrderRejected
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
+from tradingx.operator_control import OperatorControlState
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.policy import PolicySnapshotStore, build_week1_policy_snapshot
 from tradingx.risk import PreTradeRiskContext, RiskDecision
@@ -262,6 +263,20 @@ class FakeLoopRiskEngine:
         return RiskDecision(decision="approved", control_code="passed", event=None)
 
 
+class FakeOperatorControlStore:
+    def __init__(self, *, halt_requested: bool) -> None:
+        self._halt_requested = halt_requested
+
+    def read_state(self) -> OperatorControlState:
+        return OperatorControlState(
+            halt_requested=self._halt_requested,
+            kill_requested=False,
+            clearance_requested=False,
+            updated_at_utc=datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+            last_command="halt" if self._halt_requested else "",
+        )
+
+
 class FakeRegularHours:
     def __call__(self, observed_at: datetime) -> bool:
         del observed_at
@@ -506,3 +521,39 @@ def test_paper_trading_loop_controller_records_rejected_order_and_forces_reconci
         "reject",
     ]
     assert journal_rows[-1].payload["reason_code"] == "insufficient_buying_power"
+
+
+def test_paper_trading_loop_controller_blocks_entries_on_operator_halt(
+    tmp_path: Path,
+) -> None:
+    controller = PaperTradingLoopController(
+        market_data=FakeMarketData(),
+        execution=FakeExecution(),
+        portfolio=FakePortfolio(),
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(
+            now_provider=lambda: datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
+        ),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+        policy_snapshot=build_week1_policy_snapshot(
+            generated_at_utc=datetime(2026, 4, 20, 8, 0, tzinfo=UTC),
+            artifact_root=tmp_path / "artifacts",
+            git_sha="abc1234",
+            dry_run=True,
+        ),
+        policy_store=PolicySnapshotStore(tmp_path / "data" / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(tmp_path / "data" / "snapshots"),
+        journal=SqliteOmsJournal(tmp_path / "data" / "journal.db"),
+        git_sha="abc1234",
+        dry_run=True,
+        operator_control_store=FakeOperatorControlStore(halt_requested=True),
+    )
+
+    result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    assert result.terminal_state == "blocked_trade"
+    assert result.risk_event is not None
+    assert result.risk_event.control_type == "operator_halt"

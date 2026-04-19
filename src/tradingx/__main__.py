@@ -39,6 +39,7 @@ from tradingx.service import (
     build_runtime_host_paper_service,
 )
 from tradingx.snapshots import ContentAddressedSnapshotStore
+from tradingx.supervisor import build_default_operator_supervisor
 from tradingx.types import BotRuntimeState
 from tradingx.validation import (
     load_benchmark_close_series,
@@ -267,6 +268,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default="artifacts/ops",
     )
+
+    supervisor_parser = subparsers.add_parser("run-operator-supervisor")
+    supervisor_parser.add_argument("--env-file", default=".env")
+    supervisor_parser.add_argument("--symbols", default=None)
+    supervisor_parser.add_argument("--quantity", default="1")
+    supervisor_parser.add_argument("--interval-seconds", type=int, default=None)
+    supervisor_parser.add_argument("--poll-interval-seconds", type=int, default=None)
+    supervisor_parser.add_argument("--telegram-poll-seconds", type=int, default=None)
+    supervisor_parser.add_argument("--max-loops", type=int, default=None)
 
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--env-file", default=".env")
@@ -728,6 +738,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             account_state_provider=_paper_account_state_provider,
         )
         print(json.dumps(_serialize(payload), sort_keys=True))
+        return 0
+
+    if args.command == "run-operator-supervisor":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        symbols = (
+            tuple(
+                item.strip().upper() for item in args.symbols.split(",") if item.strip()
+            )
+            if args.symbols
+            else config.runtime.symbol_universe
+        )
+        supervisor = build_default_operator_supervisor(
+            config,
+            env_file=Path(args.env_file),
+            symbols=symbols,
+            quantity=Decimal(args.quantity),
+            interval_seconds=(
+                args.interval_seconds or config.runtime.service_interval_seconds
+            ),
+            poll_interval_seconds=(
+                args.poll_interval_seconds or config.runtime.scheduler_poll_seconds
+            ),
+        )
+        try:
+            with runtime_process_lock(_runtime_lock_path(config)):
+                state = supervisor.run(
+                    poll_interval_seconds=(
+                        args.poll_interval_seconds
+                        or config.runtime.scheduler_poll_seconds
+                    ),
+                    telegram_poll_seconds=args.telegram_poll_seconds or 5,
+                    max_loops=args.max_loops,
+                )
+        except RuntimeLockError as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "error": str(error),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        print(json.dumps(_serialize(state), sort_keys=True))
         return 0
 
     if args.command == "web":

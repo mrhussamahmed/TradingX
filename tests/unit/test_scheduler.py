@@ -26,12 +26,14 @@ class FakeAutomationRunner:
         quantity: Decimal,
         interval_seconds: int,
         max_heartbeats: int | None,
+        stop_event=None,
     ) -> MarketAutomationRunResult:
         self.called_with = {
             "symbols": symbols,
             "quantity": quantity,
             "interval_seconds": interval_seconds,
             "max_heartbeats": max_heartbeats,
+            "stop_event": stop_event,
         }
         return MarketAutomationRunResult(
             run_record=MarketAutomationRunRecord(
@@ -75,6 +77,7 @@ class FailingAutomationRunner:
         quantity: Decimal,
         interval_seconds: int,
         max_heartbeats: int | None,
+        stop_event=None,
     ) -> MarketAutomationRunResult:
         raise RuntimeError("scheduler-run failed")
 
@@ -155,6 +158,7 @@ def test_scheduler_launches_market_day_during_active_session(tmp_path) -> None:
         "quantity": Decimal("1"),
         "interval_seconds": 300,
         "max_heartbeats": None,
+        "stop_event": None,
     }
     assert [state.status for state in states] == ["running", "idle"]
 

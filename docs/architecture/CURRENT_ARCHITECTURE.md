@@ -1,13 +1,13 @@
 ---
 id: ARCHMAP-0001
 title: Current architecture map
-version: 1.3.0
+version: 1.4.0
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: ARCHMAP-0001@1.2.0
+supersedes: ARCHMAP-0001@1.3.0
 superseded_by: null
-author_session: SESS-2026-04-19-025
+author_session: SESS-2026-04-19-026
 ---
 
 # Current Architecture Map
@@ -42,11 +42,17 @@ For runtime and appliance work, read in this order:
 9. [SPEC-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/spec.md:1)
 10. [PLAN-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/plan.md:1)
 11. [TASKS-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/tasks.md:1)
-12. [DATAMODEL-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/data-model.md:1)
-13. [DATAMODEL-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/data-model.md:1)
-14. [CONTRACT-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/contracts/local_trading_appliance_api.md:1)
-15. [CONTRACT-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/contracts/week1_dry_run_controls.md:1)
-16. [RUNBOOK-0003](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1)
+12. [ADR-0018](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/adrs/ADR-0018-telegram-operator-supervisor-control-plane.md:1)
+13. [SPEC-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/010-operator-control-plane/spec.md:1)
+14. [PLAN-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/010-operator-control-plane/plan.md:1)
+15. [TASKS-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/010-operator-control-plane/tasks.md:1)
+16. [DATAMODEL-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/data-model.md:1)
+17. [DATAMODEL-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/data-model.md:1)
+18. [DATAMODEL-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/010-operator-control-plane/data-model.md:1)
+19. [CONTRACT-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/contracts/local_trading_appliance_api.md:1)
+20. [CONTRACT-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/contracts/week1_dry_run_controls.md:1)
+21. [CONTRACT-0011](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/010-operator-control-plane/contracts/operator_control_plane.md:1)
+22. [RUNBOOK-0003](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1)
 
 ## Canonical Runtime Model
 
@@ -66,6 +72,8 @@ these core runtime responsibilities:
 - `Week-1 Safety Control Plane` stamps immutable policy snapshots,
   decision snapshots, and append-only OMS journal events before the
   broker path or `dry_run` simulation.
+- `Operator Supervisor` owns the week-1 child lifecycle, persistent halt
+  and kill requests, and optional Telegram command polling.
 - `Website Control` is the preferred operator entry point and remains
   read-only unless write mode is explicitly enabled.
 
@@ -89,6 +97,12 @@ These files are the source of truth for appliance/runtime behavior:
   [src/tradingx/snapshots.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/snapshots.py:1)
 - Append-only OMS journal:
   [src/tradingx/journal.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/journal.py:1)
+- File-backed operator control state:
+  [src/tradingx/operator_control.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/operator_control.py:1)
+- Week-1 Telegram command plane:
+  [src/tradingx/telegram_operator.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/telegram_operator.py:1)
+- Operator supervisor and child lifecycle:
+  [src/tradingx/supervisor.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/supervisor.py:1)
 - Single-writer runtime lock:
   [src/tradingx/process_lock.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/process_lock.py:1)
 - Exchange-calendar-backed session authority:
@@ -145,6 +159,8 @@ session:
 - first-run selection or ranking/tie-break rules
 - learning proposal behavior or its safety boundaries
 - week-1 policy defaults, decision snapshot schema, or OMS journal rules
+- operator supervisor state, Telegram command semantics, or control-file
+  behavior
 - website runtime-host controls or API endpoints
 - the canonical authority order for runtime/appliance work
 

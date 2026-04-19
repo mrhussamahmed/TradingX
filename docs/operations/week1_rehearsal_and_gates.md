@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0005
 title: Week 1 rehearsal and gates
-version: 1.1.0
+version: 1.2.0
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: RUNBOOK-0005@1.0.0
+supersedes: RUNBOOK-0005@1.1.0
 superseded_by: null
-author_session: SESS-2026-04-19-025
+author_session: SESS-2026-04-19-026
 ---
 
 # TradingX Week 1 Rehearsal And Gates
@@ -114,6 +114,15 @@ The gate evaluator reads these files:
 - Monday, April 20, 2026 is dry-run only.
 - Tuesday, April 21, 2026 is only the earliest possible submit date,
   not a promise to submit.
+- If Telegram credentials are configured, the week-1 operator supervisor
+  now exposes:
+  - `/status`
+  - `/positions`
+  - `/today`
+  - `/halt`
+  - `/resume`
+  - `/flatten`
+  - `/kill`
 - CLI fallback operator controls for week 1:
   - status: `SIGUSR1` to write the current state snapshot
   - clean stop: `SIGTERM`
