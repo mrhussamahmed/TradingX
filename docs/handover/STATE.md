@@ -1,11 +1,11 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.6
+version: 1.0.7
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.5
+supersedes: STATE-0001@1.0.6
 superseded_by: null
 author_session: SESS-2026-04-19-028
 ---
@@ -51,11 +51,18 @@ author_session: SESS-2026-04-19-028
   bounded market-day runner.
 - `ADR-0016` selects a supervised local trading appliance runtime with
   governed activation records, deterministic first-run selection, and
-  proposal-only learning outputs.
+  approved weight snapshots loaded from committed config artifacts.
 - `ADR-0017` selects policy snapshots and an append-only SQLite journal
   as the week-1 dry-run safety control plane.
 - `ADR-0018` selects a local supervisor plus a single-chat Telegram
   command plane for week-1 operator control.
+- `ADR-0019` is now amended to v1.0.1 and clarifies the implemented
+  event-based daily-bar research engine: overnight return on existing
+  positions, rebalance at the next open, then intraday return on the
+  post-open portfolio.
+- `ADR-0020` is now a draft proposal for tighter Gate 1 statistical
+  criteria built around DSR, PBO, walk-forward, and the settled
+  30%-tolerance rule. It is not active yet.
 - `ARCHMAP-0001` is the canonical one-page runtime/appliance
   architecture pointer for future development and must be updated when
   canonical architecture files or precedence change.
@@ -119,8 +126,15 @@ author_session: SESS-2026-04-19-028
     stop-loss thresholds
   - an offline mandatory-candidate evaluation pipeline with persisted
     evidence packs
-  - Gate 1 and Gate 2 validation-report generation from benchmark close
-    series, including persisted validation reports and gate assessments
+  - a minimal event-driven daily-bar backtest engine plus
+    `scripts/run_backtest.py` smoke gate for engine-computed
+    benchmark-relative SPY buy-and-hold checks
+  - real signal primitives for trend, standalone `vol_target_spy`,
+    cross-sectional mean reversion, shared volatility features, and
+    generic sizing for non-pre-sized strategies
+  - Gate 1 and Gate 2 validation-report generation remains fail-closed
+    until the validation pipeline is rewired from synthetic close
+    series to real OHLCV-driven backtests
   - a `prepare-benchmark-closes` workflow that fetches Alpaca daily
     benchmark closes into metadata-rich artifacts and lets `gate-report`
     infer dividend-adjusted status safely
@@ -145,9 +159,8 @@ author_session: SESS-2026-04-19-028
     next-run status
   - a supervised local trading appliance runtime host with explicit
     startup states, governed strategy activation records, approved
-    model-weight snapshots, historical warmup artifacts, deterministic
-    opportunity selection records, and proposal-only post-trade
-    learning artifacts
+    model-weight snapshots, historical warmup artifacts, and
+    deterministic opportunity selection records
 - richer operator alerts, including optional Telegram and SMTP
   delivery and evidence-report summaries for paper-service runs
 - `tradingx web`, which serves a local-only React dashboard over FastAPI
@@ -169,7 +182,7 @@ author_session: SESS-2026-04-19-028
 - `tradingx web` now also exposes a `Runtime Host` panel in the
   command center for one-click local bot start/stop, warmup readiness,
   active strategy/model visibility, ranked opportunity inspection, and
-  bounded learning-proposal refresh.
+  approved-weight visibility.
 - `tradingx run-operator-supervisor` now owns the week-1 unattended
   parent process: it holds the runtime lock, supervises the long-running
   market-day child process, persists state under

@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.19
+version: 1.2.20
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: INDEX-0001@1.2.18
+supersedes: INDEX-0001@1.2.19
 superseded_by: null
 author_session: SESS-2026-04-19-028
 ---
@@ -73,8 +73,8 @@ field (session lifecycle). This index tracks `status` only.
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
-| STATE-0001  | Project state     | 1.0.6   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.19  | active | `docs/INDEX.md` (this file)   |
+| STATE-0001  | Project state     | 1.0.7   | active | `docs/handover/STATE.md`      |
+| INDEX-0001  | Artifact index    | 1.2.20  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -104,7 +104,8 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0016 | Use a supervised local trading appliance runtime with governed activation records | 1.0.0 | active | `docs/adrs/ADR-0016-local-trading-appliance-runtime-host.md` |
 | ADR-0017 | Use policy snapshots and an append-only SQLite journal for week-1 dry-run safety | 1.0.0 | active | `docs/adrs/ADR-0017-week1-dry-run-safety-control-plane.md` |
 | ADR-0018 | Use a local supervisor with a single-chat Telegram operator command plane | 1.0.0 | active | `docs/adrs/ADR-0018-telegram-operator-supervisor-control-plane.md` |
-| ADR-0019 | Use a minimal pandas plus empyrical-reloaded backtest engine for Gate 1 research | 1.0.0 | active | `docs/adrs/ADR-0019-minimal-pandas-backtest-engine.md` |
+| ADR-0019 | Use a minimal pandas plus empyrical-reloaded backtest engine for Gate 1 research | 1.0.1 | active | `docs/adrs/ADR-0019-minimal-pandas-backtest-engine.md` |
+| ADR-0020 | Tighten Gate 1 statistical criteria around deflated Sharpe and overfitting controls | 1.0.0 | draft | `docs/adrs/ADR-0020-gate1-statistical-criteria.md` |
 
 ### Design documents
 
@@ -259,7 +260,7 @@ rather than by per-session INDEX rows:
 
 | id pattern  | description            | count (current) | latest active          | path                            |
 | ----------- | ---------------------- | --------------- | ---------------------- | ------------------------------- |
-| SESS-*      | Session handovers      | 25              | SESS-2026-04-19-026    | `docs/handover/SESSIONS/`       |
+| SESS-*      | Session handovers      | 28              | SESS-2026-04-19-028    | `docs/handover/SESSIONS/`       |
 
 ### Recovery records (RECOVERY-NNNN)
 

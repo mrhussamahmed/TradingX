@@ -1,11 +1,11 @@
 ---
 id: ADR-0019
 title: Use a minimal pandas plus empyrical-reloaded backtest engine for Gate 1 research
-version: 1.0.0
+version: 1.0.1
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: ADR-0009
+supersedes: ADR-0019@1.0.0
 superseded_by: null
 author_session: SESS-2026-04-19-028
 ---
@@ -54,12 +54,18 @@ The engine will:
 - operate on daily OHLCV bars with explicit timestamps
 - consume signal series that only use information available through
   `t-1`
+- model entries, held days, and exits as explicit daily-bar events:
+  overnight close-to-open return on existing positions, rebalance at
+  the next regular open, then intraday open-to-close return on the
+  post-open portfolio
 - apply portfolio construction, sizing, and cost models explicitly
 - emit dated return series and trade ledgers that downstream statistics
   and evidence-pack builders can inspect directly
-- support a benchmark-relative smoke gate where `SPY` buy-and-hold
-  against `SPY` produces near-zero active return and the benchmark's
-  actual drawdown over the same window
+- support an engine-computed benchmark-relative smoke gate where
+  `SPY` buy-and-hold against an identical engine-computed `SPY`
+  benchmark path produces near-zero active CAGR and active Sharpe while
+  preserving the benchmark path's absolute max drawdown over the same
+  window
 
 The engine is intentionally narrow. It is a research and validation
 engine, not a live trading runtime.
@@ -72,6 +78,9 @@ engine, not a live trading runtime.
   outputs quickly.
 - Risk, cost, and statistical calculations can share one dated return
   surface instead of reconstructing state from detached tuples.
+- Overnight gaps and next-open execution semantics become visible in the
+  same return ledger instead of being hidden inside close-to-close
+  assumptions.
 - The implementation surface stays small enough to audit under the
   constitution's evidence-first standard.
 

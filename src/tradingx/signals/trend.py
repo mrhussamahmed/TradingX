@@ -12,6 +12,7 @@ import pandas as pd  # type: ignore[import-untyped]
 REQUIRED_OHLCV_COLUMNS = ("open", "high", "low", "close", "volume")
 LOOKBACK_DAYS = 252
 SMA_WINDOW = 200
+PRE_SIZED = False
 
 
 def generate_trend_signal(ohlcv: pd.DataFrame) -> pd.Series:
@@ -37,6 +38,7 @@ def _validate_ohlcv(ohlcv: pd.DataFrame) -> None:
 
 __all__ = (
     "LOOKBACK_DAYS",
+    "PRE_SIZED",
     "REQUIRED_OHLCV_COLUMNS",
     "SMA_WINDOW",
     "generate_trend_signal",

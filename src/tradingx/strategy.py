@@ -32,6 +32,9 @@ def build_mandatory_candidate_registry(
     benchmark_symbol: str = "SPY",
 ) -> tuple[StrategyCandidate, ...]:
     normalized_universe = tuple(universe)
+    mean_reversion_universe = tuple(
+        symbol for symbol in normalized_universe if symbol != benchmark_symbol
+    )
     return (
         StrategyCandidate(
             candidate_id="trend-following-v1",
@@ -53,8 +56,9 @@ def build_mandatory_candidate_registry(
             universe=normalized_universe,
             parameter_set={
                 "target_volatility": Decimal("0.12"),
-                "realized_vol_window_days": 20,
+                "realized_vol_window_days": 60,
                 "max_gross_leverage": Decimal("1.0"),
+                "signal": "vol_target_spy",
             },
             status="under_evaluation",
         ),
@@ -62,7 +66,7 @@ def build_mandatory_candidate_registry(
             candidate_id="mean-reversion-v1",
             family="mean_reversion",
             benchmark_symbol=benchmark_symbol,
-            universe=normalized_universe,
+            universe=mean_reversion_universe,
             parameter_set={
                 "beta_window_days": 60,
                 "residual_sum_days": 5,

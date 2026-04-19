@@ -151,6 +151,7 @@ def test_baseline_strategy_exits_on_stop_loss_threshold() -> None:
 
 def test_mandatory_candidate_registry_contains_required_families() -> None:
     candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+    candidates_by_family = {candidate.family: candidate for candidate in candidates}
 
     assert [candidate.family for candidate in candidates] == [
         "trend_following",
@@ -158,7 +159,9 @@ def test_mandatory_candidate_registry_contains_required_families() -> None:
         "mean_reversion",
     ]
     assert all(candidate.benchmark_symbol == "SPY" for candidate in candidates)
-    assert all(candidate.universe == ("SPY", "QQQ") for candidate in candidates)
+    assert candidates_by_family["trend_following"].universe == ("SPY", "QQQ")
+    assert candidates_by_family["vol_target"].universe == ("SPY", "QQQ")
+    assert candidates_by_family["mean_reversion"].universe == ("QQQ",)
 
 
 def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
@@ -175,8 +178,9 @@ def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
     }
     assert candidates["vol_target"].parameter_set == {
         "target_volatility": Decimal("0.12"),
-        "realized_vol_window_days": 20,
+        "realized_vol_window_days": 60,
         "max_gross_leverage": Decimal("1.0"),
+        "signal": "vol_target_spy",
     }
     assert candidates["mean_reversion"].parameter_set == {
         "beta_window_days": 60,
