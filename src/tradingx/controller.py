@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -25,10 +27,21 @@ from tradingx.data import (
 )
 from tradingx.evaluation import evaluate_candidate
 from tradingx.execution import AlpacaPaperExecutionGateway
+from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.policy import (
+    PolicySnapshot,
+    PolicySnapshotStore,
+    build_week1_policy_snapshot,
+)
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
+from tradingx.snapshots import (
+    CandidateIntentSnapshot,
+    ContentAddressedSnapshotStore,
+    DecisionSnapshotV1,
+)
 from tradingx.strategy import (
     DeterministicBaselineStrategy,
     build_candidate_return_series,
@@ -231,6 +244,12 @@ class PaperTradingLoopController:
         regular_hours_checker: Any,
         now_provider: Any | None = None,
         command_timeout_seconds: float = 30,
+        policy_snapshot: PolicySnapshot | None = None,
+        policy_store: PolicySnapshotStore | None = None,
+        snapshot_store: ContentAddressedSnapshotStore | None = None,
+        journal: SqliteOmsJournal | None = None,
+        git_sha: str = "unknown",
+        dry_run: bool = False,
     ) -> None:
         self._market_data = market_data
         self._execution = execution
@@ -243,6 +262,16 @@ class PaperTradingLoopController:
         self._regular_hours_checker = regular_hours_checker
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._command_timeout_seconds = command_timeout_seconds
+        self._policy_snapshot = policy_snapshot
+        self._policy_store = policy_store
+        self._snapshot_store = snapshot_store
+        self._journal = journal
+        self._git_sha = git_sha
+        self._dry_run = dry_run
+        self._session_start_equity: Decimal | None = None
+        self._policy_path: Path | None = None
+        if self._policy_store is not None and self._policy_snapshot is not None:
+            self._policy_path = self._policy_store.write(self._policy_snapshot)
 
     def run_trading_cycle(
         self,
@@ -250,6 +279,8 @@ class PaperTradingLoopController:
         quantity: Decimal,
     ) -> TradingLoopResult:
         portfolio_state = self._portfolio.get_portfolio_state()
+        if self._session_start_equity is None:
+            self._session_start_equity = portfolio_state.equity
         market_snapshot = self._market_data.get_market_snapshot(symbol)
         trade_intent = self._strategy.generate_trade_intent(
             market_snapshot=market_snapshot,
@@ -264,6 +295,20 @@ class PaperTradingLoopController:
         )
 
         if trade_intent.side not in {"buy", "sell", "reduce"}:
+            decision_path = self._write_decision_snapshot(
+                trade_intent=trade_intent,
+                session_start_equity=portfolio_state.equity,
+                risk_verdict_id="not_applicable",
+                final_action="no_action",
+            )
+            self._append_journal_event(
+                event_type="intent",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id="",
+                broker_order_id="",
+                payload={"terminal_reason": trade_intent.reason_code},
+            )
             reconciliation = self._build_reconciliation(
                 trade_intent=trade_intent,
                 portfolio_state=portfolio_state,
@@ -280,13 +325,36 @@ class PaperTradingLoopController:
                 order_record=None,
                 risk_event=None,
                 reconciliation=reconciliation,
-                artifact_paths=(trade_path, reconciliation_path),
+                artifact_paths=tuple(
+                    path
+                    for path in (
+                        trade_path,
+                        self._policy_path,
+                        decision_path,
+                        reconciliation_path,
+                    )
+                    if path is not None
+                ),
             )
 
         if not self._regular_hours_checker(self._now_provider()):
             risk_event = self._build_manual_risk_event(
                 trade_intent,
                 control_code="outside_regular_hours",
+            )
+            decision_path = self._write_decision_snapshot(
+                trade_intent=trade_intent,
+                session_start_equity=portfolio_state.equity,
+                risk_verdict_id=risk_event.event_id,
+                final_action="blocked",
+            )
+            self._append_journal_event(
+                event_type="intent",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id="",
+                broker_order_id="",
+                payload={"terminal_reason": risk_event.control_type},
             )
             risk_path = self._artifacts.write_risk_control_event(risk_event)
             self._metrics.record_evidence_artifact("risk_event")
@@ -315,7 +383,14 @@ class PaperTradingLoopController:
                 reconciliation=reconciliation,
                 artifact_paths=tuple(
                     path
-                    for path in (trade_path, risk_path, reconciliation_path, alert_path)
+                    for path in (
+                        trade_path,
+                        self._policy_path,
+                        decision_path,
+                        risk_path,
+                        reconciliation_path,
+                        alert_path,
+                    )
                     if path is not None
                 ),
             )
@@ -325,6 +400,36 @@ class PaperTradingLoopController:
             market_snapshot,
             portfolio_state,
             broker_state_timestamp=portfolio_state.as_of_utc,
+        )
+        decision_path = self._write_decision_snapshot(
+            trade_intent=trade_intent,
+            session_start_equity=portfolio_state.equity,
+            risk_verdict_id=(
+                risk_decision.event.event_id
+                if risk_decision.event is not None
+                else "risk-approved"
+            ),
+            final_action=(
+                "blocked"
+                if risk_decision.event is not None
+                else ("dry_run" if self._dry_run else trade_intent.side)
+            ),
+        )
+        client_order_id = ""
+        if trade_intent.side in {"buy", "sell", "reduce"}:
+            client_order_id = build_client_order_id(
+                decision_snapshot_id=decision_path.stem,
+                symbol=trade_intent.symbol,
+                side=trade_intent.side,
+                intent_seq=0,
+            )
+        self._append_journal_event(
+            event_type="intent",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            client_order_id=client_order_id,
+            broker_order_id="",
+            payload={"terminal_reason": trade_intent.reason_code},
         )
         if risk_decision.event is not None:
             risk_path = self._artifacts.write_risk_control_event(risk_decision.event)
@@ -355,7 +460,55 @@ class PaperTradingLoopController:
                 reconciliation=reconciliation,
                 artifact_paths=tuple(
                     path
-                    for path in (trade_path, risk_path, reconciliation_path, alert_path)
+                    for path in (
+                        trade_path,
+                        self._policy_path,
+                        decision_path,
+                        risk_path,
+                        reconciliation_path,
+                        alert_path,
+                    )
+                    if path is not None
+                ),
+            )
+
+        if self._dry_run:
+            self._append_journal_event(
+                event_type="simulated",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id=client_order_id,
+                broker_order_id="",
+                payload={
+                    "side": trade_intent.side,
+                    "quantity": str(trade_intent.quantity or quantity),
+                    "reason_code": trade_intent.reason_code,
+                },
+            )
+            reconciliation = self._build_reconciliation(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                differences=(),
+            )
+            reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+                reconciliation
+            )
+            self._metrics.record_evidence_artifact("reconciliation")
+            self._metrics.record_trade_terminal_state("dry_run")
+            return TradingLoopResult(
+                terminal_state="dry_run",
+                trade_intent=trade_intent,
+                order_record=None,
+                risk_event=None,
+                reconciliation=reconciliation,
+                artifact_paths=tuple(
+                    path
+                    for path in (
+                        trade_path,
+                        self._policy_path,
+                        decision_path,
+                        reconciliation_path,
+                    )
                     if path is not None
                 ),
             )
@@ -364,11 +517,27 @@ class PaperTradingLoopController:
         recovered = existing_order is not None
         execution_quantity = trade_intent.quantity or quantity
         if existing_order is None:
+            self._append_journal_event(
+                event_type="submit_attempt",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id=client_order_id,
+                broker_order_id="",
+                payload={"reason_code": trade_intent.reason_code},
+            )
             existing_order = self._execution.submit_market_order(
                 trade_intent.symbol,
                 execution_quantity,
                 OrderSide.BUY if trade_intent.side == "buy" else OrderSide.SELL,
-                client_order_id=trade_intent.intent_id,
+                client_order_id=client_order_id,
+            )
+            self._append_journal_event(
+                event_type="ack",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id=existing_order.client_order_id,
+                broker_order_id=existing_order.order_id,
+                payload={"status": existing_order.status},
             )
             order_path = self._artifacts.write_order_record(
                 trade_intent.intent_id,
@@ -385,6 +554,18 @@ class PaperTradingLoopController:
         )
         order_record = self._merge_order_records(existing_order, order_record)
         self._artifacts.write_order_record(trade_intent.intent_id, order_record)
+        self._append_journal_event(
+            event_type="fill",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            client_order_id=order_record.client_order_id,
+            broker_order_id=order_record.order_id,
+            payload={
+                "status": order_record.status,
+                "filled_qty": str(order_record.filled_qty),
+                "filled_avg_price": str(order_record.filled_avg_price),
+            },
+        )
         execution_record = self._build_execution_lifecycle_record(
             trade_intent=trade_intent,
             market_snapshot=market_snapshot,
@@ -422,6 +603,8 @@ class PaperTradingLoopController:
                 path
                 for path in (
                     trade_path,
+                    self._policy_path,
+                    decision_path,
                     order_path,
                     execution_path,
                     reconciliation_path,
@@ -494,6 +677,75 @@ class PaperTradingLoopController:
             reconciliation=reconciliation,
             artifact_paths=tuple(artifact_paths + [reconciliation_path]),
             recovered=True,
+        )
+
+    def _write_decision_snapshot(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        session_start_equity: Decimal,
+        risk_verdict_id: str,
+        final_action: str,
+    ) -> Path:
+        if self._snapshot_store is None or self._policy_snapshot is None:
+            return self._artifacts.write_trade_intent(trade_intent)
+        snapshot = DecisionSnapshotV1(
+            schema_version=1,
+            timestamp_utc=self._now_provider(),
+            cycle_correlation_id=f"cycle-{trade_intent.intent_id}",
+            session_snapshot_id=self._policy_snapshot.policy_snapshot_id,
+            universe_snapshot_id="week1-spy",
+            policy_snapshot_id=self._policy_snapshot.policy_snapshot_id,
+            model_snapshot_id="baseline-deterministic",
+            strategy_version=self._strategy.candidate_id,
+            strategy_config_hash=_strategy_config_hash(self._strategy),
+            git_sha=self._git_sha,
+            dry_run=self._dry_run,
+            market_data_window_hash=f"market-{trade_intent.symbol.lower()}",
+            feature_snapshot_id=f"feature-{trade_intent.symbol.lower()}",
+            session_start_equity=session_start_equity,
+            candidate_intents=(
+                CandidateIntentSnapshot(
+                    symbol=trade_intent.symbol,
+                    selected=trade_intent.side in {"buy", "sell", "reduce"},
+                    terminal_reason=trade_intent.reason_code,
+                    base_score=Decimal("0"),
+                    final_score=Decimal("0"),
+                    eligibility="eligible",
+                    risk_status=(
+                        "pending"
+                        if risk_verdict_id == "risk-approved"
+                        else "blocked"
+                    ),
+                ),
+            ),
+            final_action=final_action,
+            risk_verdict_id=risk_verdict_id,
+        )
+        return self._snapshot_store.write_decision_snapshot(snapshot)
+
+    def _append_journal_event(
+        self,
+        *,
+        event_type: str,
+        decision_path: Path,
+        trade_intent: TradeIntent,
+        client_order_id: str,
+        broker_order_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if self._journal is None:
+            return
+        self._journal.append_event(
+            event_type=event_type,
+            recorded_at_utc=self._now_provider(),
+            decision_snapshot_id=decision_path.stem,
+            cycle_correlation_id=f"cycle-{trade_intent.intent_id}",
+            client_order_id=client_order_id,
+            broker_order_id=broker_order_id,
+            symbol=trade_intent.symbol,
+            side=trade_intent.side,
+            payload=payload,
         )
 
     def _build_manual_risk_event(
@@ -806,6 +1058,12 @@ def build_default_paper_trading_controller(
         config.paper_credentials.api_secret,
         paper=True,
     )
+    policy_snapshot = build_week1_policy_snapshot(
+        generated_at_utc=datetime.now(UTC),
+        artifact_root=config.runtime.artifact_root,
+        git_sha=_resolve_git_sha(),
+        dry_run=config.runtime.dry_run,
+    )
     return PaperTradingLoopController(
         market_data=AlpacaMarketDataGateway.from_credentials(
             api_key=config.paper_credentials.api_key,
@@ -820,6 +1078,14 @@ def build_default_paper_trading_controller(
         alert_dispatcher=build_alert_dispatcher(config),
         regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
         command_timeout_seconds=config.runtime.command_timeout_seconds,
+        policy_snapshot=policy_snapshot,
+        policy_store=PolicySnapshotStore(config.runtime.data_root / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(
+            config.runtime.data_root / "snapshots"
+        ),
+        journal=SqliteOmsJournal(config.runtime.data_root / "journal.db"),
+        git_sha=_resolve_git_sha(),
+        dry_run=config.runtime.dry_run,
     )
 
 
@@ -839,3 +1105,29 @@ def main() -> None:
         "TradingX Phase 0 scaffold is installed. "
         "Run `./scripts/validate` or the smoke test to exercise the paper round trip."
     )
+
+
+def _resolve_git_sha() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "unknown"
+    return completed.stdout.strip() or "unknown"
+
+
+def _strategy_config_hash(strategy: DeterministicBaselineStrategy) -> str:
+    payload = json.dumps(
+        {
+            "candidate_id": strategy.candidate_id,
+            "max_spread_bps": str(strategy.max_spread_bps),
+            "take_profit_bps": str(strategy.take_profit_bps),
+            "stop_loss_bps": str(strategy.stop_loss_bps),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

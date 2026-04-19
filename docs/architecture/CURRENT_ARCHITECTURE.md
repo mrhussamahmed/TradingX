@@ -1,13 +1,13 @@
 ---
 id: ARCHMAP-0001
 title: Current architecture map
-version: 1.0.0
+version: 1.1.0
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: null
+supersedes: ARCHMAP-0001@1.0.0
 superseded_by: null
-author_session: SESS-2026-04-19-023
+author_session: SESS-2026-04-19-024
 ---
 
 # Current Architecture Map
@@ -38,9 +38,15 @@ For runtime and appliance work, read in this order:
 5. [SPEC-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/spec.md:1)
 6. [PLAN-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/plan.md:1)
 7. [TASKS-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/tasks.md:1)
-8. [DATAMODEL-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/data-model.md:1)
-9. [CONTRACT-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/contracts/local_trading_appliance_api.md:1)
-10. [RUNBOOK-0003](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1)
+8. [ADR-0017](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/adrs/ADR-0017-week1-dry-run-safety-control-plane.md:1)
+9. [SPEC-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/spec.md:1)
+10. [PLAN-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/plan.md:1)
+11. [TASKS-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/tasks.md:1)
+12. [DATAMODEL-0008](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/data-model.md:1)
+13. [DATAMODEL-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/data-model.md:1)
+14. [CONTRACT-0009](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/008-local-trading-appliance/contracts/local_trading_appliance_api.md:1)
+15. [CONTRACT-0010](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/specs/009-week1-dry-run-controls/contracts/week1_dry_run_controls.md:1)
+16. [RUNBOOK-0003](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1)
 
 ## Canonical Runtime Model
 
@@ -57,6 +63,9 @@ these core runtime responsibilities:
   and may legally return `no_trade`.
 - `Learning` is proposal-only. It can emit candidate model-weight
   proposals but cannot mutate the active runtime automatically.
+- `Week-1 Safety Control Plane` stamps immutable policy snapshots,
+  decision snapshots, and append-only OMS journal events before the
+  broker path or `dry_run` simulation.
 - `Website Control` is the preferred operator entry point and remains
   read-only unless write mode is explicitly enabled.
 
@@ -74,6 +83,12 @@ These files are the source of truth for appliance/runtime behavior:
   [src/tradingx/opportunity.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/opportunity.py:1)
 - Learning proposals:
   [src/tradingx/learning.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/learning.py:1)
+- Week-1 policy and close-ladder defaults:
+  [src/tradingx/policy.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/policy.py:1)
+- Decision snapshot v1 persistence:
+  [src/tradingx/snapshots.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/snapshots.py:1)
+- Append-only OMS journal:
+  [src/tradingx/journal.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/journal.py:1)
 - Shared appliance math:
   [src/tradingx/quant.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/quant.py:1)
 - Runtime-aware service orchestration:
@@ -118,6 +133,7 @@ session:
 - activation-record or model-snapshot behavior
 - first-run selection or ranking/tie-break rules
 - learning proposal behavior or its safety boundaries
+- week-1 policy defaults, decision snapshot schema, or OMS journal rules
 - website runtime-host controls or API endpoints
 - the canonical authority order for runtime/appliance work
 

@@ -91,6 +91,7 @@ class AlertingConfig:
 @dataclass(frozen=True)
 class RuntimeConfig:
     artifact_root: Path = Path("artifacts")
+    data_root: Path = Path("data")
     metrics_namespace: str = "tradingx"
     enforce_regular_hours: bool = True
     command_timeout_seconds: int = 30
@@ -98,6 +99,7 @@ class RuntimeConfig:
     service_interval_seconds: int = 300
     scheduler_poll_seconds: int = 60
     symbol_universe: tuple[str, ...] = ("SPY",)
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,9 @@ class TradingConfig:
                     _normalize_value(values.get("TRADINGX_ARTIFACT_ROOT"))
                     or "artifacts"
                 ),
+                data_root=Path(
+                    _normalize_value(values.get("TRADINGX_DATA_ROOT")) or "data"
+                ),
                 metrics_namespace=(
                     _normalize_value(values.get("TRADINGX_METRICS_NAMESPACE"))
                     or "tradingx"
@@ -179,6 +184,10 @@ class TradingConfig:
                 ),
                 symbol_universe=(
                     _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
+                ),
+                dry_run=_normalize_bool(
+                    values.get("TRADINGX_DRY_RUN"),
+                    default=False,
                 ),
             ),
             web=WebAppConfig(
@@ -211,6 +220,7 @@ class TradingConfig:
         return {
             "has_real_paper_credentials": self.has_real_paper_credentials(),
             "artifact_root": str(self.runtime.artifact_root),
+            "data_root": str(self.runtime.data_root),
             "metrics_namespace": self.runtime.metrics_namespace,
             "enforce_regular_hours": self.runtime.enforce_regular_hours,
             "command_timeout_seconds": self.runtime.command_timeout_seconds,
@@ -218,6 +228,7 @@ class TradingConfig:
             "service_interval_seconds": self.runtime.service_interval_seconds,
             "scheduler_poll_seconds": self.runtime.scheduler_poll_seconds,
             "symbol_universe": list(self.runtime.symbol_universe),
+            "dry_run": self.runtime.dry_run,
             "web_host": self.web.host,
             "web_port": self.web.port,
             "web_write_mode_enabled": self.web.write_mode_enabled,

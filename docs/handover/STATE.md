@@ -1,20 +1,20 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.0
+version: 1.0.1
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: null
+supersedes: STATE-0001@1.0.0
 superseded_by: null
-author_session: SESS-2026-04-19-023
+author_session: SESS-2026-04-19-024
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-023
-- Active branch: main
-- Active phase: 12
+- Active session: SESS-2026-04-19-024
+- Active branch: codex/week1-safety-pack
+- Active phase: 13
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -50,6 +50,8 @@ author_session: SESS-2026-04-19-023
 - `ADR-0016` selects a supervised local trading appliance runtime with
   governed activation records, deterministic first-run selection, and
   proposal-only learning outputs.
+- `ADR-0017` selects policy snapshots and an append-only SQLite journal
+  as the week-1 dry-run safety control plane.
 - `ARCHMAP-0001` is the canonical one-page runtime/appliance
   architecture pointer for future development and must be updated when
   canonical architecture files or precedence change.
@@ -85,6 +87,10 @@ author_session: SESS-2026-04-19-023
   `RESEARCH-0008`, `DATAMODEL-0008`, `QUICKSTART-0009`, and
   `CONTRACT-0009` are active and the local trading appliance
   implementation is now merged into `main`.
+- `DESIGN-0007`, `SPEC-0009`, `PLAN-0009`, `TASKS-0009`,
+  `RESEARCH-0009`, `DATAMODEL-0009`, `QUICKSTART-0010`, and
+  `CONTRACT-0010` are active on `codex/week1-safety-pack` and define
+  the week-1 dry-run safety pack now in implementation.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions

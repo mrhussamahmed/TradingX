@@ -35,9 +35,11 @@ def test_runtime_config_defaults_are_safe() -> None:
     config = TradingConfig.from_mapping({})
 
     assert config.runtime.artifact_root == Path("artifacts")
+    assert config.runtime.data_root == Path("data")
     assert config.runtime.metrics_namespace == "tradingx"
     assert config.runtime.enforce_regular_hours is True
     assert getattr(config.runtime, "scheduler_poll_seconds", None) == 60
+    assert config.runtime.dry_run is False
 
 
 def test_runtime_config_overrides_are_parsed_from_mapping() -> None:
@@ -50,16 +52,20 @@ def test_runtime_config_overrides_are_parsed_from_mapping() -> None:
             "TRADINGX_SERVICE_INTERVAL_SECONDS": "600",
             "TRADINGX_SCHEDULER_POLL_SECONDS": "120",
             "TRADINGX_SYMBOL_UNIVERSE": "SPY,QQQ,IWM",
+            "TRADINGX_DATA_ROOT": "custom-data",
+            "TRADINGX_DRY_RUN": "true",
         }
     )
 
     assert config.runtime.artifact_root == Path("custom-artifacts")
+    assert config.runtime.data_root == Path("custom-data")
     assert config.runtime.metrics_namespace == "paperbot"
     assert config.runtime.enforce_regular_hours is False
     assert config.runtime.command_timeout_seconds == 45
     assert config.runtime.service_interval_seconds == 600
     assert getattr(config.runtime, "scheduler_poll_seconds", None) == 120
     assert config.runtime.symbol_universe == ("SPY", "QQQ", "IWM")
+    assert config.runtime.dry_run is True
 
 
 def test_alert_transport_config_is_parsed_from_mapping() -> None:
