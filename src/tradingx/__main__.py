@@ -32,7 +32,10 @@ from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.process_lock import RuntimeLockError, runtime_process_lock
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
-from tradingx.runtime_portfolio import RuntimePortfolioPlanner
+from tradingx.runtime_portfolio import (
+    RuntimePortfolioPlanner,
+    UnsupportedRuntimePortfolioPlanError,
+)
 from tradingx.risk_free import (
     DEFAULT_RISK_FREE_CACHE_PATH,
     needs_risk_free_refresh,
@@ -418,10 +421,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         portfolio_state = AlpacaPortfolioGateway(
             trading_client=trading_client
         ).get_portfolio_state()
-        plan = planner.plan_for_service(
-            symbols=symbols,
-            portfolio_state=portfolio_state,
-        )
+        try:
+            plan = planner.plan_for_service(
+                symbols=symbols,
+                portfolio_state=portfolio_state,
+            )
+        except UnsupportedRuntimePortfolioPlanError as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "portfolio_planner_blocked",
+                        "strategy_id": activation.strategy_id,
+                        "message": str(error),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         if plan is None:
             print(
                 json.dumps(

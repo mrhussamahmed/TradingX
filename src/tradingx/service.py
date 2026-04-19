@@ -18,7 +18,7 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
-from tradingx.runtime_portfolio import RuntimePortfolioPlanner
+from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioPlanner
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
@@ -58,7 +58,7 @@ class PortfolioPlannerProtocol(Protocol):
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
-    ) -> object | None: ...
+    ) -> RuntimePortfolioPlan | None: ...
 
 
 class PaperTradingService:
@@ -187,14 +187,27 @@ class PaperTradingService:
                 )
             else:
                 cycle_status = "executed"
-                portfolio_plan = (
-                    self._portfolio_planner.plan_for_service(
-                        symbols=symbols,
-                        portfolio_state=initial_portfolio_state,
+                planner_failed = False
+                try:
+                    portfolio_plan = (
+                        self._portfolio_planner.plan_for_service(
+                            symbols=symbols,
+                            portfolio_state=initial_portfolio_state,
+                        )
+                        if self._portfolio_planner is not None
+                        else None
                     )
-                    if self._portfolio_planner is not None
-                    else None
-                )
+                except Exception as error:
+                    cycle_status = "recovery_required"
+                    planner_failed = True
+                    self._log_cycle_event(
+                        event_type="planner_failed",
+                        severity="warning",
+                        message="Runtime portfolio planner failed for this cycle.",
+                        cycle_correlation_id=service_cycle_id,
+                        fields={"error": str(error)},
+                    )
+                    portfolio_plan = None
                 if portfolio_plan is not None:
                     self._artifacts.write_runtime_portfolio_plan(portfolio_plan)
                     executor = getattr(self._loop_controller, "execute_trade_intent", None)
@@ -233,7 +246,7 @@ class PaperTradingService:
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
-                else:
+                elif not planner_failed:
                     open_symbols = {
                         position.symbol
                         for position in initial_portfolio_state.positions
@@ -413,8 +426,6 @@ class PaperTradingService:
             ):
                 return "broker_unavailable", portfolio_state
             return None, portfolio_state
-        if last_error is not None:
-            del last_error
         fallback = self._last_known_portfolio_state or self._empty_portfolio_state()
         if self._last_successful_broker_call_at is not None:
             age_seconds = int(

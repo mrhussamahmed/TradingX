@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -20,6 +19,7 @@ from tradingx.evaluation import (
     evaluate_candidate,
 )
 from tradingx.portfolio_construction import build_candidate_target_weight_history
+from tradingx.stats import lo_adjusted_sharpe_ratio
 from tradingx.types import (
     BenchmarkCloseSeries,
     ScalarValue,
@@ -64,13 +64,14 @@ def _total_return(returns: Sequence[float]) -> float:
 
 
 def _sharpe_ratio(returns: Sequence[float]) -> float:
-    if len(returns) < 2:
+    sharpe_ratio = lo_adjusted_sharpe_ratio(
+        returns=returns,
+        risk_free_daily_rates=(0.0,) * len(returns),
+        periods_per_year=TRADING_DAYS_PER_YEAR,
+    )
+    if sharpe_ratio is None:
         return 0.0
-    mean_return = sum(returns) / len(returns)
-    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
-    if variance <= 0:
-        return 0.0
-    return (mean_return / math.sqrt(variance)) * math.sqrt(float(TRADING_DAYS_PER_YEAR))
+    return sharpe_ratio
 
 
 def _max_drawdown(returns: Sequence[float]) -> float:
@@ -198,13 +199,13 @@ def _build_gate1_candidate_result(
             criterion_id="benchmark_edge",
             passed=benchmark_edge_passed,
             threshold=(
-                "CAGR > benchmark CAGR + 2% absolute OR Sharpe >= 1.0 "
-                "and >= 1.3x benchmark"
+                "CAGR > benchmark CAGR + 2% absolute OR Lo-adjusted Sharpe >= 1.0 "
+                "and >= 1.3x benchmark Lo-adjusted Sharpe"
             ),
             details=(
                 f"Candidate CAGR={candidate_metrics['cagr']:.3f}, benchmark CAGR="
-                f"{benchmark_metrics['cagr']:.3f}, candidate Sharpe="
-                f"{candidate_metrics['sharpe_ratio']:.3f}, benchmark Sharpe="
+                f"{benchmark_metrics['cagr']:.3f}, candidate Lo-adjusted Sharpe="
+                f"{candidate_metrics['sharpe_ratio']:.3f}, benchmark Lo-adjusted Sharpe="
                 f"{benchmark_metrics['sharpe_ratio']:.3f}."
             ),
         ),

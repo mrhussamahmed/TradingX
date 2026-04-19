@@ -304,6 +304,17 @@ class FakePortfolioPlanner:
         )
 
 
+class FakeFailingPortfolioPlanner:
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+    ) -> RuntimePortfolioPlan:
+        del symbols, portfolio_state
+        raise RuntimeError("unsupported runtime weights")
+
+
 def test_paper_trading_service_runs_multi_symbol_cycles_and_persists_summary(
     tmp_path,
 ) -> None:
@@ -526,6 +537,34 @@ def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> N
     assert loop_controller.calls == []
     assert result.cycles_completed == 1
     assert result.last_cycle.cycle_status == "kill_requested"
+
+
+def test_paper_trading_service_degrades_gracefully_when_planner_fails(
+    tmp_path,
+) -> None:
+    loop_controller = FakeLoopController()
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=FilesystemArtifactStore(tmp_path),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=FakeFailingPortfolioPlanner(),
+    )
+
+    result = service.run(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    assert loop_controller.calls == []
+    assert loop_controller.intent_calls == []
+    assert result.last_cycle.cycle_status == "recovery_required"
+    assert result.last_cycle.symbol_results == ()
 
 
 def test_paper_trading_service_executes_runtime_portfolio_plan_when_available(

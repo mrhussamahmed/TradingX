@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tradingx.runtime_portfolio import RuntimePortfolioPlanner
+import pytest
+
+from tradingx.runtime_portfolio import (
+    RuntimePortfolioPlanner,
+    UnsupportedRuntimePortfolioPlanError,
+)
 from tradingx.types import (
     ApprovedWeightSnapshot,
     MarketSnapshot,
@@ -141,7 +146,51 @@ def test_runtime_portfolio_planner_builds_reduce_then_buy_trade_intents(
         Decimal("20"),
         Decimal("20"),
     ]
+    assert [trade.delta_quantity for trade in plan.planned_trades] == [
+        Decimal("-20"),
+        Decimal("20"),
+    ]
     assert plan.target_weights == {
         "SPY": Decimal("0.10"),
         "QQQ": Decimal("0.20"),
     }
+
+
+def test_runtime_portfolio_planner_rejects_negative_target_weights(
+    monkeypatch,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    def fake_target_weights(*args, **kwargs):
+        del args, kwargs
+        return module.CandidateRuntimeWeights(
+            raw_weights={"QQQ": Decimal("-0.10")},
+            target_weights={"QQQ": Decimal("-0.10")},
+            crash_overlay_active=False,
+        )
+
+    monkeypatch.setattr(module, "build_candidate_runtime_weights", fake_target_weights)
+    monkeypatch.setattr(
+        module.RuntimePortfolioPlanner,
+        "_load_bars",
+        lambda self, *, symbols: {symbol: object() for symbol in symbols},
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(strategy_id="trend-following-v1"),
+        now_provider=lambda: datetime(2026, 4, 19, 13, 30, tzinfo=UTC),
+    )
+
+    with pytest.raises(UnsupportedRuntimePortfolioPlanError):
+        planner.plan_for_service(
+            symbols=("SPY", "QQQ"),
+            portfolio_state=PortfolioState(
+                as_of_utc=datetime(2026, 4, 19, 13, 29, tzinfo=UTC),
+                cash=Decimal("10000"),
+                equity=Decimal("10000"),
+                buying_power=Decimal("20000"),
+                positions=(),
+                open_orders=(),
+            ),
+        )

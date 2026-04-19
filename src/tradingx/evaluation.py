@@ -144,7 +144,13 @@ def _perturb_value(value: ScalarValue, factor: float) -> ScalarValue | None:
     if isinstance(value, Decimal):
         return Decimal(str(max(float(value) * factor, 0.0)))
     if isinstance(value, int):
-        return max(int(round(value * factor)), 1)
+        perturbed = int(round(value * factor))
+        if perturbed == value and factor != 1.0:
+            if factor < 1.0:
+                perturbed = max(value - 1, 0)
+            else:
+                perturbed = value + 1
+        return max(perturbed, 0)
     if isinstance(value, float):
         return max(value * factor, 0.0)
     return None
@@ -229,8 +235,10 @@ def _regime_behavior_check(
         3,
         labels=("low", "mid", "high"),
     )
-    trend_up = benchmark_closes.shift(1) > benchmark_closes.shift(
-        REGIME_TREND_WINDOW_DAYS
+    prior_close = benchmark_closes.shift(1)
+    prior_trend_close = benchmark_closes.shift(REGIME_TREND_WINDOW_DAYS)
+    trend_up = (prior_close > prior_trend_close).where(
+        prior_close.notna() & prior_trend_close.notna()
     )
     valid_index = vol_bucket.index.intersection(trend_up.dropna().index)
     if valid_index.empty:
@@ -262,6 +270,14 @@ def _regime_behavior_check(
     return "regime_behavior_pass"
 
 
+def _scaled_commission_per_share(base_commission: float, multiplier: float) -> float:
+    if multiplier <= 1.0:
+        return base_commission
+    if base_commission > 0.0:
+        return base_commission * multiplier
+    return 0.0001 * multiplier
+
+
 def _cost_sensitivity_check(
     candidate: StrategyCandidate,
     *,
@@ -278,9 +294,9 @@ def _cost_sensitivity_check(
                 impact_coefficient=(
                     base_cost_model_config.impact_coefficient * multiplier
                 ),
-                commission_per_share=max(
-                    base_cost_model_config.commission_per_share * multiplier,
-                    0.0001 if base_cost_model_config.commission_per_share > 0.0 else 0.0,
+                commission_per_share=_scaled_commission_per_share(
+                    base_cost_model_config.commission_per_share,
+                    multiplier,
                 ),
                 sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
                 finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
@@ -315,9 +331,9 @@ def _cost_sensitivity_check(
             CostModelConfig(
                 half_spread_multiplier=base_cost_model_config.half_spread_multiplier,
                 impact_coefficient=base_cost_model_config.impact_coefficient,
-                commission_per_share=max(
-                    base_cost_model_config.commission_per_share * multiplier,
-                    0.0001,
+                commission_per_share=_scaled_commission_per_share(
+                    base_cost_model_config.commission_per_share,
+                    multiplier,
                 ),
                 sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
                 finra_taf_per_share=base_cost_model_config.finra_taf_per_share,

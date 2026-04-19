@@ -7,12 +7,13 @@ from decimal import Decimal
 import pandas as pd
 
 from tradingx.costs import CostModelConfig
-from tradingx.evaluation import AdversarialCheckContext
+from tradingx.evaluation import AdversarialCheckContext, _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import StrategyCandidate
 from tradingx.validation import (
     _build_gate1_candidate_result,
     _candidate_returns,
+    _sharpe_ratio as validation_sharpe_ratio,
     build_gate_report,
 )
 
@@ -309,4 +310,18 @@ def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> N
         Decimal("100"),
         Decimal("101.5"),
         Decimal("102.25"),
+    )
+
+
+def test_validation_sharpe_ratio_matches_evaluation_sharpe_definition() -> None:
+    returns = (
+        [0.012] * 40
+        + [-0.004] * 10
+        + [0.010] * 40
+        + [-0.003] * 10
+    )
+
+    assert validation_sharpe_ratio(returns) == evaluation_sharpe_ratio(
+        returns=returns,
+        risk_free_daily_rates=[0.0] * len(returns),
     )

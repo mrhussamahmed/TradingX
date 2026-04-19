@@ -251,8 +251,21 @@ def _limit_positions(
 ) -> pd.Series:
     if len(weights[weights != 0.0]) <= config.max_positions:
         return weights
+    ranking = pd.DataFrame(
+        {
+            "abs_weight": weights.abs(),
+            "symbol": weights.index.astype(str),
+        },
+        index=weights.index,
+    )
     keep_symbols = set(
-        weights.abs().sort_values(ascending=False).head(config.max_positions).index
+        ranking.sort_values(
+            by=["abs_weight", "symbol"],
+            ascending=[False, True],
+            kind="stable",
+        )
+        .head(config.max_positions)
+        .index
     )
     limited = weights.copy()
     for symbol in limited.index:
@@ -451,6 +464,8 @@ def _wide_ohlcv_frame(
 
 
 def _to_decimal_weight(value: float) -> Decimal:
+    if value == 0.0:
+        return Decimal("0")
     return Decimal(f"{float(value):.12f}").normalize()
 
 

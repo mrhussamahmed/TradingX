@@ -780,6 +780,108 @@ def test_main_runtime_plan_command_writes_plan_artifact(
     assert Path(payload["artifact_path"]).exists()
 
 
+def test_main_runtime_plan_command_reports_blocked_research_strategy(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+
+    class FakePlanner:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def plan_for_service(self, *, symbols, portfolio_state):
+            del symbols, portfolio_state
+            from tradingx.runtime_portfolio import UnsupportedRuntimePortfolioPlanError
+
+            raise UnsupportedRuntimePortfolioPlanError(
+                "Runtime portfolio planner only supports non-negative target weights "
+                "for mean-reversion-v1."
+            )
+
+    class FakePortfolioGateway:
+        def __init__(self, trading_client) -> None:
+            del trading_client
+
+        def get_portfolio_state(self) -> PortfolioState:
+            return PortfolioState(
+                as_of_utc=datetime(2026, 4, 19, 13, 29, tzinfo=UTC),
+                cash=Decimal("9000"),
+                equity=Decimal("10000"),
+                buying_power=Decimal("20000"),
+                positions=(),
+                open_orders=(),
+            )
+
+    class FakeActivationGateway:
+        def __init__(self, *, store) -> None:
+            del store
+
+        def load_or_create_active_records(self, symbols):
+            del symbols
+            return (
+                StrategyActivationRecord(
+                    activation_id="activation-1",
+                    strategy_id="mean-reversion-v1",
+                    strategy_version="1.0.0",
+                    approved_symbols=("SPY", "QQQ"),
+                    deploy_threshold=Decimal("0.5"),
+                    allow_fallback_weights=True,
+                    status="approved",
+                    activated_at_utc=datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+                    notes="Mean reversion activation.",
+                ),
+                ApprovedWeightSnapshot(
+                    snapshot_id="snapshot-1",
+                    strategy_id="mean-reversion-v1",
+                    status="approved",
+                    generated_at_utc=datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+                    minimum_supporting_trades=5,
+                    weights={"signal": Decimal("1.0")},
+                ),
+            )
+
+    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "AlpacaPortfolioGateway",
+        FakePortfolioGateway,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "LocalActivationGateway",
+        FakeActivationGateway,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "RuntimePortfolioPlanner",
+        FakePlanner,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime-plan",
+            "--env-file",
+            str(env_file),
+            "--symbols",
+            "SPY,QQQ",
+            "--output-dir",
+            str(tmp_path / "runtime-plan"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "portfolio_planner_blocked"
+    assert payload["strategy_id"] == "mean-reversion-v1"
+
+
 def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     monkeypatch, tmp_path, capsys
 ) -> None:

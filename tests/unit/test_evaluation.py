@@ -13,6 +13,7 @@ from tradingx.evaluation import (
     _cost_sensitivity_check,
     _oos_check,
     _parameter_sensitivity_check,
+    _perturb_value,
     _regime_behavior_check,
     _sharpe_ratio,
     evaluate_candidate,
@@ -168,6 +169,27 @@ def test_regime_behavior_check_fails_when_a_populated_regime_has_negative_sharpe
     assert result == "regime_behavior_fail"
 
 
+def test_regime_behavior_check_ignores_rows_without_trend_context() -> None:
+    benchmark_bars = _benchmark_bars(periods=320)
+    candidate_returns = []
+    for index in range(320):
+        if 60 <= index < 140:
+            candidate_returns.append(
+                Decimal("-0.010") if index % 2 == 0 else Decimal("-0.006")
+            )
+        else:
+            candidate_returns.append(
+                Decimal("0.012") if index % 2 == 0 else Decimal("0.007")
+            )
+
+    result = _regime_behavior_check(
+        tuple(candidate_returns),
+        benchmark_bars=benchmark_bars,
+    )
+
+    assert result == "regime_behavior_pass"
+
+
 def test_cost_sensitivity_check_requires_profitability_under_all_stresses() -> None:
     candidate = build_mandatory_candidate_registry(("SPY",))[0]
     runner = FakeBacktestRunner(
@@ -200,6 +222,31 @@ def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
     assert result == "cost_sensitivity_pass"
     assert {call.half_spread_multiplier for call in runner.cost_calls} >= {1.0, 2.0, 4.0}
     assert {call.impact_coefficient for call in runner.cost_calls} >= {10.0, 20.0, 40.0}
+
+
+def test_cost_sensitivity_check_uses_distinct_commission_stresses_from_zero_base() -> (
+    None
+):
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    runner = FakeBacktestRunner(
+        base_returns=_stable_returns(),
+        cost_returns=_stable_returns(),
+    )
+
+    result = _cost_sensitivity_check(
+        candidate,
+        backtest_runner=runner,
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    assert result == "cost_sensitivity_pass"
+    commission_levels = {call.commission_per_share for call in runner.cost_calls}
+    assert commission_levels >= {0.0, 0.0002, 0.0004}
+
+
+def test_perturb_value_moves_integer_one_off_the_base_value() -> None:
+    assert _perturb_value(1, 0.6) != 1
+    assert _perturb_value(1, 1.4) != 1
 
 
 def test_sharpe_ratio_returns_none_for_constant_return_series(caplog) -> None:

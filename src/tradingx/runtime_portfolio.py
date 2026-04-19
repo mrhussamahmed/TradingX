@@ -22,6 +22,10 @@ from tradingx.types import (
 HISTORY_LOOKBACK_DAYS = 1200
 
 
+class UnsupportedRuntimePortfolioPlanError(ValueError):
+    """Raised when an activated research strategy cannot be executed safely."""
+
+
 class MarketDataGatewayProtocol(Protocol):
     def get_daily_bar_history(
         self,
@@ -123,8 +127,9 @@ class RuntimePortfolioPlanner:
             account_equity=portfolio_state.equity,
         )
         if any(weight < Decimal("0") for weight in runtime_weights.target_weights.values()):
-            raise ValueError(
-                "Runtime portfolio planner only supports non-negative target weights."
+            raise UnsupportedRuntimePortfolioPlanError(
+                "Runtime portfolio planner only supports non-negative target weights "
+                f"for {candidate.candidate_id}."
             )
         tracked_symbols = tuple(
             sorted(set(runtime_weights.target_weights) | set(current_weights))
@@ -245,7 +250,7 @@ class RuntimePortfolioPlanner:
             target_weight=target_weight,
             current_quantity=current_quantity,
             target_quantity=target_quantity,
-            delta_quantity=quantity,
+            delta_quantity=delta_quantity,
             no_trade_band_applied=target_weight != raw_target_weight,
         )
 
@@ -299,7 +304,9 @@ def _trade_intent_for_plan_item(
         candidate_id=candidate_id,
         symbol=trade.symbol,
         side=trade.side,
-        quantity=None if trade.side == "hold" else trade.delta_quantity,
+        quantity=(
+            None if trade.side == "hold" else abs(trade.delta_quantity)
+        ),
         reason_code=trade.reason_code,
         generated_at_utc=generated_at,
     )
@@ -317,4 +324,5 @@ __all__ = (
     "RuntimePortfolioPlan",
     "RuntimePortfolioPlanner",
     "RuntimePortfolioTrade",
+    "UnsupportedRuntimePortfolioPlanError",
 )
