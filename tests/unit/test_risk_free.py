@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import importlib
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+
+def test_risk_free_module_shell_is_importable() -> None:
+    module = importlib.import_module("tradingx.risk_free")
+
+    assert module.__doc__
+    assert hasattr(module, "__all__")
+
+
+def test_needs_risk_free_refresh_returns_true_when_cache_is_missing(
+    tmp_path: Path,
+) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+
+    assert (
+        module.needs_risk_free_refresh(
+            tmp_path / "risk_free_daily.csv",
+            now_utc=datetime(2026, 4, 19, 16, 40, tzinfo=UTC),
+        )
+        is True
+    )
+
+
+def test_needs_risk_free_refresh_returns_false_for_fresh_cache(tmp_path: Path) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "risk_free_daily.csv"
+    cache_path.write_text("date,annualized_rate,daily_rate\n", encoding="utf-8")
+
+    fresh_time = datetime(2026, 4, 16, 12, 0, tzinfo=UTC).timestamp()
+    cache_path.touch()
+    cache_path.chmod(0o644)
+    import os
+
+    os.utime(cache_path, (fresh_time, fresh_time))
+
+    assert (
+        module.needs_risk_free_refresh(
+            cache_path,
+            now_utc=datetime(2026, 4, 19, 16, 40, tzinfo=UTC),
+        )
+        is False
+    )
+
+
+def test_refresh_risk_free_cache_writes_normalized_csv(tmp_path: Path) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "risk_free_daily.csv"
+
+    def fake_fetcher(symbol: str, source: str, start: date, end: date) -> pd.DataFrame:
+        assert symbol == "DGS3MO"
+        assert source == "fred"
+        assert start == date(2026, 4, 1)
+        assert end == date(2026, 4, 3)
+        return pd.DataFrame(
+            {"DGS3MO": [4.50, 4.56, 4.62]},
+            index=pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"]),
+        )
+
+    written_path = module.refresh_risk_free_cache(
+        cache_path,
+        start_date=date(2026, 4, 1),
+        end_date=date(2026, 4, 3),
+        now_utc=datetime(2026, 4, 19, 16, 40, tzinfo=UTC),
+        fetcher=fake_fetcher,
+    )
+
+    assert written_path == cache_path
+    frame = pd.read_csv(cache_path)
+    assert list(frame.columns) == ["date", "annualized_rate", "daily_rate"]
+    assert frame["date"].tolist() == ["2026-04-01", "2026-04-02", "2026-04-03"]
+    assert frame["annualized_rate"].tolist() == pytest.approx([0.0450, 0.0456, 0.0462])
+    assert frame["daily_rate"].tolist() == pytest.approx(
+        [0.0450 / 252.0, 0.0456 / 252.0, 0.0462 / 252.0]
+    )
+
+
+def test_daily_risk_free_rate_uses_latest_available_observation(tmp_path: Path) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "risk_free_daily.csv"
+    pd.DataFrame(
+        {
+            "date": ["2026-04-01", "2026-04-03"],
+            "annualized_rate": [0.0450, 0.0462],
+            "daily_rate": [0.0450 / 252.0, 0.0462 / 252.0],
+        }
+    ).to_csv(cache_path, index=False)
+
+    rate = module.daily_risk_free_rate_for_date(cache_path, as_of_date=date(2026, 4, 5))
+
+    assert rate == pytest.approx(0.0462 / 252.0)
+
+
+def test_daily_risk_free_rate_raises_before_first_cached_observation(
+    tmp_path: Path,
+) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "risk_free_daily.csv"
+    pd.DataFrame(
+        {
+            "date": ["2026-04-03"],
+            "annualized_rate": [0.0462],
+            "daily_rate": [0.0462 / 252.0],
+        }
+    ).to_csv(cache_path, index=False)
+
+    with pytest.raises(ValueError, match="No cached risk-free rate is available"):
+        module.daily_risk_free_rate_for_date(cache_path, as_of_date=date(2026, 4, 1))

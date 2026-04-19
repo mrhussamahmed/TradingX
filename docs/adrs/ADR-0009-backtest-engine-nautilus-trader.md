@@ -2,19 +2,19 @@
 id: ADR-0009
 title: Use Nautilus Trader as the backtest engine
 version: 1.0.0
-status: active
+status: superseded
 created: 2026-04-17
-last_amended: 2026-04-17
+last_amended: 2026-04-19
 supersedes: null
-superseded_by: null
-author_session: SESS-2026-04-17-004
+superseded_by: ADR-0019
+author_session: SESS-2026-04-19-028
 ---
 
 # ADR-0009: Use Nautilus Trader as the backtest engine
 
 ## Status
 
-Accepted on 2026-04-17.
+Superseded on 2026-04-19 by `ADR-0019`.
 
 ## Context
 

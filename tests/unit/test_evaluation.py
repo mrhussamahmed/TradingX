@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tradingx.evaluation import NautilusReplayEvaluationAdapter, evaluate_candidate
+from tradingx.evaluation import (
+    NautilusReplayEvaluationAdapter,
+    _sharpe_ratio,
+    evaluate_candidate,
+)
 from tradingx.strategy import build_mandatory_candidate_registry
 
 
@@ -68,3 +73,14 @@ def test_nautilus_replay_adapter_turns_close_series_into_evidence() -> None:
     assert evidence.evidence_pack_id.startswith(candidate.candidate_id)
     assert evidence.window_start_utc == datetime(2026, 4, 1, tzinfo=UTC)
     assert evidence.window_end_utc == datetime(2026, 4, 17, tzinfo=UTC)
+
+
+def test_sharpe_ratio_returns_none_for_constant_return_series(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        sharpe_ratio = _sharpe_ratio(
+            returns=[0.01] * 40,
+            risk_free_daily_rates=[0.0] * 40,
+        )
+
+    assert sharpe_ratio is None
+    assert "variance is zero" in caplog.text

@@ -1019,6 +1019,103 @@ def test_prepare_benchmark_closes_parser_defaults() -> None:
     assert args.output_file is None
 
 
+def test_refresh_risk_free_cache_parser_defaults() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["refresh-risk-free-cache"])
+
+    assert args.output_file == "data/reference/risk_free_daily.csv"
+    assert args.start == "2000-01-01"
+    assert args.end is None
+    assert args.max_age_days == 7
+    assert args.force is False
+
+
+def test_main_refreshes_risk_free_cache_when_missing(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "needs_risk_free_refresh",
+        lambda path, *, now_utc, max_age: True,
+        raising=False,
+    )
+
+    def fake_refresh(
+        cache_path: Path,
+        *,
+        start_date,
+        end_date,
+        now_utc,
+        fetcher=None,
+    ) -> Path:
+        del fetcher
+        calls["cache_path"] = cache_path
+        calls["start_date"] = start_date
+        calls["end_date"] = end_date
+        calls["now_utc"] = now_utc
+        return cache_path
+
+    monkeypatch.setattr(cli, "refresh_risk_free_cache", fake_refresh, raising=False)
+
+    exit_code = cli.main(
+        [
+            "refresh-risk-free-cache",
+            "--output-file",
+            str(tmp_path / "risk_free_daily.csv"),
+            "--start",
+            "2026-01-01",
+            "--end",
+            "2026-04-19",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "refreshed"
+    assert payload["output_file"] == str(tmp_path / "risk_free_daily.csv")
+    assert str(calls["start_date"]) == "2026-01-01"
+    assert str(calls["end_date"]) == "2026-04-19"
+
+
+def test_main_skips_risk_free_refresh_when_cache_is_fresh(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    cache_path = tmp_path / "risk_free_daily.csv"
+    cache_path.write_text("date,annualized_rate,daily_rate\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "needs_risk_free_refresh",
+        lambda path, *, now_utc, max_age: False,
+        raising=False,
+    )
+
+    def unexpected_refresh(**kwargs):
+        raise AssertionError("refresh_risk_free_cache should not be called")
+
+    monkeypatch.setattr(
+        cli,
+        "refresh_risk_free_cache",
+        unexpected_refresh,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "refresh-risk-free-cache",
+            "--output-file",
+            str(cache_path),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fresh"
+    assert payload["output_file"] == str(cache_path)
+
+
 def test_main_runs_local_web_command(monkeypatch, tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

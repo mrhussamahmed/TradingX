@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import math
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
 from tradingx.data import close_to_close_returns
+from tradingx.stats import lo_adjusted_sharpe_ratio
 from tradingx.strategy import build_candidate_return_series
 from tradingx.types import EvaluationEvidencePack, ScalarValue, StrategyCandidate
 
+LOGGER = logging.getLogger(__name__)
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -25,14 +27,16 @@ def _total_return(returns: Sequence[float]) -> float:
     return equity - 1.0
 
 
-def _sharpe_ratio(returns: Sequence[float]) -> float:
-    if len(returns) < 2:
-        return 0.0
-    mean_return = sum(returns) / len(returns)
-    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
-    if variance <= 0:
-        return 0.0
-    return (mean_return / math.sqrt(variance)) * math.sqrt(TRADING_DAYS_PER_YEAR)
+def _sharpe_ratio(
+    *,
+    returns: Sequence[float],
+    risk_free_daily_rates: Sequence[float],
+) -> float | None:
+    return lo_adjusted_sharpe_ratio(
+        returns=returns,
+        risk_free_daily_rates=risk_free_daily_rates,
+        periods_per_year=TRADING_DAYS_PER_YEAR,
+    )
 
 
 def _max_drawdown(returns: Sequence[float]) -> float:
@@ -60,10 +64,13 @@ def _build_metric_pack(returns: Sequence[Decimal]) -> dict[str, float]:
     float_returns = _to_float_sequence(returns)
     total_return = _total_return(float_returns)
     max_drawdown = _max_drawdown(float_returns)
-    sharpe_ratio = _sharpe_ratio(float_returns)
+    sharpe_ratio = _sharpe_ratio(
+        returns=float_returns,
+        risk_free_daily_rates=(0.0,) * len(float_returns),
+    )
     return {
         "total_return": total_return,
-        "sharpe_ratio": sharpe_ratio,
+        "sharpe_ratio": 0.0 if sharpe_ratio is None else sharpe_ratio,
         "max_drawdown": max_drawdown,
         "calmar_ratio": _calmar_ratio(total_return, max_drawdown, len(float_returns)),
     }

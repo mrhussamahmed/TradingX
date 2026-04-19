@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.18
+version: 1.2.19
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: INDEX-0001@1.2.17
+supersedes: INDEX-0001@1.2.18
 superseded_by: null
-author_session: SESS-2026-04-19-027
+author_session: SESS-2026-04-19-028
 ---
 
 # Artifact index
@@ -20,9 +20,9 @@ MUST be corrected in the same session that detects the conflict.
 
 ## How to read this file
 
-Each row shows the current `active` version of an artifact.
-Superseded versions are not listed here; they live in their own
-files with `status: superseded` and a `superseded_by` pointer.
+Each row shows the current versioned artifact tracked in the
+repository, including any in-repo superseded artifacts that must
+remain indexed for validation and auditability.
 
 When an artifact is superseded, both the old and new files are
 committed in the same commit, and this index is updated in that
@@ -73,8 +73,8 @@ field (session lifecycle). This index tracks `status` only.
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
-| STATE-0001  | Project state     | 1.0.5   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.18  | active | `docs/INDEX.md` (this file)   |
+| STATE-0001  | Project state     | 1.0.6   | active | `docs/handover/STATE.md`      |
+| INDEX-0001  | Artifact index    | 1.2.19  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -94,7 +94,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0006 | Use SMTP email as the default emergency channel | 1.0.0 | active | `docs/adrs/ADR-0006-emergency-channel-smtp.md` |
 | ADR-0007 | Restrict Stage 1 and Stage 2 trading to regular market hours | 1.0.0 | active | `docs/adrs/ADR-0007-market-hours-regular-only.md` |
 | ADR-0008 | Require a real Alpaca paper round trip in Phase 0 | 1.0.0 | active | `docs/adrs/ADR-0008-walking-skeleton-deliverable.md` |
-| ADR-0009 | Use Nautilus Trader as the backtest engine | 1.0.0 | active | `docs/adrs/ADR-0009-backtest-engine-nautilus-trader.md` |
+| ADR-0009 | Use Nautilus Trader as the backtest engine | 1.0.0 | superseded | `docs/adrs/ADR-0009-backtest-engine-nautilus-trader.md` |
 | ADR-0010 | Use FastAPI with a minimal React SPA for the local control web app | 1.0.0 | active | `docs/adrs/ADR-0010-local-web-app-react-spa.md` |
 | ADR-0011 | Use a normalized operator event timeline with polling refresh for the operator platform | 1.0.0 | active | `docs/adrs/ADR-0011-operator-platform-event-timeline-polling.md` |
 | ADR-0012 | Use persisted trade lifecycle and drill artifacts as the Gate 3 evidence source | 1.0.0 | active | `docs/adrs/ADR-0012-gate3-evidence-lifecycle-artifacts.md` |
@@ -104,6 +104,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0016 | Use a supervised local trading appliance runtime with governed activation records | 1.0.0 | active | `docs/adrs/ADR-0016-local-trading-appliance-runtime-host.md` |
 | ADR-0017 | Use policy snapshots and an append-only SQLite journal for week-1 dry-run safety | 1.0.0 | active | `docs/adrs/ADR-0017-week1-dry-run-safety-control-plane.md` |
 | ADR-0018 | Use a local supervisor with a single-chat Telegram operator command plane | 1.0.0 | active | `docs/adrs/ADR-0018-telegram-operator-supervisor-control-plane.md` |
+| ADR-0019 | Use a minimal pandas plus empyrical-reloaded backtest engine for Gate 1 research | 1.0.0 | active | `docs/adrs/ADR-0019-minimal-pandas-backtest-engine.md` |
 
 ### Design documents
 

@@ -4,7 +4,7 @@ import argparse
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, is_dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,11 @@ from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.process_lock import RuntimeLockError, runtime_process_lock
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.risk_free import (
+    DEFAULT_RISK_FREE_CACHE_PATH,
+    needs_risk_free_refresh,
+    refresh_risk_free_cache,
+)
 from tradingx.scheduler import build_default_market_day_scheduler
 from tradingx.service import (
     build_default_paper_service,
@@ -70,6 +75,10 @@ def _serialize(value: Any) -> Any:
 
 def _runtime_lock_path(config: TradingConfig) -> Path:
     return config.runtime.data_root / "runtime.pid"
+
+
+def _parse_iso_date(value: str) -> date:
+    return datetime.fromisoformat(value).date()
 
 
 def _run_with_runtime_lock(
@@ -184,6 +193,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark_prep_parser.add_argument("--output-file", default=None)
 
+    risk_free_parser = subparsers.add_parser("refresh-risk-free-cache")
+    risk_free_parser.add_argument(
+        "--output-file",
+        default=str(DEFAULT_RISK_FREE_CACHE_PATH),
+    )
+    risk_free_parser.add_argument("--start", default="2000-01-01")
+    risk_free_parser.add_argument("--end", default=None)
+    risk_free_parser.add_argument("--max-age-days", type=int, default=7)
+    risk_free_parser.add_argument("--force", action="store_true")
+
     gate_parser = subparsers.add_parser("gate-report")
     gate_parser.add_argument("--env-file", default=".env")
     gate_parser.add_argument("--gate", choices=("1", "2"), required=True)
@@ -292,6 +311,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "config-summary":
         config = TradingConfig.from_env_file(Path(args.env_file))
         print(json.dumps(config.to_safe_summary(), sort_keys=True))
+        return 0
+
+    if args.command == "refresh-risk-free-cache":
+        now_utc = datetime.now(UTC)
+        output_file = Path(args.output_file)
+        start_date = _parse_iso_date(args.start)
+        end_date = _parse_iso_date(args.end) if args.end else now_utc.date()
+        max_age = timedelta(days=args.max_age_days)
+        should_refresh = args.force or needs_risk_free_refresh(
+            output_file,
+            now_utc=now_utc,
+            max_age=max_age,
+        )
+        if should_refresh:
+            refresh_risk_free_cache(
+                output_file,
+                start_date=start_date,
+                end_date=end_date,
+                now_utc=now_utc,
+            )
+            status = "refreshed"
+        else:
+            status = "fresh"
+        print(
+            json.dumps(
+                {
+                    "status": status,
+                    "output_file": str(output_file),
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat(),
+                },
+                sort_keys=True,
+            )
+        )
         return 0
 
     if args.command == "paper-loop":

@@ -1,20 +1,20 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.5
+version: 1.0.6
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.4
+supersedes: STATE-0001@1.0.5
 superseded_by: null
-author_session: SESS-2026-04-19-027
+author_session: SESS-2026-04-19-028
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-027
+- Active session: SESS-2026-04-19-028
 - Active branch: main
-- Active phase: 14
+- Active phase: 15
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -26,7 +26,9 @@ author_session: SESS-2026-04-19-027
 - `SPEC-0001` is active at `specs/001-paper-trading-bot/spec.md`.
 - `PLAN-0001` is active at `specs/001-paper-trading-bot/plan.md`.
 - `TASKS-0001` is active at `specs/001-paper-trading-bot/tasks.md`.
-- `ADR-0009` selects Nautilus Trader as the backtest engine.
+- `ADR-0019` supersedes `ADR-0009` and selects a minimal
+  pandas-plus-empyrical research backtest engine for Gate 1 and Gate 2
+  rehabilitation.
 - `GATES-0001` defines the Stage 1 gate evidence baseline.
 - `TASKS-0001` implementation is complete and merged into `main`.
 - `codex/paper-service-upgrades` has been merged into `main`.
