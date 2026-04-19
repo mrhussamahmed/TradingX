@@ -15,13 +15,19 @@ SMA_WINDOW = 200
 PRE_SIZED = False
 
 
-def generate_trend_signal(ohlcv: pd.DataFrame) -> pd.Series:
+def generate_trend_signal(
+    ohlcv: pd.DataFrame,
+    *,
+    lookback_days: int = LOOKBACK_DAYS,
+    sma_window_days: int = SMA_WINDOW,
+    skip_recent_days: int = 1,
+) -> pd.Series:
     _validate_ohlcv(ohlcv)
 
     closes = ohlcv["close"].astype(float)
-    prior_close = closes.shift(1)
-    prior_lookback_close = closes.shift(LOOKBACK_DAYS)
-    prior_sma = closes.shift(1).rolling(SMA_WINDOW).mean()
+    prior_close = closes.shift(skip_recent_days)
+    prior_lookback_close = closes.shift(lookback_days)
+    prior_sma = closes.shift(skip_recent_days).rolling(sma_window_days).mean()
 
     signal = pd.Series(0.0, index=ohlcv.index, dtype=float)
     long_mask = (prior_close / prior_lookback_close > 1.0) & (prior_close > prior_sma)

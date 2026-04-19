@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,12 @@ from pathlib import Path
 import pandas as pd  # type: ignore[import-untyped]
 
 from tradingx.backtest import run_daily_bar_backtest
-from tradingx.evaluation import TRADING_DAYS_PER_YEAR, evaluate_candidate
+from tradingx.costs import CostModelConfig
+from tradingx.evaluation import (
+    TRADING_DAYS_PER_YEAR,
+    AdversarialCheckContext,
+    evaluate_candidate,
+)
 from tradingx.signals.mean_revert import generate_mean_revert_signal
 from tradingx.signals.trend import generate_trend_signal
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
@@ -40,14 +46,6 @@ GATE1_MIN_OUT_OF_SAMPLE_DAYS = 756
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MAX_PROFILE_DRIFT = Decimal("0.30")
 
-# source: src/tradingx/evaluation.py fixed per-period cost sensitivity assumption
-BASE_COST_PENALTY = Decimal("0.001")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE2_COST_MULTIPLIER = Decimal("2.0")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE2_PARAMETER_PERTURBATION = Decimal("0.20")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE2_MAX_SHARPE_DEGRADATION = Decimal("0.30")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE2_MIN_WALK_FORWARD_DAYS = 252
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
@@ -122,31 +120,6 @@ def _relative_drift(reference: float, observed: float) -> float:
     return abs(observed - reference) / denominator
 
 
-def _apply_cost_stress(returns: Sequence[Decimal]) -> tuple[Decimal, ...]:
-    penalty = BASE_COST_PENALTY * GATE2_COST_MULTIPLIER
-    return tuple(value - penalty for value in returns)
-
-
-def _apply_parameter_stress(
-    returns: Sequence[Decimal],
-    *,
-    direction: str,
-) -> tuple[Decimal, ...]:
-    stressed: list[Decimal] = []
-    for value in returns:
-        magnitude = abs(value) * GATE2_PARAMETER_PERTURBATION
-        if direction == "minus":
-            adjusted = value - (magnitude * Decimal("0.25"))
-            if value < 0:
-                adjusted = value - (magnitude * Decimal("0.10"))
-        else:
-            adjusted = value - (magnitude * Decimal("0.15"))
-            if value < 0:
-                adjusted = value - (magnitude * Decimal("0.05"))
-        stressed.append(adjusted)
-    return tuple(stressed)
-
-
 def _rolling_windows(
     values: Sequence[Decimal],
     *,
@@ -168,6 +141,7 @@ def _build_gate1_candidate_result(
     window_start_utc: datetime,
     window_end_utc: datetime,
     benchmark_series_is_adjusted: bool,
+    adversarial_context: AdversarialCheckContext,
 ) -> ValidationCandidateResult:
     evidence_pack = evaluate_candidate(
         candidate,
@@ -175,7 +149,9 @@ def _build_gate1_candidate_result(
         benchmark_returns=benchmark_returns,
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
+        adversarial_context=adversarial_context,
     )
+    adversarial_statuses = set(evidence_pack.adversarial_checks)
     candidate_metrics = _metric_pack(candidate_returns)
     benchmark_metrics = _metric_pack(benchmark_returns)
     benchmark_edge_passed = candidate_metrics["cagr"] > benchmark_metrics[
@@ -192,23 +168,13 @@ def _build_gate1_candidate_result(
     out_of_sample_passed = False
     history_complete = len(candidate_returns) >= GATE1_MIN_OUT_OF_SAMPLE_DAYS + 252
     if history_complete:
-        in_sample_returns = candidate_returns[:-GATE1_MIN_OUT_OF_SAMPLE_DAYS]
-        out_of_sample_returns = candidate_returns[-GATE1_MIN_OUT_OF_SAMPLE_DAYS:]
-        in_sample_metrics = _metric_pack(in_sample_returns)
-        out_of_sample_metrics = _metric_pack(out_of_sample_returns)
-        cagr_drift = _relative_drift(
-            in_sample_metrics["cagr"],
-            out_of_sample_metrics["cagr"],
-        )
-        sharpe_drift = _relative_drift(
-            in_sample_metrics["sharpe_ratio"],
-            out_of_sample_metrics["sharpe_ratio"],
-        )
-        out_of_sample_passed = cagr_drift <= float(
-            GATE1_MAX_PROFILE_DRIFT
-        ) and sharpe_drift <= float(GATE1_MAX_PROFILE_DRIFT)
+        out_of_sample_passed = "out_of_sample_pass" in adversarial_statuses
         out_of_sample_details = (
-            f"OOS CAGR drift={cagr_drift:.3f}, OOS Sharpe drift={sharpe_drift:.3f}."
+            "Passed the settled 30% tolerance check across Sharpe, CAGR, and "
+            "MaxDD on the held-out window."
+            if out_of_sample_passed
+            else "Failed the settled 30% tolerance check across Sharpe, CAGR, and "
+            "MaxDD on the held-out window."
         )
     else:
         out_of_sample_details = (
@@ -296,6 +262,7 @@ def _build_gate2_candidate_result(
     benchmark_returns: tuple[Decimal, ...],
     window_start_utc: datetime,
     window_end_utc: datetime,
+    adversarial_context: AdversarialCheckContext,
 ) -> ValidationCandidateResult:
     evidence_pack = evaluate_candidate(
         candidate,
@@ -303,19 +270,12 @@ def _build_gate2_candidate_result(
         benchmark_returns=benchmark_returns,
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
+        adversarial_context=adversarial_context,
     )
-    base_metrics = _metric_pack(candidate_returns)
-    cost_metrics = _metric_pack(_apply_cost_stress(candidate_returns))
-    minus_metrics = _metric_pack(
-        _apply_parameter_stress(candidate_returns, direction="minus")
-    )
-    plus_metrics = _metric_pack(
-        _apply_parameter_stress(candidate_returns, direction="plus")
-    )
-    base_sharpe = max(base_metrics["sharpe_ratio"], 1e-9)
-    max_degradation = max(
-        _relative_drift(base_sharpe, minus_metrics["sharpe_ratio"]),
-        _relative_drift(base_sharpe, plus_metrics["sharpe_ratio"]),
+    adversarial_statuses = set(evidence_pack.adversarial_checks)
+    cost_stress_passed = "cost_sensitivity_pass" in adversarial_statuses
+    parameter_perturbation_passed = (
+        "parameter_sensitivity_pass" in adversarial_statuses
     )
     walk_forward_windows = _rolling_windows(
         candidate_returns,
@@ -341,21 +301,32 @@ def _build_gate2_candidate_result(
     criteria = (
         ValidationCriterionResult(
             criterion_id="cost_stress",
-            passed=cost_metrics["total_return"] > 0,
-            threshold="Net profitable at 2x slippage and 2x fees",
+            passed=cost_stress_passed,
+            threshold=(
+                "Net profitable across simultaneous 2x half-spread, impact, "
+                "and commission stresses, and across each stressed component "
+                "individually"
+            ),
             details=(
-                f"2x cost-stress total return={cost_metrics['total_return']:.3f} "
-                f"using a {BASE_COST_PENALTY * GATE2_COST_MULTIPLIER:.4f} "
-                "per-period cost penalty."
+                "Passed the simultaneous and individual reruns across half-spread, "
+                "impact, and commission shocks in the turnover-aware cost model."
+                if cost_stress_passed
+                else "Failed at least one stressed rerun across half-spread, "
+                "impact, or commission shocks in the turnover-aware cost model."
             ),
         ),
         ValidationCriterionResult(
             criterion_id="parameter_perturbation",
-            passed=max_degradation <= float(GATE2_MAX_SHARPE_DEGRADATION),
-            threshold="+/-20% perturbation does not degrade Sharpe by more than 30%",
+            passed=parameter_perturbation_passed,
+            threshold=(
+                "Perturbing each numeric strategy parameter by +/-20% and +/-40% "
+                "does not degrade Sharpe by more than 30%"
+            ),
             details=(
-                f"Max Sharpe degradation={max_degradation:.3f}; base Sharpe="
-                f"{base_metrics['sharpe_ratio']:.3f}."
+                "Passed all full-rerun parameter perturbations."
+                if parameter_perturbation_passed
+                else "At least one full-rerun parameter perturbation degraded "
+                "Sharpe beyond the allowed 30% threshold."
             ),
         ),
         ValidationCriterionResult(
@@ -435,14 +406,19 @@ def _normalize_target_weights(target_weights: pd.DataFrame) -> pd.DataFrame:
 
 
 def _trend_target_weights(
-    _candidate: StrategyCandidate,
+    candidate: StrategyCandidate,
     *,
     bars_by_symbol: dict[str, pd.DataFrame],
 ) -> pd.DataFrame:
     symbol_weights = {}
-    for symbol in _candidate.universe:
+    for symbol in candidate.universe:
         bars = bars_by_symbol[symbol]
-        signal = generate_trend_signal(bars)
+        signal = generate_trend_signal(
+            bars,
+            lookback_days=int(candidate.parameter_set["lookback_days"]),
+            sma_window_days=int(candidate.parameter_set["sma_window_days"]),
+            skip_recent_days=int(candidate.parameter_set.get("skip_recent_days", 1)),
+        )
         symbol_weights[symbol] = apply_position_sizing(
             bars,
             signal=signal,
@@ -511,30 +487,53 @@ def _candidate_returns(
     candidate: StrategyCandidate,
     *,
     bars_by_symbol: dict[str, pd.DataFrame],
+    parameter_overrides: dict[str, object] | None = None,
+    cost_model_config: CostModelConfig | None = None,
 ) -> tuple[Decimal, ...]:
-    if candidate.family == "trend_following":
-        traded_symbols = candidate.universe
-        target_weights = _trend_target_weights(candidate, bars_by_symbol=bars_by_symbol)
-    elif candidate.family == "vol_target":
-        traded_symbols = (candidate.benchmark_symbol,)
-        target_weights = _vol_target_target_weights(
-            candidate,
+    configured_candidate = _candidate_with_parameter_overrides(
+        candidate,
+        parameter_overrides=parameter_overrides,
+    )
+
+    if configured_candidate.family == "trend_following":
+        traded_symbols = configured_candidate.universe
+        target_weights = _trend_target_weights(
+            configured_candidate,
             bars_by_symbol=bars_by_symbol,
         )
-    elif candidate.family == "mean_reversion":
-        traded_symbols = candidate.universe
+    elif configured_candidate.family == "vol_target":
+        traded_symbols = (configured_candidate.benchmark_symbol,)
+        target_weights = _vol_target_target_weights(
+            configured_candidate,
+            bars_by_symbol=bars_by_symbol,
+        )
+    elif configured_candidate.family == "mean_reversion":
+        traded_symbols = configured_candidate.universe
         target_weights = _mean_reversion_target_weights(
-            candidate,
+            configured_candidate,
             bars_by_symbol=bars_by_symbol,
         )
     else:
-        raise ValueError(f"Unsupported candidate family: {candidate.family}")
+        raise ValueError(f"Unsupported candidate family: {configured_candidate.family}")
 
     result = run_daily_bar_backtest(
         {symbol: bars_by_symbol[symbol] for symbol in traded_symbols},
         target_weights=target_weights,
+        cost_model_config=cost_model_config,
     )
     return tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
+
+
+def _candidate_with_parameter_overrides(
+    candidate: StrategyCandidate,
+    *,
+    parameter_overrides: dict[str, object] | None,
+) -> StrategyCandidate:
+    if not parameter_overrides:
+        return candidate
+    merged_parameter_set = dict(candidate.parameter_set)
+    merged_parameter_set.update(parameter_overrides)
+    return replace(candidate, parameter_set=merged_parameter_set)
 
 
 def _benchmark_returns(
@@ -570,9 +569,29 @@ def build_gate_report(
         bars_by_symbol=aligned_bars,
         benchmark_symbol=benchmark_symbol,
     )
+    base_cost_model_config = CostModelConfig()
+
+    def backtest_runner(
+        rerun_candidate: StrategyCandidate,
+        *,
+        parameter_overrides: dict[str, object] | None = None,
+        cost_model_config: CostModelConfig | None = None,
+    ) -> tuple[Decimal, ...]:
+        return _candidate_returns(
+            rerun_candidate,
+            bars_by_symbol=aligned_bars,
+            parameter_overrides=parameter_overrides,
+            cost_model_config=cost_model_config,
+        )
+
     candidate_results = []
     for candidate in candidates:
         candidate_returns = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
+        adversarial_context = AdversarialCheckContext(
+            benchmark_bars=aligned_bars[benchmark_symbol],
+            backtest_runner=backtest_runner,
+            base_cost_model_config=base_cost_model_config,
+        )
         if gate_id == "1":
             result = _build_gate1_candidate_result(
                 candidate=candidate,
@@ -581,6 +600,7 @@ def build_gate_report(
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
                 benchmark_series_is_adjusted=benchmark_series_is_adjusted,
+                adversarial_context=adversarial_context,
             )
         elif gate_id == "2":
             result = _build_gate2_candidate_result(
@@ -589,6 +609,7 @@ def build_gate_report(
                 benchmark_returns=benchmark_returns,
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
+                adversarial_context=adversarial_context,
             )
         else:
             raise ValueError(f"Unsupported gate_id: {gate_id}")
@@ -618,6 +639,8 @@ def build_gate_report(
         ),
         assumptions=(
             "candidate returns are generated from daily-bar next-open backtests",
+            "candidate adversarial checks rerun the same backtest engine with "
+            "parameter and cost perturbations",
             "portfolio weights are normalized to max gross exposure 1.0 before replay",
         ),
         evidence_refs=tuple(result.evidence_pack_id for result in candidate_results),

@@ -6,8 +6,10 @@ from decimal import Decimal
 
 import pandas as pd
 
+from tradingx.costs import CostModelConfig
 from tradingx.strategy import build_mandatory_candidate_registry
-from tradingx.validation import build_gate_report
+from tradingx.types import StrategyCandidate
+from tradingx.validation import _candidate_returns, build_gate_report
 
 
 def _build_close_series(
@@ -40,6 +42,23 @@ def _ohlcv_frame(closes: list[float]) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def _quote_enriched_ohlcv_frame(closes: list[float]) -> pd.DataFrame:
+    frame = _ohlcv_frame(closes)
+    frame["open"] = frame["close"].shift(1).fillna(frame["close"].iloc[0])
+    frame["high"] = frame[["open", "close"]].max(axis=1) * 1.01
+    frame["low"] = frame[["open", "close"]].min(axis=1) * 0.99
+    frame["bid"] = frame["open"] - 0.05
+    frame["ask"] = frame["open"] + 0.05
+    return frame
+
+
+def _compound_total_return(returns: tuple[Decimal, ...]) -> Decimal:
+    equity = Decimal("1")
+    for value in returns:
+        equity *= Decimal("1") + value
+    return equity - Decimal("1")
 
 
 def test_validation_module_shell_is_importable() -> None:
@@ -101,6 +120,127 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         "mean-reversion-v1",
     }
     assert all(result.evidence_pack_id for result in report.candidate_results)
+
+
+def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> None:
+    trend_candidate = StrategyCandidate(
+        candidate_id="trend-test",
+        family="trend_following",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={
+            "lookback_days": 8,
+            "sma_window_days": 5,
+            "skip_recent_days": 1,
+            "signal": "long_only",
+        },
+        status="under_evaluation",
+    )
+    trend_bars = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            [100.0] * 10
+            + [
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                110.0,
+                95.0,
+                96.0,
+                97.0,
+                98.0,
+                99.0,
+                100.0,
+                101.0,
+                102.0,
+                103.0,
+                104.0,
+            ]
+        )
+    }
+
+    base_trend_returns = _candidate_returns(
+        trend_candidate,
+        bars_by_symbol=trend_bars,
+    )
+    overridden_trend_returns = _candidate_returns(
+        trend_candidate,
+        bars_by_symbol=trend_bars,
+        parameter_overrides={"lookback_days": 4, "sma_window_days": 3},
+    )
+
+    assert overridden_trend_returns != base_trend_returns
+
+    vol_candidate = build_mandatory_candidate_registry(("SPY",))[1]
+    vol_bars = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            [
+                100.0 + (0.6 * float(index)) + (2.5 * (-1.0 if index % 7 == 0 else 1.0))
+                for index in range(90)
+            ]
+        )
+    }
+
+    base_vol_returns = _candidate_returns(
+        vol_candidate,
+        bars_by_symbol=vol_bars,
+    )
+    cost_stressed_returns = _candidate_returns(
+        vol_candidate,
+        bars_by_symbol=vol_bars,
+        cost_model_config=CostModelConfig(),
+    )
+
+    assert _compound_total_return(cost_stressed_returns) < _compound_total_return(
+        base_vol_returns
+    )
+
+
+def test_build_gate2_report_uses_real_stress_descriptions() -> None:
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            [
+                100.0
+                + (0.4 * float(index))
+                + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+        "QQQ": _quote_enriched_ohlcv_frame(
+            [
+                98.0
+                + (0.45 * float(index))
+                + (1.2 * (-1.0 if index % 11 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+    }
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[1]
+
+    report = build_gate_report(
+        gate_id="2",
+        bars_by_symbol=bars_by_symbol,
+        candidates=(candidate,),
+        benchmark_symbol="SPY",
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+        benchmark_series_is_adjusted=True,
+    )
+
+    criteria_by_id = {
+        criterion.criterion_id: criterion
+        for criterion in report.candidate_results[0].criteria
+    }
+
+    assert "per-period cost penalty" not in criteria_by_id["cost_stress"].details
+    assert "half-spread" in criteria_by_id["cost_stress"].details
+    assert "impact" in criteria_by_id["cost_stress"].details
+    assert "commission" in criteria_by_id["cost_stress"].details
 
 
 def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> None:

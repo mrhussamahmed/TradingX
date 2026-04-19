@@ -40,3 +40,33 @@ def test_generate_trend_signal_uses_only_t_minus_1_data() -> None:
     assert signal.iloc[:252].eq(0.0).all()
     assert signal.iloc[-2] == 1.0
     assert signal.iloc[-1] == 0.0
+
+
+def test_generate_trend_signal_accepts_parameterized_windows() -> None:
+    module = importlib.import_module("tradingx.signals.trend")
+    frame = _ohlcv_frame(
+        [
+            100.0,
+            101.0,
+            102.0,
+            103.0,
+            104.0,
+            105.0,
+            106.0,
+            107.0,
+            108.0,
+            109.0,
+            110.0,
+            111.0,
+        ]
+    )
+
+    signal = module.generate_trend_signal(
+        frame,
+        lookback_days=8,
+        sma_window_days=5,
+        skip_recent_days=1,
+    )
+
+    assert signal.iloc[:8].eq(0.0).all()
+    assert signal.iloc[-1] == 1.0
