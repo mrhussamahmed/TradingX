@@ -8,8 +8,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 
-from alpaca.trading.client import TradingClient
-
 from tradingx.automation import (
     build_default_market_day_automation_runner,
 )
@@ -332,17 +330,12 @@ class MarketDayScheduler:
 
 
 def build_default_market_day_scheduler(config: TradingConfig) -> MarketDayScheduler:
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
-    )
     return MarketDayScheduler(
         operator_store=FilesystemArtifactStore(
             config.runtime.artifact_root / "operator_platform"
         ),
         automation_runner=build_default_market_day_automation_runner(config),
-        session_calendar=AlpacaRegularHoursCalendar(trading_client),
+        session_calendar=AlpacaRegularHoursCalendar(),
     )
 
 

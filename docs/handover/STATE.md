@@ -1,18 +1,18 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.1
+version: 1.0.3
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.0
+supersedes: STATE-0001@1.0.2
 superseded_by: null
-author_session: SESS-2026-04-19-024
+author_session: SESS-2026-04-19-025
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-024
+- Active session: SESS-2026-04-19-025
 - Active branch: codex/week1-safety-pack
 - Active phase: 13
 - Last completed gate: 0.5
@@ -58,6 +58,14 @@ author_session: SESS-2026-04-19-024
 - `RUNBOOK-0003` is now the official operator instruction manual and
   must be updated whenever startup, operation, dashboard, validation, or
   recovery behavior changes.
+- `RUNBOOK-0004` records the approved week-1 premortem and its mapped
+  controls.
+- `RUNBOOK-0005` defines the Sunday rehearsal, Monday dry-run review,
+  and `GATES-0001` Tuesday readiness flow.
+- `week1-rehearsal` now generates the canonical Sunday ops artifacts
+  under `artifacts/ops/`, including the rehearsal result,
+  reconciliation review, operator-control verification, and the
+  recorded paper-account starting state.
 - `SPEC-0002`, `PLAN-0002`, `TASKS-0002`, `RESEARCH-0002`,
   `DATAMODEL-0002`, `QUICKSTART-0003`, and `CONTRACT-0003` are active
   and define the local website feature set.
@@ -91,6 +99,9 @@ author_session: SESS-2026-04-19-024
   `RESEARCH-0009`, `DATAMODEL-0009`, `QUICKSTART-0010`, and
   `CONTRACT-0010` are active on `codex/week1-safety-pack` and define
   the week-1 dry-run safety pack now in implementation.
+- Week-1 runtime entry points now enforce a single-writer process lock
+  on `data/runtime.pid` so a second process cannot silently operate
+  against the same local data root.
 - The current repository now provides:
   - a deterministic paper trading loop with recovery and auditable risk
     decisions

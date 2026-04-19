@@ -55,6 +55,28 @@ def _extract_broker_error_message(error: Exception) -> str:
     return str(error)
 
 
+def _is_order_not_found_error(error: Exception) -> bool:
+    message = _extract_broker_error_message(error).lower()
+    return "not found" in message or "404" in message
+
+
+def classify_order_rejection_reason(message: str) -> str:
+    normalized = message.lower()
+    if "buying power" in normalized:
+        return "insufficient_buying_power"
+    if "restricted" in normalized:
+        return "restricted_symbol"
+    if "halt" in normalized:
+        return "symbol_halted"
+    if "after hours" in normalized:
+        return "after_hours"
+    if "market closed" in normalized:
+        return "market_closed"
+    if "malformed" in normalized or "invalid" in normalized:
+        return "malformed_payload"
+    return "broker_rejected"
+
+
 class OrderRejected(RuntimeError):
     """Raised when Alpaca rejects or cancels an order before fill."""
 
@@ -107,6 +129,44 @@ class AlpacaPaperExecutionGateway:
         except Exception as error:
             raise OrderRejected(_extract_broker_error_message(error)) from None
         return _to_order_record(raw_order)
+
+    def find_order_by_client_id(self, client_order_id: str) -> OrderRecord | None:
+        try:
+            raw_order = self._trading_client.get_order_by_client_id(client_order_id)
+        except Exception as error:
+            if _is_order_not_found_error(error):
+                return None
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        return _to_order_record(raw_order)
+
+    def submit_marketable_limit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        side: OrderSide,
+        *,
+        limit_price: Decimal,
+        time_in_force: TimeInForce,
+        client_order_id: str | None = None,
+    ) -> OrderRecord:
+        order_request = LimitOrderRequest(
+            symbol=symbol,
+            qty=float(quantity),
+            side=side,
+            limit_price=float(limit_price),
+            time_in_force=time_in_force,
+            client_order_id=client_order_id or f"tradingx-{uuid.uuid4()}",
+        )
+        try:
+            raw_order = self._trading_client.submit_order(order_request)
+        except Exception as error:
+            raise OrderRejected(_extract_broker_error_message(error)) from None
+        order = _to_order_record(raw_order)
+        if order.status in REJECTED_STATUSES:
+            raise OrderRejected(
+                f"Order {order.order_id} ended with status {order.status}."
+            )
+        return order
 
     def submit_oco_exit_order(
         self,

@@ -1,13 +1,13 @@
 ---
 id: ARCHMAP-0001
 title: Current architecture map
-version: 1.1.0
+version: 1.3.0
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: ARCHMAP-0001@1.0.0
+supersedes: ARCHMAP-0001@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-19-024
+author_session: SESS-2026-04-19-025
 ---
 
 # Current Architecture Map
@@ -89,10 +89,21 @@ These files are the source of truth for appliance/runtime behavior:
   [src/tradingx/snapshots.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/snapshots.py:1)
 - Append-only OMS journal:
   [src/tradingx/journal.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/journal.py:1)
+- Single-writer runtime lock:
+  [src/tradingx/process_lock.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/process_lock.py:1)
+- Exchange-calendar-backed session authority:
+  [src/tradingx/data.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/data.py:1)
+- Explicit marketable-limit order mechanics:
+  [src/tradingx/execution.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/execution.py:1)
+  [src/tradingx/controller.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/controller.py:1)
 - Shared appliance math:
   [src/tradingx/quant.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/quant.py:1)
 - Runtime-aware service orchestration:
   [src/tradingx/service.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/service.py:1)
+- Dry-run reporting and Tuesday gate evaluation:
+  [src/tradingx/dry_run_report.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/dry_run_report.py:1)
+  [src/tradingx/week1_drills.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/week1_drills.py:1)
+  [src/tradingx/week1_readiness.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/week1_readiness.py:1)
 - CLI appliance entry point:
   [src/tradingx/__main__.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/__main__.py:1)
 - API surface and local website orchestration:

@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0003
 title: TradingX operator manual
-version: 1.1.0
+version: 1.3.0
 status: active
 created: 2026-04-18
 last_amended: 2026-04-19
-supersedes: RUNBOOK-0003@1.0.0
+supersedes: RUNBOOK-0003@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-19-022
+author_session: SESS-2026-04-19-025
 ---
 
 # TradingX Operator Manual
@@ -53,6 +53,36 @@ TradingX is currently operated under these boundaries:
 
 Do not add live credentials or attempt live trading from this manual.
 
+## Week 1 controls
+
+For the current week-1 dry-run posture, use these supporting runbooks:
+
+- [week1_premortem.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/week1_premortem.md:1)
+- [week1_rehearsal_and_gates.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/week1_rehearsal_and_gates.md:1)
+
+Week-1 defaults are intentionally conservative:
+
+- `SPY` only
+- Monday dry-run only
+- Tuesday earliest possible submit date
+- flat by close
+- zero overnight exposure
+- sticky `0.5%` drawdown halt
+
+Before Monday dry-run, generate the week-1 rehearsal artifacts:
+
+```bash
+uv run tradingx week1-rehearsal --env-file .env --output-dir artifacts/ops
+```
+
+This writes:
+
+- `artifacts/ops/operator_control_verification.json`
+- `artifacts/ops/premortem_review.json`
+- `artifacts/ops/sunday_rehearsal.json`
+- `artifacts/ops/reconciliation_review.json`
+- `artifacts/ops/paper_account_starting_state.json`
+
 ## Core files and locations
 
 - Main environment file: [`.env`](</Users/ahmedabd/Desktop/AI Projects/TradingX/.env:1>)
@@ -60,6 +90,9 @@ Do not add live credentials or attempt live trading from this manual.
 - Main repo guide: [README.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/README.md:1)
 - Project state: [STATE.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/handover/STATE.md:1)
 - Acceptance gates: [acceptance_gates.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/validation/acceptance_gates.md:1)
+- Week-1 SQLite journal: `data/journal.db`
+- Week-1 content-addressed decision snapshots: `data/snapshots/`
+- Week-1 policy snapshots: `data/policy/`
 
 ## Prerequisites
 
@@ -196,6 +229,11 @@ If the loop is interrupted and you need to resume safely:
 ```bash
 uv run tradingx paper-recover --env-file .env --symbol SPY
 ```
+
+All week-1 trading entry points now enforce a single-writer runtime
+lock on `data/runtime.pid`. If a second process attempts to start
+against the same data root, TradingX refuses to run and returns a
+blocked error instead of risking duplicate paper orders.
 
 ## Mode 3: Run the recurring paper service
 

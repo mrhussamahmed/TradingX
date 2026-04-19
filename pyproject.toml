@@ -17,6 +17,7 @@ dependencies = [
   "prometheus-client>=0.25,<1",
   "python-telegram-bot>=22.7,<23",
   "uvicorn>=0.35,<1",
+  "exchange-calendars>=4.11,<5",
 ]
 
 [dependency-groups]

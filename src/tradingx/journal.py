@@ -42,8 +42,7 @@ class SqliteOmsJournal:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL;")
-            connection.execute(
-                """
+            connection.execute("""
                 CREATE TABLE IF NOT EXISTS oms_journal (
                     row_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
@@ -56,8 +55,7 @@ class SqliteOmsJournal:
                     side TEXT NOT NULL,
                     payload_json TEXT NOT NULL
                 )
-                """
-            )
+                """)
 
     def append_event(
         self,
@@ -103,7 +101,9 @@ class SqliteOmsJournal:
             )
             raw_row_id = cursor.lastrowid
             if raw_row_id is None:
-                raise RuntimeError("SQLite did not return a row id for the journal event.")
+                raise RuntimeError(
+                    "SQLite did not return a row id for the journal event."
+                )
             row_id = int(raw_row_id)
         return OmsJournalEvent(
             event_id=f"journal-{row_id}",
@@ -120,8 +120,7 @@ class SqliteOmsJournal:
 
     def list_events(self) -> list[OmsJournalEvent]:
         with self._connect() as connection:
-            rows = connection.execute(
-                """
+            rows = connection.execute("""
                 SELECT
                     row_id,
                     event_type,
@@ -135,8 +134,7 @@ class SqliteOmsJournal:
                     payload_json
                 FROM oms_journal
                 ORDER BY row_id ASC
-                """
-            ).fetchall()
+                """).fetchall()
         return [self._row_to_event(row) for row in rows]
 
     def find_latest_by_client_order_id(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +18,7 @@ from tradingx.types import (
     ModelWeightSnapshot,
     OpportunitySelectionRecord,
     PortfolioState,
+    ReconciliationSnapshot,
     StrategyActivationRecord,
     WebActionResult,
 )
@@ -76,6 +77,18 @@ class PortfolioGatewayProtocol(Protocol):
     def get_portfolio_state(self) -> PortfolioState: ...
 
 
+class ReconciliationGatewayProtocol(Protocol):
+    def reconcile(self) -> ReconciliationSnapshot: ...
+
+
+@dataclass(frozen=True)
+class _PendingStartRequest:
+    symbols: tuple[str, ...]
+    quantity: Decimal
+    interval_seconds: int
+    max_cycles: int | None
+
+
 class LocalRuntimeHostManager:
     def __init__(
         self,
@@ -87,6 +100,7 @@ class LocalRuntimeHostManager:
         activation_gateway: ActivationGatewayProtocol,
         opportunity_planner: OpportunityPlannerProtocol,
         portfolio_gateway: PortfolioGatewayProtocol,
+        reconciliation_gateway: ReconciliationGatewayProtocol | None = None,
         learning_service: PostTradeLearningService | None = None,
         paper_store_root: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
@@ -101,10 +115,12 @@ class LocalRuntimeHostManager:
         self._activation_gateway = activation_gateway
         self._opportunity_planner = opportunity_planner
         self._portfolio_gateway = portfolio_gateway
+        self._reconciliation_gateway = reconciliation_gateway
         self._learning_service = learning_service or PostTradeLearningService()
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        self._pending_start_request: _PendingStartRequest | None = None
         self._state = BotRuntimeState(
             status="idle",
             status_reason="Runtime host is idle.",
@@ -145,6 +161,12 @@ class LocalRuntimeHostManager:
                 started_at_utc=self._now_provider(),
                 last_error="",
             )
+            self._pending_start_request = _PendingStartRequest(
+                symbols=symbols,
+                quantity=quantity,
+                interval_seconds=interval_seconds,
+                max_cycles=max_cycles,
+            )
             self._thread = threading.Thread(
                 target=self._bootstrap_and_start,
                 kwargs={
@@ -161,6 +183,35 @@ class LocalRuntimeHostManager:
             action_type="runtime_host_start",
             status="accepted",
             message="Runtime host start accepted.",
+            evidence_refs=(),
+        )
+
+    def request_clearance(self) -> WebActionResult:
+        with self._lock:
+            if self._state.status != "recovery_required":
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="runtime_host_clearance",
+                    status="blocked",
+                    message=(
+                        "Runtime host is not currently awaiting operator clearance."
+                    ),
+                    evidence_refs=(),
+                )
+            self._set_state(
+                status="clearance_requested",
+                status_reason="Operator clearance requested. Preparing reconciliation.",
+            )
+            self._thread = threading.Thread(
+                target=self._run_clearance_reconciliation,
+                daemon=True,
+            )
+            self._thread.start()
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="runtime_host_clearance",
+            status="accepted",
+            message="Clearance request accepted. Reconciliation is running.",
             evidence_refs=(),
         )
 
@@ -265,6 +316,8 @@ class LocalRuntimeHostManager:
                 status_reason="Broker state synchronized.",
             )
             portfolio_state = self._portfolio_gateway.get_portfolio_state()
+            if not self._reconcile_current_state():
+                return
             self._set_state(
                 status="feature_ready",
                 status_reason="Warmup and market features are ready.",
@@ -300,6 +353,62 @@ class LocalRuntimeHostManager:
                 status_reason="Runtime host halted.",
                 last_error=str(exc),
             )
+
+    def _run_clearance_reconciliation(self) -> None:
+        self._set_state(
+            status="reconciling",
+            status_reason="Running operator-cleared reconciliation.",
+        )
+        try:
+            if not self._reconcile_current_state():
+                return
+            pending_start = self._pending_start_request
+            if pending_start is not None:
+                service_result = self._service_manager.start(
+                    symbols=pending_start.symbols,
+                    quantity=pending_start.quantity,
+                    interval_seconds=pending_start.interval_seconds,
+                    max_cycles=pending_start.max_cycles,
+                )
+                if service_result.status not in {"accepted", "completed"}:
+                    raise RuntimeError(service_result.message)
+            self._set_state(
+                status="nominal",
+                status_reason="Reconciliation cleared after operator clearance.",
+                last_error="",
+            )
+        except Exception as exc:
+            self._set_state(
+                status="halted",
+                status_reason="Runtime host halted during operator clearance.",
+                last_error=str(exc),
+            )
+
+    def _reconcile_current_state(self) -> bool:
+        if self._reconciliation_gateway is None:
+            return True
+        snapshot = self._reconciliation_gateway.reconcile()
+        self._operator_store.write_reconciliation_snapshot(snapshot)
+        if snapshot.resolved:
+            self._set_state(last_error="")
+            return True
+        self._set_state(
+            status="recovery_required",
+            status_reason=(
+                "Reconciliation divergence detected. New entries are blocked until "
+                "operator clearance succeeds."
+            ),
+            last_error=self._format_reconciliation_differences(snapshot),
+        )
+        return False
+
+    def _format_reconciliation_differences(
+        self,
+        snapshot: ReconciliationSnapshot,
+    ) -> str:
+        if not snapshot.differences:
+            return "Reconciliation divergence detected."
+        return "Reconciliation divergence detected: " + ", ".join(snapshot.differences)
 
     def _set_state(self, **changes: object) -> None:
         with self._lock:

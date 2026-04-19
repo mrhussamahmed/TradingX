@@ -5,10 +5,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from alpaca.trading.enums import OrderSide
+from alpaca.trading.enums import OrderSide, TimeInForce
 from prometheus_client import CollectorRegistry
 
 from tradingx.controller import PaperTradingLoopController, RoundTripController
+from tradingx.execution import OrderRejected
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
 from tradingx.persistence import FilesystemArtifactStore
@@ -59,10 +60,23 @@ class FakeMarketData:
         )
 
 
+class FrozenMarketData(FakeMarketData):
+    def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
+        return MarketSnapshot(
+            symbol=symbol,
+            last_trade_price=Decimal("600.00"),
+            bid_price=Decimal("599.90"),
+            ask_price=Decimal("600.10"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+        )
+
+
 class FakeExecution:
     def __init__(self) -> None:
         self.submissions = []
         self.fill_count = 0
+        self.orders_by_client_id: dict[str, OrderRecord] = {}
 
     def submit_market_order(
         self,
@@ -83,6 +97,40 @@ class FakeExecution:
             filled_qty=Decimal("0"),
             filled_avg_price=Decimal("0"),
         )
+
+    def submit_marketable_limit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        side: OrderSide,
+        *,
+        limit_price: Decimal,
+        time_in_force: TimeInForce,
+        client_order_id: str | None = None,
+    ) -> OrderRecord:
+        order_id = f"order-{len(self.submissions) + 1}"
+        self.submissions.append(
+            (
+                symbol,
+                quantity,
+                side,
+                limit_price,
+                time_in_force,
+                client_order_id,
+            )
+        )
+        return OrderRecord(
+            order_id=order_id,
+            client_order_id=client_order_id or f"{order_id}-client",
+            symbol=symbol,
+            side=side.value,
+            status="accepted",
+            filled_qty=Decimal("0"),
+            filled_avg_price=Decimal("0"),
+        )
+
+    def find_order_by_client_id(self, client_order_id: str) -> OrderRecord | None:
+        return self.orders_by_client_id.get(client_order_id)
 
     def submit_oco_exit_order(
         self,
@@ -220,6 +268,23 @@ class FakeRegularHours:
         return True
 
 
+class RejectingExecution(FakeExecution):
+    def submit_marketable_limit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        side: OrderSide,
+        *,
+        limit_price: Decimal,
+        time_in_force: TimeInForce,
+        client_order_id: str | None = None,
+    ) -> OrderRecord:
+        del symbol, quantity, side, limit_price, time_in_force, client_order_id
+        raise OrderRejected(
+            '{"message":"insufficient buying power for requested exposure"}'
+        )
+
+
 def test_round_trip_controller_writes_structured_log(tmp_path) -> None:
     controller = RoundTripController(
         market_data=FakeMarketData(),
@@ -285,6 +350,8 @@ def test_paper_trading_loop_controller_dry_run_persists_snapshot_and_journal(
     assert any(snapshot_dir.glob("*.json"))
     journal_rows = SqliteOmsJournal(tmp_path / "data" / "journal.db").list_events()
     assert [row.event_type for row in journal_rows] == ["intent", "simulated"]
+    assert journal_rows[-1].payload["reference_price"] == "600.10"
+    assert journal_rows[-1].payload["would_submit_limit_price"] == "600.70"
 
 
 def test_paper_trading_loop_controller_uses_deterministic_client_order_id(
@@ -327,12 +394,115 @@ def test_paper_trading_loop_controller_uses_deterministic_client_order_id(
         side="buy",
         intent_seq=0,
     )
-    assert execution.submissions[0] == (
-        "SPY",
-        Decimal("1"),
-        OrderSide.BUY,
-        expected_client_order_id,
-    )
+    assert execution.submissions[0][0] == "SPY"
+    assert execution.submissions[0][1] == Decimal("1")
+    assert execution.submissions[0][2] == OrderSide.BUY
+    assert execution.submissions[0][3] == Decimal("600.70")
+    assert execution.submissions[0][4] == TimeInForce.DAY
+    assert execution.submissions[0][5] == expected_client_order_id
     journal_rows = SqliteOmsJournal(tmp_path / "data" / "journal.db").list_events()
     assert journal_rows[0].client_order_id == expected_client_order_id
     assert journal_rows[-1].event_type == "fill"
+
+
+def test_paper_trading_loop_controller_queries_broker_before_resubmit(
+    tmp_path: Path,
+) -> None:
+    execution = FakeExecution()
+    policy_snapshot = build_week1_policy_snapshot(
+        generated_at_utc=datetime(2026, 4, 19, 8, 0, tzinfo=UTC),
+        artifact_root=tmp_path / "artifacts",
+        git_sha="abc1234",
+        dry_run=False,
+    )
+    expected_now = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+    controller = PaperTradingLoopController(
+        market_data=FrozenMarketData(),
+        execution=execution,
+        portfolio=FakePortfolio(),
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(now_provider=lambda: expected_now),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: expected_now,
+        policy_snapshot=policy_snapshot,
+        policy_store=PolicySnapshotStore(tmp_path / "data" / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(tmp_path / "data" / "snapshots"),
+        journal=SqliteOmsJournal(tmp_path / "data" / "journal.db"),
+        git_sha="abc1234",
+        dry_run=False,
+    )
+
+    preview_result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    assert preview_result.terminal_state == "reconciled_trade"
+    expected_client_order_id = execution.submissions[0][5]
+    execution.submissions.clear()
+    execution.orders_by_client_id[expected_client_order_id] = OrderRecord(
+        order_id="order-existing",
+        client_order_id=expected_client_order_id,
+        symbol="SPY",
+        side="buy",
+        status="accepted",
+        filled_qty=Decimal("0"),
+        filled_avg_price=Decimal("0"),
+    )
+    artifacts = FilesystemArtifactStore(tmp_path / "artifacts")
+    trade_intent = artifacts.find_latest_trade_intent("SPY")
+    assert trade_intent is not None
+    order_path = artifacts.order_record_path(trade_intent.intent_id)
+    order_path.unlink()
+
+    result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    assert result.terminal_state == "reconciled_trade"
+    assert execution.submissions == []
+    recovered_order = artifacts.read_order_record(trade_intent.intent_id)
+    assert recovered_order is not None
+    assert recovered_order.order_id == "order-existing"
+
+
+def test_paper_trading_loop_controller_records_rejected_order_and_forces_reconciliation(
+    tmp_path: Path,
+) -> None:
+    execution = RejectingExecution()
+    policy_snapshot = build_week1_policy_snapshot(
+        generated_at_utc=datetime(2026, 4, 19, 8, 0, tzinfo=UTC),
+        artifact_root=tmp_path / "artifacts",
+        git_sha="abc1234",
+        dry_run=False,
+    )
+    controller = PaperTradingLoopController(
+        market_data=FakeMarketData(),
+        execution=execution,
+        portfolio=FakePortfolio(),
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(
+            now_provider=lambda: datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        ),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+        policy_snapshot=policy_snapshot,
+        policy_store=PolicySnapshotStore(tmp_path / "data" / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(tmp_path / "data" / "snapshots"),
+        journal=SqliteOmsJournal(tmp_path / "data" / "journal.db"),
+        git_sha="abc1234",
+        dry_run=False,
+    )
+
+    result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    assert result.terminal_state == "rejected"
+    assert result.order_record is None
+    assert result.reconciliation.resolved is False
+    assert result.reconciliation.differences == ("insufficient_buying_power",)
+    journal_rows = SqliteOmsJournal(tmp_path / "data" / "journal.db").list_events()
+    assert [row.event_type for row in journal_rows] == [
+        "intent",
+        "submit_attempt",
+        "reject",
+    ]
+    assert journal_rows[-1].payload["reason_code"] == "insufficient_buying_power"

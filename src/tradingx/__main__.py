@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -22,12 +22,15 @@ from tradingx.controller import (
     build_default_paper_trading_controller,
 )
 from tradingx.data import build_default_market_data_gateway
+from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
+from tradingx.journal import SqliteOmsJournal
 from tradingx.learning import PostTradeLearningService
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.process_lock import RuntimeLockError, runtime_process_lock
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.scheduler import build_default_market_day_scheduler
@@ -35,12 +38,15 @@ from tradingx.service import (
     build_default_paper_service,
     build_runtime_host_paper_service,
 )
+from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.types import BotRuntimeState
 from tradingx.validation import (
     load_benchmark_close_series,
     write_benchmark_close_series,
 )
 from tradingx.web.app import run_web_app
+from tradingx.week1_drills import run_week1_rehearsal
+from tradingx.week1_readiness import build_gates_0001_status
 
 
 def _serialize(value: Any) -> Any:
@@ -59,6 +65,33 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, list):
         return [_serialize(item) for item in value]
     return value
+
+
+def _runtime_lock_path(config: TradingConfig) -> Path:
+    return config.runtime.data_root / "runtime.pid"
+
+
+def _run_with_runtime_lock(
+    config: TradingConfig,
+    action: Callable[[], tuple[int, Any]],
+) -> int:
+    try:
+        with runtime_process_lock(_runtime_lock_path(config)):
+            result = action()
+    except RuntimeLockError as error:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "error": str(error),
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    exit_code, payload = result
+    print(json.dumps(_serialize(payload), sort_keys=True))
+    return exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -200,6 +233,41 @@ def build_parser() -> argparse.ArgumentParser:
         default="artifacts/validation",
     )
 
+    dry_run_report_parser = subparsers.add_parser("dry-run-report")
+    dry_run_report_parser.add_argument(
+        "--paper-artifact-root",
+        default="artifacts/paper_loop",
+    )
+    dry_run_report_parser.add_argument(
+        "--snapshot-root",
+        default="data/snapshots",
+    )
+    dry_run_report_parser.add_argument(
+        "--journal-path",
+        default="data/journal.db",
+    )
+    dry_run_report_parser.add_argument(
+        "--output-dir",
+        default="artifacts/dry_run_reports",
+    )
+
+    gates_parser = subparsers.add_parser("gates-0001-status")
+    gates_parser.add_argument(
+        "--dry-run-report-path",
+        required=True,
+    )
+    gates_parser.add_argument(
+        "--ops-artifact-root",
+        default="artifacts/ops",
+    )
+
+    rehearsal_parser = subparsers.add_parser("week1-rehearsal")
+    rehearsal_parser.add_argument("--env-file", default=".env")
+    rehearsal_parser.add_argument(
+        "--output-dir",
+        default="artifacts/ops",
+    )
+
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--env-file", default=".env")
     web_parser.add_argument("--host", default=None)
@@ -218,16 +286,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "paper-loop":
         config = TradingConfig.from_env_file(Path(args.env_file))
-        paper_controller = build_default_paper_trading_controller(config)
-        loop_result = paper_controller.run_trading_cycle(
-            args.symbol, Decimal(args.quantity)
+        return _run_with_runtime_lock(
+            config,
+            lambda: (
+                0,
+                build_default_paper_trading_controller(config).run_trading_cycle(
+                    args.symbol,
+                    Decimal(args.quantity),
+                ),
+            ),
         )
-        print(json.dumps(_serialize(loop_result), sort_keys=True))
-        return 0
 
     if args.command == "run-paper-service":
         config = TradingConfig.from_env_file(Path(args.env_file))
-        service = build_default_paper_service(config)
         symbols = (
             tuple(
                 item.strip().upper() for item in args.symbols.split(",") if item.strip()
@@ -235,16 +306,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.symbols
             else config.runtime.symbol_universe
         )
-        service_result = service.run(
-            symbols=symbols,
-            quantity=Decimal(args.quantity),
-            interval_seconds=(
-                args.interval_seconds or config.runtime.service_interval_seconds
+        return _run_with_runtime_lock(
+            config,
+            lambda: (
+                0,
+                build_default_paper_service(config).run(
+                    symbols=symbols,
+                    quantity=Decimal(args.quantity),
+                    interval_seconds=(
+                        args.interval_seconds or config.runtime.service_interval_seconds
+                    ),
+                    max_cycles=args.max_cycles,
+                ),
             ),
-            max_cycles=args.max_cycles,
         )
-        print(json.dumps(_serialize(service_result), sort_keys=True))
-        return 0
 
     if args.command == "runtime-start":
         config = TradingConfig.from_env_file(Path(args.env_file))
@@ -255,105 +330,109 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.symbols
             else config.runtime.symbol_universe
         )
-        operator_store = FilesystemArtifactStore(
-            config.runtime.artifact_root / "operator_platform"
-        )
-        market_data_gateway = build_default_market_data_gateway(config)
-        activation_gateway = LocalActivationGateway(store=operator_store)
-        activation, snapshot = activation_gateway.load_or_create_active_records(symbols)
-        warmup = HistoricalWarmupService(
-            market_data_gateway=market_data_gateway,
-        ).build_warmup(
-            symbols=symbols,
-            benchmark_symbol="SPY",
-            warmup_days=60,
-            required_bar_count=30,
-        )
-        warmup_path = operator_store.write_historical_warmup_record(warmup)
-        trading_client = TradingClient(
-            config.paper_credentials.api_key,
-            config.paper_credentials.api_secret,
-            paper=True,
-        )
-        portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
-        selection = RuntimeOpportunityPlanner(
-            market_data_gateway=market_data_gateway,
-        ).plan(
-            symbols=symbols,
-            portfolio_state=portfolio_gateway.get_portfolio_state(),
-            activation=activation,
-            model_snapshot=snapshot,
-            warmup=warmup,
-        )
-        selection_path = operator_store.write_opportunity_selection_record(selection)
-        warmup_complete = all(symbol in warmup.symbols_ready for symbol in symbols)
-        runtime_state = BotRuntimeState(
-            status="trading_ready" if warmup_complete else "halted",
-            status_reason=(
-                "Runtime boot complete."
-                if warmup_complete
-                else "Warmup incomplete for one or more configured symbols."
-            ),
-            active_symbols=symbols,
-            started_at_utc=datetime.now(UTC),
-            updated_at_utc=datetime.now(UTC),
-            last_error=(
-                ""
-                if warmup_complete
-                else "Warmup incomplete for symbols: "
-                + ", ".join(
-                    symbol for symbol in symbols if symbol not in warmup.symbols_ready
-                )
-            ),
-            active_strategy_id=activation.strategy_id,
-            active_model_snapshot_id=snapshot.snapshot_id,
-            latest_selection_id=selection.selection_id,
-        )
-        runtime_state_path = operator_store.write_runtime_host_state(runtime_state)
-        learning_proposal = PostTradeLearningService().generate_from_artifact_store(
-            paper_store=FilesystemArtifactStore(
-                config.runtime.artifact_root / "paper_loop"
-            ),
-            activation=activation,
-            baseline_snapshot=snapshot,
-            minimum_supporting_trades=snapshot.minimum_supporting_trades,
-        )
-        if learning_proposal is not None:
-            operator_store.write_model_weight_proposal(learning_proposal)
-        runtime_service_result: Any | None = None
-        if warmup_complete:
-            runtime_service_result = build_runtime_host_paper_service(config).run(
+
+        def _start_runtime() -> tuple[int, dict[str, Any]]:
+            operator_store = FilesystemArtifactStore(
+                config.runtime.artifact_root / "operator_platform"
+            )
+            market_data_gateway = build_default_market_data_gateway(config)
+            activation_gateway = LocalActivationGateway(store=operator_store)
+            activation, snapshot = activation_gateway.load_or_create_active_records(
+                symbols
+            )
+            warmup = HistoricalWarmupService(
+                market_data_gateway=market_data_gateway,
+            ).build_warmup(
                 symbols=symbols,
-                quantity=Decimal(args.quantity),
-                interval_seconds=(
-                    args.interval_seconds or config.runtime.service_interval_seconds
-                ),
-                max_cycles=args.max_cycles,
+                benchmark_symbol="SPY",
+                warmup_days=60,
+                required_bar_count=30,
             )
-        print(
-            json.dumps(
-                _serialize(
-                    {
-                        "runtime_state": runtime_state,
-                        "runtime_state_path": runtime_state_path,
-                        "warmup": warmup,
-                        "warmup_path": warmup_path,
-                        "activation": activation,
-                        "model_snapshot": snapshot,
-                        "selection": selection,
-                        "selection_path": selection_path,
-                        "learning_proposal": learning_proposal,
-                        "service_result": runtime_service_result,
-                    }
-                ),
-                sort_keys=True,
+            warmup_path = operator_store.write_historical_warmup_record(warmup)
+            trading_client = TradingClient(
+                config.paper_credentials.api_key,
+                config.paper_credentials.api_secret,
+                paper=True,
             )
-        )
-        return 0
+            portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
+            selection = RuntimeOpportunityPlanner(
+                market_data_gateway=market_data_gateway,
+            ).plan(
+                symbols=symbols,
+                portfolio_state=portfolio_gateway.get_portfolio_state(),
+                activation=activation,
+                model_snapshot=snapshot,
+                warmup=warmup,
+            )
+            selection_path = operator_store.write_opportunity_selection_record(
+                selection
+            )
+            warmup_complete = all(symbol in warmup.symbols_ready for symbol in symbols)
+            runtime_state = BotRuntimeState(
+                status="trading_ready" if warmup_complete else "halted",
+                status_reason=(
+                    "Runtime boot complete."
+                    if warmup_complete
+                    else "Warmup incomplete for one or more configured symbols."
+                ),
+                active_symbols=symbols,
+                started_at_utc=datetime.now(UTC),
+                updated_at_utc=datetime.now(UTC),
+                last_error=(
+                    ""
+                    if warmup_complete
+                    else "Warmup incomplete for symbols: "
+                    + ", ".join(
+                        symbol
+                        for symbol in symbols
+                        if symbol not in warmup.symbols_ready
+                    )
+                ),
+                active_strategy_id=activation.strategy_id,
+                active_model_snapshot_id=snapshot.snapshot_id,
+                latest_selection_id=selection.selection_id,
+            )
+            runtime_state_path = operator_store.write_runtime_host_state(runtime_state)
+            learning_proposal = PostTradeLearningService().generate_from_artifact_store(
+                paper_store=FilesystemArtifactStore(
+                    config.runtime.artifact_root / "paper_loop"
+                ),
+                activation=activation,
+                baseline_snapshot=snapshot,
+                minimum_supporting_trades=snapshot.minimum_supporting_trades,
+            )
+            if learning_proposal is not None:
+                operator_store.write_model_weight_proposal(learning_proposal)
+            runtime_service_result: Any | None = None
+            if warmup_complete:
+                runtime_service_result = build_runtime_host_paper_service(config).run(
+                    symbols=symbols,
+                    quantity=Decimal(args.quantity),
+                    interval_seconds=(
+                        args.interval_seconds or config.runtime.service_interval_seconds
+                    ),
+                    max_cycles=args.max_cycles,
+                )
+            return (
+                0,
+                {
+                    "runtime_state": runtime_state,
+                    "runtime_state_path": runtime_state_path,
+                    "warmup": warmup,
+                    "warmup_path": warmup_path,
+                    "activation": activation,
+                    "model_snapshot": snapshot,
+                    "selection": selection,
+                    "selection_path": selection_path,
+                    "learning_proposal": learning_proposal,
+                    "service_result": runtime_service_result,
+                },
+            )
+
+        return _run_with_runtime_lock(config, _start_runtime)
 
     if args.command == "run-market-day":
         config = TradingConfig.from_env_file(Path(args.env_file))
-        runner = build_default_market_day_automation_runner(config)
         symbols = (
             tuple(
                 item.strip().upper() for item in args.symbols.split(",") if item.strip()
@@ -361,20 +440,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.symbols
             else config.runtime.symbol_universe
         )
-        market_day_result = runner.run_market_day(
-            symbols=symbols,
-            quantity=Decimal(args.quantity),
-            interval_seconds=(
-                args.interval_seconds or config.runtime.service_interval_seconds
+        return _run_with_runtime_lock(
+            config,
+            lambda: (
+                0,
+                build_default_market_day_automation_runner(config).run_market_day(
+                    symbols=symbols,
+                    quantity=Decimal(args.quantity),
+                    interval_seconds=(
+                        args.interval_seconds or config.runtime.service_interval_seconds
+                    ),
+                    max_heartbeats=args.max_heartbeats,
+                ),
             ),
-            max_heartbeats=args.max_heartbeats,
         )
-        print(json.dumps(_serialize(market_day_result), sort_keys=True))
-        return 0
 
     if args.command == "run-market-scheduler":
         config = TradingConfig.from_env_file(Path(args.env_file))
-        scheduler = build_default_market_day_scheduler(config)
         symbols = (
             tuple(
                 item.strip().upper() for item in args.symbols.split(",") if item.strip()
@@ -382,26 +464,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.symbols
             else config.runtime.symbol_universe
         )
-        scheduler_result = scheduler.run(
-            symbols=symbols,
-            quantity=Decimal(args.quantity),
-            interval_seconds=(
-                args.interval_seconds or config.runtime.service_interval_seconds
+        return _run_with_runtime_lock(
+            config,
+            lambda: (
+                0,
+                build_default_market_day_scheduler(config).run(
+                    symbols=symbols,
+                    quantity=Decimal(args.quantity),
+                    interval_seconds=(
+                        args.interval_seconds or config.runtime.service_interval_seconds
+                    ),
+                    poll_interval_seconds=(
+                        args.poll_interval_seconds
+                        or config.runtime.scheduler_poll_seconds
+                    ),
+                    max_scheduled_days=args.max_scheduled_days,
+                ),
             ),
-            poll_interval_seconds=(
-                args.poll_interval_seconds or config.runtime.scheduler_poll_seconds
-            ),
-            max_scheduled_days=args.max_scheduled_days,
         )
-        print(json.dumps(_serialize(scheduler_result), sort_keys=True))
-        return 0
 
     if args.command == "paper-recover":
         config = TradingConfig.from_env_file(Path(args.env_file))
-        paper_controller = build_default_paper_trading_controller(config)
-        recovery_result = paper_controller.recover_trading_cycle(args.symbol)
-        print(json.dumps(_serialize(recovery_result or {}), sort_keys=True))
-        return 0
+        return _run_with_runtime_lock(
+            config,
+            lambda: (
+                0,
+                build_default_paper_trading_controller(config).recover_trading_cycle(
+                    args.symbol
+                )
+                or {},
+            ),
+        )
 
     if args.command == "live-disable-status":
         config = TradingConfig.from_env_file(Path(args.env_file))
@@ -575,6 +668,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(_serialize(replay_result), sort_keys=True))
         return 0
 
+    if args.command == "dry-run-report":
+        dry_run_report = build_dry_run_report(
+            paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
+            snapshot_store=ContentAddressedSnapshotStore(Path(args.snapshot_root)),
+            journal=SqliteOmsJournal(Path(args.journal_path)),
+        )
+        artifact_path = write_dry_run_report(
+            report=dry_run_report,
+            output_dir=Path(args.output_dir),
+        )
+        payload = dict(dry_run_report)
+        payload["artifact_path"] = str(artifact_path)
+        print(json.dumps(_serialize(payload), sort_keys=True))
+        return 0
+
+    if args.command == "gates-0001-status":
+        payload = build_gates_0001_status(
+            dry_run_report_path=Path(args.dry_run_report_path),
+            ops_artifact_root=Path(args.ops_artifact_root),
+        )
+        print(json.dumps(_serialize(payload), sort_keys=True))
+        return 0
+
+    if args.command == "week1-rehearsal":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+
+        def _paper_account_state_provider() -> dict[str, Any]:
+            if not config.has_real_paper_credentials():
+                return {
+                    "status": "skipped",
+                    "reason": "Paper credentials are placeholders.",
+                }
+            trading_client = TradingClient(
+                config.paper_credentials.api_key,
+                config.paper_credentials.api_secret,
+                paper=True,
+            )
+            portfolio_state = AlpacaPortfolioGateway(
+                trading_client=trading_client
+            ).get_portfolio_state()
+            return {
+                "status": "recorded",
+                "cash": str(portfolio_state.cash),
+                "equity": str(portfolio_state.equity),
+                "buying_power": str(portfolio_state.buying_power),
+                "positions": [
+                    {
+                        "symbol": position.symbol,
+                        "quantity": str(position.quantity),
+                    }
+                    for position in portfolio_state.positions
+                ],
+                "open_orders": list(portfolio_state.open_orders),
+            }
+
+        payload = run_week1_rehearsal(
+            output_dir=Path(args.output_dir),
+            account_state_provider=_paper_account_state_provider,
+        )
+        print(json.dumps(_serialize(payload), sort_keys=True))
+        return 0
+
     if args.command == "web":
         config = TradingConfig.from_env_file(Path(args.env_file))
         run_web_app(
@@ -585,30 +740,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     config = TradingConfig.from_env_file(Path(args.env_file))
-    roundtrip_controller = build_default_controller(config)
     log_dir = (
         Path(args.log_dir)
         if args.log_dir is not None
         else config.runtime.artifact_root / "smoke"
     )
-    roundtrip_result = roundtrip_controller.run_paper_roundtrip(
-        args.symbol,
-        Decimal(args.quantity),
-        log_dir=log_dir,
+
+    return _run_with_runtime_lock(
+        config,
+        lambda: (
+            0,
+            {
+                "symbol": (
+                    result := build_default_controller(config).run_paper_roundtrip(
+                        args.symbol,
+                        Decimal(args.quantity),
+                        log_dir=log_dir,
+                    )
+                ).symbol,
+                "quantity": result.quantity,
+                "quote": asdict(result.quote),
+                "buy_order": asdict(result.buy_order),
+                "sell_order": asdict(result.sell_order),
+                "final_account": asdict(result.final_account),
+                "final_position_quantity": result.final_position_quantity,
+                "cash_delta": result.cash_delta,
+                "log_path": result.log_path,
+            },
+        ),
     )
-    payload = {
-        "symbol": roundtrip_result.symbol,
-        "quantity": roundtrip_result.quantity,
-        "quote": asdict(roundtrip_result.quote),
-        "buy_order": asdict(roundtrip_result.buy_order),
-        "sell_order": asdict(roundtrip_result.sell_order),
-        "final_account": asdict(roundtrip_result.final_account),
-        "final_position_quantity": roundtrip_result.final_position_quantity,
-        "cash_delta": roundtrip_result.cash_delta,
-        "log_path": roundtrip_result.log_path,
-    }
-    print(json.dumps(_serialize(payload), sort_keys=True))
-    return 0
 
 
 if __name__ == "__main__":

@@ -6,12 +6,12 @@ import subprocess
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide
+from alpaca.trading.enums import OrderSide, TimeInForce
 
 from tradingx.alerts import (
     OperatorAlertDispatcher,
@@ -26,7 +26,11 @@ from tradingx.data import (
     close_to_close_returns,
 )
 from tradingx.evaluation import evaluate_candidate
-from tradingx.execution import AlpacaPaperExecutionGateway
+from tradingx.execution import (
+    AlpacaPaperExecutionGateway,
+    OrderRejected,
+    classify_order_rejection_reason,
+)
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
 from tradingx.persistence import FilesystemArtifactStore
@@ -473,6 +477,25 @@ class PaperTradingLoopController:
             )
 
         if self._dry_run:
+            would_submit_limit_price = (
+                str(
+                    self._marketable_limit_price(
+                        trade_intent=trade_intent,
+                        market_snapshot=market_snapshot,
+                    )
+                )
+                if trade_intent.side in {"buy", "sell"}
+                else ""
+            )
+            reference_price = (
+                str(market_snapshot.ask_price)
+                if trade_intent.side == "buy"
+                else (
+                    str(market_snapshot.bid_price)
+                    if trade_intent.side == "sell"
+                    else ""
+                )
+            )
             self._append_journal_event(
                 event_type="simulated",
                 decision_path=decision_path,
@@ -483,6 +506,8 @@ class PaperTradingLoopController:
                     "side": trade_intent.side,
                     "quantity": str(trade_intent.quantity or quantity),
                     "reason_code": trade_intent.reason_code,
+                    "reference_price": reference_price,
+                    "would_submit_limit_price": would_submit_limit_price,
                 },
             )
             reconciliation = self._build_reconciliation(
@@ -516,42 +541,72 @@ class PaperTradingLoopController:
         existing_order = self._artifacts.read_order_record(trade_intent.intent_id)
         recovered = existing_order is not None
         execution_quantity = trade_intent.quantity or quantity
-        if existing_order is None:
-            self._append_journal_event(
-                event_type="submit_attempt",
-                decision_path=decision_path,
-                trade_intent=trade_intent,
-                client_order_id=client_order_id,
-                broker_order_id="",
-                payload={"reason_code": trade_intent.reason_code},
-            )
-            existing_order = self._execution.submit_market_order(
-                trade_intent.symbol,
-                execution_quantity,
-                OrderSide.BUY if trade_intent.side == "buy" else OrderSide.SELL,
-                client_order_id=client_order_id,
-            )
-            self._append_journal_event(
-                event_type="ack",
-                decision_path=decision_path,
-                trade_intent=trade_intent,
-                client_order_id=existing_order.client_order_id,
-                broker_order_id=existing_order.order_id,
-                payload={"status": existing_order.status},
-            )
-            order_path = self._artifacts.write_order_record(
-                trade_intent.intent_id,
-                existing_order,
-            )
-            self._metrics.record_evidence_artifact("order")
-        else:
-            order_path = self._artifacts.order_record_path(trade_intent.intent_id)
+        try:
+            if existing_order is None:
+                existing_order = self._find_existing_order_by_client_id(client_order_id)
+                if existing_order is not None:
+                    recovered = True
+                    self._append_journal_event(
+                        event_type="ack",
+                        decision_path=decision_path,
+                        trade_intent=trade_intent,
+                        client_order_id=existing_order.client_order_id,
+                        broker_order_id=existing_order.order_id,
+                        payload={
+                            "status": existing_order.status,
+                            "recovered_via_client_order_id": True,
+                        },
+                    )
+                    order_path = self._artifacts.write_order_record(
+                        trade_intent.intent_id,
+                        existing_order,
+                    )
+                    self._metrics.record_evidence_artifact("order")
+                else:
+                    self._append_journal_event(
+                        event_type="submit_attempt",
+                        decision_path=decision_path,
+                        trade_intent=trade_intent,
+                        client_order_id=client_order_id,
+                        broker_order_id="",
+                        payload={"reason_code": trade_intent.reason_code},
+                    )
+                    existing_order = self._submit_entry_or_exit_order(
+                        trade_intent=trade_intent,
+                        market_snapshot=market_snapshot,
+                        symbol=trade_intent.symbol,
+                        quantity=execution_quantity,
+                        client_order_id=client_order_id,
+                    )
+                    self._append_journal_event(
+                        event_type="ack",
+                        decision_path=decision_path,
+                        trade_intent=trade_intent,
+                        client_order_id=existing_order.client_order_id,
+                        broker_order_id=existing_order.order_id,
+                        payload={"status": existing_order.status},
+                    )
+                    order_path = self._artifacts.write_order_record(
+                        trade_intent.intent_id,
+                        existing_order,
+                    )
+                    self._metrics.record_evidence_artifact("order")
+            else:
+                order_path = self._artifacts.order_record_path(trade_intent.intent_id)
 
-        order_record = self._execution.wait_for_fill(
-            existing_order.order_id,
-            timeout_seconds=self._command_timeout_seconds,
-            poll_interval_seconds=0,
-        )
+            order_record = self._execution.wait_for_fill(
+                existing_order.order_id,
+                timeout_seconds=self._command_timeout_seconds,
+                poll_interval_seconds=0,
+            )
+        except OrderRejected as error:
+            return self._build_rejected_trade_result(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                decision_path=decision_path,
+                trade_path=trade_path,
+                error=error,
+            )
         order_record = self._merge_order_records(existing_order, order_record)
         self._artifacts.write_order_record(trade_intent.intent_id, order_record)
         self._append_journal_event(
@@ -613,6 +668,66 @@ class PaperTradingLoopController:
                 if path is not None
             ),
             recovered=recovered,
+        )
+
+    def _build_rejected_trade_result(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        portfolio_state: PortfolioState,
+        decision_path: Path,
+        trade_path: Path,
+        error: OrderRejected,
+    ) -> TradingLoopResult:
+        rejection_message = str(error)
+        reason_code = classify_order_rejection_reason(rejection_message)
+        self._append_journal_event(
+            event_type="reject",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            client_order_id=build_client_order_id(
+                decision_snapshot_id=decision_path.stem,
+                symbol=trade_intent.symbol,
+                side=trade_intent.side,
+                intent_seq=0,
+            ),
+            broker_order_id="",
+            payload={
+                "reason_code": reason_code,
+                "message": rejection_message,
+            },
+        )
+        force_reconciliation = reason_code == "insufficient_buying_power"
+        reconciliation = self._build_reconciliation(
+            trade_intent=trade_intent,
+            portfolio_state=portfolio_state,
+            differences=(reason_code,),
+            resolved=not force_reconciliation,
+        )
+        reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+            reconciliation
+        )
+        self._metrics.record_evidence_artifact("reconciliation")
+        self._metrics.record_trade_terminal_state("rejected")
+        self._metrics.record_reconciliation_age_seconds(
+            reconciliation.broker_state_age_seconds
+        )
+        return TradingLoopResult(
+            terminal_state="rejected",
+            trade_intent=trade_intent,
+            order_record=None,
+            risk_event=None,
+            reconciliation=reconciliation,
+            artifact_paths=tuple(
+                path
+                for path in (
+                    trade_path,
+                    self._policy_path,
+                    decision_path,
+                    reconciliation_path,
+                )
+                if path is not None
+            ),
         )
 
     def recover_trading_cycle(self, symbol: str) -> TradingLoopResult | None:
@@ -713,9 +828,7 @@ class PaperTradingLoopController:
                     final_score=Decimal("0"),
                     eligibility="eligible",
                     risk_status=(
-                        "pending"
-                        if risk_verdict_id == "risk-approved"
-                        else "blocked"
+                        "pending" if risk_verdict_id == "risk-approved" else "blocked"
                     ),
                 ),
             ),
@@ -770,6 +883,7 @@ class PaperTradingLoopController:
         trade_intent: TradeIntent,
         portfolio_state: PortfolioState,
         differences: tuple[str, ...],
+        resolved: bool = True,
     ) -> ReconciliationSnapshot:
         return ReconciliationSnapshot(
             reconciliation_id=self._reconciliation_id(trade_intent.intent_id),
@@ -779,7 +893,7 @@ class PaperTradingLoopController:
                 int((self._now_provider() - portfolio_state.as_of_utc).total_seconds()),
             ),
             differences=differences,
-            resolved=True,
+            resolved=resolved,
         )
 
     def _reconciliation_id(self, intent_id: str) -> str:
@@ -843,6 +957,71 @@ class PaperTradingLoopController:
             bid_price=market_snapshot.bid_price,
             ask_price=market_snapshot.ask_price,
             average_daily_volume_30d=market_snapshot.average_daily_volume_30d,
+        )
+
+    def _marketable_limit_price(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        market_snapshot: MarketSnapshot,
+    ) -> Decimal:
+        if self._policy_snapshot is None:
+            buffer_bps = Decimal("10")
+        elif trade_intent.side == "buy":
+            buffer_bps = self._policy_snapshot.entry_marketable_limit_bps
+        else:
+            buffer_bps = self._policy_snapshot.exit_marketable_limit_bps
+        if trade_intent.side == "buy":
+            reference_price = market_snapshot.ask_price
+            multiplier = Decimal("1") + (buffer_bps / Decimal("10000"))
+        else:
+            reference_price = market_snapshot.bid_price
+            multiplier = Decimal("1") - (buffer_bps / Decimal("10000"))
+        return (reference_price * multiplier).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+
+    def _find_existing_order_by_client_id(
+        self,
+        client_order_id: str,
+    ) -> Any | None:
+        finder = getattr(self._execution, "find_order_by_client_id", None)
+        if callable(finder):
+            return finder(client_order_id)
+        return None
+
+    def _submit_entry_or_exit_order(
+        self,
+        trade_intent: TradeIntent,
+        market_snapshot: MarketSnapshot,
+        symbol: str,
+        quantity: Decimal,
+        client_order_id: str,
+    ) -> Any:
+        submit_marketable_limit_order = getattr(
+            self._execution,
+            "submit_marketable_limit_order",
+            None,
+        )
+        side = OrderSide.BUY if trade_intent.side == "buy" else OrderSide.SELL
+        if callable(submit_marketable_limit_order):
+            return submit_marketable_limit_order(
+                symbol,
+                quantity,
+                side,
+                limit_price=self._marketable_limit_price(
+                    trade_intent=trade_intent,
+                    market_snapshot=market_snapshot,
+                ),
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+            )
+        return self._execution.submit_market_order(
+            symbol,
+            quantity,
+            side,
+            client_order_id=client_order_id,
         )
 
     def _write_closed_trade_record_if_available(
@@ -1076,7 +1255,7 @@ def build_default_paper_trading_controller(
         artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         alert_dispatcher=build_alert_dispatcher(config),
-        regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
+        regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         command_timeout_seconds=config.runtime.command_timeout_seconds,
         policy_snapshot=policy_snapshot,
         policy_store=PolicySnapshotStore(config.runtime.data_root / "policy"),

@@ -37,6 +37,8 @@ def test_week1_policy_snapshot_has_locked_defaults(tmp_path: Path) -> None:
     assert snapshot.data_stall_seconds == 30
     assert snapshot.broker_failure_threshold == 2
     assert snapshot.broker_staleness_seconds == 60
+    assert snapshot.entry_marketable_limit_bps == Decimal("10")
+    assert snapshot.exit_marketable_limit_bps == Decimal("10")
     assert tuple(step.stage for step in snapshot.close_ladder) == (
         "halt_entries",
         "flatten_marketable_limit",
@@ -63,6 +65,7 @@ def test_policy_snapshot_store_writes_yaml_with_stable_filename(tmp_path: Path) 
     payload = path.read_text(encoding="utf-8")
     assert "schema_version: 1" in payload
     assert "max_new_entries_per_day: 3" in payload
+    assert "entry_marketable_limit_bps: 10" in payload
     assert "stage: flatten_market" in payload
 
 
@@ -173,6 +176,5 @@ def test_execution_policy_engine_selects_close_ladder_stage(
     engine = ExecutionPolicyEngine(snapshot)
 
     assert (
-        engine.close_ladder_stage(minutes_to_close=minutes_to_close)
-        == expected_stage
+        engine.close_ladder_stage(minutes_to_close=minutes_to_close) == expected_stage
     )

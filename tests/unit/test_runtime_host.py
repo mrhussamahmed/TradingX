@@ -12,6 +12,7 @@ from tradingx.types import (
     OpportunityScore,
     OpportunitySelectionRecord,
     PortfolioState,
+    ReconciliationSnapshot,
     StrategyActivationRecord,
 )
 
@@ -113,6 +114,25 @@ class FakeActivationGateway:
         symbols: tuple[str, ...],
     ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]:
         return self._activation, self._snapshot
+
+    def get_latest_activation(self) -> StrategyActivationRecord | None:
+        return self._activation
+
+    def get_latest_snapshot(self, *, strategy_id: str) -> ModelWeightSnapshot | None:
+        del strategy_id
+        return self._snapshot
+
+
+class FakeReconciliationGateway:
+    def __init__(self, snapshots: list[ReconciliationSnapshot]) -> None:
+        self._snapshots = snapshots
+        self.calls = 0
+
+    def reconcile(self) -> ReconciliationSnapshot:
+        self.calls += 1
+        if not self._snapshots:
+            raise AssertionError("No reconciliation snapshot available.")
+        return self._snapshots.pop(0)
 
 
 class FakeOpportunityPlanner:
@@ -363,4 +383,176 @@ def test_runtime_host_halts_when_service_manager_rejects_start(tmp_path) -> None
     state = manager.get_state()
 
     assert state.last_error == "Paper service is already running."
-    assert service_manager.calls == [(("SPY", "QQQ"), Decimal("1"), 300, 1)]
+
+
+def test_runtime_host_enters_recovery_required_when_startup_reconciliation_fails(
+    tmp_path,
+) -> None:
+    activation = StrategyActivationRecord(
+        activation_id="activation-3",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY",),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Baseline activation.",
+    )
+    snapshot = ModelWeightSnapshot(
+        snapshot_id="snapshot-3",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 15, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={
+            "signal": Decimal("1.0"),
+            "regime": Decimal("1.0"),
+            "liquidity": Decimal("1.0"),
+            "spread_penalty": Decimal("1.0"),
+            "volatility_penalty": Decimal("1.0"),
+            "portfolio_overlap_penalty": Decimal("1.0"),
+            "execution_cost_penalty": Decimal("1.0"),
+        },
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-3",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY",),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY",),
+        symbols_blocked={},
+        return_summary={"benchmark": {"cumulative_return": Decimal("0.02")}},
+    )
+    reconciliation_gateway = FakeReconciliationGateway(
+        [
+            ReconciliationSnapshot(
+                reconciliation_id="reconcile-start",
+                portfolio_state=FakePortfolioGateway().get_portfolio_state(),
+                broker_state_age_seconds=0,
+                differences=("broker_position_unknown_to_journal",),
+                resolved=False,
+            )
+        ]
+    )
+    service_manager = FakeServiceManager()
+    manager = LocalRuntimeHostManager(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        operator_store_root=tmp_path / "artifacts" / "operator_platform",
+        service_manager=service_manager,
+        warmup_service=FakeWarmupService(warmup),
+        activation_gateway=FakeActivationGateway(activation, snapshot),
+        opportunity_planner=FakeOpportunityPlanner(),
+        portfolio_gateway=FakePortfolioGateway(),
+        reconciliation_gateway=reconciliation_gateway,
+    )
+
+    manager.start(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    _wait_for(lambda: manager.get_state().status == "recovery_required")
+    state = manager.get_state()
+
+    assert reconciliation_gateway.calls == 1
+    assert service_manager.calls == []
+    assert "broker_position_unknown_to_journal" in state.last_error
+
+
+def test_runtime_host_clearance_request_reconciles_back_to_nominal(tmp_path) -> None:
+    activation = StrategyActivationRecord(
+        activation_id="activation-4",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY",),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Baseline activation.",
+    )
+    snapshot = ModelWeightSnapshot(
+        snapshot_id="snapshot-4",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 15, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={
+            "signal": Decimal("1.0"),
+            "regime": Decimal("1.0"),
+            "liquidity": Decimal("1.0"),
+            "spread_penalty": Decimal("1.0"),
+            "volatility_penalty": Decimal("1.0"),
+            "portfolio_overlap_penalty": Decimal("1.0"),
+            "execution_cost_penalty": Decimal("1.0"),
+        },
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-4",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY",),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY",),
+        symbols_blocked={},
+        return_summary={"benchmark": {"cumulative_return": Decimal("0.02")}},
+    )
+    reconciliation_gateway = FakeReconciliationGateway(
+        [
+            ReconciliationSnapshot(
+                reconciliation_id="reconcile-start",
+                portfolio_state=FakePortfolioGateway().get_portfolio_state(),
+                broker_state_age_seconds=0,
+                differences=("broker_position_unknown_to_journal",),
+                resolved=False,
+            ),
+            ReconciliationSnapshot(
+                reconciliation_id="reconcile-clearance",
+                portfolio_state=FakePortfolioGateway().get_portfolio_state(),
+                broker_state_age_seconds=0,
+                differences=(),
+                resolved=True,
+            ),
+        ]
+    )
+    service_manager = FakeServiceManager()
+    manager = LocalRuntimeHostManager(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        operator_store_root=tmp_path / "artifacts" / "operator_platform",
+        service_manager=service_manager,
+        warmup_service=FakeWarmupService(warmup),
+        activation_gateway=FakeActivationGateway(activation, snapshot),
+        opportunity_planner=FakeOpportunityPlanner(),
+        portfolio_gateway=FakePortfolioGateway(),
+        reconciliation_gateway=reconciliation_gateway,
+    )
+
+    manager.start(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+    _wait_for(lambda: manager.get_state().status == "recovery_required")
+
+    result = manager.request_clearance()
+
+    _wait_for(lambda: manager.get_state().status == "nominal")
+    state = manager.get_state()
+
+    assert result.status == "accepted"
+    assert reconciliation_gateway.calls == 2
+    assert state.last_error == ""
+    assert service_manager.calls == [(("SPY",), Decimal("1"), 300, 1)]

@@ -7,6 +7,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx import __main__ as cli
+from tradingx.journal import SqliteOmsJournal
+from tradingx.persistence import FilesystemArtifactStore
+from tradingx.snapshots import (
+    CandidateIntentSnapshot,
+    ContentAddressedSnapshotStore,
+    DecisionSnapshotV1,
+)
 from tradingx.types import (
     AccountSnapshot,
     ExecutionLifecycleRecord,
@@ -23,6 +30,8 @@ from tradingx.types import (
     OrderRecord,
     PortfolioState,
     RoundTripResult,
+    ServiceCycleSnapshot,
+    ServiceSymbolResult,
     StrategyActivationRecord,
 )
 
@@ -420,7 +429,9 @@ def test_parser_exposes_market_day_scheduler_command() -> None:
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
 
@@ -436,7 +447,9 @@ def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
 def test_main_runs_paper_roundtrip_command(monkeypatch, tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -466,7 +479,9 @@ def test_main_runs_paper_roundtrip_command(monkeypatch, tmp_path, capsys) -> Non
 def test_main_runs_paper_loop_command(monkeypatch, tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
     fake_controller = FakePaperLoopController()
@@ -492,6 +507,46 @@ def test_main_runs_paper_loop_command(monkeypatch, tmp_path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert fake_controller.called_with == ("SPY", Decimal("1"))
     assert payload["terminal_state"] == "reconciled_trade"
+
+
+def test_main_paper_loop_rejects_when_runtime_lock_is_held(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
+        encoding="utf-8",
+    )
+    fake_controller = FakePaperLoopController()
+    monkeypatch.setattr(
+        cli,
+        "build_default_paper_trading_controller",
+        lambda config: fake_controller,
+    )
+
+    data_root = tmp_path / "data"
+    data_root.mkdir(parents=True, exist_ok=True)
+    lock_path = data_root / "runtime.pid"
+    with cli.runtime_process_lock(lock_path):
+        exit_code = cli.main(
+            [
+                "paper-loop",
+                "--env-file",
+                str(env_file),
+                "--symbol",
+                "SPY",
+                "--quantity",
+                "1",
+            ]
+        )
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "blocked"
+    assert "already controls this data root" in payload["error"]
+    assert fake_controller.called_with is None
 
 
 def test_main_runs_recovery_command(monkeypatch, tmp_path, capsys) -> None:
@@ -1084,6 +1139,188 @@ def test_main_runs_market_day_scheduler_command(monkeypatch, tmp_path, capsys) -
         "poll_interval_seconds": 120,
         "max_scheduled_days": 2,
     }
+
+
+def test_main_generates_dry_run_report_artifact(tmp_path, capsys) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    snapshot_store = ContentAddressedSnapshotStore(tmp_path / "snapshots")
+    journal = SqliteOmsJournal(tmp_path / "journal.db")
+
+    snapshot = DecisionSnapshotV1(
+        schema_version=1,
+        timestamp_utc=datetime(2026, 4, 20, 13, 45, tzinfo=UTC),
+        cycle_correlation_id="cycle-1",
+        session_snapshot_id="session-1",
+        universe_snapshot_id="week1-spy",
+        policy_snapshot_id="policy-1",
+        model_snapshot_id="baseline",
+        strategy_version="baseline-long-only-v1",
+        strategy_config_hash="cfg-1",
+        git_sha="abc1234",
+        dry_run=True,
+        market_data_window_hash="market-1",
+        feature_snapshot_id="feature-1",
+        session_start_equity=Decimal("100000"),
+        candidate_intents=(
+            CandidateIntentSnapshot(
+                symbol="SPY",
+                selected=True,
+                terminal_reason="baseline_long_entry",
+                base_score=Decimal("1"),
+                final_score=Decimal("0.8"),
+                eligibility="eligible",
+                risk_status="approved",
+            ),
+        ),
+        final_action="dry_run",
+        risk_verdict_id="risk-1",
+    )
+    snapshot_store.write_decision_snapshot(snapshot)
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-1",
+            started_at_utc=datetime(2026, 4, 20, 13, 45, tzinfo=UTC),
+            completed_at_utc=datetime(2026, 4, 20, 13, 45, tzinfo=UTC),
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(
+                ServiceSymbolResult(
+                    symbol="SPY",
+                    terminal_state="dry_run",
+                    reason_code="baseline_long_entry",
+                    recovered=False,
+                ),
+            ),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=(),
+            cash=Decimal("100000"),
+            equity=Decimal("100000"),
+            buying_power=Decimal("100000"),
+        )
+    )
+    journal.append_event(
+        event_type="simulated",
+        recorded_at_utc=datetime(2026, 4, 20, 13, 45, tzinfo=UTC),
+        decision_snapshot_id=snapshot.decision_snapshot_id,
+        cycle_correlation_id="cycle-1",
+        client_order_id="cid-1",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={
+            "quantity": "1",
+            "reason_code": "baseline_long_entry",
+            "reference_price": "600.10",
+            "would_submit_limit_price": "600.70",
+        },
+    )
+
+    exit_code = cli.main(
+        [
+            "dry-run-report",
+            "--paper-artifact-root",
+            str(tmp_path / "paper_loop"),
+            "--snapshot-root",
+            str(tmp_path / "snapshots"),
+            "--journal-path",
+            str(tmp_path / "journal.db"),
+            "--output-dir",
+            str(tmp_path / "reports"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["artifact_path"].endswith(".json")
+    assert payload["dry_run"] is True
+    assert payload["cycle_count"] == 1
+
+
+def test_main_reports_gates_0001_status(tmp_path, capsys) -> None:
+    dry_run_report_path = tmp_path / "dry-run-report-2026-04-20.json"
+    dry_run_report_path.write_text(
+        json.dumps(
+            {
+                "blocked_intents": [{"reason": "daily_entry_cap_reached"}],
+                "major_path_coverage": {
+                    "entry": True,
+                    "exit": True,
+                    "halt": True,
+                    "reject": True,
+                    "recovery": True,
+                },
+                "anomalies": {
+                    "unexpected_log_levels": [],
+                    "reconciliation_flags": [],
+                    "cycle_overruns": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ops_root = tmp_path / "ops"
+    ops_root.mkdir(parents=True, exist_ok=True)
+    (ops_root / "operator_control_verification.json").write_text(
+        json.dumps({"status": "pass"}),
+        encoding="utf-8",
+    )
+    (ops_root / "premortem_review.json").write_text(
+        json.dumps({"reviewers": ["snooze", "solo", "week1"]}),
+        encoding="utf-8",
+    )
+    (ops_root / "sunday_rehearsal.json").write_text(
+        json.dumps({"status": "pass"}),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "gates-0001-status",
+            "--dry-run-report-path",
+            str(dry_run_report_path),
+            "--ops-artifact-root",
+            str(ops_root),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["gate_id"] == "GATES-0001"
+    assert payload["status"] == "pass"
+
+
+def test_main_runs_week1_rehearsal_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=placeholder\nALPACA_PAPER_API_SECRET=placeholder\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_week1_rehearsal",
+        lambda *, output_dir, account_state_provider: {
+            "status": "pass",
+            "artifacts": {"sunday_rehearsal": str(Path(output_dir) / "x.json")},
+            "drills": [],
+            "paper_account_starting_state": {"status": "skipped"},
+        },
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "week1-rehearsal",
+            "--env-file",
+            str(env_file),
+            "--output-dir",
+            str(tmp_path / "ops"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "pass"
 
 
 def test_gate3_parser_defaults() -> None:

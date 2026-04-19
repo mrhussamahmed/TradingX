@@ -58,6 +58,8 @@ class PolicySnapshot:
     data_stall_seconds: int
     broker_failure_threshold: int
     broker_staleness_seconds: int
+    entry_marketable_limit_bps: Decimal
+    exit_marketable_limit_bps: Decimal
     decision_budget_seconds: int
     cycle_budget_seconds: int
     close_ladder: tuple[CloseLadderStep, ...]
@@ -122,13 +124,13 @@ def build_week1_policy_snapshot(
         "data_stall_seconds": 30,
         "broker_failure_threshold": 2,
         "broker_staleness_seconds": 60,
+        "entry_marketable_limit_bps": Decimal("10"),
+        "exit_marketable_limit_bps": Decimal("10"),
         "decision_budget_seconds": 5,
         "cycle_budget_seconds": 30,
         "close_ladder": close_ladder,
     }
-    snapshot_hash = hashlib.sha256(
-        _canonical_json(payload).encode("utf-8")
-    ).hexdigest()
+    snapshot_hash = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
     return PolicySnapshot(
         policy_snapshot_id=f"policy-{snapshot_hash}",
         generated_at_utc=generated_at_utc,
@@ -149,6 +151,8 @@ def build_week1_policy_snapshot(
         data_stall_seconds=30,
         broker_failure_threshold=2,
         broker_staleness_seconds=60,
+        entry_marketable_limit_bps=Decimal("10"),
+        exit_marketable_limit_bps=Decimal("10"),
         decision_budget_seconds=5,
         cycle_budget_seconds=30,
         close_ladder=close_ladder,
@@ -194,6 +198,8 @@ class PolicySnapshotStore:
             ("data_stall_seconds", snapshot.data_stall_seconds),
             ("broker_failure_threshold", snapshot.broker_failure_threshold),
             ("broker_staleness_seconds", snapshot.broker_staleness_seconds),
+            ("entry_marketable_limit_bps", snapshot.entry_marketable_limit_bps),
+            ("exit_marketable_limit_bps", snapshot.exit_marketable_limit_bps),
             ("decision_budget_seconds", snapshot.decision_budget_seconds),
             ("cycle_budget_seconds", snapshot.cycle_budget_seconds),
             ("snapshot_hash", snapshot.snapshot_hash),
@@ -240,10 +246,7 @@ class ExecutionPolicyEngine:
             return PolicyDecision(allowed=False, reason_code="spread_relative_cap")
         if context.entries_today >= self._snapshot.max_new_entries_per_day:
             return PolicyDecision(allowed=False, reason_code="daily_entry_cap_reached")
-        if (
-            context.entries_for_symbol
-            >= self._snapshot.max_entries_per_symbol_per_day
-        ):
+        if context.entries_for_symbol >= self._snapshot.max_entries_per_symbol_per_day:
             return PolicyDecision(
                 allowed=False,
                 reason_code="per_symbol_entry_cap_reached",

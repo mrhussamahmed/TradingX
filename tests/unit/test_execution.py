@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from alpaca.trading.enums import OrderSide
+from alpaca.trading.enums import OrderSide, TimeInForce
 
 from tradingx.execution import AlpacaPaperExecutionGateway, OrderRejected
 
@@ -36,6 +36,7 @@ class FakeTradingClient:
             FakeOrder(order_id="order-1", status="new"),
             FakeOrder(order_id="order-1", status="filled"),
         ]
+        self.order_by_client_id: FakeOrder | None = None
 
     def submit_order(self, order_data):
         self.submitted = order_data
@@ -51,6 +52,11 @@ class FakeTradingClient:
 
     def get_order_by_id(self, order_id, filter=None):
         return self.order_reads.pop(0)
+
+    def get_order_by_client_id(self, client_order_id):
+        if self.order_by_client_id is None:
+            raise RuntimeError('{"message":"order not found"}')
+        return self.order_by_client_id
 
 
 def test_submit_and_wait_for_fill() -> None:
@@ -68,6 +74,50 @@ def test_submit_and_wait_for_fill() -> None:
     assert submitted.status == "accepted"
     assert filled.status == "filled"
     assert filled.filled_qty == Decimal("1")
+
+
+def test_submit_marketable_limit_order_uses_limit_order_request() -> None:
+    client = FakeTradingClient()
+    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+
+    submitted = gateway.submit_marketable_limit_order(
+        "SPY",
+        Decimal("1"),
+        OrderSide.BUY,
+        limit_price=Decimal("600.16"),
+        time_in_force=TimeInForce.DAY,
+        client_order_id="cid-limit",
+    )
+
+    assert client.submitted.symbol == "SPY"
+    assert client.submitted.limit_price == 600.16
+    assert client.submitted.time_in_force == TimeInForce.DAY
+    assert submitted.client_order_id == "cid-limit"
+
+
+def test_find_order_by_client_id_returns_none_when_broker_has_no_match() -> None:
+    client = FakeTradingClient()
+    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+
+    existing = gateway.find_order_by_client_id("cid-missing")
+
+    assert existing is None
+
+
+def test_find_order_by_client_id_returns_existing_order_when_present() -> None:
+    client = FakeTradingClient()
+    client.order_by_client_id = FakeOrder(
+        order_id="order-existing",
+        status="accepted",
+        client_order_id="cid-existing",
+    )
+    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+
+    existing = gateway.find_order_by_client_id("cid-existing")
+
+    assert existing is not None
+    assert existing.order_id == "order-existing"
+    assert existing.client_order_id == "cid-existing"
 
 
 def test_submit_oco_exit_order_uses_complex_exit_group() -> None:

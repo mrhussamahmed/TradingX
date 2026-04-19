@@ -58,6 +58,10 @@ class PaperTradingService:
         opportunity_selector: OpportunitySelectorProtocol | None = None,
         now_provider: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[int], None] | None = None,
+        monotonic_fn: Callable[[], float] | None = None,
+        cycle_budget_seconds: int = 30,
+        broker_failure_threshold: int = 2,
+        broker_staleness_seconds: int = 60,
     ) -> None:
         self._loop_controller = loop_controller
         self._portfolio = portfolio
@@ -67,7 +71,13 @@ class PaperTradingService:
         self._opportunity_selector = opportunity_selector
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._sleep_fn = sleep_fn or (lambda seconds: __import__("time").sleep(seconds))
+        self._monotonic_fn = monotonic_fn or __import__("time").monotonic
+        self._cycle_budget_seconds = cycle_budget_seconds
+        self._broker_failure_threshold = broker_failure_threshold
+        self._broker_staleness_seconds = broker_staleness_seconds
         self._session_start_equity: Decimal | None = None
+        self._last_successful_broker_call_at: datetime | None = None
+        self._last_known_portfolio_state: PortfolioState | None = None
 
     def run(
         self,
@@ -107,78 +117,116 @@ class PaperTradingService:
         quantity: Decimal,
     ) -> ServiceCycleSnapshot:
         started_at = self._now_provider()
+        cycle_started_at = self._monotonic_fn()
         symbol_results: list[ServiceSymbolResult] = []
         blocked_trade_count = 0
         reconciliation_failure_count = 0
         cycle_status = "market_closed"
-        initial_portfolio_state = self._portfolio.get_portfolio_state()
-        if self._regular_hours_checker(started_at):
-            cycle_status = "executed"
-            open_symbols = {
-                position.symbol
-                for position in initial_portfolio_state.positions
-                if position.quantity != Decimal("0")
-            }
-            for symbol in symbols:
-                if symbol not in open_symbols:
-                    continue
-                result = self._loop_controller.run_trading_cycle(symbol, quantity)
-                symbol_results.append(
-                    ServiceSymbolResult(
-                        symbol=symbol,
-                        terminal_state=result.terminal_state,
-                        reason_code=result.trade_intent.reason_code,
-                        recovered=result.recovered,
-                    )
-                )
-                if result.terminal_state == "blocked_trade":
-                    blocked_trade_count += 1
-                if not result.reconciliation.resolved:
-                    reconciliation_failure_count += 1
-            candidate_symbols = tuple(
-                symbol for symbol in symbols if symbol not in open_symbols
+        if not self._regular_hours_checker(started_at):
+            initial_portfolio_state = (
+                self._last_known_portfolio_state or self._empty_portfolio_state()
             )
-            if self._opportunity_selector is None:
-                for symbol in candidate_symbols:
+            portfolio_state = initial_portfolio_state
+        else:
+            broker_status, initial_portfolio_state = self._get_portfolio_state_guarded()
+            if broker_status is not None:
+                cycle_status = broker_status
+                portfolio_state = initial_portfolio_state
+            else:
+                cycle_status = "executed"
+                open_symbols = {
+                    position.symbol
+                    for position in initial_portfolio_state.positions
+                    if position.quantity != Decimal("0")
+                }
+                for symbol in symbols:
+                    if symbol not in open_symbols:
+                        continue
                     result = self._loop_controller.run_trading_cycle(symbol, quantity)
+                    reason_code = self._result_reason_code(result)
                     symbol_results.append(
                         ServiceSymbolResult(
                             symbol=symbol,
                             terminal_state=result.terminal_state,
-                            reason_code=result.trade_intent.reason_code,
+                            reason_code=reason_code,
                             recovered=result.recovered,
                         )
                     )
                     if result.terminal_state == "blocked_trade":
                         blocked_trade_count += 1
+                        if reason_code in {"stale_market_data", "stale_quote"}:
+                            cycle_status = "data_unavailable"
                     if not result.reconciliation.resolved:
                         reconciliation_failure_count += 1
-            elif candidate_symbols:
-                selection = self._opportunity_selector.select_for_service(
-                    symbols=candidate_symbols,
-                    portfolio_state=initial_portfolio_state,
+                        cycle_status = "recovery_required"
+                candidate_symbols = tuple(
+                    symbol for symbol in symbols if symbol not in open_symbols
                 )
-                if selection.decision == "selected" and selection.selected_symbol:
-                    result = self._loop_controller.run_trading_cycle(
-                        selection.selected_symbol,
-                        quantity,
-                    )
-                    symbol_results.append(
-                        ServiceSymbolResult(
-                            symbol=selection.selected_symbol,
-                            terminal_state=result.terminal_state,
-                            reason_code=result.trade_intent.reason_code,
-                            recovered=result.recovered,
+                if self._opportunity_selector is None:
+                    for symbol in candidate_symbols:
+                        result = self._loop_controller.run_trading_cycle(
+                            symbol,
+                            quantity,
                         )
+                        reason_code = self._result_reason_code(result)
+                        symbol_results.append(
+                            ServiceSymbolResult(
+                                symbol=symbol,
+                                terminal_state=result.terminal_state,
+                                reason_code=reason_code,
+                                recovered=result.recovered,
+                            )
+                        )
+                        if result.terminal_state == "blocked_trade":
+                            blocked_trade_count += 1
+                            if reason_code in {"stale_market_data", "stale_quote"}:
+                                cycle_status = "data_unavailable"
+                        if not result.reconciliation.resolved:
+                            reconciliation_failure_count += 1
+                            cycle_status = "recovery_required"
+                elif candidate_symbols:
+                    selection = self._opportunity_selector.select_for_service(
+                        symbols=candidate_symbols,
+                        portfolio_state=initial_portfolio_state,
                     )
-                    if result.terminal_state == "blocked_trade":
-                        blocked_trade_count += 1
-                    if not result.reconciliation.resolved:
-                        reconciliation_failure_count += 1
-        portfolio_state = self._portfolio.get_portfolio_state()
+                    if selection.decision == "selected" and selection.selected_symbol:
+                        result = self._loop_controller.run_trading_cycle(
+                            selection.selected_symbol,
+                            quantity,
+                        )
+                        reason_code = self._result_reason_code(result)
+                        symbol_results.append(
+                            ServiceSymbolResult(
+                                symbol=selection.selected_symbol,
+                                terminal_state=result.terminal_state,
+                                reason_code=reason_code,
+                                recovered=result.recovered,
+                            )
+                        )
+                        if result.terminal_state == "blocked_trade":
+                            blocked_trade_count += 1
+                            if reason_code in {"stale_market_data", "stale_quote"}:
+                                cycle_status = "data_unavailable"
+                        if not result.reconciliation.resolved:
+                            reconciliation_failure_count += 1
+                            cycle_status = "recovery_required"
+                broker_status_after_cycle, portfolio_state = (
+                    self._get_portfolio_state_guarded()
+                )
+                if (
+                    broker_status_after_cycle is not None
+                    and cycle_status != "recovery_required"
+                ):
+                    cycle_status = broker_status_after_cycle
         if self._session_start_equity is None:
             self._session_start_equity = portfolio_state.equity
         daily_pnl = portfolio_state.equity - self._session_start_equity
+        cycle_duration_seconds = self._monotonic_fn() - cycle_started_at
+        if (
+            cycle_duration_seconds > self._cycle_budget_seconds
+            and cycle_status != "recovery_required"
+        ):
+            cycle_status = "cycle_overrun"
         self._metrics.record_service_cycle(cycle_status)
         self._metrics.record_symbols_scanned(len(symbol_results))
         self._metrics.record_open_positions(
@@ -210,6 +258,57 @@ class PaperTradingService:
             buying_power=portfolio_state.buying_power,
         )
 
+    def _get_portfolio_state_guarded(self) -> tuple[str | None, PortfolioState]:
+        last_error: Exception | None = None
+        for _ in range(self._broker_failure_threshold):
+            try:
+                portfolio_state = self._portfolio.get_portfolio_state()
+            except Exception as error:
+                last_error = error
+                continue
+            self._last_successful_broker_call_at = self._now_provider()
+            self._last_known_portfolio_state = portfolio_state
+            if (
+                self._broker_state_age_seconds(portfolio_state)
+                > self._broker_staleness_seconds
+            ):
+                return "broker_unavailable", portfolio_state
+            return None, portfolio_state
+        if last_error is not None:
+            del last_error
+        fallback = self._last_known_portfolio_state or self._empty_portfolio_state()
+        if self._last_successful_broker_call_at is not None:
+            age_seconds = int(
+                (
+                    self._now_provider() - self._last_successful_broker_call_at
+                ).total_seconds()
+            )
+            if age_seconds > self._broker_staleness_seconds:
+                return "broker_unavailable", fallback
+        return "broker_unavailable", fallback
+
+    def _broker_state_age_seconds(self, portfolio_state: PortfolioState) -> int:
+        return max(
+            0,
+            int((self._now_provider() - portfolio_state.as_of_utc).total_seconds()),
+        )
+
+    def _empty_portfolio_state(self) -> PortfolioState:
+        timestamp = self._now_provider()
+        return PortfolioState(
+            as_of_utc=timestamp,
+            cash=Decimal("0"),
+            equity=Decimal("0"),
+            buying_power=Decimal("0"),
+            positions=(),
+            open_orders=(),
+        )
+
+    def _result_reason_code(self, result: TradingLoopResult) -> str:
+        if result.risk_event is not None and result.risk_event.control_type:
+            return result.risk_event.control_type
+        return result.trade_intent.reason_code
+
     def _open_position_symbols(
         self,
         portfolio_state: PortfolioState,
@@ -236,7 +335,7 @@ def build_default_paper_service(
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
-        regular_hours_checker=AlpacaRegularHoursCalendar(trading_client).is_open,
+        regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         opportunity_selector=opportunity_selector,
     )
 

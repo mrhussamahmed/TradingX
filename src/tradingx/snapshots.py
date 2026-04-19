@@ -121,6 +121,14 @@ class ContentAddressedSnapshotStore:
             )
         return path
 
+    def list_decision_snapshot_payloads(self) -> list[dict[str, Any]]:
+        if not self._root_dir.exists():
+            return []
+        return [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(self._root_dir.glob("*.json"))
+        ]
+
 
 __all__ = (
     "CandidateIntentSnapshot",

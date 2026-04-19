@@ -4,8 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
+import exchange_calendars as xcals  # type: ignore[import-untyped]
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import (
@@ -14,8 +14,6 @@ from alpaca.data.requests import (
     StockSnapshotRequest,
 )
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetCalendarRequest
 
 from tradingx.config import TradingConfig
 from tradingx.types import BenchmarkCloseSeries, LatestQuote, MarketSnapshot
@@ -199,8 +197,14 @@ class AlpacaMarketDataGateway:
 
 
 class AlpacaRegularHoursCalendar:
-    def __init__(self, trading_client: TradingClient) -> None:
-        self._trading_client = trading_client
+    def __init__(self, calendar_name: object = "XNYS") -> None:
+        # Backward compatibility: older call sites passed an Alpaca TradingClient
+        # into this boundary even though the exchange-calendar implementation
+        # no longer needs it. Any non-string argument falls back to XNYS.
+        resolved_calendar_name = (
+            calendar_name if isinstance(calendar_name, str) else "XNYS"
+        )
+        self._calendar = xcals.get_calendar(resolved_calendar_name)
 
     def is_open(self, observed_at_utc: datetime) -> bool:
         session_window = self.get_current_or_next_session(observed_at_utc)
@@ -214,33 +218,22 @@ class AlpacaRegularHoursCalendar:
         self,
         observed_at_utc: datetime,
     ) -> RegularSessionWindow | None:
-        eastern = ZoneInfo("America/New_York")
-        observed_at_eastern = observed_at_utc.astimezone(eastern)
-        calendars = self._trading_client.get_calendar(
-            GetCalendarRequest(
-                start=observed_at_eastern.date(),
-                end=(observed_at_eastern.date() + timedelta(days=14)),
-            )
+        calendars = self._calendar.sessions_in_range(
+            observed_at_utc.date(),
+            observed_at_utc.date() + timedelta(days=14),
         )
-        if isinstance(calendars, dict) or not calendars:
+        if len(calendars) == 0:
             return None
-        for calendar_entry in calendars:
-            session_open = calendar_entry.open
-            session_close = calendar_entry.close
-            if session_open.tzinfo is None:
-                session_open = session_open.replace(tzinfo=eastern)
-            else:
-                session_open = session_open.astimezone(eastern)
-            if session_close.tzinfo is None:
-                session_close = session_close.replace(tzinfo=eastern)
-            else:
-                session_close = session_close.astimezone(eastern)
-            if session_close < observed_at_eastern:
+        for session_label in calendars:
+            session = self._calendar.schedule.loc[session_label]
+            session_open = session["open"].to_pydatetime().astimezone(UTC)
+            session_close = session["close"].to_pydatetime().astimezone(UTC)
+            if session_close < observed_at_utc:
                 continue
             return RegularSessionWindow(
-                trading_day=session_open.date().isoformat(),
-                open_at_utc=session_open.astimezone(UTC),
-                close_at_utc=session_close.astimezone(UTC),
+                trading_day=session_label.date().isoformat(),
+                open_at_utc=session_open,
+                close_at_utc=session_close,
             )
         return None
 

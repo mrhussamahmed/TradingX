@@ -40,6 +40,13 @@ For the canonical runtime/appliance file map used for future
 development, use
 [CURRENT_ARCHITECTURE.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/architecture/CURRENT_ARCHITECTURE.md:1).
 
+For the current week-1 dry-run posture, generate the Sunday rehearsal
+artifacts with:
+
+```bash
+uv run tradingx week1-rehearsal --env-file .env --output-dir artifacts/ops
+```
+
 ## Core commands
 
 ```bash
@@ -60,6 +67,7 @@ uv run tradingx alert-drill --env-file .env --channel smtp
 uv run tradingx replay-slippage-report --paper-artifact-root artifacts/paper_loop --validation-artifact-root artifacts/validation
 uv run tradingx gate3-report --env-file .env
 uv run tradingx gate3-package --env-file .env
+uv run tradingx week1-rehearsal --env-file .env --output-dir artifacts/ops
 uv run tradingx web --env-file .env
 ```
 

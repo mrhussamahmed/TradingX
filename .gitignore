@@ -9,6 +9,7 @@
 *.pyc
 __pycache__/
 artifacts/
+data/
 webapp/dist/
 webapp/node_modules/
 
