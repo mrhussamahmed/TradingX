@@ -39,6 +39,8 @@ def test_runtime_config_defaults_are_safe() -> None:
     assert config.runtime.metrics_namespace == "tradingx"
     assert config.runtime.enforce_regular_hours is True
     assert getattr(config.runtime, "scheduler_poll_seconds", None) == 60
+    assert getattr(config.runtime, "log_max_bytes", None) == 100 * 1024 * 1024
+    assert getattr(config.runtime, "log_retention_files", None) == 30
     assert config.runtime.dry_run is False
 
 
@@ -51,6 +53,8 @@ def test_runtime_config_overrides_are_parsed_from_mapping() -> None:
             "TRADINGX_COMMAND_TIMEOUT_SECONDS": "45",
             "TRADINGX_SERVICE_INTERVAL_SECONDS": "600",
             "TRADINGX_SCHEDULER_POLL_SECONDS": "120",
+            "TRADINGX_LOG_MAX_BYTES": "2048",
+            "TRADINGX_LOG_RETENTION_FILES": "7",
             "TRADINGX_SYMBOL_UNIVERSE": "SPY,QQQ,IWM",
             "TRADINGX_DATA_ROOT": "custom-data",
             "TRADINGX_DRY_RUN": "true",
@@ -64,6 +68,8 @@ def test_runtime_config_overrides_are_parsed_from_mapping() -> None:
     assert config.runtime.command_timeout_seconds == 45
     assert config.runtime.service_interval_seconds == 600
     assert getattr(config.runtime, "scheduler_poll_seconds", None) == 120
+    assert getattr(config.runtime, "log_max_bytes", None) == 2048
+    assert getattr(config.runtime, "log_retention_files", None) == 7
     assert config.runtime.symbol_universe == ("SPY", "QQQ", "IWM")
     assert config.runtime.dry_run is True
 

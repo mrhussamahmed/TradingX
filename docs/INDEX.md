@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.17
+version: 1.2.18
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: INDEX-0001@1.2.16
+supersedes: INDEX-0001@1.2.17
 superseded_by: null
-author_session: SESS-2026-04-19-026
+author_session: SESS-2026-04-19-027
 ---
 
 # Artifact index
@@ -65,22 +65,22 @@ field (session lifecycle). This index tracks `status` only.
 | --------------- | ----------------------- | ------- | ------ | ------------------------------------------- |
 | RUNBOOK-0001    | Session recovery        | 1.1.1   | active | `docs/operations/session_recovery.md`       |
 | RUNBOOK-0002    | Bootstrap install       | 1.0.1   | active | `docs/operations/bootstrap_install.md`      |
-| RUNBOOK-0003    | TradingX operator manual | 1.4.0  | active | `docs/operations/operator_manual.md`        |
+| RUNBOOK-0003    | TradingX operator manual | 1.4.1  | active | `docs/operations/operator_manual.md`        |
 | RUNBOOK-0004    | Week 1 premortem       | 1.0.0   | active | `docs/operations/week1_premortem.md`        |
-| RUNBOOK-0005    | Week 1 rehearsal and gates | 1.2.0 | active | `docs/operations/week1_rehearsal_and_gates.md` |
+| RUNBOOK-0005    | Week 1 rehearsal and gates | 1.2.1 | active | `docs/operations/week1_rehearsal_and_gates.md` |
 
 ### State files
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
-| STATE-0001  | Project state     | 1.0.4   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.17  | active | `docs/INDEX.md` (this file)   |
+| STATE-0001  | Project state     | 1.0.5   | active | `docs/handover/STATE.md`      |
+| INDEX-0001  | Artifact index    | 1.2.18  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
 | id           | title                    | version | status | path                                    |
 | ------------ | ------------------------ | ------- | ------ | --------------------------------------- |
-| ARCHMAP-0001 | Current architecture map | 1.4.0   | active | `docs/architecture/CURRENT_ARCHITECTURE.md` |
+| ARCHMAP-0001 | Current architecture map | 1.4.1   | active | `docs/architecture/CURRENT_ARCHITECTURE.md` |
 
 ### Architecture decision records (ADR-NNNN)
 
@@ -160,8 +160,8 @@ field (session lifecycle). This index tracks `status` only.
 | TASKS-0006 | TradingX market-day automation task list | 1.0.0 | active | `specs/006-market-day-automation/tasks.md` |
 | TASKS-0007 | TradingX recurring market-day scheduler task list | 1.0.0 | active | `specs/007-market-day-scheduler/tasks.md` |
 | TASKS-0008 | TradingX local trading appliance task list | 1.0.0 | active | `specs/008-local-trading-appliance/tasks.md` |
-| TASKS-0009 | TradingX week-1 dry-run controls task list | 1.0.0 | active | `specs/009-week1-dry-run-controls/tasks.md` |
-| TASKS-0010 | TradingX operator control plane task list | 1.0.0 | active | `specs/010-operator-control-plane/tasks.md` |
+| TASKS-0009 | TradingX week-1 dry-run controls task list | 1.0.1 | active | `specs/009-week1-dry-run-controls/tasks.md` |
+| TASKS-0010 | TradingX operator control plane task list | 1.0.1 | active | `specs/010-operator-control-plane/tasks.md` |
 
 ### Research notes
 

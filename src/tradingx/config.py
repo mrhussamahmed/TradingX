@@ -98,6 +98,8 @@ class RuntimeConfig:
     manual_kill_switch_active: bool = False
     service_interval_seconds: int = 300
     scheduler_poll_seconds: int = 60
+    log_max_bytes: int = 100 * 1024 * 1024
+    log_retention_files: int = 30
     symbol_universe: tuple[str, ...] = ("SPY",)
     dry_run: bool = False
 
@@ -182,6 +184,14 @@ class TradingConfig:
                     values.get("TRADINGX_SCHEDULER_POLL_SECONDS"),
                     default=60,
                 ),
+                log_max_bytes=_normalize_int(
+                    values.get("TRADINGX_LOG_MAX_BYTES"),
+                    default=100 * 1024 * 1024,
+                ),
+                log_retention_files=_normalize_int(
+                    values.get("TRADINGX_LOG_RETENTION_FILES"),
+                    default=30,
+                ),
                 symbol_universe=(
                     _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
                 ),
@@ -227,6 +237,8 @@ class TradingConfig:
             "manual_kill_switch_active": self.runtime.manual_kill_switch_active,
             "service_interval_seconds": self.runtime.service_interval_seconds,
             "scheduler_poll_seconds": self.runtime.scheduler_poll_seconds,
+            "log_max_bytes": self.runtime.log_max_bytes,
+            "log_retention_files": self.runtime.log_retention_files,
             "symbol_universe": list(self.runtime.symbol_universe),
             "dry_run": self.runtime.dry_run,
             "web_host": self.web.host,

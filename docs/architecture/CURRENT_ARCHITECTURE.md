@@ -1,13 +1,13 @@
 ---
 id: ARCHMAP-0001
 title: Current architecture map
-version: 1.4.0
+version: 1.4.1
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: ARCHMAP-0001@1.3.0
+supersedes: ARCHMAP-0001@1.4.0
 superseded_by: null
-author_session: SESS-2026-04-19-026
+author_session: SESS-2026-04-19-027
 ---
 
 # Current Architecture Map
@@ -72,6 +72,8 @@ these core runtime responsibilities:
 - `Week-1 Safety Control Plane` stamps immutable policy snapshots,
   decision snapshots, and append-only OMS journal events before the
   broker path or `dry_run` simulation.
+- `Runtime Observability` writes structured JSONL component logs with
+  correlation ids and size-based rotation under `data/logs/`.
 - `Operator Supervisor` owns the week-1 child lifecycle, persistent halt
   and kill requests, and optional Telegram command polling.
 - `Website Control` is the preferred operator entry point and remains
@@ -97,6 +99,8 @@ These files are the source of truth for appliance/runtime behavior:
   [src/tradingx/snapshots.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/snapshots.py:1)
 - Append-only OMS journal:
   [src/tradingx/journal.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/journal.py:1)
+- Structured runtime logging and rotation:
+  [src/tradingx/runtime_logging.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/runtime_logging.py:1)
 - File-backed operator control state:
   [src/tradingx/operator_control.py](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/src/tradingx/operator_control.py:1)
 - Week-1 Telegram command plane:
@@ -159,6 +163,7 @@ session:
 - first-run selection or ranking/tie-break rules
 - learning proposal behavior or its safety boundaries
 - week-1 policy defaults, decision snapshot schema, or OMS journal rules
+- runtime logging component set, rotation defaults, or storage paths
 - operator supervisor state, Telegram command semantics, or control-file
   behavior
 - website runtime-host controls or API endpoints

@@ -107,6 +107,10 @@ trading child, persists state under
 `artifacts/operator_platform/supervisor/`, and optionally polls Telegram
 for the single authorized operator chat when
 `TRADINGX_TELEGRAM_BOT_TOKEN` and `TRADINGX_TELEGRAM_CHAT_ID` are set.
+It also writes structured JSONL runtime logs under `data/logs/`, with
+default rotation at `100 MB` per file and `30` retained rotated files
+per component. Override those limits with `TRADINGX_LOG_MAX_BYTES` and
+`TRADINGX_LOG_RETENTION_FILES` when needed.
 
 If `TRADINGX_TELEGRAM_BOT_TOKEN` / `TRADINGX_TELEGRAM_CHAT_ID` or the
 `TRADINGX_SMTP_*` settings are present in `.env`, operator alerts are

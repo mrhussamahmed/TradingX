@@ -26,6 +26,10 @@ from tradingx.operator_control import (
 )
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.runtime_logging import (
+    StructuredRuntimeLogger,
+    build_default_runtime_logger,
+)
 from tradingx.scheduler import build_default_market_day_scheduler
 from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.telegram_operator import HttpxTelegramTransport, TelegramCommandPlane
@@ -287,6 +291,7 @@ class OperatorSupervisor:
         restart_policy_enabled: bool = False,
         max_restart_attempts: int = 0,
         telegram_plane: TelegramCommandPlane | None = None,
+        runtime_logger: StructuredRuntimeLogger | None = None,
     ) -> None:
         self._control_store = control_store
         self._artifact_root = artifact_root
@@ -297,6 +302,7 @@ class OperatorSupervisor:
         self._restart_policy_enabled = restart_policy_enabled
         self._max_restart_attempts = max_restart_attempts
         self._telegram_plane = telegram_plane
+        self._runtime_logger = runtime_logger
         self._child: ChildProcessProtocol | None = None
         self._restart_count = 0
         self._last_error = ""
@@ -362,6 +368,12 @@ class OperatorSupervisor:
             and self._child.is_alive()
         ):
             self._child.request_stop()
+            self._log_event(
+                event_type="kill_requested",
+                severity="warning",
+                message="Kill request forwarded to the supervised child.",
+                fields={},
+            )
         if self._child is not None and not self._child.is_alive():
             if (
                 self._restart_policy_enabled
@@ -370,12 +382,24 @@ class OperatorSupervisor:
             ):
                 self._restart_count += 1
                 self._child = self._child_factory.start()
+                self._log_event(
+                    event_type="child_restarted",
+                    severity="warning",
+                    message="Supervisor restarted the market-day child.",
+                    fields={"restart_count": self._restart_count},
+                )
             else:
                 if self._child.exitcode not in {None, 0, -15}:
                     self._last_error = (
                         f"child exited unexpectedly with code {self._child.exitcode}"
                     )
                     blocked_restart = True
+                    self._log_event(
+                        event_type="child_exit_unexpected",
+                        severity="error",
+                        message=self._last_error,
+                        fields={"exitcode": self._child.exitcode},
+                    )
                 self._child = None
         if (
             self._child is None
@@ -383,42 +407,49 @@ class OperatorSupervisor:
             and not blocked_restart
         ):
             self._child = self._child_factory.start()
+            self._log_event(
+                event_type="child_started",
+                severity="info",
+                message="Supervisor started the market-day child.",
+                fields={"child_pid": self._child.pid},
+            )
         self._update_state(control_state)
         return self._state
 
     def execute_command(self, command: str) -> dict[str, Any]:
         normalized = command.lower().strip().lstrip("/")
         now = self._now_provider()
+        result: dict[str, Any]
         if normalized == "status":
             self._update_state(self._control_store.read_state())
-            return {
+            result = {
                 "status": "completed",
                 "message": self._format_status_message(),
             }
-        if normalized == "positions":
-            return {
+        elif normalized == "positions":
+            result = {
                 "status": "completed",
                 "message": self._broker_operator.get_positions_summary(),
             }
-        if normalized == "today":
+        elif normalized == "today":
             summary = self._today_summary_provider()
-            return {
+            result = {
                 "status": "completed",
                 "message": json.dumps(summary, sort_keys=True),
             }
-        if normalized == "halt":
+        elif normalized == "halt":
             self._control_store.request_halt(now=now)
             self._update_state(self._control_store.read_state(), last_command="halt")
-            return {"status": "completed", "message": "Halt request recorded."}
-        if normalized == "resume":
+            result = {"status": "completed", "message": "Halt request recorded."}
+        elif normalized == "resume":
             self._control_store.request_resume(now=now)
             self._last_error = ""
             self._update_state(self._control_store.read_state(), last_command="resume")
-            return {"status": "completed", "message": "Resume request recorded."}
-        if normalized == "flatten":
+            result = {"status": "completed", "message": "Resume request recorded."}
+        elif normalized == "flatten":
             summary = self._broker_operator.flatten_all()
             self._update_state(self._control_store.read_state(), last_command="flatten")
-            return {
+            result = {
                 "status": "completed",
                 "message": (
                     "Flatten completed. "
@@ -426,13 +457,24 @@ class OperatorSupervisor:
                     f"flattened {summary['flattened_position_count']} positions."
                 ),
             }
-        if normalized == "kill":
+        elif normalized == "kill":
             self._control_store.request_kill(now=now)
             if self._child is not None and self._child.is_alive():
                 self._child.request_stop()
             self._update_state(self._control_store.read_state(), last_command="kill")
-            return {"status": "completed", "message": "Kill request recorded."}
-        return {"status": "blocked", "message": f"Unsupported command: {command}"}
+            result = {"status": "completed", "message": "Kill request recorded."}
+        else:
+            result = {"status": "blocked", "message": f"Unsupported command: {command}"}
+        self._log_event(
+            event_type="operator_command",
+            severity="info" if result["status"] == "completed" else "warning",
+            message="Supervisor processed an operator command.",
+            fields={
+                "command": normalized,
+                "status": result["status"],
+            },
+        )
+        return result
 
     def handle(self, command: str) -> str:
         return str(self.execute_command(command).get("message", ""))
@@ -491,6 +533,25 @@ class OperatorSupervisor:
         del signum, frame
         self._persist_state()
 
+    def _log_event(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        message: str,
+        fields: dict[str, object],
+    ) -> None:
+        if self._runtime_logger is None:
+            return
+        self._runtime_logger.log(
+            event_type=event_type,
+            severity=severity,
+            message=message,
+            decision_snapshot_id="",
+            cycle_correlation_id="",
+            fields=fields,
+        )
+
 
 def _run_market_scheduler_child(
     *,
@@ -522,6 +583,7 @@ def build_default_operator_supervisor(
     poll_interval_seconds: int,
 ) -> OperatorSupervisor:
     control_store = OperatorControlStore(config.runtime.data_root / "control")
+    supervisor_logger = build_default_runtime_logger(config, component="supervisor")
     paper_store = FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop")
     snapshot_store = ContentAddressedSnapshotStore(
         config.runtime.data_root / "snapshots"
@@ -559,6 +621,7 @@ def build_default_operator_supervisor(
         restart_policy_enabled=False,
         max_restart_attempts=0,
         telegram_plane=None,
+        runtime_logger=supervisor_logger,
     )
     if config.alerting.telegram_enabled():
         supervisor._telegram_plane = TelegramCommandPlane(
@@ -568,6 +631,7 @@ def build_default_operator_supervisor(
             ),
             command_handler=supervisor,
             control_store=control_store,
+            runtime_logger=build_default_runtime_logger(config, component="telegram"),
         )
     return supervisor
 

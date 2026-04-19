@@ -1,18 +1,18 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.4
+version: 1.0.5
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.3
+supersedes: STATE-0001@1.0.4
 superseded_by: null
-author_session: SESS-2026-04-19-026
+author_session: SESS-2026-04-19-027
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-026
+- Active session: SESS-2026-04-19-027
 - Active branch: main
 - Active phase: 14
 - Last completed gate: 0.5
@@ -174,6 +174,11 @@ author_session: SESS-2026-04-19-026
   `artifacts/operator_platform/supervisor/`, and optionally polls
   Telegram for `/status`, `/positions`, `/today`, `/halt`, `/resume`,
   `/flatten`, and `/kill` when Telegram credentials are configured.
+- Week-1 runtime observability is now fully wired through structured
+  JSONL component logs under `data/logs/`, with default `100 MB`
+  rotation and `30` retained rotated files per component, plus explicit
+  `decision_snapshot_id` and `cycle_correlation_id` tagging in the
+  controller, service, supervisor, and Telegram command paths.
 - Week-1 control files now live under `data/control/` and are consumed
   by the paper trading controller so operator halts block new entry
   intents without blocking exits.

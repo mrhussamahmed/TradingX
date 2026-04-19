@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0003
 title: TradingX operator manual
-version: 1.4.0
+version: 1.4.1
 status: active
 created: 2026-04-18
 last_amended: 2026-04-19
-supersedes: RUNBOOK-0003@1.3.0
+supersedes: RUNBOOK-0003@1.4.0
 superseded_by: null
-author_session: SESS-2026-04-19-026
+author_session: SESS-2026-04-19-027
 ---
 
 # TradingX Operator Manual
@@ -93,6 +93,8 @@ This writes:
 - Week-1 SQLite journal: `data/journal.db`
 - Week-1 content-addressed decision snapshots: `data/snapshots/`
 - Week-1 policy snapshots: `data/policy/`
+- Week-1 structured runtime logs: `data/logs/`
+- Week-1 operator control markers: `data/control/`
 
 ## Prerequisites
 
@@ -132,6 +134,8 @@ Common optional settings:
 - `TRADINGX_SYMBOL_UNIVERSE`
 - `TRADINGX_SERVICE_INTERVAL_SECONDS`
 - `TRADINGX_SCHEDULER_POLL_SECONDS`
+- `TRADINGX_LOG_MAX_BYTES`
+- `TRADINGX_LOG_RETENTION_FILES`
 - `TRADINGX_WEB_WRITE_MODE_ENABLED`
 - `TRADINGX_TELEGRAM_*`
 - `TRADINGX_SMTP_*`
@@ -183,7 +187,17 @@ What it does:
 - supervises the long-running trading child process
 - persists state under `artifacts/operator_platform/supervisor/`
 - reads control files under `data/control/`
+- writes structured JSONL runtime logs under `data/logs/`
 - optionally polls Telegram if the bot token and chat id are configured
+
+Week-1 logging defaults:
+
+- `data/logs/controller.jsonl`
+- `data/logs/service.jsonl`
+- `data/logs/supervisor.jsonl`
+- `data/logs/telegram.jsonl` when Telegram polling is enabled
+- size-based rotation at `100 MB` per file
+- retention of `30` rotated files per component
 
 Telegram commands when enabled:
 

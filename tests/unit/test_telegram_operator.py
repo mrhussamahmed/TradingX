@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+
+from tradingx.runtime_logging import StructuredRuntimeLogger
 from tradingx.telegram_operator import TelegramCommandPlane
 
 
@@ -76,3 +80,43 @@ def test_telegram_command_plane_rejects_unauthorized_chat() -> None:
     assert results[0].authorized is False
     assert handler.calls == []
     assert transport.sent_messages == [("99", "Unauthorized operator chat.")]
+
+
+def test_telegram_command_plane_writes_runtime_logs(tmp_path) -> None:
+    transport = FakeTelegramTransport(
+        [
+            {
+                "update_id": 3,
+                "message": {
+                    "chat": {"id": "42"},
+                    "text": "/status",
+                },
+            }
+        ]
+    )
+    handler = FakeCommandHandler()
+    plane = TelegramCommandPlane(
+        authorized_chat_id="42",
+        transport=transport,
+        command_handler=handler,
+        runtime_logger=StructuredRuntimeLogger(
+            component="telegram",
+            root_dir=tmp_path / "data" / "logs",
+            now_provider=lambda: datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+        ),
+    )
+
+    plane.poll_once()
+
+    payloads = [
+        json.loads(line)
+        for line in (tmp_path / "data" / "logs" / "telegram.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert any(
+        payload["event_type"] == "telegram_command"
+        and payload["fields"]["command"] == "status"
+        and payload["fields"]["status"] == "completed"
+        for payload in payloads
+    )

@@ -42,6 +42,10 @@ from tradingx.policy import (
 )
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
+from tradingx.runtime_logging import (
+    StructuredRuntimeLogger,
+    build_default_runtime_logger,
+)
 from tradingx.snapshots import (
     CandidateIntentSnapshot,
     ContentAddressedSnapshotStore,
@@ -256,6 +260,7 @@ class PaperTradingLoopController:
         git_sha: str = "unknown",
         dry_run: bool = False,
         operator_control_store: OperatorControlStore | None = None,
+        runtime_logger: StructuredRuntimeLogger | None = None,
     ) -> None:
         self._market_data = market_data
         self._execution = execution
@@ -275,6 +280,7 @@ class PaperTradingLoopController:
         self._git_sha = git_sha
         self._dry_run = dry_run
         self._operator_control_store = operator_control_store
+        self._runtime_logger = runtime_logger
         self._session_start_equity: Decimal | None = None
         self._policy_path: Path | None = None
         if self._policy_store is not None and self._policy_snapshot is not None:
@@ -307,6 +313,14 @@ class PaperTradingLoopController:
                 session_start_equity=portfolio_state.equity,
                 risk_verdict_id="not_applicable",
                 final_action="no_action",
+            )
+            self._log_runtime_event(
+                event_type="decision_recorded",
+                severity="info",
+                message="Decision snapshot recorded with no actionable trade.",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={"final_action": "no_action"},
             )
             self._append_journal_event(
                 event_type="intent",
@@ -364,6 +378,14 @@ class PaperTradingLoopController:
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
             )
+            self._log_runtime_event(
+                event_type="decision_recorded",
+                severity="warning",
+                message="Decision snapshot recorded and blocked by operator halt.",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={"final_action": "blocked", "control_type": "operator_halt"},
+            )
             self._append_journal_event(
                 event_type="intent",
                 decision_path=decision_path,
@@ -412,6 +434,17 @@ class PaperTradingLoopController:
                 session_start_equity=portfolio_state.equity,
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
+            )
+            self._log_runtime_event(
+                event_type="decision_recorded",
+                severity="warning",
+                message="Decision snapshot recorded outside regular hours.",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={
+                    "final_action": "blocked",
+                    "control_type": "outside_regular_hours",
+                },
             )
             self._append_journal_event(
                 event_type="intent",
@@ -480,6 +513,20 @@ class PaperTradingLoopController:
                 else ("dry_run" if self._dry_run else trade_intent.side)
             ),
         )
+        self._log_runtime_event(
+            event_type="decision_recorded",
+            severity="info",
+            message="Decision snapshot persisted before OMS handling.",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            fields={
+                "final_action": (
+                    "blocked"
+                    if risk_decision.event is not None
+                    else ("dry_run" if self._dry_run else trade_intent.side)
+                ),
+            },
+        )
         client_order_id = ""
         if trade_intent.side in {"buy", "sell", "reduce"}:
             client_order_id = build_client_order_id(
@@ -497,6 +544,14 @@ class PaperTradingLoopController:
             payload={"terminal_reason": trade_intent.reason_code},
         )
         if risk_decision.event is not None:
+            self._log_runtime_event(
+                event_type="blocked_intent",
+                severity="warning",
+                message="Trade intent blocked by risk controls.",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={"control_type": risk_decision.control_code},
+            )
             risk_path = self._artifacts.write_risk_control_event(risk_decision.event)
             self._metrics.record_evidence_artifact("risk_event")
             self._metrics.record_blocked_trade(risk_decision.control_code)
@@ -571,6 +626,20 @@ class PaperTradingLoopController:
                     "would_submit_limit_price": would_submit_limit_price,
                 },
             )
+            self._log_runtime_event(
+                event_type="dry_run_simulated",
+                severity="info",
+                message=(
+                    "Dry-run simulated order path recorded without broker "
+                    "submission."
+                ),
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={
+                    "reference_price": reference_price,
+                    "would_submit_limit_price": would_submit_limit_price,
+                },
+            )
             reconciliation = self._build_reconciliation(
                 trade_intent=trade_intent,
                 portfolio_state=portfolio_state,
@@ -607,6 +676,17 @@ class PaperTradingLoopController:
                 existing_order = self._find_existing_order_by_client_id(client_order_id)
                 if existing_order is not None:
                     recovered = True
+                    self._log_runtime_event(
+                        event_type="order_recovered",
+                        severity="warning",
+                        message=(
+                            "Recovered existing broker order by deterministic "
+                            "client_order_id."
+                        ),
+                        decision_path=decision_path,
+                        trade_intent=trade_intent,
+                        fields={"client_order_id": existing_order.client_order_id},
+                    )
                     self._append_journal_event(
                         event_type="ack",
                         decision_path=decision_path,
@@ -624,6 +704,14 @@ class PaperTradingLoopController:
                     )
                     self._metrics.record_evidence_artifact("order")
                 else:
+                    self._log_runtime_event(
+                        event_type="submit_attempt",
+                        severity="info",
+                        message="Submitting order to broker.",
+                        decision_path=decision_path,
+                        trade_intent=trade_intent,
+                        fields={"client_order_id": client_order_id},
+                    )
                     self._append_journal_event(
                         event_type="submit_attempt",
                         decision_path=decision_path,
@@ -670,6 +758,18 @@ class PaperTradingLoopController:
             )
         order_record = self._merge_order_records(existing_order, order_record)
         self._artifacts.write_order_record(trade_intent.intent_id, order_record)
+        self._log_runtime_event(
+            event_type="fill_recorded",
+            severity="info",
+            message="Broker order reached filled state.",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            fields={
+                "broker_order_id": order_record.order_id,
+                "filled_qty": order_record.filled_qty,
+                "filled_avg_price": order_record.filled_avg_price,
+            },
+        )
         self._append_journal_event(
             event_type="fill",
             decision_path=decision_path,
@@ -742,6 +842,14 @@ class PaperTradingLoopController:
     ) -> TradingLoopResult:
         rejection_message = str(error)
         reason_code = classify_order_rejection_reason(rejection_message)
+        self._log_runtime_event(
+            event_type="submit_rejected",
+            severity="error",
+            message="Broker rejected order submission.",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            fields={"reason_code": reason_code},
+        )
         self._append_journal_event(
             event_type="reject",
             decision_path=decision_path,
@@ -920,6 +1028,34 @@ class PaperTradingLoopController:
             symbol=trade_intent.symbol,
             side=trade_intent.side,
             payload=payload,
+        )
+
+    def _log_runtime_event(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        message: str,
+        decision_path: Path,
+        trade_intent: TradeIntent,
+        fields: dict[str, Any] | None = None,
+    ) -> None:
+        if self._runtime_logger is None:
+            return
+        payload: dict[str, Any] = {
+            "symbol": trade_intent.symbol,
+            "side": trade_intent.side,
+            "reason_code": trade_intent.reason_code,
+        }
+        if fields is not None:
+            payload.update(fields)
+        self._runtime_logger.log(
+            event_type=event_type,
+            severity=severity,
+            message=message,
+            decision_snapshot_id=decision_path.stem,
+            cycle_correlation_id=f"cycle-{trade_intent.intent_id}",
+            fields=payload,
         )
 
     def _build_manual_risk_event(
@@ -1329,6 +1465,7 @@ def build_default_paper_trading_controller(
         operator_control_store=OperatorControlStore(
             config.runtime.data_root / "control"
         ),
+        runtime_logger=build_default_runtime_logger(config, component="controller"),
     )
 
 

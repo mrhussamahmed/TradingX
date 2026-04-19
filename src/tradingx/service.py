@@ -18,6 +18,10 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.runtime_logging import (
+    StructuredRuntimeLogger,
+    build_default_runtime_logger,
+)
 from tradingx.types import (
     OpportunitySelectionRecord,
     PortfolioState,
@@ -64,6 +68,7 @@ class PaperTradingService:
         broker_failure_threshold: int = 2,
         broker_staleness_seconds: int = 60,
         operator_control_store: OperatorControlStore | None = None,
+        runtime_logger: StructuredRuntimeLogger | None = None,
     ) -> None:
         self._loop_controller = loop_controller
         self._portfolio = portfolio
@@ -78,6 +83,7 @@ class PaperTradingService:
         self._broker_failure_threshold = broker_failure_threshold
         self._broker_staleness_seconds = broker_staleness_seconds
         self._operator_control_store = operator_control_store
+        self._runtime_logger = runtime_logger
         self._session_start_equity: Decimal | None = None
         self._last_successful_broker_call_at: datetime | None = None
         self._last_known_portfolio_state: PortfolioState | None = None
@@ -123,10 +129,18 @@ class PaperTradingService:
     ) -> ServiceCycleSnapshot:
         started_at = self._now_provider()
         cycle_started_at = self._monotonic_fn()
+        service_cycle_id = f"service-{uuid.uuid4()}"
         symbol_results: list[ServiceSymbolResult] = []
         blocked_trade_count = 0
         reconciliation_failure_count = 0
         cycle_status = "market_closed"
+        self._log_cycle_event(
+            event_type="cycle_started",
+            severity="info",
+            message="Paper trading service cycle started.",
+            cycle_correlation_id=service_cycle_id,
+            fields={"symbols": symbols},
+        )
         if (
             self._operator_control_store is not None
             and self._operator_control_store.read_state().kill_requested
@@ -135,6 +149,13 @@ class PaperTradingService:
                 self._last_known_portfolio_state or self._empty_portfolio_state()
             )
             cycle_status = "kill_requested"
+            self._log_cycle_event(
+                event_type="kill_requested",
+                severity="warning",
+                message="Kill request detected at cycle boundary.",
+                cycle_correlation_id=service_cycle_id,
+                fields={},
+            )
         elif not self._regular_hours_checker(started_at):
             initial_portfolio_state = (
                 self._last_known_portfolio_state or self._empty_portfolio_state()
@@ -145,6 +166,13 @@ class PaperTradingService:
             if broker_status is not None:
                 cycle_status = broker_status
                 portfolio_state = initial_portfolio_state
+                self._log_cycle_event(
+                    event_type=broker_status,
+                    severity="warning",
+                    message="Service cycle blocked by broker or data guardrail.",
+                    cycle_correlation_id=service_cycle_id,
+                    fields={},
+                )
             else:
                 cycle_status = "executed"
                 open_symbols = {
@@ -169,6 +197,13 @@ class PaperTradingService:
                         blocked_trade_count += 1
                         if reason_code in {"stale_market_data", "stale_quote"}:
                             cycle_status = "data_unavailable"
+                            self._log_cycle_event(
+                                event_type="data_unavailable",
+                                severity="warning",
+                                message="Cycle blocked by stale market data.",
+                                cycle_correlation_id=service_cycle_id,
+                                fields={"symbol": symbol},
+                            )
                     if not result.reconciliation.resolved:
                         reconciliation_failure_count += 1
                         cycle_status = "recovery_required"
@@ -194,6 +229,13 @@ class PaperTradingService:
                             blocked_trade_count += 1
                             if reason_code in {"stale_market_data", "stale_quote"}:
                                 cycle_status = "data_unavailable"
+                                self._log_cycle_event(
+                                    event_type="data_unavailable",
+                                    severity="warning",
+                                    message="Cycle blocked by stale market data.",
+                                    cycle_correlation_id=service_cycle_id,
+                                    fields={"symbol": symbol},
+                                )
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
@@ -220,6 +262,13 @@ class PaperTradingService:
                             blocked_trade_count += 1
                             if reason_code in {"stale_market_data", "stale_quote"}:
                                 cycle_status = "data_unavailable"
+                                self._log_cycle_event(
+                                    event_type="data_unavailable",
+                                    severity="warning",
+                                    message="Cycle blocked by stale market data.",
+                                    cycle_correlation_id=service_cycle_id,
+                                    fields={"symbol": selection.selected_symbol},
+                                )
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
@@ -240,6 +289,13 @@ class PaperTradingService:
             and cycle_status != "recovery_required"
         ):
             cycle_status = "cycle_overrun"
+            self._log_cycle_event(
+                event_type="cycle_overrun",
+                severity="warning",
+                message="Service cycle exceeded the hard time budget.",
+                cycle_correlation_id=service_cycle_id,
+                fields={"cycle_duration_seconds": cycle_duration_seconds},
+            )
         self._metrics.record_service_cycle(cycle_status)
         self._metrics.record_symbols_scanned(len(symbol_results))
         self._metrics.record_open_positions(
@@ -256,8 +312,19 @@ class PaperTradingService:
             equity=portfolio_state.equity,
             daily_pnl=daily_pnl,
         )
+        self._log_cycle_event(
+            event_type="cycle_completed",
+            severity="info",
+            message="Paper trading service cycle completed.",
+            cycle_correlation_id=service_cycle_id,
+            fields={
+                "cycle_status": cycle_status,
+                "blocked_trade_count": blocked_trade_count,
+                "reconciliation_failure_count": reconciliation_failure_count,
+            },
+        )
         return ServiceCycleSnapshot(
-            cycle_id=f"cycle-{uuid.uuid4()}",
+            cycle_id=service_cycle_id,
             started_at_utc=started_at,
             completed_at_utc=self._now_provider(),
             cycle_status=cycle_status,
@@ -332,6 +399,26 @@ class PaperTradingService:
             if position.quantity != Decimal("0")
         )
 
+    def _log_cycle_event(
+        self,
+        *,
+        event_type: str,
+        severity: str,
+        message: str,
+        cycle_correlation_id: str,
+        fields: dict[str, object],
+    ) -> None:
+        if self._runtime_logger is None:
+            return
+        self._runtime_logger.log(
+            event_type=event_type,
+            severity=severity,
+            message=message,
+            decision_snapshot_id="",
+            cycle_correlation_id=cycle_correlation_id,
+            fields=fields,
+        )
+
 
 def build_default_paper_service(
     config: TradingConfig,
@@ -353,6 +440,7 @@ def build_default_paper_service(
         operator_control_store=OperatorControlStore(
             config.runtime.data_root / "control"
         ),
+        runtime_logger=build_default_runtime_logger(config, component="service"),
     )
 
 

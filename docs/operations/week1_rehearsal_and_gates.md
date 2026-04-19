@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0005
 title: Week 1 rehearsal and gates
-version: 1.2.0
+version: 1.2.1
 status: active
 created: 2026-04-19
 last_amended: 2026-04-19
-supersedes: RUNBOOK-0005@1.1.0
+supersedes: RUNBOOK-0005@1.2.0
 superseded_by: null
-author_session: SESS-2026-04-19-026
+author_session: SESS-2026-04-19-027
 ---
 
 # TradingX Week 1 Rehearsal And Gates
@@ -48,6 +48,16 @@ artifacts, decision snapshots, and the SQLite journal are being written.
 - `premortem_review.json`
 - `reconciliation_review.json`
 - `paper_account_starting_state.json`
+
+8. Verify runtime observability is active:
+- `data/logs/controller.jsonl`
+- `data/logs/service.jsonl`
+- `data/logs/supervisor.jsonl`
+- `data/logs/telegram.jsonl` when Telegram polling is enabled
+
+Runtime logs are JSONL, rotate at `100 MB` by default, and retain
+`30` rotated files per component unless the `TRADINGX_LOG_*` overrides
+are set in `.env`.
 
 ## Monday dry-run review commands
 
@@ -127,10 +137,12 @@ The gate evaluator reads these files:
   - status: `SIGUSR1` to write the current state snapshot
   - clean stop: `SIGTERM`
   - force stop: `SIGKILL`
-  - halt request: `touch data/halt_request`
-  - clearance request: `touch data/clearance_request`
+  - halt request: `touch data/control/halt_request`
+  - clearance request: `touch data/control/clearance_request`
   - flatten: run the dedicated flatten CLI path when available
 - Canonical week-1 storage paths:
   - `data/journal.db`
   - `data/snapshots/`
   - `data/policy/policy_snapshot_<hash>.yaml`
+  - `data/logs/<component>.jsonl`
+  - `data/control/`
