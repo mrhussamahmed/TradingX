@@ -188,3 +188,41 @@ def test_market_day_automation_runner_stops_before_next_heartbeat_when_requested
     assert sleep_calls == []
     assert result.run_record.status == "stopped"
     assert result.run_record.heartbeat_count == 0
+
+
+def test_market_day_automation_runner_records_exception_context_in_summary(tmp_path) -> None:
+    validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+
+    class FailingService(FakePaperService):
+        def run(
+            self,
+            *,
+            symbols: tuple[str, ...],
+            quantity: Decimal,
+            interval_seconds: int,
+            max_cycles: int | None = None,
+        ) -> ServiceRunResult:
+            del symbols, quantity, interval_seconds, max_cycles
+            raise RuntimeError("heartbeat exploded")
+
+    runner = MarketDayAutomationRunner(
+        paper_store=paper_store,
+        validation_store=validation_store,
+        operator_store=operator_store,
+        service_builder=lambda: FailingService(),
+        now_provider=lambda: datetime(2026, 4, 18, 13, 0, tzinfo=UTC),
+    )
+
+    result = runner.run_market_day(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_heartbeats=1,
+    )
+
+    assert result.run_record.status == "failed"
+    assert "heartbeat exploded" in result.run_record.summary

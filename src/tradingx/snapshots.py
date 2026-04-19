@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -115,9 +117,13 @@ class ContentAddressedSnapshotStore:
         self._root_dir.mkdir(parents=True, exist_ok=True)
         path = self._root_dir / f"{snapshot.decision_snapshot_id}.json"
         if not path.exists():
-            path.write_text(
-                json.dumps(_serialize(snapshot.to_payload()), indent=2, sort_keys=True),
-                encoding="utf-8",
+            _write_text_atomically(
+                path,
+                json.dumps(
+                    _serialize(snapshot.to_payload()),
+                    indent=2,
+                    sort_keys=True,
+                ),
             )
         return path
 
@@ -128,6 +134,19 @@ class ContentAddressedSnapshotStore:
             json.loads(path.read_text(encoding="utf-8"))
             for path in sorted(self._root_dir.glob("*.json"))
         ]
+
+
+def _write_text_atomically(path: Path, payload: str) -> None:
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 __all__ = (

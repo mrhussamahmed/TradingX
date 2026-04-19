@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import json
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+import types
 
 from tradingx.snapshots import (
     CandidateIntentSnapshot,
@@ -78,3 +81,23 @@ def test_decision_snapshot_id_changes_when_dry_run_changes(tmp_path: Path) -> No
     live_path = store.write_decision_snapshot(_build_snapshot(dry_run=False))
 
     assert dry_run_path != live_path
+
+
+def test_decision_snapshot_store_uses_atomic_replace(tmp_path: Path, monkeypatch) -> None:
+    module = importlib.import_module("tradingx.snapshots")
+    replace_calls: list[tuple[str, str]] = []
+
+    def recording_replace(source, target) -> None:
+        replace_calls.append((os.fspath(source), os.fspath(target)))
+        os.replace(source, target)
+
+    monkeypatch.setattr(
+        module,
+        "os",
+        types.SimpleNamespace(replace=recording_replace, fsync=os.fsync),
+    )
+
+    store = module.ContentAddressedSnapshotStore(tmp_path)
+    store.write_decision_snapshot(_build_snapshot(dry_run=True))
+
+    assert replace_calls

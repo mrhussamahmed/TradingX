@@ -78,7 +78,11 @@ def test_refresh_risk_free_cache_writes_normalized_csv(tmp_path: Path) -> None:
     assert frame["date"].tolist() == ["2026-04-01", "2026-04-02", "2026-04-03"]
     assert frame["annualized_rate"].tolist() == pytest.approx([0.0450, 0.0456, 0.0462])
     assert frame["daily_rate"].tolist() == pytest.approx(
-        [0.0450 / 252.0, 0.0456 / 252.0, 0.0462 / 252.0]
+        [
+            (1.0450 ** (1.0 / 252.0)) - 1.0,
+            (1.0456 ** (1.0 / 252.0)) - 1.0,
+            (1.0462 ** (1.0 / 252.0)) - 1.0,
+        ]
     )
 
 
@@ -89,13 +93,16 @@ def test_daily_risk_free_rate_uses_latest_available_observation(tmp_path: Path) 
         {
             "date": ["2026-04-01", "2026-04-03"],
             "annualized_rate": [0.0450, 0.0462],
-            "daily_rate": [0.0450 / 252.0, 0.0462 / 252.0],
+            "daily_rate": [
+                (1.0450 ** (1.0 / 252.0)) - 1.0,
+                (1.0462 ** (1.0 / 252.0)) - 1.0,
+            ],
         }
     ).to_csv(cache_path, index=False)
 
     rate = module.daily_risk_free_rate_for_date(cache_path, as_of_date=date(2026, 4, 5))
 
-    assert rate == pytest.approx(0.0462 / 252.0)
+    assert rate == pytest.approx((1.0462 ** (1.0 / 252.0)) - 1.0)
 
 
 def test_daily_risk_free_rate_raises_before_first_cached_observation(
@@ -107,7 +114,7 @@ def test_daily_risk_free_rate_raises_before_first_cached_observation(
         {
             "date": ["2026-04-03"],
             "annualized_rate": [0.0462],
-            "daily_rate": [0.0462 / 252.0],
+            "daily_rate": [(1.0462 ** (1.0 / 252.0)) - 1.0],
         }
     ).to_csv(cache_path, index=False)
 

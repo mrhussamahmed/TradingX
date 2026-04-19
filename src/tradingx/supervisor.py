@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import multiprocessing as mp
 import signal
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -112,10 +113,16 @@ class MultiprocessingChildHandle:
         if self._process.is_alive():
             self._process.terminate()
             self._process.join(timeout=5)
+        if self._process.is_alive():
+            self.kill()
 
     def kill(self) -> None:
         self._process.kill()
         self._process.join(timeout=5)
+        if self._process.is_alive():
+            raise RuntimeError(
+                f"Child pid={self._process.pid} still alive after kill attempt."
+            )
 
 
 class MultiprocessingChildFactory:
@@ -290,6 +297,7 @@ class OperatorSupervisor:
         now_provider: Callable[[], datetime] | None = None,
         restart_policy_enabled: bool = False,
         max_restart_attempts: int = 0,
+        restart_cooldown_seconds: int = 0,
         telegram_plane: TelegramCommandPlane | None = None,
         runtime_logger: StructuredRuntimeLogger | None = None,
     ) -> None:
@@ -301,10 +309,13 @@ class OperatorSupervisor:
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._restart_policy_enabled = restart_policy_enabled
         self._max_restart_attempts = max_restart_attempts
+        self._restart_cooldown_seconds = restart_cooldown_seconds
         self._telegram_plane = telegram_plane
         self._runtime_logger = runtime_logger
         self._child: ChildProcessProtocol | None = None
+        self._flatten_thread: threading.Thread | None = None
         self._restart_count = 0
+        self._child_exit_observed_at_utc: datetime | None = None
         self._last_error = ""
         self._stop_requested = False
         self._state = SupervisorState(
@@ -360,6 +371,7 @@ class OperatorSupervisor:
         return self._state
 
     def run_once(self) -> SupervisorState:
+        now = self._now_provider()
         control_state = self._control_store.read_state()
         blocked_restart = False
         if (
@@ -375,13 +387,47 @@ class OperatorSupervisor:
                 fields={},
             )
         if self._child is not None and not self._child.is_alive():
+            exitcode = self._child.exitcode
+            self._child = None
             if (
                 self._restart_policy_enabled
                 and not control_state.kill_requested
                 and self._restart_count < self._max_restart_attempts
             ):
+                if self._child_exit_observed_at_utc is None:
+                    self._child_exit_observed_at_utc = now
+            else:
+                self._child_exit_observed_at_utc = None
+                if exitcode not in {None, 0, -15}:
+                    self._last_error = (
+                        f"child exited unexpectedly with code {exitcode}"
+                    )
+                    blocked_restart = True
+                    self._log_event(
+                        event_type="child_exit_unexpected",
+                        severity="error",
+                        message=self._last_error,
+                        fields={"exitcode": exitcode},
+                    )
+        restart_cooldown_active = (
+            self._child is None
+            and self._child_exit_observed_at_utc is not None
+            and (
+                now - self._child_exit_observed_at_utc
+            ).total_seconds()
+            < self._restart_cooldown_seconds
+        )
+        if (
+            self._child is None
+            and not control_state.kill_requested
+            and not blocked_restart
+            and not restart_cooldown_active
+        ):
+            restarting = self._child_exit_observed_at_utc is not None
+            self._child = self._child_factory.start()
+            if restarting:
                 self._restart_count += 1
-                self._child = self._child_factory.start()
+                self._child_exit_observed_at_utc = None
                 self._log_event(
                     event_type="child_restarted",
                     severity="warning",
@@ -389,31 +435,13 @@ class OperatorSupervisor:
                     fields={"restart_count": self._restart_count},
                 )
             else:
-                if self._child.exitcode not in {None, 0, -15}:
-                    self._last_error = (
-                        f"child exited unexpectedly with code {self._child.exitcode}"
-                    )
-                    blocked_restart = True
-                    self._log_event(
-                        event_type="child_exit_unexpected",
-                        severity="error",
-                        message=self._last_error,
-                        fields={"exitcode": self._child.exitcode},
-                    )
-                self._child = None
-        if (
-            self._child is None
-            and not control_state.kill_requested
-            and not blocked_restart
-        ):
-            self._child = self._child_factory.start()
-            self._log_event(
-                event_type="child_started",
-                severity="info",
-                message="Supervisor started the market-day child.",
-                fields={"child_pid": self._child.pid},
-            )
-        self._update_state(control_state)
+                self._log_event(
+                    event_type="child_started",
+                    severity="info",
+                    message="Supervisor started the market-day child.",
+                    fields={"child_pid": self._child.pid},
+                )
+        self._update_state(control_state, updated_at_utc=now)
         return self._state
 
     def execute_command(self, command: str) -> dict[str, Any]:
@@ -421,7 +449,10 @@ class OperatorSupervisor:
         now = self._now_provider()
         result: dict[str, Any]
         if normalized == "status":
-            self._update_state(self._control_store.read_state())
+            self._update_state(
+                self._control_store.read_state(),
+                updated_at_utc=now,
+            )
             result = {
                 "status": "completed",
                 "message": self._format_status_message(),
@@ -439,35 +470,60 @@ class OperatorSupervisor:
             }
         elif normalized == "halt":
             self._control_store.request_halt(now=now)
-            self._update_state(self._control_store.read_state(), last_command="halt")
+            self._update_state(
+                self._control_store.read_state(),
+                last_command="halt",
+                updated_at_utc=now,
+            )
             result = {"status": "completed", "message": "Halt request recorded."}
         elif normalized == "resume":
             self._control_store.request_resume(now=now)
             self._last_error = ""
-            self._update_state(self._control_store.read_state(), last_command="resume")
+            self._update_state(
+                self._control_store.read_state(),
+                last_command="resume",
+                updated_at_utc=now,
+            )
             result = {"status": "completed", "message": "Resume request recorded."}
         elif normalized == "flatten":
-            summary = self._broker_operator.flatten_all()
-            self._update_state(self._control_store.read_state(), last_command="flatten")
-            result = {
-                "status": "completed",
-                "message": (
-                    "Flatten completed. "
-                    f"Canceled {summary['canceled_order_count']} open orders and "
-                    f"flattened {summary['flattened_position_count']} positions."
-                ),
-            }
+            if self._flatten_thread is not None and self._flatten_thread.is_alive():
+                result = {
+                    "status": "accepted",
+                    "message": "Flatten already in progress.",
+                }
+            else:
+                self._flatten_thread = threading.Thread(
+                    target=self._run_flatten_job,
+                    name="tradingx-supervisor-flatten",
+                    daemon=True,
+                )
+                self._flatten_thread.start()
+                self._update_state(
+                    self._control_store.read_state(),
+                    last_command="flatten",
+                    updated_at_utc=now,
+                )
+                result = {
+                    "status": "accepted",
+                    "message": "Flatten request accepted.",
+                }
         elif normalized == "kill":
             self._control_store.request_kill(now=now)
             if self._child is not None and self._child.is_alive():
                 self._child.request_stop()
-            self._update_state(self._control_store.read_state(), last_command="kill")
+            self._update_state(
+                self._control_store.read_state(),
+                last_command="kill",
+                updated_at_utc=now,
+            )
             result = {"status": "completed", "message": "Kill request recorded."}
         else:
             result = {"status": "blocked", "message": f"Unsupported command: {command}"}
         self._log_event(
             event_type="operator_command",
-            severity="info" if result["status"] == "completed" else "warning",
+            severity=(
+                "info" if result["status"] in {"completed", "accepted"} else "warning"
+            ),
             message="Supervisor processed an operator command.",
             fields={
                 "command": normalized,
@@ -489,6 +545,7 @@ class OperatorSupervisor:
         control_state: OperatorControlState,
         *,
         last_command: str | None = None,
+        updated_at_utc: datetime | None = None,
     ) -> None:
         child_alive = self._child is not None and self._child.is_alive()
         child_pid = self._child.pid if self._child is not None else None
@@ -505,7 +562,7 @@ class OperatorSupervisor:
             clearance_requested=control_state.clearance_requested,
             last_command=last_command or control_state.last_command,
             last_error=self._last_error,
-            updated_at_utc=self._now_provider(),
+            updated_at_utc=updated_at_utc or self._now_provider(),
         )
         self._persist_state()
 
@@ -532,6 +589,30 @@ class OperatorSupervisor:
     def _handle_sigusr1(self, signum: int, frame: Any) -> None:
         del signum, frame
         self._persist_state()
+
+    def _run_flatten_job(self) -> None:
+        try:
+            summary = self._broker_operator.flatten_all()
+        except Exception as error:
+            self._last_error = f"flatten failed: {error}"
+            self._log_event(
+                event_type="flatten_failed",
+                severity="error",
+                message=self._last_error,
+                fields={},
+            )
+            self._update_state(
+                self._control_store.read_state(),
+                last_command="flatten",
+                updated_at_utc=self._now_provider(),
+            )
+            return
+        self._log_event(
+            event_type="flatten_completed",
+            severity="warning",
+            message="Supervisor flatten completed.",
+            fields=summary,
+        )
 
     def _log_event(
         self,

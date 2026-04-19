@@ -5,6 +5,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,7 @@ class SqliteOmsJournal:
         payload: dict[str, Any],
     ) -> OmsJournalEvent:
         recorded = recorded_at_utc.astimezone(UTC).isoformat()
+        serialized_payload = _serialize_payload(payload)
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -96,7 +98,7 @@ class SqliteOmsJournal:
                     broker_order_id,
                     symbol,
                     side,
-                    json.dumps(payload, sort_keys=True),
+                    json.dumps(serialized_payload, sort_keys=True),
                 ),
             )
             raw_row_id = cursor.lastrowid
@@ -115,7 +117,7 @@ class SqliteOmsJournal:
             broker_order_id=broker_order_id,
             symbol=symbol,
             side=side,
-            payload=payload,
+            payload=serialized_payload,
         )
 
     def list_events(self) -> list[OmsJournalEvent]:
@@ -190,6 +192,20 @@ class SqliteOmsJournal:
             side=str(row["side"]),
             payload=json.loads(str(row["payload_json"])),
         )
+
+
+def _serialize_payload(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, tuple):
+        return [_serialize_payload(item) for item in value]
+    if isinstance(value, list):
+        return [_serialize_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _serialize_payload(item) for key, item in value.items()}
+    return value
 
 
 __all__ = ("OmsJournalEvent", "SqliteOmsJournal", "build_client_order_id")

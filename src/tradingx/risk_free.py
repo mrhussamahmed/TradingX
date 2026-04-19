@@ -103,7 +103,9 @@ def _normalize_risk_free_frame(frame: pd.DataFrame) -> pd.DataFrame:
     normalized.index = pd.to_datetime(normalized.index, utc=True).normalize()
     normalized = normalized.sort_index(kind="stable")
     annualized_rate = normalized[RISK_FREE_SERIES_CODE].astype(float) / 100.0
-    daily_rate = annualized_rate / float(TRADING_DAYS_PER_YEAR)
+    daily_rate = (
+        (1.0 + annualized_rate) ** (1.0 / float(TRADING_DAYS_PER_YEAR))
+    ) - 1.0
     return pd.DataFrame(
         {
             "date": normalized.index.strftime("%Y-%m-%d"),

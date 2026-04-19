@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import smtplib
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
@@ -19,6 +20,8 @@ from tradingx.types import (
     OperatorAlert,
     RiskControlEvent,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def build_risk_control_alert(
@@ -170,9 +173,9 @@ class SmtpAlertTransport:
         message.set_content(_render_alert_message(alert))
 
         with self.smtp_factory(self.host, self.port) as smtp_client:
-            if self.use_starttls and hasattr(smtp_client, "starttls"):
+            if self.use_starttls:
                 smtp_client.starttls()
-            if self.username and hasattr(smtp_client, "login"):
+            if self.username:
                 smtp_client.login(self.username, self.password)
             smtp_client.send_message(message)
 
@@ -223,9 +226,19 @@ class OperatorAlertDispatcher:
         for transport in self._transports:
             try:
                 transport.send(alert)
-            except Exception:
+            except Exception as error:
+                LOGGER.error(
+                    "Operator alert transport failed: alert_id=%s transport=%s error=%s",
+                    alert.alert_id,
+                    transport.target_name,
+                    error,
+                )
                 continue
             delivery_targets.append(transport.target_name)
+        if not delivery_targets and alert.severity in {"critical", "error"}:
+            raise RuntimeError(
+                f"No alert transports delivered alert {alert.alert_id}."
+            )
         delivered = OperatorAlert(
             alert_id=alert.alert_id,
             severity=alert.severity,

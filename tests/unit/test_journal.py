@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
@@ -93,3 +94,21 @@ def test_build_client_order_id_is_stable_and_retry_sensitive() -> None:
 
     assert first == same
     assert retry != first
+
+
+def test_sqlite_oms_journal_serializes_decimal_payload_values(tmp_path: Path) -> None:
+    journal = SqliteOmsJournal(tmp_path / "journal.db")
+
+    row = journal.append_event(
+        event_type="fill",
+        recorded_at_utc=datetime(2026, 4, 19, 12, 1, tzinfo=UTC),
+        decision_snapshot_id="decision-2",
+        cycle_correlation_id="cycle-2",
+        client_order_id="cid-2",
+        broker_order_id="broker-2",
+        symbol="SPY",
+        side="buy",
+        payload={"filled_qty": Decimal("1.25")},
+    )
+
+    assert row.payload["filled_qty"] == "1.25"

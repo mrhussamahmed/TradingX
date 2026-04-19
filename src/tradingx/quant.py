@@ -25,7 +25,9 @@ def decimal_stddev(values: tuple[Decimal, ...] | list[Decimal]) -> Decimal:
     if len(values) < 2:
         return ZERO
     mean = decimal_mean(values)
-    variance = sum((value - mean) ** 2 for value in values) / Decimal(len(values))
+    variance = sum((value - mean) ** 2 for value in values) / Decimal(
+        len(values) - 1
+    )
     return Decimal(str(sqrt(float(variance))))
 
 

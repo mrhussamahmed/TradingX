@@ -880,7 +880,13 @@ class LocalWebReadModel:
     def _parse_datetime(self, raw_value: str) -> datetime:
         if not raw_value:
             return datetime(1970, 1, 1, tzinfo=UTC)
-        return datetime.fromisoformat(raw_value)
+        try:
+            parsed = datetime.fromisoformat(raw_value)
+        except ValueError:
+            return datetime(1970, 1, 1, tzinfo=UTC)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     def _candidate_family(self, candidate_id: str) -> str:
         if "-v" in candidate_id:

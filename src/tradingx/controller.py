@@ -86,6 +86,13 @@ def _serialize(value: Any) -> Any:
     return value
 
 
+def _parse_aware_utc_datetime(raw_value: str, *, field_name: str) -> datetime:
+    timestamp = datetime.fromisoformat(raw_value)
+    if timestamp.tzinfo is None:
+        raise ValueError(f"{field_name} must be timezone-aware.")
+    return timestamp.astimezone(UTC)
+
+
 class RoundTripController:
     def __init__(
         self,
@@ -1341,13 +1348,14 @@ class PaperTradingLoopController:
                 continue
             matched_quantity = min(entry_remaining, remaining_exit_quantity)
             entry_price = Decimal(str(entry_payload.get("fill_price", "0")))
-            opened_at_utc = datetime.fromisoformat(
+            opened_at_utc = _parse_aware_utc_datetime(
                 str(
                     entry_payload.get(
                         "filled_at_utc",
                         trade_intent.generated_at_utc.isoformat(),
                     )
-                )
+                ),
+                field_name="filled_at_utc",
             )
             gross_pnl = (order_record.filled_avg_price - entry_price) * matched_quantity
             closed_trade = ClosedTradeRecord(

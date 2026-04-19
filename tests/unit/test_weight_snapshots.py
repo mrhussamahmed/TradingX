@@ -60,3 +60,30 @@ def test_approved_weight_snapshot_store_rejects_missing_committed_yaml(
 
     with pytest.raises(ApprovedWeightSnapshotNotFoundError):
         store.load_by_strategy_id("baseline-long-only-v1")
+
+
+def test_approved_weight_snapshot_store_rejects_naive_generated_at_utc(tmp_path) -> None:
+    weights_root = tmp_path / "config" / "strategy" / "weights"
+    weights_root.mkdir(parents=True)
+    (weights_root / "baseline-long-only-v1.yaml").write_text(
+        "\n".join(
+            (
+                "snapshot_id: approved-baseline-long-only-v1",
+                "strategy_id: baseline-long-only-v1",
+                "status: approved",
+                "generated_at_utc: 2026-04-19T09:55:00",
+                "minimum_supporting_trades: 5",
+                "weights:",
+                "  signal: 1.0",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    from tradingx.weights import ApprovedWeightSnapshotStore
+
+    store = ApprovedWeightSnapshotStore(weights_root)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        store.load_by_strategy_id("baseline-long-only-v1")

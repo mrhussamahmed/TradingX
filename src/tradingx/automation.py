@@ -78,10 +78,10 @@ class MarketDayAutomationRunner:
     def run_preopen(self) -> WebActionResult:
         try:
             return self._execute_preopen().action_result
-        except Exception:
+        except Exception as error:
             return self._failure_result(
                 action_type="session_preopen",
-                message="Pre-open automation failed.",
+                message=f"Pre-open automation failed: {error}",
             )
 
     def run_heartbeat(
@@ -97,19 +97,19 @@ class MarketDayAutomationRunner:
                 quantity=quantity,
                 interval_seconds=interval_seconds,
             ).action_result
-        except Exception:
+        except Exception as error:
             return self._failure_result(
                 action_type="session_heartbeat",
-                message="Heartbeat automation failed.",
+                message=f"Heartbeat automation failed: {error}",
             )
 
     def run_close(self) -> WebActionResult:
         try:
             return self._execute_close().action_result
-        except Exception:
+        except Exception as error:
             return self._failure_result(
                 action_type="session_close",
-                message="Session close automation failed.",
+                message=f"Session close automation failed: {error}",
             )
 
     def run_market_day(
@@ -126,6 +126,7 @@ class MarketDayAutomationRunner:
         heartbeat_steps: list[_AutomationStepArtifacts] = []
         close_step: _AutomationStepArtifacts | None = None
         failed = False
+        failure_reason = ""
 
         try:
             preopen_step = self._execute_preopen()
@@ -150,8 +151,9 @@ class MarketDayAutomationRunner:
                 self._sleep_fn(interval_seconds)
             if stop_event is None or not stop_event.is_set():
                 close_step = self._execute_close()
-        except Exception:
+        except Exception as error:
             failed = True
+            failure_reason = str(error)
 
         heartbeat_count = len(heartbeat_steps)
         executed_heartbeats = sum(
@@ -174,6 +176,7 @@ class MarketDayAutomationRunner:
         )
         run_summary = self._run_summary(
             failed=failed,
+            failure_reason=failure_reason,
             heartbeat_count=heartbeat_count,
             executed_heartbeats=executed_heartbeats,
         )
@@ -456,10 +459,16 @@ class MarketDayAutomationRunner:
         self,
         *,
         failed: bool,
+        failure_reason: str,
         heartbeat_count: int,
         executed_heartbeats: int,
     ) -> str:
         if failed:
+            if failure_reason:
+                return (
+                    "Market-day automation failed before completing all checkpoints: "
+                    f"{failure_reason}"
+                )
             return "Market-day automation failed before completing all checkpoints."
         if heartbeat_count and executed_heartbeats == 0:
             return (

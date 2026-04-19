@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime
 
 from tradingx.operator_control import OperatorControlStore
-from tradingx.supervisor import OperatorSupervisor
+from tradingx.supervisor import MultiprocessingChildHandle, OperatorSupervisor
 
 
 class FakeChildProcess:
@@ -181,5 +183,136 @@ def test_operator_supervisor_flatten_uses_broker_operator(tmp_path) -> None:
 
     result = supervisor.execute_command("flatten")
 
-    assert result["status"] == "completed"
+    deadline = time.perf_counter() + 0.2
+    while broker.flatten_calls == 0 and time.perf_counter() < deadline:
+        time.sleep(0.01)
+
+    assert result["status"] == "accepted"
     assert broker.flatten_calls == 1
+
+
+class _StopEvent:
+    def __init__(self) -> None:
+        self.set_called = False
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+class _HandleProcess:
+    def __init__(self) -> None:
+        self.pid = 123
+        self.exitcode: int | None = None
+        self.join_calls: list[int] = []
+        self.terminate_called = False
+        self.kill_called = False
+        self._alive = True
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def join(self, timeout: int) -> None:
+        self.join_calls.append(timeout)
+
+    def terminate(self) -> None:
+        self.terminate_called = True
+
+    def kill(self) -> None:
+        self.kill_called = True
+        self._alive = False
+        self.exitcode = -9
+
+
+def test_multiprocessing_child_handle_terminate_escalates_to_kill() -> None:
+    process = _HandleProcess()
+    handle = MultiprocessingChildHandle(process=process, stop_event=_StopEvent())
+
+    handle.terminate()
+
+    assert process.terminate_called is True
+    assert process.kill_called is True
+    assert process.join_calls == [5, 5, 5]
+
+
+def test_multiprocessing_child_handle_kill_raises_if_process_survives() -> None:
+    process = _HandleProcess()
+
+    def stubborn_kill() -> None:
+        process.kill_called = True
+
+    process.kill = stubborn_kill  # type: ignore[assignment]
+    handle = MultiprocessingChildHandle(process=process, stop_event=_StopEvent())
+
+    try:
+        handle.kill()
+    except RuntimeError as error:
+        assert "still alive" in str(error)
+    else:
+        raise AssertionError("Expected kill() to raise when the child survives.")
+
+
+def test_operator_supervisor_flattens_asynchronously(tmp_path) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingBroker(FakeBrokerOperator):
+        def flatten_all(self) -> dict[str, int]:
+            self.flatten_calls += 1
+            started.set()
+            release.wait(timeout=1.0)
+            return {"canceled_order_count": 1, "flattened_position_count": 1}
+
+    supervisor = OperatorSupervisor(
+        control_store=OperatorControlStore(tmp_path / "data" / "control"),
+        artifact_root=tmp_path / "artifacts" / "operator_platform",
+        child_factory=FakeChildFactory(),
+        broker_operator=BlockingBroker(),
+        today_summary_provider=lambda: {"cycle_count": 1},
+        now_provider=lambda: datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+    )
+
+    started_at = time.perf_counter()
+    result = supervisor.execute_command("flatten")
+    elapsed = time.perf_counter() - started_at
+
+    assert result["status"] == "accepted"
+    assert elapsed < 0.05
+    assert started.wait(timeout=0.2) is True
+    release.set()
+
+
+def test_operator_supervisor_waits_for_restart_cooldown(tmp_path) -> None:
+    factory = FakeChildFactory()
+    timestamps = iter(
+        (
+            datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+            datetime(2026, 4, 20, 12, 0, tzinfo=UTC),
+            datetime(2026, 4, 20, 12, 0, 1, tzinfo=UTC),
+            datetime(2026, 4, 20, 12, 0, 5, tzinfo=UTC),
+            datetime(2026, 4, 20, 12, 0, 6, tzinfo=UTC),
+        )
+    )
+    supervisor = OperatorSupervisor(
+        control_store=OperatorControlStore(tmp_path / "data" / "control"),
+        artifact_root=tmp_path / "artifacts" / "operator_platform",
+        child_factory=factory,
+        broker_operator=FakeBrokerOperator(),
+        today_summary_provider=lambda: {"cycle_count": 1},
+        now_provider=lambda: next(timestamps),
+        restart_policy_enabled=True,
+        max_restart_attempts=2,
+        restart_cooldown_seconds=5,
+    )
+
+    supervisor.run_once()
+    factory.children[0].alive = False
+    factory.children[0].exitcode = 1
+
+    supervisor.run_once()
+    assert len(factory.children) == 1
+
+    supervisor.run_once()
+    assert len(factory.children) == 1
+
+    supervisor.run_once()
+    assert len(factory.children) == 2

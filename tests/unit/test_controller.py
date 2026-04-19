@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from prometheus_client import CollectorRegistry
 
@@ -298,6 +299,60 @@ class RejectingExecution(FakeExecution):
         del symbol, quantity, side, limit_price, time_in_force, client_order_id
         raise OrderRejected(
             '{"message":"insufficient buying power for requested exposure"}'
+        )
+
+
+def test_write_closed_trade_records_rejects_naive_entry_timestamp(tmp_path) -> None:
+    artifacts = FilesystemArtifactStore(tmp_path / "artifacts")
+    execution_dir = tmp_path / "artifacts" / "execution_lifecycles"
+    execution_dir.mkdir(parents=True, exist_ok=True)
+    (execution_dir / "entry.json").write_text(
+        json.dumps(
+            {
+                "intent_id": "entry-1",
+                "symbol": "SPY",
+                "side": "buy",
+                "filled_qty": "1",
+                "fill_price": "600.00",
+                "filled_at_utc": "2026-04-19T12:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    controller = PaperTradingLoopController(
+        market_data=FakeMarketData(),
+        execution=FakeExecution(),
+        portfolio=FakePortfolio(),
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(),
+        artifacts=artifacts,
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+    )
+    trade_intent = TradeIntent(
+        intent_id="exit-1",
+        candidate_id="baseline-long-only-v1",
+        symbol="SPY",
+        side="sell",
+        quantity=Decimal("1"),
+        reason_code="test_exit",
+        generated_at_utc=datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+    )
+    order_record = OrderRecord(
+        order_id="order-1",
+        client_order_id="client-1",
+        symbol="SPY",
+        side="sell",
+        status="filled",
+        filled_qty=Decimal("1"),
+        filled_avg_price=Decimal("605.00"),
+    )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        controller._write_closed_trade_records_if_available(
+            trade_intent=trade_intent,
+            order_record=order_record,
         )
 
 

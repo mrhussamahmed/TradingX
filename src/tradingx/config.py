@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -222,7 +223,8 @@ class TradingConfig:
 
     @classmethod
     def from_env_file(cls, path: Path) -> TradingConfig:
-        return cls.from_mapping(dotenv_values(path))
+        file_values = dotenv_values(path)
+        return cls.from_mapping({**file_values, **os.environ})
 
     def has_real_paper_credentials(self) -> bool:
         return not _is_placeholder(

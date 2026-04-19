@@ -181,6 +181,33 @@ def test_local_web_read_model_lists_artifact_payloads_by_category(tmp_path) -> N
     assert payloads[0]["summary"] == "Kill switch active."
 
 
+def test_local_web_read_model_parse_datetime_tolerates_invalid_iso(tmp_path) -> None:
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+    )
+
+    parsed = read_model._parse_datetime("not-a-timestamp")
+
+    assert parsed == datetime(1970, 1, 1, tzinfo=UTC)
+
+
 def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
     paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
     validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")

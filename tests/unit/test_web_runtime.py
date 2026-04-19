@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from tradingx.config import TradingConfig
 from tradingx.service import ServiceRunResult
@@ -342,3 +345,43 @@ def test_local_web_action_runner_exposes_market_scheduler_controls(tmp_path) -> 
 
     assert hasattr(runner, "start_market_scheduler")
     assert hasattr(runner, "stop_market_scheduler")
+
+
+def test_local_web_action_runner_rejects_gate_report_benchmark_outside_artifact_root(
+    tmp_path, monkeypatch
+) -> None:
+    benchmark_file = tmp_path / "outside.json"
+    benchmark_file.write_text(
+        json.dumps(
+            {
+                "symbol": "SPY",
+                "window_start_utc": "2026-04-01T00:00:00+00:00",
+                "window_end_utc": "2026-04-17T00:00:00+00:00",
+                "generated_at_utc": "2026-04-17T21:15:00+00:00",
+                "feed": "iex",
+                "adjustment": "dividend",
+                "series_is_adjusted": True,
+                "closes": ["100", "101", "102"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "tradingx.web.runtime.build_default_gate_validation_controller",
+        lambda config, artifact_root: None,
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    with pytest.raises(ValueError, match="artifact root"):
+        runner.generate_gate_report(
+            gate="1",
+            benchmark_closes_file=str(benchmark_file),
+            window_start="2026-04-01",
+            window_end="2026-04-17",
+        )

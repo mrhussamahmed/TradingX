@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import types
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -214,6 +216,38 @@ def test_filesystem_artifact_store_round_trips_runtime_portfolio_plan(tmp_path) 
     loaded = store.read_runtime_portfolio_plan("runtime-plan-1")
 
     assert loaded == plan
+
+
+def test_filesystem_artifact_store_writes_json_via_atomic_replace(
+    tmp_path, monkeypatch
+) -> None:
+    module = importlib.import_module("tradingx.persistence")
+    store = module.FilesystemArtifactStore(tmp_path)
+    replace_calls: list[tuple[str, str]] = []
+
+    def recording_replace(source, target) -> None:
+        replace_calls.append((os.fspath(source), os.fspath(target)))
+        os.replace(source, target)
+
+    monkeypatch.setattr(
+        module,
+        "os",
+        types.SimpleNamespace(replace=recording_replace, fsync=os.fsync),
+    )
+
+    store.write_trade_intent(
+        TradeIntent(
+            intent_id="intent-atomic",
+            candidate_id="trend-following-v1",
+            symbol="SPY",
+            side="buy",
+            quantity=Decimal("1"),
+            reason_code="trend_breakout",
+            generated_at_utc=datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        )
+    )
+
+    assert replace_calls
 
 
 def test_filesystem_artifact_store_separates_alert_and_gate_artifacts(tmp_path) -> None:

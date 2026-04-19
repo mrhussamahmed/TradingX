@@ -648,7 +648,6 @@ def create_app(
         return JSONResponse(
             content={
                 "message": "Web app frontend has not been built yet.",
-                "requested_path": full_path,
             },
             status_code=503,
         )

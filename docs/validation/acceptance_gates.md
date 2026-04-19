@@ -1,10 +1,10 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.0.0
+version: 1.0.1
 status: active
 created: 2026-04-17
-last_amended: 2026-04-17
+last_amended: 2026-04-19
 supersedes: null
 superseded_by: null
 author_session: SESS-2026-04-17-004
@@ -123,6 +123,10 @@ reference that later validation reports can cite.
 - Monitoring is confirmed for at least 7 days.
 - A fresh SMTP emergency round trip passes within 7 days of the Gate 4
   decision.
+- Web write endpoints require request signing plus idempotency keys before
+  any live-control environment variable is accepted.
+- Live-control flags remain fail-closed in code until Gate 4-specific
+  enablement work lands.
 
 **Primary evidence**
 

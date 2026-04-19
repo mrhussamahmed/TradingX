@@ -152,6 +152,60 @@ def test_execution_policy_engine_enforces_sticky_drawdown_halt() -> None:
     assert second.reason_code == "daily_drawdown_halt_sticky"
 
 
+def test_execution_policy_engine_persists_sticky_drawdown_halt_across_instances(
+    tmp_path: Path,
+) -> None:
+    snapshot = build_week1_policy_snapshot(
+        generated_at_utc=datetime(2026, 4, 19, 8, 0, tzinfo=UTC),
+        artifact_root=Path("artifacts"),
+        git_sha="abc1234",
+        dry_run=True,
+    )
+    state_path = tmp_path / "data" / "control" / "policy_state.json"
+    first_engine = ExecutionPolicyEngine(snapshot, state_path=state_path)
+    second_engine = ExecutionPolicyEngine(snapshot, state_path=state_path)
+
+    first = first_engine.evaluate_entry(
+        EntryPolicyContext(
+            symbol="SPY",
+            entries_today=0,
+            entries_for_symbol=0,
+            concurrent_positions=0,
+            exited_symbols=(),
+            deployed_capital=Decimal("0"),
+            session_start_equity=Decimal("100000"),
+            current_mark_equity=Decimal("99499"),
+            minutes_to_close=120,
+            quote_spread=Decimal("0.01"),
+            quote_spread_bps=Decimal("1"),
+            quote_age_seconds=1,
+            regular_hours=True,
+            kill_switch_active=False,
+        )
+    )
+    second = second_engine.evaluate_entry(
+        EntryPolicyContext(
+            symbol="SPY",
+            entries_today=0,
+            entries_for_symbol=0,
+            concurrent_positions=0,
+            exited_symbols=(),
+            deployed_capital=Decimal("0"),
+            session_start_equity=Decimal("100000"),
+            current_mark_equity=Decimal("100000"),
+            minutes_to_close=120,
+            quote_spread=Decimal("0.01"),
+            quote_spread_bps=Decimal("1"),
+            quote_age_seconds=1,
+            regular_hours=True,
+            kill_switch_active=False,
+        )
+    )
+
+    assert first.reason_code == "daily_drawdown_halt"
+    assert second.reason_code == "daily_drawdown_halt_sticky"
+
+
 @pytest.mark.parametrize(
     ("minutes_to_close", "expected_stage"),
     [

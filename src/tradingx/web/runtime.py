@@ -520,13 +520,14 @@ class LocalWebActionRunner:
         window_end: str,
         universe: tuple[str, ...] = (),
     ) -> WebActionResult:
+        benchmark_path = self._resolve_artifact_path(Path(benchmark_closes_file))
         controller = build_default_gate_validation_controller(
             self._config,
             artifact_root=self._config.runtime.artifact_root / "validation",
         )
         window_start_utc = datetime.fromisoformat(window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(window_end).replace(tzinfo=UTC)
-        benchmark_series = load_benchmark_close_series(Path(benchmark_closes_file))
+        benchmark_series = load_benchmark_close_series(benchmark_path)
         result = controller.generate_gate_report(
             gate_id=gate,
             benchmark_closes=benchmark_series.closes,
@@ -542,6 +543,25 @@ class LocalWebActionRunner:
             message=f"Generated Gate {gate} report.",
             evidence_refs=tuple(str(path) for path in result.artifact_paths),
         )
+
+    def _resolve_artifact_path(self, candidate: Path) -> Path:
+        artifact_root = self._config.runtime.artifact_root
+        if not artifact_root.is_absolute():
+            artifact_root = (self._repo_root / artifact_root).resolve()
+        else:
+            artifact_root = artifact_root.resolve()
+        resolved = candidate.expanduser()
+        if not resolved.is_absolute():
+            resolved = (self._repo_root / resolved).resolve()
+        else:
+            resolved = resolved.resolve()
+        try:
+            resolved.relative_to(artifact_root)
+        except ValueError as error:
+            raise ValueError(
+                "Benchmark closes file must resolve under the artifact root."
+            ) from error
+        return resolved
 
     def generate_decision_report(self, *, gate: str | None) -> WebActionResult:
         brief = build_gate_decision_brief(

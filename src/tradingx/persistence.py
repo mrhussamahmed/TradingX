@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -424,9 +426,9 @@ class FilesystemArtifactStore:
     def _write_json(self, category: str, filename: str, payload: Any) -> Path:
         path = self._path_for(category, filename)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        _write_text_atomically(
+            path,
             json.dumps(_serialize(payload), indent=2, sort_keys=True),
-            encoding="utf-8",
         )
         return path
 
@@ -564,6 +566,19 @@ class FilesystemArtifactStore:
             json.loads(path.read_text(encoding="utf-8"))
             for path in sorted(category_dir.glob("*.json"))
         ]
+
+
+def _write_text_atomically(path: Path, payload: str) -> None:
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 __all__ = ("FilesystemArtifactStore",)

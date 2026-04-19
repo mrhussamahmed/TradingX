@@ -78,23 +78,23 @@ def run_daily_bar_backtest(
                 overnight_gross_by_symbol=overnight_gross_by_symbol,
                 portfolio_open_multiplier=daily_growth,
             )
-            if cost_model_config is not None:
-                trade_cost_fraction = _trade_cost_fraction(
-                    bars_by_symbol=bars_by_symbol,
-                    current_weights=drifted_weights,
-                    target_weights={
-                        symbol: float(target_weights.iloc[bar_offset - 1][symbol])
-                        for symbol in symbols
-                    },
-                    bar_offset=bar_offset,
-                    equity=equity * daily_growth,
-                    cost_model_config=cost_model_config,
-                )
-                daily_growth *= 1.0 - trade_cost_fraction
-            current_weights = {
-                symbol: float(target_weights.iloc[bar_offset - 1][symbol])
-                for symbol in symbols
-            }
+        else:
+            drifted_weights = current_weights.copy()
+
+        scheduled_open_weights = {
+            symbol: float(target_weights.iloc[bar_offset][symbol]) for symbol in symbols
+        }
+        if cost_model_config is not None:
+            trade_cost_fraction = _trade_cost_fraction(
+                bars_by_symbol=bars_by_symbol,
+                current_weights=drifted_weights,
+                target_weights=scheduled_open_weights,
+                bar_offset=bar_offset,
+                equity=equity * daily_growth,
+                cost_model_config=cost_model_config,
+            )
+            daily_growth *= 1.0 - trade_cost_fraction
+        current_weights = scheduled_open_weights
 
         applied_rows.append(current_weights.copy())
 

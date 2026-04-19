@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -213,11 +215,21 @@ class PolicySnapshotStore:
 
 
 class ExecutionPolicyEngine:
-    def __init__(self, snapshot: PolicySnapshot) -> None:
+    def __init__(
+        self,
+        snapshot: PolicySnapshot,
+        *,
+        state_path: Path | None = None,
+    ) -> None:
         self._snapshot = snapshot
-        self._sticky_drawdown_halt = False
+        self._state_path = state_path
+        self._sticky_drawdown_halt = self._load_sticky_drawdown_state()
 
     def evaluate_entry(self, context: EntryPolicyContext) -> PolicyDecision:
+        if self._state_path is not None:
+            self._sticky_drawdown_halt = (
+                self._sticky_drawdown_halt or self._load_sticky_drawdown_state()
+            )
         if context.kill_switch_active:
             return PolicyDecision(allowed=False, reason_code="kill_switch_active")
         if not context.regular_hours:
@@ -229,6 +241,7 @@ class ExecutionPolicyEngine:
             )
         if self._drawdown_triggered(context):
             self._sticky_drawdown_halt = True
+            self._persist_sticky_drawdown_state()
             return PolicyDecision(allowed=False, reason_code="daily_drawdown_halt")
         if (
             self.close_ladder_stage(minutes_to_close=context.minutes_to_close)
@@ -289,6 +302,47 @@ class ExecutionPolicyEngine:
             context.session_start_equity * self._snapshot.daily_drawdown_halt_fraction
         )
         return drawdown >= threshold
+
+    def _load_sticky_drawdown_state(self) -> bool:
+        if self._state_path is None or not self._state_path.exists():
+            return False
+        payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+        if (
+            str(payload.get("policy_snapshot_id", ""))
+            != self._snapshot.policy_snapshot_id
+        ):
+            return False
+        return bool(payload.get("sticky_drawdown_halt", False))
+
+    def _persist_sticky_drawdown_state(self) -> None:
+        if self._state_path is None:
+            return
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_text_atomically(
+            self._state_path,
+            json.dumps(
+                {
+                    "policy_snapshot_id": self._snapshot.policy_snapshot_id,
+                    "sticky_drawdown_halt": self._sticky_drawdown_halt,
+                    "updated_at_utc": datetime.now(UTC).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+        )
+
+
+def _write_text_atomically(path: Path, payload: str) -> None:
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 __all__ = (

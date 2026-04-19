@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 
 from tradingx.alerts import (
     MemoryAlertTransport,
@@ -278,3 +281,105 @@ def test_build_alert_dispatcher_uses_configured_real_transports() -> None:
     )
 
     assert delivered.delivery_targets == ("telegram", "smtp")
+
+
+def test_operator_alert_dispatcher_logs_transport_failures(caplog) -> None:
+    class FailingTransport:
+        target_name = "smtp"
+
+        def send(self, alert) -> None:
+            del alert
+            raise RuntimeError("smtp offline")
+
+    dispatcher = OperatorAlertDispatcher(
+        transports=(FailingTransport(), MemoryAlertTransport(target_name="telegram"))
+    )
+    alert = build_risk_control_alert(
+        RiskControlEvent(
+            event_id="risk-2",
+            intent_id="intent-2",
+            severity="warning",
+            control_type="stale_market_data",
+            blocked=True,
+            recorded_at_utc=datetime(2026, 4, 17, 18, 5, tzinfo=UTC),
+            operator_visible=True,
+        ),
+        evidence_refs=("artifacts/risk_events/risk-2.json",),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        delivered = dispatcher.dispatch(alert)
+
+    assert delivered.delivery_targets == ("telegram",)
+    assert "smtp offline" in caplog.text
+
+
+def test_operator_alert_dispatcher_raises_when_critical_alert_has_no_delivery() -> None:
+    class FailingTransport:
+        target_name = "smtp"
+
+        def send(self, alert) -> None:
+            del alert
+            raise RuntimeError("smtp offline")
+
+    dispatcher = OperatorAlertDispatcher(transports=(FailingTransport(),))
+    alert = build_gate_decision_alert(
+        GateDecisionBrief(
+            gate_id="4",
+            status="blocked",
+            decision_summary="Gate 4 blocked.",
+            required_operator_action="Do not enable live trading.",
+            generated_at_utc=datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+            evidence_refs=("validation_reports/gate-4.json",),
+            candidate_summaries=(),
+            latest_open_positions=(),
+            latest_cash=Decimal("10025.00"),
+            latest_equity=Decimal("10030.00"),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            latest_alert_summary="",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="No alert transports delivered"):
+        dispatcher.dispatch(alert)
+
+
+def test_smtp_alert_transport_requires_starttls_when_enabled() -> None:
+    class NoStartTlsClient:
+        def login(self, username: str, password: str) -> None:
+            del username, password
+
+        def send_message(self, message) -> None:
+            del message
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    transport = SmtpAlertTransport(
+        host="smtp.example.com",
+        port=587,
+        username="mailer",
+        password="secret",
+        from_email="bot@example.com",
+        to_email="ops@example.com",
+        smtp_factory=lambda host, port: NoStartTlsClient(),
+    )
+    alert = build_risk_control_alert(
+        RiskControlEvent(
+            event_id="risk-3",
+            intent_id="intent-3",
+            severity="warning",
+            control_type="liquidity_filter",
+            blocked=True,
+            recorded_at_utc=datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+            operator_visible=True,
+        ),
+        evidence_refs=(),
+    )
+
+    with pytest.raises(AttributeError):
+        transport.send(alert)

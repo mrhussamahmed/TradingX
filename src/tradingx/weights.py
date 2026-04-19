@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,11 +27,15 @@ class ApprovedWeightSnapshotStore:
         if not isinstance(weights_payload, dict):
             raise ValueError(f"weights section must be a mapping in {path}")
 
+        generated_at_utc = datetime.fromisoformat(str(payload["generated_at_utc"]))
+        if generated_at_utc.tzinfo is None:
+            raise ValueError(f"generated_at_utc must be timezone-aware in {path}")
+
         return ApprovedWeightSnapshot(
             snapshot_id=str(payload["snapshot_id"]),
             strategy_id=str(payload["strategy_id"]),
             status=str(payload["status"]),
-            generated_at_utc=datetime.fromisoformat(str(payload["generated_at_utc"])),
+            generated_at_utc=generated_at_utc.astimezone(UTC),
             minimum_supporting_trades=int(str(payload["minimum_supporting_trades"])),
             weights={
                 str(key): Decimal(str(value)) for key, value in weights_payload.items()
