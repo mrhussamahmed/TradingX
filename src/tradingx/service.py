@@ -219,22 +219,25 @@ class PaperTradingService:
                     for trade_intent in portfolio_plan.trade_intents:
                         result = executor(
                             trade_intent,
-                            market_snapshot=portfolio_plan.market_snapshots[
+                            market_snapshot=portfolio_plan.market_snapshots.get(
                                 trade_intent.symbol
-                            ],
+                            ),
+                            universe_snapshot_id=portfolio_plan.universe_snapshot_id,
                         )
-                        reason_code = self._result_reason_code(result)
+                        reason_code = result.trade_intent.reason_code
+                        control_type = self._result_control_type(result)
                         symbol_results.append(
                             ServiceSymbolResult(
                                 symbol=trade_intent.symbol,
                                 terminal_state=result.terminal_state,
                                 reason_code=reason_code,
                                 recovered=result.recovered,
+                                control_type=control_type,
                             )
                         )
                         if result.terminal_state == "blocked_trade":
                             blocked_trade_count += 1
-                            if reason_code in {"stale_market_data", "stale_quote"}:
+                            if control_type in {"stale_market_data", "stale_quote"}:
                                 cycle_status = "data_unavailable"
                                 self._log_cycle_event(
                                     event_type="data_unavailable",
@@ -256,18 +259,20 @@ class PaperTradingService:
                         if symbol not in open_symbols:
                             continue
                         result = self._loop_controller.run_trading_cycle(symbol, quantity)
-                        reason_code = self._result_reason_code(result)
+                        reason_code = result.trade_intent.reason_code
+                        control_type = self._result_control_type(result)
                         symbol_results.append(
                             ServiceSymbolResult(
                                 symbol=symbol,
                                 terminal_state=result.terminal_state,
                                 reason_code=reason_code,
                                 recovered=result.recovered,
+                                control_type=control_type,
                             )
                         )
                         if result.terminal_state == "blocked_trade":
                             blocked_trade_count += 1
-                            if reason_code in {"stale_market_data", "stale_quote"}:
+                            if control_type in {"stale_market_data", "stale_quote"}:
                                 cycle_status = "data_unavailable"
                                 self._log_cycle_event(
                                     event_type="data_unavailable",
@@ -288,18 +293,20 @@ class PaperTradingService:
                                 symbol,
                                 quantity,
                             )
-                            reason_code = self._result_reason_code(result)
+                            reason_code = result.trade_intent.reason_code
+                            control_type = self._result_control_type(result)
                             symbol_results.append(
                                 ServiceSymbolResult(
                                     symbol=symbol,
                                     terminal_state=result.terminal_state,
                                     reason_code=reason_code,
                                     recovered=result.recovered,
+                                    control_type=control_type,
                                 )
                             )
                             if result.terminal_state == "blocked_trade":
                                 blocked_trade_count += 1
-                                if reason_code in {"stale_market_data", "stale_quote"}:
+                                if control_type in {"stale_market_data", "stale_quote"}:
                                     cycle_status = "data_unavailable"
                                     self._log_cycle_event(
                                         event_type="data_unavailable",
@@ -321,18 +328,20 @@ class PaperTradingService:
                                 selection.selected_symbol,
                                 quantity,
                             )
-                            reason_code = self._result_reason_code(result)
+                            reason_code = result.trade_intent.reason_code
+                            control_type = self._result_control_type(result)
                             symbol_results.append(
                                 ServiceSymbolResult(
                                     symbol=selection.selected_symbol,
                                     terminal_state=result.terminal_state,
                                     reason_code=reason_code,
                                     recovered=result.recovered,
+                                    control_type=control_type,
                                 )
                             )
                             if result.terminal_state == "blocked_trade":
                                 blocked_trade_count += 1
-                                if reason_code in {"stale_market_data", "stale_quote"}:
+                                if control_type in {"stale_market_data", "stale_quote"}:
                                     cycle_status = "data_unavailable"
                                     self._log_cycle_event(
                                         event_type="data_unavailable",
@@ -454,10 +463,10 @@ class PaperTradingService:
             open_orders=(),
         )
 
-    def _result_reason_code(self, result: TradingLoopResult) -> str:
+    def _result_control_type(self, result: TradingLoopResult) -> str | None:
         if result.risk_event is not None and result.risk_event.control_type:
             return result.risk_event.control_type
-        return result.trade_intent.reason_code
+        return None
 
     def _open_position_symbols(
         self,

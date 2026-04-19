@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
 from tradingx.types import (
     AlertDrillRecord,
     ApprovedWeightSnapshot,
@@ -18,6 +19,7 @@ from tradingx.types import (
     GateAssessment,
     HistoricalWarmupRecord,
     MarketAutomationRunRecord,
+    MarketSnapshot,
     OperatorAlert,
     OpportunityScore,
     OpportunitySelectionRecord,
@@ -156,6 +158,62 @@ def test_filesystem_artifact_store_writes_trade_intent_json(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["symbol"] == "SPY"
     assert payload["generated_at_utc"] == "2026-04-17T18:00:00+00:00"
+
+
+def test_filesystem_artifact_store_round_trips_runtime_portfolio_plan(tmp_path) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    timestamp = datetime(2026, 4, 19, 13, 30, tzinfo=UTC)
+    plan = RuntimePortfolioPlan(
+        plan_id="runtime-plan-1",
+        generated_at_utc=timestamp,
+        strategy_id="trend-following-v1",
+        universe_snapshot_id="universe-qqq-spy",
+        benchmark_symbol="SPY",
+        crash_overlay_active=False,
+        symbols_considered=("SPY", "QQQ"),
+        current_weights={"SPY": Decimal("0.10"), "QQQ": Decimal("0.00")},
+        target_weights={"SPY": Decimal("0.05"), "QQQ": Decimal("0.15")},
+        trade_intents=(
+            TradeIntent(
+                intent_id="intent-1",
+                candidate_id="trend-following-v1",
+                symbol="QQQ",
+                side="buy",
+                quantity=Decimal("15"),
+                reason_code="target_weight_entry",
+                generated_at_utc=timestamp,
+            ),
+        ),
+        planned_trades=(
+            RuntimePortfolioTrade(
+                symbol="QQQ",
+                side="buy",
+                reason_code="target_weight_entry",
+                last_trade_price=Decimal("100"),
+                current_weight=Decimal("0"),
+                target_weight=Decimal("0.15"),
+                current_quantity=Decimal("0"),
+                target_quantity=Decimal("15"),
+                delta_quantity=Decimal("15"),
+                no_trade_band_applied=False,
+            ),
+        ),
+        market_snapshots={
+            "QQQ": MarketSnapshot(
+                symbol="QQQ",
+                last_trade_price=Decimal("100"),
+                bid_price=Decimal("99.95"),
+                ask_price=Decimal("100.05"),
+                average_daily_volume_30d=Decimal("1500000"),
+                timestamp=timestamp,
+            )
+        },
+    )
+
+    store.write_runtime_portfolio_plan(plan)
+    loaded = store.read_runtime_portfolio_plan("runtime-plan-1")
+
+    assert loaded == plan
 
 
 def test_filesystem_artifact_store_separates_alert_and_gate_artifacts(tmp_path) -> None:

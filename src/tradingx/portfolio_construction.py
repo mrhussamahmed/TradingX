@@ -26,6 +26,7 @@ class PortfolioConstructionConfig:
     gross_exposure_cap: float = 1.0
     max_positions: int = 10
     min_trade_notional: Decimal = Decimal("50")
+    min_trade_fraction_of_equity: Decimal = Decimal("0.0025")
     crash_overlay_factor: float = 0.5
     crash_overlay_vol_window_days: int = 20
     crash_overlay_lookback_days: int = 756
@@ -221,7 +222,7 @@ def _build_raw_target_weights_from_rows(
         adjusted_rows[sleeve_name] = adjusted_row
 
     adjusted_frame = pd.DataFrame(adjusted_rows).T.fillna(0.0)
-    combined = (adjusted_frame.sum(axis=0) / float(len(adjusted_rows))).fillna(0.0)
+    combined = (adjusted_frame.sum(axis=0) / float(len(sleeve_rows))).fillna(0.0)
     combined = _cap_concentration(combined, config=config)
     combined = _limit_positions(combined, config=config)
     combined = _cap_gross_exposure(combined, config=config)
@@ -293,13 +294,17 @@ def _apply_no_trade_band(
     config: PortfolioConstructionConfig,
 ) -> dict[str, Decimal]:
     symbols = sorted(set(target_weights) | set(current_positions))
+    minimum_trade_notional = max(
+        config.min_trade_notional,
+        account_equity * config.min_trade_fraction_of_equity,
+    )
     held_weights: dict[str, Decimal] = {}
     for symbol in symbols:
         target_weight = target_weights.get(symbol, Decimal("0"))
         current_weight = current_positions.get(symbol, Decimal("0"))
         weight_delta = abs(target_weight - current_weight)
         trade_notional = weight_delta * account_equity
-        if trade_notional < config.min_trade_notional:
+        if trade_notional < minimum_trade_notional:
             held_weights[symbol] = current_weight
         else:
             held_weights[symbol] = target_weight

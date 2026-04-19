@@ -246,6 +246,7 @@ class ServiceSymbolResult:
     terminal_state: str
     reason_code: str
     recovered: bool
+    control_type: str | None = None
 
 
 @dataclass(frozen=True)

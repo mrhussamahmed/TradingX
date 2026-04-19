@@ -150,3 +150,37 @@ def test_daily_bar_backtest_applies_costs_on_rebalance_trades() -> None:
 
     assert result.portfolio_returns.iloc[1] < 0.0
     assert result.portfolio_returns.iloc[2] < 0.0
+
+
+def test_daily_bar_backtest_rebalances_drifted_weights_before_costing() -> None:
+    module = importlib.import_module("tradingx.backtest")
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            opens=[100.0, 110.0],
+            closes=[100.0, 110.0],
+        ),
+        "QQQ": _quote_enriched_ohlcv_frame(
+            opens=[100.0, 100.0],
+            closes=[100.0, 100.0],
+        ),
+    }
+    target_weights = pd.DataFrame(
+        {"SPY": [0.5, 0.5], "QQQ": [0.5, 0.5]},
+        index=bars_by_symbol["SPY"].index,
+        dtype=float,
+    )
+
+    without_costs = module.run_daily_bar_backtest(
+        bars_by_symbol,
+        target_weights=target_weights,
+        initial_weights={"SPY": 0.5, "QQQ": 0.5},
+    )
+    with_costs = module.run_daily_bar_backtest(
+        bars_by_symbol,
+        target_weights=target_weights,
+        initial_weights={"SPY": 0.5, "QQQ": 0.5},
+        cost_model_config=module.CostModelConfig(),
+    )
+
+    assert without_costs.portfolio_returns.iloc[1] == pytest.approx(0.05)
+    assert with_costs.portfolio_returns.iloc[1] < without_costs.portfolio_returns.iloc[1]

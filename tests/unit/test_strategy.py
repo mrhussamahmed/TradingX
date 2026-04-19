@@ -90,6 +90,25 @@ def test_baseline_strategy_holds_when_symbol_position_is_already_open() -> None:
     assert intent.reason_code == "existing_position_hold"
 
 
+def test_baseline_strategy_holds_when_spread_is_too_wide() -> None:
+    strategy = DeterministicBaselineStrategy(
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)
+    )
+
+    intent = strategy.generate_trade_intent(
+        market_snapshot=make_market_snapshot(
+            bid_price=Decimal("100.00"),
+            ask_price=Decimal("102.50"),
+        ),
+        portfolio_state=make_portfolio_state(),
+        quantity=Decimal("2"),
+    )
+
+    assert intent.side == "hold"
+    assert intent.quantity is None
+    assert intent.reason_code == "spread_too_wide"
+
+
 def test_baseline_strategy_exits_on_take_profit_threshold() -> None:
     strategy = DeterministicBaselineStrategy(
         now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)

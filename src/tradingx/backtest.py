@@ -58,18 +58,30 @@ def run_daily_bar_backtest(
 
         if bar_offset > 0:
             overnight_return = 0.0
+            overnight_gross_by_symbol: dict[str, float] = {}
             for symbol in symbols:
                 symbol_bars = bars_by_symbol[symbol]
                 previous_close = float(symbol_bars.iloc[bar_offset - 1]["close"])
                 current_open = float(symbol_bars.iloc[bar_offset]["open"])
-                overnight_return += current_weights[symbol] * (
-                    (current_open / previous_close) - 1.0
+                symbol_growth = (
+                    (current_open / previous_close)
+                    if previous_close > 0.0
+                    else 1.0
                 )
+                overnight_gross_by_symbol[symbol] = (
+                    current_weights[symbol] * symbol_growth
+                )
+                overnight_return += current_weights[symbol] * (symbol_growth - 1.0)
             daily_growth *= 1.0 + overnight_return
+            drifted_weights = _drifted_weights(
+                current_weights=current_weights,
+                overnight_gross_by_symbol=overnight_gross_by_symbol,
+                portfolio_open_multiplier=daily_growth,
+            )
             if cost_model_config is not None:
                 trade_cost_fraction = _trade_cost_fraction(
                     bars_by_symbol=bars_by_symbol,
-                    current_weights=current_weights,
+                    current_weights=drifted_weights,
                     target_weights={
                         symbol: float(target_weights.iloc[bar_offset - 1][symbol])
                         for symbol in symbols
@@ -270,6 +282,20 @@ def _trade_cost_fraction(
         )
         total_cost += trade_costs.total
     return total_cost / equity
+
+
+def _drifted_weights(
+    *,
+    current_weights: dict[str, float],
+    overnight_gross_by_symbol: dict[str, float],
+    portfolio_open_multiplier: float,
+) -> dict[str, float]:
+    if portfolio_open_multiplier <= 0.0:
+        return current_weights.copy()
+    return {
+        symbol: overnight_gross_by_symbol.get(symbol, 0.0) / portfolio_open_multiplier
+        for symbol in current_weights
+    }
 
 
 def _sigma_20d_bps(close_series: pd.Series, bar_offset: int) -> float:

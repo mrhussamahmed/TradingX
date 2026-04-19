@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -28,6 +29,8 @@ from tradingx.types import (
     ValidationCriterionResult,
     ValidationReport,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MIN_CAGR_EDGE = Decimal("0.02")
@@ -571,6 +574,10 @@ def load_benchmark_close_series(path: Path) -> BenchmarkCloseSeries:
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
+        LOGGER.warning(
+            "Benchmark close series at %s uses legacy bare-number format without metadata.",
+            path,
+        )
         tokens = [token.strip() for token in raw_text.replace("\n", ",").split(",")]
         return BenchmarkCloseSeries(
             symbol="SPY",
@@ -583,6 +590,10 @@ def load_benchmark_close_series(path: Path) -> BenchmarkCloseSeries:
             series_is_adjusted=False,
         )
     if isinstance(payload, list):
+        LOGGER.warning(
+            "Benchmark close series at %s uses legacy JSON-list format without metadata.",
+            path,
+        )
         return BenchmarkCloseSeries(
             symbol="SPY",
             closes=tuple(Decimal(str(value)) for value in payload),

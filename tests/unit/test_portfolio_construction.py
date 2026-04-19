@@ -47,7 +47,7 @@ def test_portfolio_construction_module_shell_is_importable() -> None:
     assert hasattr(module, "__all__")
 
 
-def test_build_target_weights_averages_active_sleeves_and_applies_caps() -> None:
+def test_build_target_weights_averages_configured_sleeves_and_applies_caps() -> None:
     module = importlib.import_module("tradingx.portfolio_construction")
     config = module.PortfolioConstructionConfig()
     timestamp = pd.Timestamp("2026-04-17T00:00:00+00:00")
@@ -78,7 +78,10 @@ def test_build_target_weights_averages_active_sleeves_and_applies_caps() -> None
 
 def test_build_target_weights_holds_small_changes_inside_no_trade_band() -> None:
     module = importlib.import_module("tradingx.portfolio_construction")
-    config = module.PortfolioConstructionConfig(min_trade_notional=Decimal("50"))
+    config = module.PortfolioConstructionConfig(
+        min_trade_notional=Decimal("50"),
+        min_trade_fraction_of_equity=Decimal("0"),
+    )
     timestamp = pd.Timestamp("2026-04-17T00:00:00+00:00")
     sleeve_signals = {
         "trend_following": pd.DataFrame(
@@ -100,6 +103,32 @@ def test_build_target_weights_holds_small_changes_inside_no_trade_band() -> None
 
     assert weights["SPY"] == Decimal("0.10")
     assert weights["QQQ"] == Decimal("0.102")
+
+
+def test_build_target_weights_uses_equity_fraction_no_trade_band_by_default() -> None:
+    module = importlib.import_module("tradingx.portfolio_construction")
+    config = module.PortfolioConstructionConfig(min_trade_notional=Decimal("50"))
+    timestamp = pd.Timestamp("2026-04-17T00:00:00+00:00")
+    sleeve_signals = {
+        "trend_following": pd.DataFrame(
+            [{"SPY": 0.1004, "QQQ": 0.1020}],
+            index=[timestamp],
+            dtype=float,
+        )
+    }
+
+    weights = module.build_target_weights(
+        sleeve_signals=sleeve_signals,
+        current_positions={
+            "SPY": Decimal("0.10"),
+            "QQQ": Decimal("0.10"),
+        },
+        account_equity=Decimal("100000"),
+        config=config,
+    )
+
+    assert weights["SPY"] == Decimal("0.10")
+    assert weights["QQQ"] == Decimal("0.10")
 
 
 def test_build_target_weights_limits_positions_and_rescales_gross() -> None:
@@ -190,3 +219,30 @@ def test_build_target_weight_history_scales_long_equity_sleeves_in_crash_overlay
     assert history.iloc[-30]["EEM"] == pytest.approx(-0.10)
     assert history.iloc[-1]["SPY"] == pytest.approx(0.05)
     assert history.iloc[-1]["EEM"] == pytest.approx(-0.10)
+
+
+def test_build_target_weight_history_keeps_sleeve_budget_stable_when_other_sleeves_toggle() -> (
+    None
+):
+    module = importlib.import_module("tradingx.portfolio_construction")
+    history = module.build_target_weight_history(
+        sleeve_signals={
+            "trend_following": _signal_frame(
+                [{"SPY": 0.20}, {"SPY": 0.20}],
+                start="2026-04-16",
+            ),
+            "mean_reversion": _signal_frame(
+                [{"IWM": 0.0}, {"IWM": 0.20}],
+                start="2026-04-16",
+            ),
+        },
+        account_equity=Decimal("100000"),
+        config=module.PortfolioConstructionConfig(
+            min_trade_notional=Decimal("0"),
+            min_trade_fraction_of_equity=Decimal("0"),
+        ),
+    )
+
+    assert history.iloc[0]["SPY"] == pytest.approx(0.10)
+    assert history.iloc[1]["SPY"] == pytest.approx(0.10)
+    assert history.iloc[1]["IWM"] == pytest.approx(0.10)

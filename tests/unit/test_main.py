@@ -667,6 +667,7 @@ def test_main_runtime_plan_command_writes_plan_artifact(
                 plan_id="runtime-plan-1",
                 generated_at_utc=timestamp,
                 strategy_id="trend-following-v1",
+                universe_snapshot_id="universe-spy",
                 benchmark_symbol="SPY",
                 crash_overlay_active=False,
                 symbols_considered=symbols,

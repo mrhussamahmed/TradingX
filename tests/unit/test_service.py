@@ -17,6 +17,7 @@ from tradingx.types import (
     PositionSnapshot,
     ReconciliationSnapshot,
     RiskControlEvent,
+    ServiceSymbolResult,
     TradeIntent,
     TradingLoopResult,
 )
@@ -65,8 +66,9 @@ class FakeLoopController:
         trade_intent: TradeIntent,
         *,
         market_snapshot: MarketSnapshot,
+        universe_snapshot_id: str | None = None,
     ) -> TradingLoopResult:
-        del market_snapshot
+        del market_snapshot, universe_snapshot_id
         self.intent_calls.append(
             (trade_intent.symbol, trade_intent.side, trade_intent.quantity)
         )
@@ -246,6 +248,7 @@ class FakePortfolioPlanner:
             plan_id="plan-1",
             generated_at_utc=timestamp,
             strategy_id="trend-following-v1",
+            universe_snapshot_id="universe-qqq-spy",
             benchmark_symbol="SPY",
             crash_overlay_active=False,
             symbols_considered=("SPY", "QQQ"),
@@ -510,6 +513,15 @@ def test_paper_trading_service_marks_data_unavailable_on_stale_market_veto(
     )
 
     assert result.last_cycle.cycle_status == "data_unavailable"
+    assert result.last_cycle.symbol_results == (
+        ServiceSymbolResult(
+            symbol="SPY",
+            terminal_state="blocked_trade",
+            reason_code="baseline_long_entry",
+            recovered=False,
+            control_type="stale_market_data",
+        ),
+    )
 
 
 def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> None:

@@ -70,6 +70,9 @@ class PaperOnlyRiskEngine:
         if control_code is not None:
             raise RiskViolation(self._message_for_control_code(control_code))
 
+    def is_manual_halt_active(self) -> bool:
+        return bool(self._config.runtime.manual_kill_switch_active)
+
     def evaluate_trade_intent(
         self,
         intent: TradeIntent,

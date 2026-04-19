@@ -259,6 +259,7 @@ class PaperTradingLoopController:
         dry_run: bool = False,
         operator_control_store: OperatorControlStore | None = None,
         runtime_logger: StructuredRuntimeLogger | None = None,
+        universe_symbols: tuple[str, ...] | None = None,
     ) -> None:
         self._market_data = market_data
         self._execution = execution
@@ -279,6 +280,9 @@ class PaperTradingLoopController:
         self._dry_run = dry_run
         self._operator_control_store = operator_control_store
         self._runtime_logger = runtime_logger
+        self._default_universe_snapshot_id = _universe_snapshot_id(
+            universe_symbols or ()
+        )
         self._session_start_equity: Decimal | None = None
         self._policy_path: Path | None = None
         if self._policy_store is not None and self._policy_snapshot is not None:
@@ -314,36 +318,46 @@ class PaperTradingLoopController:
         portfolio_state: PortfolioState | None = None,
         default_quantity: Decimal = Decimal("0"),
         strategy_fingerprint: str | None = None,
+        universe_snapshot_id: str | None = None,
     ) -> TradingLoopResult:
         resolved_portfolio_state = portfolio_state or self._portfolio.get_portfolio_state()
         if self._session_start_equity is None:
             self._session_start_equity = resolved_portfolio_state.equity
-        resolved_market_snapshot = market_snapshot or self._market_data.get_market_snapshot(
-            trade_intent.symbol
-        )
+        resolved_market_snapshot = market_snapshot
+        if resolved_market_snapshot is None and trade_intent.side in {"buy", "sell", "reduce"}:
+            resolved_market_snapshot = self._market_data.get_market_snapshot(
+                trade_intent.symbol
+            )
         return self._execute_trade_intent_impl(
             trade_intent,
             market_snapshot=resolved_market_snapshot,
             portfolio_state=resolved_portfolio_state,
             default_quantity=default_quantity,
             strategy_fingerprint=strategy_fingerprint or trade_intent.candidate_id,
+            universe_snapshot_id=universe_snapshot_id,
         )
+
+    def _manual_halt_active(self) -> bool:
+        manual_halt = getattr(self._risk, "is_manual_halt_active", None)
+        if callable(manual_halt):
+            return bool(manual_halt())
+        runtime_config = getattr(getattr(self._risk, "_config", None), "runtime", None)
+        return bool(getattr(runtime_config, "manual_kill_switch_active", False))
 
     def _execute_trade_intent_impl(
         self,
         trade_intent: TradeIntent,
         *,
-        market_snapshot: MarketSnapshot,
+        market_snapshot: MarketSnapshot | None,
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
         strategy_fingerprint: str,
+        universe_snapshot_id: str | None = None,
     ) -> TradingLoopResult:
         trade_path = self._artifacts.write_trade_intent(trade_intent)
         self._metrics.record_evidence_artifact("trade_intent")
         self._metrics.record_live_disable_state(True)
-        self._metrics.record_manual_halt_state(
-            self._risk._config.runtime.manual_kill_switch_active
-        )
+        self._metrics.record_manual_halt_state(self._manual_halt_active())
 
         if trade_intent.side not in {"buy", "sell", "reduce"}:
             decision_path = self._write_decision_snapshot(
@@ -352,6 +366,7 @@ class PaperTradingLoopController:
                 risk_verdict_id="not_applicable",
                 final_action="no_action",
                 strategy_fingerprint=strategy_fingerprint,
+                universe_snapshot_id=universe_snapshot_id,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -417,6 +432,7 @@ class PaperTradingLoopController:
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
                 strategy_fingerprint=strategy_fingerprint,
+                universe_snapshot_id=universe_snapshot_id,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -475,6 +491,7 @@ class PaperTradingLoopController:
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
                 strategy_fingerprint=strategy_fingerprint,
+                universe_snapshot_id=universe_snapshot_id,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -534,6 +551,11 @@ class PaperTradingLoopController:
                 ),
             )
 
+        if market_snapshot is None:
+            raise RuntimeError(
+                f"Market snapshot is required for actionable trade intent {trade_intent.intent_id}."
+            )
+
         risk_decision = self._risk.evaluate_trade_intent(
             trade_intent,
             market_snapshot,
@@ -554,6 +576,7 @@ class PaperTradingLoopController:
                 else ("dry_run" if self._dry_run else trade_intent.side)
             ),
             strategy_fingerprint=strategy_fingerprint,
+            universe_snapshot_id=universe_snapshot_id,
         )
         self._log_runtime_event(
             event_type="decision_recorded",
@@ -842,7 +865,7 @@ class PaperTradingLoopController:
         reconciliation_path = self._artifacts.write_reconciliation_snapshot(
             reconciliation
         )
-        closed_trade_path = self._write_closed_trade_record_if_available(
+        closed_trade_paths = self._write_closed_trade_records_if_available(
             trade_intent=trade_intent,
             order_record=order_record,
         )
@@ -866,7 +889,7 @@ class PaperTradingLoopController:
                     order_path,
                     execution_path,
                     reconciliation_path,
-                    closed_trade_path,
+                    *closed_trade_paths,
                 )
                 if path is not None
             ),
@@ -1013,6 +1036,7 @@ class PaperTradingLoopController:
         risk_verdict_id: str,
         final_action: str,
         strategy_fingerprint: str,
+        universe_snapshot_id: str | None = None,
     ) -> Path:
         if self._snapshot_store is None or self._policy_snapshot is None:
             return self._artifacts.write_trade_intent(trade_intent)
@@ -1021,7 +1045,11 @@ class PaperTradingLoopController:
             timestamp_utc=self._now_provider(),
             cycle_correlation_id=f"cycle-{trade_intent.intent_id}",
             session_snapshot_id=self._policy_snapshot.policy_snapshot_id,
-            universe_snapshot_id="week1-spy",
+            universe_snapshot_id=(
+                universe_snapshot_id
+                or self._default_universe_snapshot_id
+                or _universe_snapshot_id((trade_intent.symbol,))
+            ),
             policy_snapshot_id=self._policy_snapshot.policy_snapshot_id,
             model_snapshot_id=trade_intent.candidate_id,
             strategy_version=trade_intent.candidate_id,
@@ -1264,80 +1292,89 @@ class PaperTradingLoopController:
             client_order_id=client_order_id,
         )
 
-    def _write_closed_trade_record_if_available(
+    def _write_closed_trade_records_if_available(
         self,
         *,
         trade_intent: TradeIntent,
         order_record: Any,
-    ) -> Path | None:
+    ) -> tuple[Path, ...]:
         if trade_intent.side != "sell":
-            return None
+            return ()
         closed_trades = self._artifacts.list_artifact_payloads("closed_trades")
-        used_entry_ids = {
-            str(payload.get("entry_intent_id", ""))
-            for payload in closed_trades
-            if str(payload.get("entry_intent_id", "")).strip()
-        }
-        candidate_entries = [
-            payload
-            for payload in self._artifacts.list_artifact_payloads(
-                "execution_lifecycles"
-            )
-            if str(payload.get("symbol", "")) == trade_intent.symbol
-            and str(payload.get("side", "")).lower() == "buy"
-            and str(payload.get("intent_id", "")) not in used_entry_ids
-        ]
-        if not candidate_entries:
-            return None
-        entry_payload = max(
-            candidate_entries,
-            key=lambda payload: str(payload.get("filled_at_utc", "")),
+        consumed_quantities: dict[str, Decimal] = {}
+        for payload in closed_trades:
+            entry_intent_id = str(payload.get("entry_intent_id", "")).strip()
+            if not entry_intent_id:
+                continue
+            consumed_quantities[entry_intent_id] = consumed_quantities.get(
+                entry_intent_id,
+                Decimal("0"),
+            ) + Decimal(str(payload.get("quantity", "0")))
+        candidate_entries = sorted(
+            [
+                payload
+                for payload in self._artifacts.list_artifact_payloads(
+                    "execution_lifecycles"
+                )
+                if str(payload.get("symbol", "")) == trade_intent.symbol
+                and str(payload.get("side", "")).lower() == "buy"
+            ],
+            key=lambda payload: (
+                str(payload.get("filled_at_utc", "")),
+                str(payload.get("intent_id", "")),
+            ),
         )
-        entry_price = Decimal(str(entry_payload.get("fill_price", "0")))
-        quantity = Decimal(str(order_record.filled_qty))
-        gross_pnl = (order_record.filled_avg_price - entry_price) * quantity
-        closed_trade = ClosedTradeRecord(
-            trade_id=f"trade-{trade_intent.intent_id}",
-            symbol=trade_intent.symbol,
-            entry_intent_id=str(entry_payload.get("intent_id", "")),
-            exit_intent_id=trade_intent.intent_id,
-            opened_at_utc=datetime.fromisoformat(
+        if not candidate_entries:
+            return ()
+        remaining_exit_quantity = Decimal(str(order_record.filled_qty))
+        paths: list[Path] = []
+        for entry_payload in candidate_entries:
+            if remaining_exit_quantity <= Decimal("0"):
+                break
+            entry_intent_id = str(entry_payload.get("intent_id", ""))
+            entry_quantity = Decimal(str(entry_payload.get("filled_qty", "0")))
+            entry_remaining = entry_quantity - consumed_quantities.get(
+                entry_intent_id,
+                Decimal("0"),
+            )
+            if entry_remaining <= Decimal("0"):
+                continue
+            matched_quantity = min(entry_remaining, remaining_exit_quantity)
+            entry_price = Decimal(str(entry_payload.get("fill_price", "0")))
+            opened_at_utc = datetime.fromisoformat(
                 str(
                     entry_payload.get(
                         "filled_at_utc",
                         trade_intent.generated_at_utc.isoformat(),
                     )
                 )
-            ),
-            closed_at_utc=self._now_provider(),
-            quantity=quantity,
-            entry_price=entry_price,
-            exit_price=order_record.filled_avg_price,
-            gross_pnl=gross_pnl,
-            return_pct=(
-                Decimal("0")
-                if entry_price == Decimal("0")
-                else (order_record.filled_avg_price - entry_price) / entry_price
-            ),
-            outcome="win" if gross_pnl > Decimal("0") else "loss",
-            holding_period_seconds=max(
-                0,
-                int(
-                    (
-                        self._now_provider()
-                        - datetime.fromisoformat(
-                            str(
-                                entry_payload.get(
-                                    "filled_at_utc",
-                                    trade_intent.generated_at_utc.isoformat(),
-                                )
-                            )
-                        )
-                    ).total_seconds()
+            )
+            gross_pnl = (order_record.filled_avg_price - entry_price) * matched_quantity
+            closed_trade = ClosedTradeRecord(
+                trade_id=f"trade-{trade_intent.intent_id}-{entry_intent_id}",
+                symbol=trade_intent.symbol,
+                entry_intent_id=entry_intent_id,
+                exit_intent_id=trade_intent.intent_id,
+                opened_at_utc=opened_at_utc,
+                closed_at_utc=self._now_provider(),
+                quantity=matched_quantity,
+                entry_price=entry_price,
+                exit_price=order_record.filled_avg_price,
+                gross_pnl=gross_pnl,
+                return_pct=(
+                    Decimal("0")
+                    if entry_price == Decimal("0")
+                    else (order_record.filled_avg_price - entry_price) / entry_price
                 ),
-            ),
-        )
-        return self._artifacts.write_closed_trade_record(closed_trade)
+                outcome="win" if gross_pnl > Decimal("0") else "loss",
+                holding_period_seconds=max(
+                    0,
+                    int((self._now_provider() - opened_at_utc).total_seconds()),
+                ),
+            )
+            paths.append(self._artifacts.write_closed_trade_record(closed_trade))
+            remaining_exit_quantity -= matched_quantity
+        return tuple(paths)
 
 
 class StrategyEvaluationController:
@@ -1515,6 +1552,7 @@ def build_default_paper_trading_controller(
             config.runtime.data_root / "control"
         ),
         runtime_logger=build_default_runtime_logger(config, component="controller"),
+        universe_symbols=config.runtime.symbol_universe,
     )
 
 
@@ -1548,6 +1586,15 @@ def _resolve_git_sha() -> str:
     except Exception:
         return "unknown"
     return completed.stdout.strip() or "unknown"
+
+
+def _universe_snapshot_id(symbols: tuple[str, ...]) -> str:
+    normalized = tuple(
+        sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+    )
+    if not normalized:
+        return "universe-empty"
+    return "universe-" + "-".join(symbol.lower() for symbol in normalized)
 
 
 def _strategy_config_hash(strategy: DeterministicBaselineStrategy) -> str:

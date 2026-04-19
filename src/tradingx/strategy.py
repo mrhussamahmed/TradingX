@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -97,7 +97,9 @@ class DeterministicBaselineStrategy:
     max_spread_bps: Decimal = MAX_SPREAD_BPS
     take_profit_bps: Decimal = Decimal("100")
     stop_loss_bps: Decimal = Decimal("100")
-    now_provider: Callable[[], datetime] = lambda: datetime.now(UTC)
+    now_provider: Callable[[], datetime] = field(
+        default_factory=lambda: (lambda: datetime.now(UTC))
+    )
 
     def generate_trade_intent(
         self,
@@ -143,7 +145,7 @@ class DeterministicBaselineStrategy:
         if self._spread_bps(market_snapshot) > self.max_spread_bps:
             return self._build_intent(
                 symbol=market_snapshot.symbol,
-                side="skip",
+                side="hold",
                 quantity=None,
                 reason_code="spread_too_wide",
                 observation_timestamp=market_snapshot.timestamp,

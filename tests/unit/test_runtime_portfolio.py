@@ -139,6 +139,7 @@ def test_runtime_portfolio_planner_builds_reduce_then_buy_trade_intents(
 
     assert plan is not None
     assert plan.strategy_id == "trend-following-v1"
+    assert plan.universe_snapshot_id == "universe-qqq-spy"
     assert plan.crash_overlay_active is True
     assert [intent.symbol for intent in plan.trade_intents] == ["SPY", "QQQ"]
     assert [intent.side for intent in plan.trade_intents] == ["reduce", "buy"]
@@ -154,6 +155,52 @@ def test_runtime_portfolio_planner_builds_reduce_then_buy_trade_intents(
         "SPY": Decimal("0.10"),
         "QQQ": Decimal("0.20"),
     }
+
+
+def test_runtime_portfolio_planner_uses_activation_approved_symbols_for_candidate_scope(
+    monkeypatch,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    loaded_symbols: list[tuple[str, ...]] = []
+
+    def fake_target_weights(*args, **kwargs):
+        del args, kwargs
+        return module.CandidateRuntimeWeights(
+            raw_weights={"SPY": Decimal("0.10"), "QQQ": Decimal("0.20")},
+            target_weights={"SPY": Decimal("0.10"), "QQQ": Decimal("0.20")},
+            crash_overlay_active=False,
+        )
+
+    monkeypatch.setattr(module, "build_candidate_runtime_weights", fake_target_weights)
+
+    def fake_load_bars(self, *, symbols):
+        loaded_symbols.append(symbols)
+        return {symbol: object() for symbol in symbols}
+
+    monkeypatch.setattr(module.RuntimePortfolioPlanner, "_load_bars", fake_load_bars)
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(strategy_id="trend-following-v1"),
+        now_provider=lambda: datetime(2026, 4, 19, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 19, 13, 29, tzinfo=UTC),
+            cash=Decimal("10000"),
+            equity=Decimal("10000"),
+            buying_power=Decimal("20000"),
+            positions=(),
+            open_orders=(),
+        ),
+    )
+
+    assert plan is not None
+    assert plan.universe_snapshot_id == "universe-qqq-spy"
+    assert loaded_symbols == [("QQQ", "SPY")]
 
 
 def test_runtime_portfolio_planner_rejects_negative_target_weights(

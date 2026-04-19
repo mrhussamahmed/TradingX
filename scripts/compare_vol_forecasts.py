@@ -7,6 +7,7 @@ import math
 import sys
 import warnings
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ from tradingx.config import TradingConfig
 from tradingx.costs import CostModelConfig
 from tradingx.data import build_default_market_data_gateway
 from tradingx.features.volatility import TRADING_DAYS_PER_YEAR, volatility_scale
+from tradingx.portfolio_construction import (
+    PortfolioConstructionConfig,
+    build_target_weight_history,
+)
 from tradingx.signals.trend import generate_trend_signal
 from tradingx.sizing import KELLY_FRACTION, MAX_GROSS_LEVERAGE, TARGET_VOLATILITY
 from tradingx.stats import lo_adjusted_sharpe_ratio
@@ -193,45 +198,56 @@ def _forecast_error_metrics(
         symbol_metrics: dict[str, dict[str, float | int]] = {}
         pooled_errors: list[float] = []
         pooled_squared_errors: list[float] = []
+        pooled_qlike: list[float] = []
         for symbol, forecast in method_series.items():
-            actual = bars_by_symbol[symbol]["close"].astype(float).pct_change().abs()
-            valid = actual.notna() & forecast.notna()
-            errors = (forecast.loc[valid] - actual.loc[valid]).abs()
-            squared_errors = (forecast.loc[valid] - actual.loc[valid]).pow(2.0)
+            actual_variance = (
+                bars_by_symbol[symbol]["close"].astype(float).pct_change().pow(2.0)
+            )
+            forecast_variance = forecast.pow(2.0)
+            valid = actual_variance.notna() & forecast_variance.notna()
+            valid_index = actual_variance.loc[valid].index
+            variance_error = (
+                forecast_variance.loc[valid_index] - actual_variance.loc[valid_index]
+            )
+            errors = variance_error.abs()
+            squared_errors = variance_error.pow(2.0)
+            clipped_forecast_variance = forecast_variance.loc[valid_index].clip(
+                lower=1e-12
+            )
+            qlike = (
+                actual_variance.loc[valid_index] / clipped_forecast_variance
+            ) + clipped_forecast_variance.map(math.log)
             symbol_metrics[symbol] = {
                 "prediction_count": int(valid.sum()),
-                "mae": float(errors.mean()) if not errors.empty else float("nan"),
-                "rmse": (
+                "variance_mae": (
+                    float(errors.mean()) if not errors.empty else float("nan")
+                ),
+                "variance_rmse": (
                     float(math.sqrt(squared_errors.mean()))
                     if not squared_errors.empty
                     else float("nan")
                 ),
+                "qlike": float(qlike.mean()) if not qlike.empty else float("nan"),
             }
             pooled_errors.extend(float(value) for value in errors.tolist())
             pooled_squared_errors.extend(float(value) for value in squared_errors.tolist())
+            pooled_qlike.extend(float(value) for value in qlike.tolist())
         metrics[method_name] = {
             "prediction_count": len(pooled_errors),
-            "pooled_mae": (
+            "pooled_variance_mae": (
                 sum(pooled_errors) / len(pooled_errors) if pooled_errors else float("nan")
             ),
-            "pooled_rmse": (
+            "pooled_variance_rmse": (
                 math.sqrt(sum(pooled_squared_errors) / len(pooled_squared_errors))
                 if pooled_squared_errors
                 else float("nan")
             ),
+            "pooled_qlike": (
+                sum(pooled_qlike) / len(pooled_qlike) if pooled_qlike else float("nan")
+            ),
             "symbols": symbol_metrics,
         }
     return metrics
-
-
-def _normalize_target_weights(target_weights: pd.DataFrame) -> pd.DataFrame:
-    normalized = target_weights.fillna(0.0).astype(float).copy()
-    gross_exposure = normalized.abs().sum(axis=1)
-    for timestamp in normalized.index[gross_exposure > 1.0]:
-        normalized.loc[timestamp] = normalized.loc[timestamp] / float(
-            gross_exposure.loc[timestamp]
-        )
-    return normalized
 
 
 def _backtest_metrics_for_method(
@@ -240,7 +256,7 @@ def _backtest_metrics_for_method(
     annualized_forecasts: dict[str, pd.Series],
     garch_train_size: int,
 ) -> dict[str, float]:
-    target_weights = {}
+    sleeve_weights = {}
     for symbol, bars in bars_by_symbol.items():
         signal = generate_trend_signal(bars)
         leverage = volatility_scale(
@@ -248,13 +264,24 @@ def _backtest_metrics_for_method(
             realized_vol=annualized_forecasts[symbol],
             max_gross_leverage=MAX_GROSS_LEVERAGE,
         )
-        target_weights[symbol] = (signal.astype(float) * KELLY_FRACTION * leverage).clip(
+        sleeve_weights[symbol] = (
+            signal.astype(float) * KELLY_FRACTION * leverage
+        ).clip(
             lower=-MAX_GROSS_LEVERAGE,
             upper=MAX_GROSS_LEVERAGE,
         )
 
-    target_weight_frame = _normalize_target_weights(
-        pd.DataFrame(target_weights, index=next(iter(target_weights.values())).index)
+    target_weight_frame = build_target_weight_history(
+        sleeve_signals={
+            "trend_following": pd.DataFrame(
+                sleeve_weights,
+                index=next(iter(sleeve_weights.values())).index,
+                dtype=float,
+            )
+        },
+        account_equity=Decimal("100000"),
+        config=PortfolioConstructionConfig(crash_overlay_symbol="SPY"),
+        benchmark_bars=bars_by_symbol.get("SPY"),
     )
     result = run_daily_bar_backtest(
         bars_by_symbol,
@@ -310,20 +337,22 @@ def _material_garch_win(
     forecast_metrics: dict[str, dict[str, object]],
     backtest_metrics: dict[str, dict[str, float]],
 ) -> bool:
-    garch_mae = float(forecast_metrics["garch"]["pooled_mae"])
-    realized_mae = float(forecast_metrics["realized"]["pooled_mae"])
-    ewma_mae = float(forecast_metrics["ewma"]["pooled_mae"])
-    if not math.isfinite(garch_mae) or not math.isfinite(realized_mae):
+    garch_qlike = float(forecast_metrics["garch"]["pooled_qlike"])
+    realized_qlike = float(forecast_metrics["realized"]["pooled_qlike"])
+    ewma_qlike = float(forecast_metrics["ewma"]["pooled_qlike"])
+    if not math.isfinite(garch_qlike) or not math.isfinite(realized_qlike):
         return False
-    mae_improvement = (
-        (realized_mae - garch_mae) / realized_mae if realized_mae > 0.0 else 0.0
+    qlike_improvement = (
+        (realized_qlike - garch_qlike) / realized_qlike
+        if realized_qlike > 0.0
+        else 0.0
     )
     sharpe_improvement = (
         backtest_metrics["garch"]["sharpe_ratio"]
         - backtest_metrics["realized"]["sharpe_ratio"]
     )
-    return garch_mae < min(realized_mae, ewma_mae) and (
-        mae_improvement >= 0.10 or sharpe_improvement >= 0.10
+    return garch_qlike < min(realized_qlike, ewma_qlike) and (
+        qlike_improvement >= 0.10 or sharpe_improvement >= 0.10
     )
 
 
@@ -383,8 +412,8 @@ def main(argv: list[str] | None = None) -> int:
             backtest_metrics=backtest_metrics,
         ),
         "assumptions": [
-            "Forecast errors compare daily volatility forecasts to same-day absolute close-to-close returns.",
-            "Backtest sizing uses the existing long-only trend signal with 33% Kelly scaling and gross exposure capped at 1.0.",
+            "Forecast errors use variance loss (MAE/RMSE on squared returns) plus QLIKE instead of comparing volatility directly to absolute returns.",
+            "Backtest sizing uses the existing long-only trend sleeve and the same portfolio construction path used by research backtests.",
             "Net-of-cost backtests disable half-spread costs because daily bars do not include bid/ask quotes.",
         ],
         "artifact_path": output_path,

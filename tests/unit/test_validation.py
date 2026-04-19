@@ -313,6 +313,22 @@ def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> N
     )
 
 
+def test_load_benchmark_close_series_warns_on_legacy_json_list(tmp_path, caplog) -> None:
+    module = importlib.import_module("tradingx.validation")
+    artifact_file = tmp_path / "legacy-benchmark.json"
+    artifact_file.write_text(
+        json.dumps(["100", "101.5", "102.25"]),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING"):
+        series = module.load_benchmark_close_series(artifact_file)
+
+    assert series.symbol == "SPY"
+    assert series.series_is_adjusted is False
+    assert "legacy JSON-list format without metadata" in caplog.text
+
+
 def test_validation_sharpe_ratio_matches_evaluation_sharpe_definition() -> None:
     returns = (
         [0.012] * 40

@@ -64,6 +64,7 @@ class RuntimePortfolioPlan:
     plan_id: str
     generated_at_utc: datetime
     strategy_id: str
+    universe_snapshot_id: str
     benchmark_symbol: str
     crash_overlay_active: bool
     symbols_considered: tuple[str, ...]
@@ -100,9 +101,10 @@ class RuntimePortfolioPlanner:
         activation, _snapshot = self._activation_gateway.load_or_create_active_records(
             symbols
         )
+        runtime_symbols = activation.approved_symbols or symbols
         candidate = self._candidate_for_strategy(
             strategy_id=activation.strategy_id,
-            symbols=symbols,
+            symbols=runtime_symbols,
         )
         if candidate is None:
             return None
@@ -134,24 +136,42 @@ class RuntimePortfolioPlanner:
         tracked_symbols = tuple(
             sorted(set(runtime_weights.target_weights) | set(current_weights))
         )
-        market_snapshots = {
-            symbol: self._market_data.get_market_snapshot(symbol)
-            for symbol in tracked_symbols
-        }
-        planned_trades = tuple(
-            self._build_planned_trade(
+        market_snapshots: dict[str, MarketSnapshot] = {}
+        planned_trade_rows: list[RuntimePortfolioTrade] = []
+        for symbol in tracked_symbols:
+            current_quantity = _current_quantity(portfolio_state, symbol)
+            last_trade_price = _position_price_hint(portfolio_state, symbol)
+            if last_trade_price is None:
+                snapshot = self._market_data.get_market_snapshot(symbol)
+                market_snapshots[symbol] = snapshot
+                last_trade_price = snapshot.last_trade_price
+            trade = self._build_planned_trade(
                 symbol=symbol,
                 current_weight=current_weights.get(symbol, Decimal("0")),
                 target_weight=runtime_weights.target_weights.get(symbol, Decimal("0")),
                 raw_target_weight=runtime_weights.raw_weights.get(symbol, Decimal("0")),
-                current_quantity=_current_quantity(portfolio_state, symbol),
-                market_snapshot=market_snapshots[symbol],
+                current_quantity=current_quantity,
+                last_trade_price=last_trade_price,
                 candidate_id=candidate.candidate_id,
                 generated_at=generated_at,
                 account_equity=portfolio_state.equity,
             )
-            for symbol in tracked_symbols
-        )
+            if trade.side in {"buy", "sell", "reduce"} and symbol not in market_snapshots:
+                snapshot = self._market_data.get_market_snapshot(symbol)
+                market_snapshots[symbol] = snapshot
+                trade = self._build_planned_trade(
+                    symbol=symbol,
+                    current_weight=current_weights.get(symbol, Decimal("0")),
+                    target_weight=runtime_weights.target_weights.get(symbol, Decimal("0")),
+                    raw_target_weight=runtime_weights.raw_weights.get(symbol, Decimal("0")),
+                    current_quantity=current_quantity,
+                    last_trade_price=snapshot.last_trade_price,
+                    candidate_id=candidate.candidate_id,
+                    generated_at=generated_at,
+                    account_equity=portfolio_state.equity,
+                )
+            planned_trade_rows.append(trade)
+        planned_trades = tuple(planned_trade_rows)
         ordered_trades = tuple(
             sorted(
                 planned_trades,
@@ -170,6 +190,7 @@ class RuntimePortfolioPlanner:
             plan_id=f"runtime-plan-{uuid.uuid4()}",
             generated_at_utc=generated_at,
             strategy_id=candidate.candidate_id,
+            universe_snapshot_id=_universe_snapshot_id(runtime_symbols),
             benchmark_symbol=candidate.benchmark_symbol,
             crash_overlay_active=runtime_weights.crash_overlay_active,
             symbols_considered=tracked_symbols,
@@ -214,7 +235,7 @@ class RuntimePortfolioPlanner:
         target_weight: Decimal,
         raw_target_weight: Decimal,
         current_quantity: Decimal,
-        market_snapshot: MarketSnapshot,
+        last_trade_price: Decimal,
         candidate_id: str,
         generated_at: datetime,
         account_equity: Decimal,
@@ -223,7 +244,7 @@ class RuntimePortfolioPlanner:
         target_quantity = _target_quantity(
             target_weight=target_weight,
             account_equity=account_equity,
-            last_trade_price=market_snapshot.last_trade_price,
+            last_trade_price=last_trade_price,
         )
         delta_quantity = target_quantity - current_quantity
         if delta_quantity > Decimal("0"):
@@ -245,7 +266,7 @@ class RuntimePortfolioPlanner:
             symbol=symbol,
             side=side,
             reason_code=reason_code,
-            last_trade_price=market_snapshot.last_trade_price,
+            last_trade_price=last_trade_price,
             current_weight=current_weight,
             target_weight=target_weight,
             current_quantity=current_quantity,
@@ -270,6 +291,20 @@ def _current_quantity(portfolio_state: PortfolioState, symbol: str) -> Decimal:
         if position.symbol == symbol:
             return position.quantity
     return Decimal("0")
+
+
+def _position_price_hint(
+    portfolio_state: PortfolioState,
+    symbol: str,
+) -> Decimal | None:
+    for position in portfolio_state.positions:
+        if (
+            position.symbol == symbol
+            and position.quantity != Decimal("0")
+            and position.market_value > Decimal("0")
+        ):
+            return position.market_value / position.quantity
+    return None
 
 
 def _target_quantity(
@@ -318,6 +353,15 @@ def _side_priority(side: str) -> int:
     if side == "hold":
         return 1
     return 2
+
+
+def _universe_snapshot_id(symbols: tuple[str, ...]) -> str:
+    normalized = tuple(
+        sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+    )
+    if not normalized:
+        return "universe-empty"
+    return "universe-" + "-".join(symbol.lower() for symbol in normalized)
 
 
 __all__ = (

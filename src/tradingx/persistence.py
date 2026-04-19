@@ -109,6 +109,78 @@ class FilesystemArtifactStore:
             plan,
         )
 
+    def read_runtime_portfolio_plan(self, plan_id: str) -> Any | None:
+        path = self._path_for("runtime_portfolio_plans", f"{plan_id}.json")
+        if not path.exists():
+            return None
+        from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
+        from tradingx.types import MarketSnapshot
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return RuntimePortfolioPlan(
+            plan_id=str(payload["plan_id"]),
+            generated_at_utc=datetime.fromisoformat(str(payload["generated_at_utc"])),
+            strategy_id=str(payload["strategy_id"]),
+            universe_snapshot_id=str(payload["universe_snapshot_id"]),
+            benchmark_symbol=str(payload["benchmark_symbol"]),
+            crash_overlay_active=bool(payload["crash_overlay_active"]),
+            symbols_considered=tuple(str(value) for value in payload["symbols_considered"]),
+            current_weights={
+                str(symbol): Decimal(str(weight))
+                for symbol, weight in dict(payload["current_weights"]).items()
+            },
+            target_weights={
+                str(symbol): Decimal(str(weight))
+                for symbol, weight in dict(payload["target_weights"]).items()
+            },
+            trade_intents=tuple(
+                TradeIntent(
+                    intent_id=str(item["intent_id"]),
+                    candidate_id=str(item["candidate_id"]),
+                    symbol=str(item["symbol"]),
+                    side=str(item["side"]),
+                    quantity=(
+                        None
+                        if item["quantity"] is None
+                        else Decimal(str(item["quantity"]))
+                    ),
+                    reason_code=str(item["reason_code"]),
+                    generated_at_utc=datetime.fromisoformat(
+                        str(item["generated_at_utc"])
+                    ),
+                )
+                for item in payload["trade_intents"]
+            ),
+            planned_trades=tuple(
+                RuntimePortfolioTrade(
+                    symbol=str(item["symbol"]),
+                    side=str(item["side"]),
+                    reason_code=str(item["reason_code"]),
+                    last_trade_price=Decimal(str(item["last_trade_price"])),
+                    current_weight=Decimal(str(item["current_weight"])),
+                    target_weight=Decimal(str(item["target_weight"])),
+                    current_quantity=Decimal(str(item["current_quantity"])),
+                    target_quantity=Decimal(str(item["target_quantity"])),
+                    delta_quantity=Decimal(str(item["delta_quantity"])),
+                    no_trade_band_applied=bool(item["no_trade_band_applied"]),
+                )
+                for item in payload["planned_trades"]
+            ),
+            market_snapshots={
+                str(symbol): MarketSnapshot(
+                    symbol=str(snapshot["symbol"]),
+                    last_trade_price=Decimal(str(snapshot["last_trade_price"])),
+                    bid_price=Decimal(str(snapshot["bid_price"])),
+                    ask_price=Decimal(str(snapshot["ask_price"])),
+                    average_daily_volume_30d=Decimal(
+                        str(snapshot["average_daily_volume_30d"])
+                    ),
+                    timestamp=datetime.fromisoformat(str(snapshot["timestamp"])),
+                )
+                for symbol, snapshot in dict(payload["market_snapshots"]).items()
+            },
+        )
+
     def write_runtime_host_state(self, state: BotRuntimeState) -> Path:
         return self._write_json("runtime_host", "state.json", state)
 
