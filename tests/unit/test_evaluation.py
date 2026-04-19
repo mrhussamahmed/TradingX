@@ -76,6 +76,7 @@ class FakeBacktestRunner:
         self.parameter_returns = parameter_returns or base_returns
         self.cost_returns = cost_returns or base_returns
         self.parameter_calls: list[dict[str, object]] = []
+        self.cost_calls: list[CostModelConfig] = []
 
     def __call__(
         self,
@@ -88,6 +89,8 @@ class FakeBacktestRunner:
         if parameter_overrides is not None:
             self.parameter_calls.append(parameter_overrides)
             return self.parameter_returns
+        if cost_model_config is not None:
+            self.cost_calls.append(cost_model_config)
         if cost_model_config is not None and (
             cost_model_config.half_spread_multiplier > 1.0
             or cost_model_config.impact_coefficient > 10.0
@@ -179,6 +182,24 @@ def test_cost_sensitivity_check_requires_profitability_under_all_stresses() -> N
     )
 
     assert result == "cost_sensitivity_fail"
+
+
+def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    runner = FakeBacktestRunner(
+        base_returns=_stable_returns(),
+        cost_returns=_stable_returns(),
+    )
+
+    result = _cost_sensitivity_check(
+        candidate,
+        backtest_runner=runner,
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    assert result == "cost_sensitivity_pass"
+    assert {call.half_spread_multiplier for call in runner.cost_calls} >= {1.0, 2.0, 4.0}
+    assert {call.impact_coefficient for call in runner.cost_calls} >= {10.0, 20.0, 40.0}
 
 
 def test_sharpe_ratio_returns_none_for_constant_return_series(caplog) -> None:

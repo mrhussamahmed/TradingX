@@ -298,6 +298,46 @@ class PaperTradingLoopController:
             portfolio_state=portfolio_state,
             quantity=quantity,
         )
+        return self._execute_trade_intent_impl(
+            trade_intent,
+            market_snapshot=market_snapshot,
+            portfolio_state=portfolio_state,
+            default_quantity=quantity,
+            strategy_fingerprint=_strategy_config_hash(self._strategy),
+        )
+
+    def execute_trade_intent(
+        self,
+        trade_intent: TradeIntent,
+        *,
+        market_snapshot: MarketSnapshot | None = None,
+        portfolio_state: PortfolioState | None = None,
+        default_quantity: Decimal = Decimal("0"),
+        strategy_fingerprint: str | None = None,
+    ) -> TradingLoopResult:
+        resolved_portfolio_state = portfolio_state or self._portfolio.get_portfolio_state()
+        if self._session_start_equity is None:
+            self._session_start_equity = resolved_portfolio_state.equity
+        resolved_market_snapshot = market_snapshot or self._market_data.get_market_snapshot(
+            trade_intent.symbol
+        )
+        return self._execute_trade_intent_impl(
+            trade_intent,
+            market_snapshot=resolved_market_snapshot,
+            portfolio_state=resolved_portfolio_state,
+            default_quantity=default_quantity,
+            strategy_fingerprint=strategy_fingerprint or trade_intent.candidate_id,
+        )
+
+    def _execute_trade_intent_impl(
+        self,
+        trade_intent: TradeIntent,
+        *,
+        market_snapshot: MarketSnapshot,
+        portfolio_state: PortfolioState,
+        default_quantity: Decimal,
+        strategy_fingerprint: str,
+    ) -> TradingLoopResult:
         trade_path = self._artifacts.write_trade_intent(trade_intent)
         self._metrics.record_evidence_artifact("trade_intent")
         self._metrics.record_live_disable_state(True)
@@ -311,6 +351,7 @@ class PaperTradingLoopController:
                 session_start_equity=portfolio_state.equity,
                 risk_verdict_id="not_applicable",
                 final_action="no_action",
+                strategy_fingerprint=strategy_fingerprint,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -375,6 +416,7 @@ class PaperTradingLoopController:
                 session_start_equity=portfolio_state.equity,
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
+                strategy_fingerprint=strategy_fingerprint,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -432,6 +474,7 @@ class PaperTradingLoopController:
                 session_start_equity=portfolio_state.equity,
                 risk_verdict_id=risk_event.event_id,
                 final_action="blocked",
+                strategy_fingerprint=strategy_fingerprint,
             )
             self._log_runtime_event(
                 event_type="decision_recorded",
@@ -510,6 +553,7 @@ class PaperTradingLoopController:
                 if risk_decision.event is not None
                 else ("dry_run" if self._dry_run else trade_intent.side)
             ),
+            strategy_fingerprint=strategy_fingerprint,
         )
         self._log_runtime_event(
             event_type="decision_recorded",
@@ -618,7 +662,7 @@ class PaperTradingLoopController:
                 broker_order_id="",
                 payload={
                     "side": trade_intent.side,
-                    "quantity": str(trade_intent.quantity or quantity),
+                    "quantity": str(trade_intent.quantity or default_quantity),
                     "reason_code": trade_intent.reason_code,
                     "reference_price": reference_price,
                     "would_submit_limit_price": would_submit_limit_price,
@@ -668,7 +712,7 @@ class PaperTradingLoopController:
 
         existing_order = self._artifacts.read_order_record(trade_intent.intent_id)
         recovered = existing_order is not None
-        execution_quantity = trade_intent.quantity or quantity
+        execution_quantity = trade_intent.quantity or default_quantity
         try:
             if existing_order is None:
                 existing_order = self._find_existing_order_by_client_id(client_order_id)
@@ -968,6 +1012,7 @@ class PaperTradingLoopController:
         session_start_equity: Decimal,
         risk_verdict_id: str,
         final_action: str,
+        strategy_fingerprint: str,
     ) -> Path:
         if self._snapshot_store is None or self._policy_snapshot is None:
             return self._artifacts.write_trade_intent(trade_intent)
@@ -978,9 +1023,9 @@ class PaperTradingLoopController:
             session_snapshot_id=self._policy_snapshot.policy_snapshot_id,
             universe_snapshot_id="week1-spy",
             policy_snapshot_id=self._policy_snapshot.policy_snapshot_id,
-            model_snapshot_id="baseline-deterministic",
-            strategy_version=self._strategy.candidate_id,
-            strategy_config_hash=_strategy_config_hash(self._strategy),
+            model_snapshot_id=trade_intent.candidate_id,
+            strategy_version=trade_intent.candidate_id,
+            strategy_config_hash=strategy_fingerprint,
             git_sha=self._git_sha,
             dry_run=self._dry_run,
             market_data_window_hash=f"market-{trade_intent.symbol.lower()}",

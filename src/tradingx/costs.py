@@ -22,6 +22,10 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class CostModelConfig:
     half_spread_multiplier: float = 1.0
+    # Placeholder research coefficient for the daily-bar impact term used below.
+    # This is intentionally not source-backed yet because it does not map cleanly
+    # onto the Almgren-style coefficients from the reviewed papers. Replace it
+    # only after Gate 3 paper-slippage evidence supports a calibrated value.
     impact_coefficient: float = 10.0
     commission_per_share: float = 0.0
     sec_fee_per_dollar: float = 20.60 / 1_000_000.0

@@ -176,18 +176,21 @@ def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
         "sma_window_days": 200,
         "skip_recent_days": 1,
         "signal": "long_only",
+        "forecast_method": "garch",
     }
     assert candidates["vol_target"].parameter_set == {
         "target_volatility": Decimal("0.12"),
         "realized_vol_window_days": 60,
         "max_gross_leverage": Decimal("1.0"),
         "signal": "vol_target_spy",
+        "forecast_method": "garch",
     }
     assert candidates["mean_reversion"].parameter_set == {
         "beta_window_days": 60,
         "residual_sum_days": 5,
         "zscore_window_days": 60,
         "zscore_threshold": Decimal("2.0"),
+        "forecast_method": "garch",
     }
 
 

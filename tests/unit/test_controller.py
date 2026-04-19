@@ -24,6 +24,7 @@ from tradingx.types import (
     MarketSnapshot,
     OrderRecord,
     PortfolioState,
+    TradeIntent,
 )
 
 
@@ -557,3 +558,54 @@ def test_paper_trading_loop_controller_blocks_entries_on_operator_halt(
     assert result.terminal_state == "blocked_trade"
     assert result.risk_event is not None
     assert result.risk_event.control_type == "operator_halt"
+
+
+def test_execute_trade_intent_uses_prebuilt_quantity_and_candidate_id(
+    tmp_path: Path,
+) -> None:
+    execution = FakeExecution()
+    portfolio = FakePortfolio()
+    initial_state = portfolio.get_portfolio_state()
+    controller = PaperTradingLoopController(
+        market_data=FakeMarketData(),
+        execution=execution,
+        portfolio=portfolio,
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(
+            now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)
+        ),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+        policy_snapshot=build_week1_policy_snapshot(
+            generated_at_utc=datetime(2026, 4, 17, 8, 0, tzinfo=UTC),
+            artifact_root=tmp_path / "artifacts",
+            git_sha="abc1234",
+            dry_run=False,
+        ),
+        policy_store=PolicySnapshotStore(tmp_path / "data" / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(tmp_path / "data" / "snapshots"),
+        journal=SqliteOmsJournal(tmp_path / "data" / "journal.db"),
+        git_sha="abc1234",
+        dry_run=False,
+    )
+
+    result = controller.execute_trade_intent(
+        TradeIntent(
+            intent_id="intent-prebuilt",
+            candidate_id="trend-following-v1",
+            symbol="SPY",
+            side="buy",
+            quantity=Decimal("3"),
+            reason_code="target_weight_entry",
+            generated_at_utc=datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+        ),
+        market_snapshot=FakeMarketData().get_market_snapshot("SPY"),
+        portfolio_state=initial_state,
+    )
+
+    assert execution.submissions[0][0] == "SPY"
+    assert execution.submissions[0][1] == Decimal("3")
+    assert result.trade_intent.candidate_id == "trend-following-v1"
+    assert result.terminal_state == "reconciled_trade"

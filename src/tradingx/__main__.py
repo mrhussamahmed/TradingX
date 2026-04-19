@@ -32,6 +32,7 @@ from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.process_lock import RuntimeLockError, runtime_process_lock
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.runtime_portfolio import RuntimePortfolioPlanner
 from tradingx.risk_free import (
     DEFAULT_RISK_FREE_CACHE_PATH,
     needs_risk_free_refresh,
@@ -134,6 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_start_parser.add_argument("--quantity", default="1")
     runtime_start_parser.add_argument("--interval-seconds", type=int, default=None)
     runtime_start_parser.add_argument("--max-cycles", type=int, default=1)
+
+    runtime_plan_parser = subparsers.add_parser("runtime-plan")
+    runtime_plan_parser.add_argument("--env-file", default=".env")
+    runtime_plan_parser.add_argument("--symbols", default=None)
+    runtime_plan_parser.add_argument(
+        "--output-dir",
+        default="artifacts/runtime_plans",
+    )
 
     market_day_parser = subparsers.add_parser("run-market-day")
     market_day_parser.add_argument("--env-file", default=".env")
@@ -382,6 +391,59 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             ),
         )
+
+    if args.command == "runtime-plan":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        symbols = (
+            tuple(
+                item.strip().upper() for item in args.symbols.split(",") if item.strip()
+            )
+            if args.symbols
+            else config.runtime.symbol_universe
+        )
+        operator_store = FilesystemArtifactStore(
+            config.runtime.artifact_root / "operator_platform"
+        )
+        activation_gateway = LocalActivationGateway(store=operator_store)
+        activation, _snapshot = activation_gateway.load_or_create_active_records(symbols)
+        planner = RuntimePortfolioPlanner(
+            market_data=build_default_market_data_gateway(config),
+            activation_gateway=activation_gateway,
+        )
+        trading_client = TradingClient(
+            config.paper_credentials.api_key,
+            config.paper_credentials.api_secret,
+            paper=True,
+        )
+        portfolio_state = AlpacaPortfolioGateway(
+            trading_client=trading_client
+        ).get_portfolio_state()
+        plan = planner.plan_for_service(
+            symbols=symbols,
+            portfolio_state=portfolio_state,
+        )
+        if plan is None:
+            print(
+                json.dumps(
+                    {
+                        "status": "legacy_strategy_active",
+                        "strategy_id": activation.strategy_id,
+                        "message": (
+                            "Active strategy does not use the runtime portfolio "
+                            "planner."
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        artifact_path = FilesystemArtifactStore(Path(args.output_dir)).write_runtime_portfolio_plan(
+            plan
+        )
+        payload = _serialize(plan)
+        payload["artifact_path"] = str(artifact_path)
+        print(json.dumps(payload, sort_keys=True))
+        return 0
 
     if args.command == "runtime-start":
         config = TradingConfig.from_env_file(Path(args.env_file))

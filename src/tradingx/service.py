@@ -18,6 +18,7 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.runtime_portfolio import RuntimePortfolioPlanner
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
@@ -51,6 +52,15 @@ class OpportunitySelectorProtocol(Protocol):
     ) -> OpportunitySelectionRecord: ...
 
 
+class PortfolioPlannerProtocol(Protocol):
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+    ) -> object | None: ...
+
+
 class PaperTradingService:
     def __init__(
         self,
@@ -67,6 +77,7 @@ class PaperTradingService:
         cycle_budget_seconds: int = 30,
         broker_failure_threshold: int = 2,
         broker_staleness_seconds: int = 60,
+        portfolio_planner: PortfolioPlannerProtocol | None = None,
         operator_control_store: OperatorControlStore | None = None,
         runtime_logger: StructuredRuntimeLogger | None = None,
     ) -> None:
@@ -82,6 +93,7 @@ class PaperTradingService:
         self._cycle_budget_seconds = cycle_budget_seconds
         self._broker_failure_threshold = broker_failure_threshold
         self._broker_staleness_seconds = broker_staleness_seconds
+        self._portfolio_planner = portfolio_planner
         self._operator_control_store = operator_control_store
         self._runtime_logger = runtime_logger
         self._session_start_equity: Decimal | None = None
@@ -175,47 +187,62 @@ class PaperTradingService:
                 )
             else:
                 cycle_status = "executed"
-                open_symbols = {
-                    position.symbol
-                    for position in initial_portfolio_state.positions
-                    if position.quantity != Decimal("0")
-                }
-                for symbol in symbols:
-                    if symbol not in open_symbols:
-                        continue
-                    result = self._loop_controller.run_trading_cycle(symbol, quantity)
-                    reason_code = self._result_reason_code(result)
-                    symbol_results.append(
-                        ServiceSymbolResult(
-                            symbol=symbol,
-                            terminal_state=result.terminal_state,
-                            reason_code=reason_code,
-                            recovered=result.recovered,
-                        )
+                portfolio_plan = (
+                    self._portfolio_planner.plan_for_service(
+                        symbols=symbols,
+                        portfolio_state=initial_portfolio_state,
                     )
-                    if result.terminal_state == "blocked_trade":
-                        blocked_trade_count += 1
-                        if reason_code in {"stale_market_data", "stale_quote"}:
-                            cycle_status = "data_unavailable"
-                            self._log_cycle_event(
-                                event_type="data_unavailable",
-                                severity="warning",
-                                message="Cycle blocked by stale market data.",
-                                cycle_correlation_id=service_cycle_id,
-                                fields={"symbol": symbol},
-                            )
-                    if not result.reconciliation.resolved:
-                        reconciliation_failure_count += 1
-                        cycle_status = "recovery_required"
-                candidate_symbols = tuple(
-                    symbol for symbol in symbols if symbol not in open_symbols
+                    if self._portfolio_planner is not None
+                    else None
                 )
-                if self._opportunity_selector is None:
-                    for symbol in candidate_symbols:
-                        result = self._loop_controller.run_trading_cycle(
-                            symbol,
-                            quantity,
+                if portfolio_plan is not None:
+                    self._artifacts.write_runtime_portfolio_plan(portfolio_plan)
+                    executor = getattr(self._loop_controller, "execute_trade_intent", None)
+                    if not callable(executor):
+                        raise AttributeError(
+                            "Loop controller must implement execute_trade_intent "
+                            "when a portfolio planner is configured."
                         )
+                    for trade_intent in portfolio_plan.trade_intents:
+                        result = executor(
+                            trade_intent,
+                            market_snapshot=portfolio_plan.market_snapshots[
+                                trade_intent.symbol
+                            ],
+                        )
+                        reason_code = self._result_reason_code(result)
+                        symbol_results.append(
+                            ServiceSymbolResult(
+                                symbol=trade_intent.symbol,
+                                terminal_state=result.terminal_state,
+                                reason_code=reason_code,
+                                recovered=result.recovered,
+                            )
+                        )
+                        if result.terminal_state == "blocked_trade":
+                            blocked_trade_count += 1
+                            if reason_code in {"stale_market_data", "stale_quote"}:
+                                cycle_status = "data_unavailable"
+                                self._log_cycle_event(
+                                    event_type="data_unavailable",
+                                    severity="warning",
+                                    message="Cycle blocked by stale market data.",
+                                    cycle_correlation_id=service_cycle_id,
+                                    fields={"symbol": trade_intent.symbol},
+                                )
+                        if not result.reconciliation.resolved:
+                            reconciliation_failure_count += 1
+                            cycle_status = "recovery_required"
+                else:
+                    open_symbols = {
+                        position.symbol
+                        for position in initial_portfolio_state.positions
+                        if position.quantity != Decimal("0")
+                    }
+                    for symbol in symbols:
+                        if symbol not in open_symbols:
+                            continue
+                        result = self._loop_controller.run_trading_cycle(symbol, quantity)
                         reason_code = self._result_reason_code(result)
                         symbol_results.append(
                             ServiceSymbolResult(
@@ -239,39 +266,71 @@ class PaperTradingService:
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
-                elif candidate_symbols:
-                    selection = self._opportunity_selector.select_for_service(
-                        symbols=candidate_symbols,
-                        portfolio_state=initial_portfolio_state,
+                    candidate_symbols = tuple(
+                        symbol for symbol in symbols if symbol not in open_symbols
                     )
-                    if selection.decision == "selected" and selection.selected_symbol:
-                        result = self._loop_controller.run_trading_cycle(
-                            selection.selected_symbol,
-                            quantity,
-                        )
-                        reason_code = self._result_reason_code(result)
-                        symbol_results.append(
-                            ServiceSymbolResult(
-                                symbol=selection.selected_symbol,
-                                terminal_state=result.terminal_state,
-                                reason_code=reason_code,
-                                recovered=result.recovered,
+                    if self._opportunity_selector is None:
+                        for symbol in candidate_symbols:
+                            result = self._loop_controller.run_trading_cycle(
+                                symbol,
+                                quantity,
                             )
-                        )
-                        if result.terminal_state == "blocked_trade":
-                            blocked_trade_count += 1
-                            if reason_code in {"stale_market_data", "stale_quote"}:
-                                cycle_status = "data_unavailable"
-                                self._log_cycle_event(
-                                    event_type="data_unavailable",
-                                    severity="warning",
-                                    message="Cycle blocked by stale market data.",
-                                    cycle_correlation_id=service_cycle_id,
-                                    fields={"symbol": selection.selected_symbol},
+                            reason_code = self._result_reason_code(result)
+                            symbol_results.append(
+                                ServiceSymbolResult(
+                                    symbol=symbol,
+                                    terminal_state=result.terminal_state,
+                                    reason_code=reason_code,
+                                    recovered=result.recovered,
                                 )
-                        if not result.reconciliation.resolved:
-                            reconciliation_failure_count += 1
-                            cycle_status = "recovery_required"
+                            )
+                            if result.terminal_state == "blocked_trade":
+                                blocked_trade_count += 1
+                                if reason_code in {"stale_market_data", "stale_quote"}:
+                                    cycle_status = "data_unavailable"
+                                    self._log_cycle_event(
+                                        event_type="data_unavailable",
+                                        severity="warning",
+                                        message="Cycle blocked by stale market data.",
+                                        cycle_correlation_id=service_cycle_id,
+                                        fields={"symbol": symbol},
+                                    )
+                            if not result.reconciliation.resolved:
+                                reconciliation_failure_count += 1
+                                cycle_status = "recovery_required"
+                    elif candidate_symbols:
+                        selection = self._opportunity_selector.select_for_service(
+                            symbols=candidate_symbols,
+                            portfolio_state=initial_portfolio_state,
+                        )
+                        if selection.decision == "selected" and selection.selected_symbol:
+                            result = self._loop_controller.run_trading_cycle(
+                                selection.selected_symbol,
+                                quantity,
+                            )
+                            reason_code = self._result_reason_code(result)
+                            symbol_results.append(
+                                ServiceSymbolResult(
+                                    symbol=selection.selected_symbol,
+                                    terminal_state=result.terminal_state,
+                                    reason_code=reason_code,
+                                    recovered=result.recovered,
+                                )
+                            )
+                            if result.terminal_state == "blocked_trade":
+                                blocked_trade_count += 1
+                                if reason_code in {"stale_market_data", "stale_quote"}:
+                                    cycle_status = "data_unavailable"
+                                    self._log_cycle_event(
+                                        event_type="data_unavailable",
+                                        severity="warning",
+                                        message="Cycle blocked by stale market data.",
+                                        cycle_correlation_id=service_cycle_id,
+                                        fields={"symbol": selection.selected_symbol},
+                                    )
+                            if not result.reconciliation.resolved:
+                                reconciliation_failure_count += 1
+                                cycle_status = "recovery_required"
                 broker_status_after_cycle, portfolio_state = (
                     self._get_portfolio_state_guarded()
                 )
@@ -430,6 +489,10 @@ def build_default_paper_service(
         config.paper_credentials.api_secret,
         paper=True,
     )
+    operator_store = FilesystemArtifactStore(
+        config.runtime.artifact_root / "operator_platform"
+    )
+    market_data_gateway = build_default_market_data_gateway(config)
     return PaperTradingService(
         loop_controller=build_default_paper_trading_controller(config),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
@@ -437,6 +500,10 @@ def build_default_paper_service(
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         opportunity_selector=opportunity_selector,
+        portfolio_planner=RuntimePortfolioPlanner(
+            market_data=market_data_gateway,
+            activation_gateway=LocalActivationGateway(store=operator_store),
+        ),
         operator_control_store=OperatorControlStore(
             config.runtime.data_root / "control"
         ),

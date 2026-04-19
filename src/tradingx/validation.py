@@ -19,10 +19,7 @@ from tradingx.evaluation import (
     AdversarialCheckContext,
     evaluate_candidate,
 )
-from tradingx.signals.mean_revert import generate_mean_revert_signal
-from tradingx.signals.trend import generate_trend_signal
-from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
-from tradingx.sizing import apply_position_sizing
+from tradingx.portfolio_construction import build_candidate_target_weight_history
 from tradingx.types import (
     BenchmarkCloseSeries,
     ScalarValue,
@@ -39,7 +36,9 @@ GATE1_MIN_SHARPE = Decimal("1.0")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MIN_BENCHMARK_SHARPE_MULTIPLIER = Decimal("1.3")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_MAX_DRAWDOWN = Decimal("0.15")
+GATE1_DRAWDOWN_TARGET = Decimal("0.12")
+# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
+GATE1_MAX_DRAWDOWN_HARD_LIMIT = Decimal("0.15")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MIN_CALMAR = Decimal("0.5")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
@@ -163,7 +162,12 @@ def _build_gate1_candidate_result(
         >= benchmark_metrics["sharpe_ratio"]
         * float(GATE1_MIN_BENCHMARK_SHARPE_MULTIPLIER)
     )
-    max_drawdown_passed = candidate_metrics["max_drawdown"] <= float(GATE1_MAX_DRAWDOWN)
+    max_drawdown_target_passed = (
+        candidate_metrics["max_drawdown"] <= float(GATE1_DRAWDOWN_TARGET)
+    )
+    max_drawdown_hard_limit_passed = (
+        candidate_metrics["max_drawdown"] <= float(GATE1_MAX_DRAWDOWN_HARD_LIMIT)
+    )
     calmar_passed = candidate_metrics["calmar_ratio"] >= float(GATE1_MIN_CALMAR)
 
     out_of_sample_passed = False
@@ -205,10 +209,20 @@ def _build_gate1_candidate_result(
             ),
         ),
         ValidationCriterionResult(
-            criterion_id="max_drawdown",
-            passed=max_drawdown_passed,
-            threshold="Max drawdown <= 15%",
-            details=f"Candidate max drawdown={candidate_metrics['max_drawdown']:.3f}.",
+            criterion_id="max_drawdown_target",
+            passed=max_drawdown_target_passed,
+            threshold="Design target max drawdown <= 12%",
+            details=(
+                f"Candidate max drawdown={candidate_metrics['max_drawdown']:.3f}."
+            ),
+        ),
+        ValidationCriterionResult(
+            criterion_id="max_drawdown_hard_limit",
+            passed=max_drawdown_hard_limit_passed,
+            threshold="Hard reject if max drawdown > 15%",
+            details=(
+                f"Candidate max drawdown={candidate_metrics['max_drawdown']:.3f}."
+            ),
         ),
         ValidationCriterionResult(
             criterion_id="calmar",
@@ -302,16 +316,18 @@ def _build_gate2_candidate_result(
             criterion_id="cost_stress",
             passed=cost_stress_passed,
             threshold=(
-                "Net profitable across simultaneous 2x half-spread, impact, "
-                "and commission stresses, and across each stressed component "
-                "individually"
+                "Net profitable across the 1x, 2x, and 4x cost grid, including "
+                "simultaneous half-spread, impact, and commission stresses and "
+                "each stressed component individually"
             ),
             details=(
-                "Passed the simultaneous and individual reruns across half-spread, "
-                "impact, and commission shocks in the turnover-aware cost model."
+                "Passed the baseline, simultaneous, and individual reruns across "
+                "the 1x, 2x, and 4x half-spread, impact, and commission shocks "
+                "in the turnover-aware cost model."
                 if cost_stress_passed
-                else "Failed at least one stressed rerun across half-spread, "
-                "impact, or commission shocks in the turnover-aware cost model."
+                else "Failed at least one baseline, simultaneous, or individual "
+                "rerun across the 1x, 2x, and 4x half-spread, impact, or "
+                "commission shocks in the turnover-aware cost model."
             ),
         ),
         ValidationCriterionResult(
@@ -381,107 +397,6 @@ def _align_bars_by_symbol(
     }
 
 
-def _wide_ohlcv_frame(
-    bars_by_symbol: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    payload: dict[tuple[str, str], pd.Series] = {}
-    reference_index = next(iter(bars_by_symbol.values())).index
-    for symbol, bars in bars_by_symbol.items():
-        for field in ("open", "high", "low", "close", "volume"):
-            payload[(symbol, field)] = (
-                bars[field].astype(float).reindex(reference_index)
-            )
-    return pd.DataFrame(payload, index=reference_index)
-
-
-def _normalize_target_weights(target_weights: pd.DataFrame) -> pd.DataFrame:
-    normalized = target_weights.fillna(0.0).astype(float).copy()
-    gross_exposure = normalized.abs().sum(axis=1)
-    for timestamp in normalized.index[gross_exposure > 1.0]:
-        normalized.loc[timestamp] = normalized.loc[timestamp] / float(
-            gross_exposure.loc[timestamp]
-        )
-    return normalized
-
-
-def _trend_target_weights(
-    candidate: StrategyCandidate,
-    *,
-    bars_by_symbol: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    symbol_weights = {}
-    for symbol in candidate.universe:
-        bars = bars_by_symbol[symbol]
-        signal = generate_trend_signal(
-            bars,
-            lookback_days=int(candidate.parameter_set["lookback_days"]),
-            sma_window_days=int(candidate.parameter_set["sma_window_days"]),
-            skip_recent_days=int(candidate.parameter_set.get("skip_recent_days", 1)),
-        )
-        symbol_weights[symbol] = apply_position_sizing(
-            bars,
-            signal=signal,
-            pre_sized=False,
-        )
-    reference_index = next(iter(symbol_weights.values())).index
-    return _normalize_target_weights(
-        pd.DataFrame(symbol_weights, index=reference_index, dtype=float)
-    )
-
-
-def _vol_target_target_weights(
-    candidate: StrategyCandidate,
-    *,
-    bars_by_symbol: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    benchmark_symbol = candidate.benchmark_symbol
-    bars = bars_by_symbol[benchmark_symbol]
-    signal = generate_vol_target_spy_signal(
-        bars,
-        target_volatility=float(candidate.parameter_set["target_volatility"]),
-        realized_vol_window_days=int(
-            candidate.parameter_set["realized_vol_window_days"]
-        ),
-        max_gross_leverage=float(candidate.parameter_set["max_gross_leverage"]),
-    )
-    return pd.DataFrame({benchmark_symbol: signal}, index=bars.index, dtype=float)
-
-
-def _mean_reversion_target_weights(
-    candidate: StrategyCandidate,
-    *,
-    bars_by_symbol: dict[str, pd.DataFrame],
-) -> pd.DataFrame:
-    if not candidate.universe:
-        raise ValueError(
-            "mean_reversion candidate requires at least one tradable symbol."
-        )
-    relevant_bars = {
-        symbol: bars_by_symbol[symbol]
-        for symbol in (candidate.benchmark_symbol, *candidate.universe)
-    }
-    signal_frame = generate_mean_revert_signal(
-        _wide_ohlcv_frame(relevant_bars),
-        benchmark_symbol=candidate.benchmark_symbol,
-        tradable_symbols=candidate.universe,
-        beta_window_days=int(candidate.parameter_set["beta_window_days"]),
-        residual_sum_days=int(candidate.parameter_set["residual_sum_days"]),
-        zscore_window_days=int(candidate.parameter_set["zscore_window_days"]),
-        zscore_threshold=float(candidate.parameter_set["zscore_threshold"]),
-    )
-    sized_weights = {
-        symbol: apply_position_sizing(
-            bars_by_symbol[symbol],
-            signal=signal_frame[symbol],
-            pre_sized=False,
-        )
-        for symbol in candidate.universe
-    }
-    return _normalize_target_weights(
-        pd.DataFrame(sized_weights, index=signal_frame.index, dtype=float)
-    )
-
-
 def _candidate_returns(
     candidate: StrategyCandidate,
     *,
@@ -493,27 +408,11 @@ def _candidate_returns(
         candidate,
         parameter_overrides=parameter_overrides,
     )
-
-    if configured_candidate.family == "trend_following":
-        traded_symbols = configured_candidate.universe
-        target_weights = _trend_target_weights(
-            configured_candidate,
-            bars_by_symbol=bars_by_symbol,
-        )
-    elif configured_candidate.family == "vol_target":
-        traded_symbols = (configured_candidate.benchmark_symbol,)
-        target_weights = _vol_target_target_weights(
-            configured_candidate,
-            bars_by_symbol=bars_by_symbol,
-        )
-    elif configured_candidate.family == "mean_reversion":
-        traded_symbols = configured_candidate.universe
-        target_weights = _mean_reversion_target_weights(
-            configured_candidate,
-            bars_by_symbol=bars_by_symbol,
-        )
-    else:
-        raise ValueError(f"Unsupported candidate family: {configured_candidate.family}")
+    target_weights = build_candidate_target_weight_history(
+        configured_candidate,
+        bars_by_symbol=bars_by_symbol,
+    )
+    traded_symbols = tuple(str(symbol) for symbol in target_weights.columns)
 
     result = run_daily_bar_backtest(
         {symbol: bars_by_symbol[symbol] for symbol in traded_symbols},

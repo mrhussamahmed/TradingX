@@ -28,11 +28,13 @@ from tradingx.types import (
     OpportunityScore,
     OpportunitySelectionRecord,
     OrderRecord,
+    MarketSnapshot,
     PortfolioState,
     RoundTripResult,
     ServiceCycleSnapshot,
     ServiceSymbolResult,
     StrategyActivationRecord,
+    TradeIntent,
 )
 
 
@@ -630,6 +632,152 @@ def test_main_runs_paper_service_command(monkeypatch, tmp_path, capsys) -> None:
         "max_cycles": 2,
     }
     assert payload["cycles_completed"] == 2
+
+
+def test_main_runtime_plan_command_writes_plan_artifact(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+
+    class FakePlanner:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        def plan_for_service(self, *, symbols, portfolio_state):
+            del portfolio_state
+            timestamp = datetime(2026, 4, 19, 13, 30, tzinfo=UTC)
+            snapshot = MarketSnapshot(
+                symbol="SPY",
+                last_trade_price=Decimal("100"),
+                bid_price=Decimal("99.95"),
+                ask_price=Decimal("100.05"),
+                average_daily_volume_30d=Decimal("1500000"),
+                timestamp=timestamp,
+            )
+            from tradingx.runtime_portfolio import (
+                RuntimePortfolioPlan,
+                RuntimePortfolioTrade,
+            )
+
+            return RuntimePortfolioPlan(
+                plan_id="runtime-plan-1",
+                generated_at_utc=timestamp,
+                strategy_id="trend-following-v1",
+                benchmark_symbol="SPY",
+                crash_overlay_active=False,
+                symbols_considered=symbols,
+                current_weights={"SPY": Decimal("0.10")},
+                target_weights={"SPY": Decimal("0.20")},
+                trade_intents=(
+                    TradeIntent(
+                        intent_id="intent-spy",
+                        candidate_id="trend-following-v1",
+                        symbol="SPY",
+                        side="buy",
+                        quantity=Decimal("10"),
+                        reason_code="target_weight_entry",
+                        generated_at_utc=timestamp,
+                    ),
+                ),
+                planned_trades=(
+                    RuntimePortfolioTrade(
+                        symbol="SPY",
+                        side="buy",
+                        reason_code="target_weight_entry",
+                        last_trade_price=Decimal("100"),
+                        current_weight=Decimal("0.10"),
+                        target_weight=Decimal("0.20"),
+                        current_quantity=Decimal("10"),
+                        target_quantity=Decimal("20"),
+                        delta_quantity=Decimal("10"),
+                        no_trade_band_applied=False,
+                    ),
+                ),
+                market_snapshots={"SPY": snapshot},
+            )
+
+    class FakePortfolioGateway:
+        def __init__(self, trading_client) -> None:
+            del trading_client
+
+        def get_portfolio_state(self) -> PortfolioState:
+            return PortfolioState(
+                as_of_utc=datetime(2026, 4, 19, 13, 29, tzinfo=UTC),
+                cash=Decimal("9000"),
+                equity=Decimal("10000"),
+                buying_power=Decimal("20000"),
+                positions=(),
+                open_orders=(),
+            )
+
+    class FakeActivationGateway:
+        def __init__(self, *, store) -> None:
+            del store
+
+        def load_or_create_active_records(self, symbols):
+            del symbols
+            return (
+                StrategyActivationRecord(
+                    activation_id="activation-1",
+                    strategy_id="trend-following-v1",
+                    strategy_version="1.0.0",
+                    approved_symbols=("SPY",),
+                    deploy_threshold=Decimal("0.5"),
+                    allow_fallback_weights=True,
+                    status="approved",
+                    activated_at_utc=datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+                    notes="Trend activation.",
+                ),
+                ApprovedWeightSnapshot(
+                    snapshot_id="snapshot-1",
+                    strategy_id="trend-following-v1",
+                    status="approved",
+                    generated_at_utc=datetime(2026, 4, 19, 13, 0, tzinfo=UTC),
+                    minimum_supporting_trades=5,
+                    weights={"signal": Decimal("1.0")},
+                ),
+            )
+
+    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "AlpacaPortfolioGateway",
+        FakePortfolioGateway,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "LocalActivationGateway",
+        FakeActivationGateway,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "RuntimePortfolioPlanner",
+        FakePlanner,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "runtime-plan",
+            "--env-file",
+            str(env_file),
+            "--symbols",
+            "SPY",
+            "--output-dir",
+            str(tmp_path / "runtime-plan"),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["strategy_id"] == "trend-following-v1"
+    assert Path(payload["artifact_path"]).exists()
 
 
 def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(

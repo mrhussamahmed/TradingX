@@ -7,9 +7,14 @@ from decimal import Decimal
 import pandas as pd
 
 from tradingx.costs import CostModelConfig
+from tradingx.evaluation import AdversarialCheckContext
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import StrategyCandidate
-from tradingx.validation import _candidate_returns, build_gate_report
+from tradingx.validation import (
+    _build_gate1_candidate_result,
+    _candidate_returns,
+    build_gate_report,
+)
 
 
 def _build_close_series(
@@ -239,6 +244,40 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
     assert "half-spread" in criteria_by_id["cost_stress"].details
     assert "impact" in criteria_by_id["cost_stress"].details
     assert "commission" in criteria_by_id["cost_stress"].details
+    assert "1x, 2x, and 4x" in criteria_by_id["cost_stress"].threshold
+
+
+def test_gate1_drawdown_reports_design_target_separately_from_hard_limit() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate_returns = (
+        Decimal("0.10"),
+        Decimal("-0.13"),
+        Decimal("0.00"),
+        Decimal("0.00"),
+    )
+    benchmark_returns = tuple(Decimal("0.00") for _ in candidate_returns)
+    benchmark_bars = _ohlcv_frame([100.0, 101.0, 102.0, 103.0])
+
+    result = _build_gate1_candidate_result(
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        benchmark_returns=benchmark_returns,
+        window_start_utc=benchmark_bars.index[0].to_pydatetime(),
+        window_end_utc=benchmark_bars.index[-1].to_pydatetime(),
+        benchmark_series_is_adjusted=True,
+        adversarial_context=AdversarialCheckContext(
+            benchmark_bars=benchmark_bars,
+            backtest_runner=lambda *_args, **_kwargs: candidate_returns,
+            base_cost_model_config=CostModelConfig(),
+        ),
+    )
+
+    criteria_by_id = {
+        criterion.criterion_id: criterion for criterion in result.criteria
+    }
+
+    assert criteria_by_id["max_drawdown_target"].passed is False
+    assert criteria_by_id["max_drawdown_hard_limit"].passed is True
 
 
 def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> None:

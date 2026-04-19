@@ -101,6 +101,14 @@ class FilesystemArtifactStore:
             snapshot,
         )
 
+    def write_runtime_portfolio_plan(self, plan: Any) -> Path:
+        plan_id = str(getattr(plan, "plan_id", "runtime-plan"))
+        return self._write_json(
+            "runtime_portfolio_plans",
+            f"{plan_id}.json",
+            plan,
+        )
+
     def write_runtime_host_state(self, state: BotRuntimeState) -> Path:
         return self._write_json("runtime_host", "state.json", state)
 
@@ -381,6 +389,7 @@ class FilesystemArtifactStore:
             "operator_alerts",
             "gate_assessments",
             "service_cycles",
+            "runtime_portfolio_plans",
             "validation_reports",
             "execution_lifecycles",
             "closed_trades",

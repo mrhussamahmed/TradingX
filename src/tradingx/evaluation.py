@@ -268,43 +268,62 @@ def _cost_sensitivity_check(
     backtest_runner: BacktestRunner,
     base_cost_model_config: CostModelConfig,
 ) -> str:
-    stress_configs = (
-        CostModelConfig(
-            half_spread_multiplier=base_cost_model_config.half_spread_multiplier * 2.0,
-            impact_coefficient=base_cost_model_config.impact_coefficient * 2.0,
-            commission_per_share=base_cost_model_config.commission_per_share * 2.0,
-            sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
-            finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
-            finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
-        ),
-        CostModelConfig(
-            half_spread_multiplier=base_cost_model_config.half_spread_multiplier * 2.0,
-            impact_coefficient=base_cost_model_config.impact_coefficient,
-            commission_per_share=base_cost_model_config.commission_per_share,
-            sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
-            finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
-            finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
-        ),
-        CostModelConfig(
-            half_spread_multiplier=base_cost_model_config.half_spread_multiplier,
-            impact_coefficient=base_cost_model_config.impact_coefficient * 2.0,
-            commission_per_share=base_cost_model_config.commission_per_share,
-            sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
-            finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
-            finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
-        ),
-        CostModelConfig(
-            half_spread_multiplier=base_cost_model_config.half_spread_multiplier,
-            impact_coefficient=base_cost_model_config.impact_coefficient,
-            commission_per_share=max(
-                base_cost_model_config.commission_per_share * 2.0,
-                0.0001,
-            ),
-            sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
-            finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
-            finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
-        ),
-    )
+    stress_configs = [base_cost_model_config]
+    for multiplier in (2.0, 4.0):
+        stress_configs.append(
+            CostModelConfig(
+                half_spread_multiplier=(
+                    base_cost_model_config.half_spread_multiplier * multiplier
+                ),
+                impact_coefficient=(
+                    base_cost_model_config.impact_coefficient * multiplier
+                ),
+                commission_per_share=max(
+                    base_cost_model_config.commission_per_share * multiplier,
+                    0.0001 if base_cost_model_config.commission_per_share > 0.0 else 0.0,
+                ),
+                sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
+                finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
+                finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
+            )
+        )
+        stress_configs.append(
+            CostModelConfig(
+                half_spread_multiplier=(
+                    base_cost_model_config.half_spread_multiplier * multiplier
+                ),
+                impact_coefficient=base_cost_model_config.impact_coefficient,
+                commission_per_share=base_cost_model_config.commission_per_share,
+                sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
+                finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
+                finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
+            )
+        )
+        stress_configs.append(
+            CostModelConfig(
+                half_spread_multiplier=base_cost_model_config.half_spread_multiplier,
+                impact_coefficient=(
+                    base_cost_model_config.impact_coefficient * multiplier
+                ),
+                commission_per_share=base_cost_model_config.commission_per_share,
+                sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
+                finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
+                finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
+            )
+        )
+        stress_configs.append(
+            CostModelConfig(
+                half_spread_multiplier=base_cost_model_config.half_spread_multiplier,
+                impact_coefficient=base_cost_model_config.impact_coefficient,
+                commission_per_share=max(
+                    base_cost_model_config.commission_per_share * multiplier,
+                    0.0001,
+                ),
+                sec_fee_per_dollar=base_cost_model_config.sec_fee_per_dollar,
+                finra_taf_per_share=base_cost_model_config.finra_taf_per_share,
+                finra_taf_max_per_trade=base_cost_model_config.finra_taf_max_per_trade,
+            )
+        )
     for stressed_config in stress_configs:
         try:
             stressed_returns = backtest_runner(

@@ -9,8 +9,10 @@ from prometheus_client import CollectorRegistry
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
 from tradingx.service import PaperTradingService
 from tradingx.types import (
+    MarketSnapshot,
     PortfolioState,
     PositionSnapshot,
     ReconciliationSnapshot,
@@ -23,6 +25,7 @@ from tradingx.types import (
 class FakeLoopController:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Decimal]] = []
+        self.intent_calls: list[tuple[str, str, Decimal | None]] = []
 
     def run_trading_cycle(self, symbol: str, quantity: Decimal) -> TradingLoopResult:
         self.calls.append((symbol, quantity))
@@ -55,6 +58,43 @@ class FakeLoopController:
                 resolved=True,
             ),
             artifact_paths=(Path(f"artifacts/{symbol.lower()}.json"),),
+        )
+
+    def execute_trade_intent(
+        self,
+        trade_intent: TradeIntent,
+        *,
+        market_snapshot: MarketSnapshot,
+    ) -> TradingLoopResult:
+        del market_snapshot
+        self.intent_calls.append(
+            (trade_intent.symbol, trade_intent.side, trade_intent.quantity)
+        )
+        timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+        return TradingLoopResult(
+            terminal_state=(
+                "reconciled_trade"
+                if trade_intent.side in {"buy", "sell", "reduce"}
+                else "no_action"
+            ),
+            trade_intent=trade_intent,
+            order_record=None,
+            risk_event=None,
+            reconciliation=ReconciliationSnapshot(
+                reconciliation_id=f"reconcile-{trade_intent.symbol.lower()}",
+                portfolio_state=PortfolioState(
+                    as_of_utc=timestamp,
+                    cash=Decimal("10000.00"),
+                    equity=Decimal("10010.00"),
+                    buying_power=Decimal("20000.00"),
+                    positions=(),
+                    open_orders=(),
+                ),
+                broker_state_age_seconds=0,
+                differences=(),
+                resolved=True,
+            ),
+            artifact_paths=(Path(f"artifacts/{trade_intent.symbol.lower()}.json"),),
         )
 
 
@@ -175,6 +215,93 @@ class FakeFailingPortfolio:
     def get_portfolio_state(self) -> PortfolioState:
         self.calls += 1
         raise RuntimeError("broker gateway unavailable")
+
+
+class FakePortfolioPlanner:
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+    ) -> RuntimePortfolioPlan:
+        del symbols, portfolio_state
+        timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+        market_snapshot = MarketSnapshot(
+            symbol="SPY",
+            last_trade_price=Decimal("100"),
+            bid_price=Decimal("99.95"),
+            ask_price=Decimal("100.05"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=timestamp,
+        )
+        qqq_snapshot = MarketSnapshot(
+            symbol="QQQ",
+            last_trade_price=Decimal("100"),
+            bid_price=Decimal("99.95"),
+            ask_price=Decimal("100.05"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=timestamp,
+        )
+        return RuntimePortfolioPlan(
+            plan_id="plan-1",
+            generated_at_utc=timestamp,
+            strategy_id="trend-following-v1",
+            benchmark_symbol="SPY",
+            crash_overlay_active=False,
+            symbols_considered=("SPY", "QQQ"),
+            current_weights={"SPY": Decimal("0.30"), "QQQ": Decimal("0")},
+            target_weights={"SPY": Decimal("0.10"), "QQQ": Decimal("0.20")},
+            trade_intents=(
+                TradeIntent(
+                    intent_id="intent-spy",
+                    candidate_id="trend-following-v1",
+                    symbol="SPY",
+                    side="reduce",
+                    quantity=Decimal("20"),
+                    reason_code="target_weight_reduce",
+                    generated_at_utc=timestamp,
+                ),
+                TradeIntent(
+                    intent_id="intent-qqq",
+                    candidate_id="trend-following-v1",
+                    symbol="QQQ",
+                    side="buy",
+                    quantity=Decimal("20"),
+                    reason_code="target_weight_entry",
+                    generated_at_utc=timestamp,
+                ),
+            ),
+            planned_trades=(
+                RuntimePortfolioTrade(
+                    symbol="SPY",
+                    side="reduce",
+                    reason_code="target_weight_reduce",
+                    last_trade_price=Decimal("100"),
+                    current_weight=Decimal("0.30"),
+                    target_weight=Decimal("0.10"),
+                    current_quantity=Decimal("30"),
+                    target_quantity=Decimal("10"),
+                    delta_quantity=Decimal("20"),
+                    no_trade_band_applied=False,
+                ),
+                RuntimePortfolioTrade(
+                    symbol="QQQ",
+                    side="buy",
+                    reason_code="target_weight_entry",
+                    last_trade_price=Decimal("100"),
+                    current_weight=Decimal("0"),
+                    target_weight=Decimal("0.20"),
+                    current_quantity=Decimal("0"),
+                    target_quantity=Decimal("20"),
+                    delta_quantity=Decimal("20"),
+                    no_trade_band_applied=False,
+                ),
+            ),
+            market_snapshots={
+                "SPY": market_snapshot,
+                "QQQ": qqq_snapshot,
+            },
+        )
 
 
 def test_paper_trading_service_runs_multi_symbol_cycles_and_persists_summary(
@@ -399,3 +526,33 @@ def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> N
     assert loop_controller.calls == []
     assert result.cycles_completed == 1
     assert result.last_cycle.cycle_status == "kill_requested"
+
+
+def test_paper_trading_service_executes_runtime_portfolio_plan_when_available(
+    tmp_path,
+) -> None:
+    loop_controller = FakeLoopController()
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=FilesystemArtifactStore(tmp_path),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=FakePortfolioPlanner(),
+    )
+
+    result = service.run(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    assert loop_controller.calls == []
+    assert loop_controller.intent_calls == [
+        ("SPY", "reduce", Decimal("20")),
+        ("QQQ", "buy", Decimal("20")),
+    ]
+    assert result.last_cycle.cycle_status == "executed"

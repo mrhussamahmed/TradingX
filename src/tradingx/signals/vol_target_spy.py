@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd  # type: ignore[import-untyped]
 
-from tradingx.features.volatility import realized_vol, volatility_scale
+from tradingx.features.volatility import forecast_volatility, volatility_scale
 from tradingx.signals.trend import REQUIRED_OHLCV_COLUMNS
 
 TARGET_VOLATILITY = 0.12
@@ -24,15 +24,17 @@ def generate_vol_target_spy_signal(
     target_volatility: float = TARGET_VOLATILITY,
     realized_vol_window_days: int = REALIZED_VOL_WINDOW_DAYS,
     max_gross_leverage: float = MAX_GROSS_LEVERAGE,
+    forecast_method: str = "realized",
 ) -> pd.Series:
     _validate_ohlcv(ohlcv)
 
     close_returns = ohlcv["close"].astype(float).pct_change()
     leverage = volatility_scale(
         target_vol=target_volatility,
-        realized_vol=realized_vol(
+        realized_vol=forecast_volatility(
             close_returns,
             lookback_days=realized_vol_window_days,
+            forecast_method=forecast_method,
         ),
         max_gross_leverage=max_gross_leverage,
     )
