@@ -14,13 +14,16 @@ from tradingx.types import (
     Gate3ReadinessReport,
     ReplaySlippageSummary,
 )
-from tradingx.validation import BASE_COST_PENALTY
 
 GATE3_DURATION_DAYS = 180
 GATE3_TRADE_COUNT = 100
 GATE3_SLIPPAGE_MULTIPLIER = Decimal("1.5")
 GATE3_HIT_RATE_DRIFT = Decimal("0.20")
 GATE3_REALIZED_SHARPE_MULTIPLIER = Decimal("0.5")
+# source: legacy Stage 1 backtest slippage reference carried forward for
+# Gate 3 readiness until candidate-specific slippage assumptions are
+# persisted alongside evaluation evidence.
+GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS = Decimal("10")
 P1_BUG_CATEGORIES = frozenset(
     {"runtime", "service_failure", "execution_failure", "automation_failure", "bug"}
 )
@@ -193,7 +196,9 @@ def build_gate3_readiness_report(
         if str(payload.get("severity", "")) == "critical"
         and str(payload.get("category", "")) in P1_BUG_CATEGORIES
     )
-    slippage_limit = BASE_COST_PENALTY * Decimal("10000") * GATE3_SLIPPAGE_MULTIPLIER
+    slippage_limit = (
+        GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS * GATE3_SLIPPAGE_MULTIPLIER
+    )
     mean_slippage = _mean_absolute_slippage(execution_payloads)
     observed_hit_rate = _hit_rate(closed_trade_payloads)
     expected_hit_rate = reference_metrics.get("hit_rate") or reference_metrics.get(

@@ -41,6 +41,16 @@ def test_runtime_config_defaults_are_safe() -> None:
     assert getattr(config.runtime, "scheduler_poll_seconds", None) == 60
     assert getattr(config.runtime, "log_max_bytes", None) == 100 * 1024 * 1024
     assert getattr(config.runtime, "log_retention_files", None) == 30
+    assert config.runtime.symbol_universe == (
+        "SPY",
+        "QQQ",
+        "IWM",
+        "XLE",
+        "XLF",
+        "XLK",
+        "EEM",
+        "TLT",
+    )
     assert config.runtime.dry_run is False
 
 

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.strategy import (
+    CANONICAL_STAGE1_UNIVERSE,
     DeterministicBaselineStrategy,
     build_mandatory_candidate_registry,
 )
@@ -188,3 +189,14 @@ def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
         "zscore_window_days": 60,
         "zscore_threshold": Decimal("2.0"),
     }
+
+
+def test_mandatory_candidate_registry_defaults_to_canonical_stage1_universe() -> None:
+    candidates = build_mandatory_candidate_registry()
+    candidates_by_family = {candidate.family: candidate for candidate in candidates}
+
+    assert candidates_by_family["trend_following"].universe == CANONICAL_STAGE1_UNIVERSE
+    assert candidates_by_family["vol_target"].universe == CANONICAL_STAGE1_UNIVERSE
+    assert candidates_by_family["mean_reversion"].universe == tuple(
+        symbol for symbol in CANONICAL_STAGE1_UNIVERSE if symbol != "SPY"
+    )

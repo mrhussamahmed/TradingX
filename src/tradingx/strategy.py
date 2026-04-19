@@ -18,6 +18,16 @@ from tradingx.types import (
 
 DEFAULT_CANDIDATE_ID = "baseline-long-only-v1"
 MAX_SPREAD_BPS = Decimal("20")
+CANONICAL_STAGE1_UNIVERSE = (
+    "SPY",
+    "QQQ",
+    "IWM",
+    "XLE",
+    "XLF",
+    "XLK",
+    "EEM",
+    "TLT",
+)
 
 
 def _normalize_quantity(quantity: Decimal | None) -> str:
@@ -27,11 +37,11 @@ def _normalize_quantity(quantity: Decimal | None) -> str:
 
 
 def build_mandatory_candidate_registry(
-    universe: Sequence[str],
+    universe: Sequence[str] | None = None,
     *,
     benchmark_symbol: str = "SPY",
 ) -> tuple[StrategyCandidate, ...]:
-    normalized_universe = tuple(universe)
+    normalized_universe = tuple(universe or CANONICAL_STAGE1_UNIVERSE)
     mean_reversion_universe = tuple(
         symbol for symbol in normalized_universe if symbol != benchmark_symbol
     )
@@ -206,6 +216,7 @@ class DeterministicBaselineStrategy:
 
 
 __all__ = (
+    "CANONICAL_STAGE1_UNIVERSE",
     "DEFAULT_CANDIDATE_ID",
     "DeterministicBaselineStrategy",
     "build_mandatory_candidate_registry",

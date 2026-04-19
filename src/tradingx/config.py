@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from tradingx.strategy import CANONICAL_STAGE1_UNIVERSE
+
 
 def _normalize_value(value: str | None) -> str:
     return (value or "").strip()
@@ -100,7 +102,7 @@ class RuntimeConfig:
     scheduler_poll_seconds: int = 60
     log_max_bytes: int = 100 * 1024 * 1024
     log_retention_files: int = 30
-    symbol_universe: tuple[str, ...] = ("SPY",)
+    symbol_universe: tuple[str, ...] = CANONICAL_STAGE1_UNIVERSE
     dry_run: bool = False
 
 
@@ -193,7 +195,8 @@ class TradingConfig:
                     default=30,
                 ),
                 symbol_universe=(
-                    _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE")) or ("SPY",)
+                    _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE"))
+                    or CANONICAL_STAGE1_UNIVERSE
                 ),
                 dry_run=_normalize_bool(
                     values.get("TRADINGX_DRY_RUN"),
