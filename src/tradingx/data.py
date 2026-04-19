@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import exchange_calendars as xcals  # type: ignore[import-untyped]
+import pandas as pd  # type: ignore[import-untyped]
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import (
@@ -194,6 +195,56 @@ class AlpacaMarketDataGateway:
             series_is_adjusted=normalized_adjustment
             in {Adjustment.DIVIDEND, Adjustment.ALL},
         )
+
+    def get_daily_bar_history(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str | DataFeed = DataFeed.IEX,
+        adjustment: str | Adjustment = Adjustment.DIVIDEND,
+    ) -> pd.DataFrame:
+        normalized_symbol = symbol.upper()
+        normalized_feed = _normalize_feed(feed)
+        normalized_adjustment = _normalize_adjustment(adjustment)
+        bars_request = StockBarsRequest(
+            symbol_or_symbols=normalized_symbol,
+            timeframe=TimeFrame.Day,
+            start=start_utc,
+            end=end_utc,
+            feed=normalized_feed,
+            adjustment=normalized_adjustment,
+        )
+        bars_response = self._client.get_stock_bars(bars_request)
+        if isinstance(bars_response, dict):
+            bars = bars_response.get(normalized_symbol, [])
+        else:
+            bars = bars_response[normalized_symbol]
+        if not bars:
+            raise ValueError(
+                f"No daily bars returned for {normalized_symbol} between "
+                f"{start_utc.isoformat()} and {end_utc.isoformat()}."
+            )
+        index = []
+        rows: list[dict[str, float]] = []
+        for bar in bars:
+            timestamp = bar.timestamp
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+            else:
+                timestamp = timestamp.astimezone(UTC)
+            index.append(timestamp)
+            rows.append(
+                {
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": float(bar.volume),
+                }
+            )
+        return pd.DataFrame(rows, index=index, dtype=float).sort_index(kind="stable")
 
 
 class AlpacaRegularHoursCalendar:

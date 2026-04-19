@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pandas as pd
 import pytest
 
 from tradingx.controller import GateValidationController
@@ -26,21 +27,91 @@ def _build_close_series(
     return tuple(closes)
 
 
+def _ohlcv_frame(closes: list[float]) -> pd.DataFrame:
+    index = pd.date_range("2023-01-03", periods=len(closes), freq="B", tz="UTC")
+    close_series = pd.Series(closes, index=index, dtype=float)
+    return pd.DataFrame(
+        {
+            "open": close_series,
+            "high": close_series * 1.01,
+            "low": close_series * 0.99,
+            "close": close_series,
+            "volume": 1_000_000.0,
+        },
+        index=index,
+    )
+
+
+class FakeHistoricalMarketDataGateway:
+    def __init__(self) -> None:
+        self.requested_symbols: list[str] = []
+        self._bars_by_symbol = {
+            "SPY": _ohlcv_frame(
+                [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
+            ),
+            "QQQ": _ohlcv_frame(
+                [100.0, 100.5, 101.0, 102.0, 101.0, 102.5, 103.0, 104.0]
+            ),
+        }
+
+    def get_daily_bar_history(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str = "iex",
+        adjustment: str = "dividend",
+    ) -> pd.DataFrame:
+        del start_utc, end_utc, feed, adjustment
+        self.requested_symbols.append(symbol)
+        return self._bars_by_symbol[symbol].copy()
+
+
 def test_gate_validation_pipeline_persists_report_and_assessment(tmp_path) -> None:
     store = FilesystemArtifactStore(tmp_path)
-    controller = GateValidationController(artifacts=store)
+    controller = GateValidationController(
+        artifacts=store,
+        market_data=FakeHistoricalMarketDataGateway(),
+    )
 
-    with pytest.raises(RuntimeError, match="real backtest engine"):
+    result = controller.generate_gate_report(
+        gate_id="1",
+        benchmark_closes=tuple(
+            Decimal(str(value))
+            for value in [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
+        ),
+        window_start_utc=datetime(2023, 1, 3, tzinfo=UTC),
+        window_end_utc=datetime(2023, 1, 12, tzinfo=UTC),
+        universe=("SPY", "QQQ"),
+        benchmark_series_is_adjusted=True,
+    )
+
+    assert result.report.gate_id == "1"
+    assert result.gate_assessment.gate_id == "1"
+    report_files = sorted((tmp_path / "validation_reports").glob("*.json"))
+    assessment_files = sorted((tmp_path / "gate_assessments").glob("*.json"))
+    assert len(report_files) == 1
+    assert len(assessment_files) == 1
+
+
+def test_gate_validation_pipeline_rejects_mismatched_benchmark_closes(tmp_path) -> None:
+    controller = GateValidationController(
+        artifacts=FilesystemArtifactStore(tmp_path),
+        market_data=FakeHistoricalMarketDataGateway(),
+    )
+
+    with pytest.raises(ValueError, match="Benchmark close artifact does not match"):
         controller.generate_gate_report(
             gate_id="1",
             benchmark_closes=_build_close_series(
-                periods=1200,
+                periods=8,
                 up_return=Decimal("0.0030"),
                 down_return=Decimal("-0.0015"),
                 down_every=23,
             ),
-            window_start_utc=datetime(2023, 1, 1, tzinfo=UTC),
-            window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+            window_start_utc=datetime(2023, 1, 3, tzinfo=UTC),
+            window_end_utc=datetime(2023, 1, 12, tzinfo=UTC),
             universe=("SPY", "QQQ"),
             benchmark_series_is_adjusted=True,
         )

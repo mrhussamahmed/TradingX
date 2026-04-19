@@ -9,7 +9,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd  # type: ignore[import-untyped]
+
+from tradingx.backtest import run_daily_bar_backtest
 from tradingx.evaluation import TRADING_DAYS_PER_YEAR, evaluate_candidate
+from tradingx.signals.mean_revert import generate_mean_revert_signal
+from tradingx.signals.trend import generate_trend_signal
+from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
+from tradingx.sizing import apply_position_sizing
 from tradingx.types import (
     BenchmarkCloseSeries,
     StrategyCandidate,
@@ -385,18 +392,235 @@ def _build_gate2_candidate_result(
     )
 
 
+def _align_bars_by_symbol(
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    common_index = None
+    for bars in bars_by_symbol.values():
+        if common_index is None:
+            common_index = bars.index
+        else:
+            common_index = common_index.intersection(bars.index)
+    if common_index is None or common_index.empty:
+        raise ValueError(
+            "bars_by_symbol must contain at least one aligned bar history."
+        )
+    return {
+        symbol: bars.loc[common_index].astype(float).copy()
+        for symbol, bars in bars_by_symbol.items()
+    }
+
+
+def _wide_ohlcv_frame(
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    payload: dict[tuple[str, str], pd.Series] = {}
+    reference_index = next(iter(bars_by_symbol.values())).index
+    for symbol, bars in bars_by_symbol.items():
+        for field in ("open", "high", "low", "close", "volume"):
+            payload[(symbol, field)] = (
+                bars[field].astype(float).reindex(reference_index)
+            )
+    return pd.DataFrame(payload, index=reference_index)
+
+
+def _normalize_target_weights(target_weights: pd.DataFrame) -> pd.DataFrame:
+    normalized = target_weights.fillna(0.0).astype(float).copy()
+    gross_exposure = normalized.abs().sum(axis=1)
+    for timestamp in normalized.index[gross_exposure > 1.0]:
+        normalized.loc[timestamp] = (
+            normalized.loc[timestamp] / float(gross_exposure.loc[timestamp])
+        )
+    return normalized
+
+
+def _trend_target_weights(
+    _candidate: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    symbol_weights = {}
+    for symbol in _candidate.universe:
+        bars = bars_by_symbol[symbol]
+        signal = generate_trend_signal(bars)
+        symbol_weights[symbol] = apply_position_sizing(
+            bars,
+            signal=signal,
+            pre_sized=False,
+        )
+    reference_index = next(iter(symbol_weights.values())).index
+    return _normalize_target_weights(
+        pd.DataFrame(symbol_weights, index=reference_index, dtype=float)
+    )
+
+
+def _vol_target_target_weights(
+    candidate: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    benchmark_symbol = candidate.benchmark_symbol
+    bars = bars_by_symbol[benchmark_symbol]
+    signal = generate_vol_target_spy_signal(
+        bars,
+        target_volatility=float(candidate.parameter_set["target_volatility"]),
+        realized_vol_window_days=int(
+            candidate.parameter_set["realized_vol_window_days"]
+        ),
+        max_gross_leverage=float(candidate.parameter_set["max_gross_leverage"]),
+    )
+    return pd.DataFrame({benchmark_symbol: signal}, index=bars.index, dtype=float)
+
+
+def _mean_reversion_target_weights(
+    candidate: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    if not candidate.universe:
+        raise ValueError(
+            "mean_reversion candidate requires at least one tradable symbol."
+        )
+    relevant_bars = {
+        symbol: bars_by_symbol[symbol]
+        for symbol in (candidate.benchmark_symbol, *candidate.universe)
+    }
+    signal_frame = generate_mean_revert_signal(
+        _wide_ohlcv_frame(relevant_bars),
+        benchmark_symbol=candidate.benchmark_symbol,
+        tradable_symbols=candidate.universe,
+        beta_window_days=int(candidate.parameter_set["beta_window_days"]),
+        residual_sum_days=int(candidate.parameter_set["residual_sum_days"]),
+        zscore_window_days=int(candidate.parameter_set["zscore_window_days"]),
+        zscore_threshold=float(candidate.parameter_set["zscore_threshold"]),
+    )
+    sized_weights = {
+        symbol: apply_position_sizing(
+            bars_by_symbol[symbol],
+            signal=signal_frame[symbol],
+            pre_sized=False,
+        )
+        for symbol in candidate.universe
+    }
+    return _normalize_target_weights(
+        pd.DataFrame(sized_weights, index=signal_frame.index, dtype=float)
+    )
+
+
+def _candidate_returns(
+    candidate: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> tuple[Decimal, ...]:
+    if candidate.family == "trend_following":
+        traded_symbols = candidate.universe
+        target_weights = _trend_target_weights(candidate, bars_by_symbol=bars_by_symbol)
+    elif candidate.family == "vol_target":
+        traded_symbols = (candidate.benchmark_symbol,)
+        target_weights = _vol_target_target_weights(
+            candidate,
+            bars_by_symbol=bars_by_symbol,
+        )
+    elif candidate.family == "mean_reversion":
+        traded_symbols = candidate.universe
+        target_weights = _mean_reversion_target_weights(
+            candidate,
+            bars_by_symbol=bars_by_symbol,
+        )
+    else:
+        raise ValueError(f"Unsupported candidate family: {candidate.family}")
+
+    result = run_daily_bar_backtest(
+        {symbol: bars_by_symbol[symbol] for symbol in traded_symbols},
+        target_weights=target_weights,
+    )
+    return tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
+
+
+def _benchmark_returns(
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    benchmark_symbol: str,
+) -> tuple[Decimal, ...]:
+    bars = bars_by_symbol[benchmark_symbol]
+    result = run_daily_bar_backtest(
+        {benchmark_symbol: bars},
+        target_weights=pd.DataFrame(
+            {benchmark_symbol: [1.0] * len(bars)},
+            index=bars.index,
+            dtype=float,
+        ),
+        initial_weights={benchmark_symbol: 1.0},
+    )
+    return tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
+
+
 def build_gate_report(
     *,
     gate_id: str,
-    benchmark_closes: Sequence[Decimal],
+    bars_by_symbol: dict[str, pd.DataFrame],
     candidates: Sequence[StrategyCandidate],
+    benchmark_symbol: str,
     window_start_utc: datetime,
     window_end_utc: datetime,
     benchmark_series_is_adjusted: bool,
 ) -> ValidationReport:
-    raise RuntimeError(
-        "Gate report generation is disabled until the real backtest engine lands; "
-        "the fake candidate return generator was deleted on 2026-04-19."
+    aligned_bars = _align_bars_by_symbol(bars_by_symbol)
+    benchmark_returns = _benchmark_returns(
+        bars_by_symbol=aligned_bars,
+        benchmark_symbol=benchmark_symbol,
+    )
+    candidate_results = []
+    for candidate in candidates:
+        candidate_returns = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
+        if gate_id == "1":
+            result = _build_gate1_candidate_result(
+                candidate=candidate,
+                candidate_returns=candidate_returns,
+                benchmark_returns=benchmark_returns,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+                benchmark_series_is_adjusted=benchmark_series_is_adjusted,
+            )
+        elif gate_id == "2":
+            result = _build_gate2_candidate_result(
+                candidate=candidate,
+                candidate_returns=candidate_returns,
+                benchmark_returns=benchmark_returns,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+            )
+        else:
+            raise ValueError(f"Unsupported gate_id: {gate_id}")
+        candidate_results.append(result)
+
+    statuses = {result.status for result in candidate_results}
+    if statuses == {"pass"}:
+        report_status = "pass"
+    elif "fail" in statuses:
+        report_status = "fail"
+    else:
+        report_status = "pending"
+
+    report_timestamp = datetime.now(UTC)
+    return ValidationReport(
+        report_id=f"gate-{gate_id}-{report_timestamp.strftime('%Y%m%dT%H%M%SZ')}",
+        gate_id=gate_id,
+        generated_at_utc=report_timestamp,
+        status=report_status,
+        benchmark_symbol=benchmark_symbol,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        candidate_results=tuple(candidate_results),
+        summary=(
+            f"Gate {gate_id} {'passed' if report_status == 'pass' else report_status} "
+            f"for {len(candidate_results)} mandatory candidates."
+        ),
+        assumptions=(
+            "candidate returns are generated from daily-bar next-open backtests",
+            "portfolio weights are normalized to max gross exposure 1.0 before replay",
+        ),
+        evidence_refs=tuple(result.evidence_pack_id for result in candidate_results),
     )
 
 

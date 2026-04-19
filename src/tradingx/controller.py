@@ -23,6 +23,7 @@ from tradingx.config import TradingConfig
 from tradingx.data import (
     AlpacaMarketDataGateway,
     AlpacaRegularHoursCalendar,
+    build_default_market_data_gateway,
 )
 from tradingx.execution import (
     AlpacaPaperExecutionGateway,
@@ -57,6 +58,7 @@ from tradingx.types import (
     ClosedTradeRecord,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
+    GateAssessment,
     GateReportResult,
     LatestQuote,
     MarketSnapshot,
@@ -67,6 +69,7 @@ from tradingx.types import (
     TradeIntent,
     TradingLoopResult,
 )
+from tradingx.validation import build_gate_report
 
 
 def _serialize(value: Any) -> Any:
@@ -1344,9 +1347,11 @@ class GateValidationController:
         self,
         *,
         artifacts: FilesystemArtifactStore,
+        market_data: Any,
         metrics: StageMetrics | None = None,
     ) -> None:
         self._artifacts = artifacts
+        self._market_data = market_data
         self._metrics = metrics or StageMetrics()
 
     def generate_gate_report(
@@ -1359,9 +1364,55 @@ class GateValidationController:
         universe: tuple[str, ...],
         benchmark_series_is_adjusted: bool,
     ) -> GateReportResult:
-        raise RuntimeError(
-            "Gate report generation is disabled until the real backtest engine "
-            "lands; the fake candidate return generator was deleted on 2026-04-19."
+        candidates = build_mandatory_candidate_registry(universe)
+        required_symbols = {
+            candidate.benchmark_symbol
+            for candidate in candidates
+        } | {
+            symbol for candidate in candidates for symbol in candidate.universe
+        }
+        bars_by_symbol = {
+            symbol: self._market_data.get_daily_bar_history(
+                symbol,
+                start_utc=window_start_utc,
+                end_utc=window_end_utc,
+            )
+            for symbol in sorted(required_symbols)
+        }
+        benchmark_symbol = candidates[0].benchmark_symbol if candidates else "SPY"
+        benchmark_bars = bars_by_symbol[benchmark_symbol]
+        fetched_closes = tuple(
+            Decimal(str(value)) for value in benchmark_bars["close"].tolist()
+        )
+        if fetched_closes != benchmark_closes:
+            raise ValueError(
+                "Benchmark close artifact does not match the fetched benchmark bars."
+            )
+
+        report = build_gate_report(
+            gate_id=gate_id,
+            bars_by_symbol=bars_by_symbol,
+            candidates=candidates,
+            benchmark_symbol=benchmark_symbol,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            benchmark_series_is_adjusted=benchmark_series_is_adjusted,
+        )
+        report_path = self._artifacts.write_validation_report(report)
+        self._metrics.record_evidence_artifact("validation_report")
+        assessment = GateAssessment(
+            gate_id=gate_id,
+            status=report.status,
+            evidence_refs=(str(report_path),),
+            decision_summary=report.summary,
+            recorded_at_utc=datetime.now(UTC),
+        )
+        assessment_path = self._artifacts.write_gate_assessment(assessment)
+        self._metrics.record_evidence_artifact("gate_assessment")
+        return GateReportResult(
+            report=report,
+            gate_assessment=assessment,
+            artifact_paths=(report_path, assessment_path),
         )
 
 
@@ -1432,6 +1483,7 @@ def build_default_gate_validation_controller(
 ) -> GateValidationController:
     return GateValidationController(
         artifacts=FilesystemArtifactStore(artifact_root),
+        market_data=build_default_market_data_gateway(config),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
     )
 

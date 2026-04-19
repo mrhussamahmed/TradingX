@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import importlib
 import json
-from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
+import pandas as pd
 
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.validation import build_gate_report
@@ -28,6 +27,21 @@ def _build_close_series(
     return tuple(closes)
 
 
+def _ohlcv_frame(closes: list[float]) -> pd.DataFrame:
+    index = pd.date_range("2023-01-03", periods=len(closes), freq="B", tz="UTC")
+    close_series = pd.Series(closes, index=index, dtype=float)
+    return pd.DataFrame(
+        {
+            "open": close_series,
+            "high": close_series * 1.01,
+            "low": close_series * 0.99,
+            "close": close_series,
+            "volume": 1_000_000.0,
+        },
+        index=index,
+    )
+
+
 def test_validation_module_shell_is_importable() -> None:
     module = importlib.import_module("tradingx.validation")
 
@@ -35,22 +49,58 @@ def test_validation_module_shell_is_importable() -> None:
     assert hasattr(module, "__all__")
 
 
-def test_build_gate_report_fails_closed_until_real_backtest_engine_lands() -> None:
-    benchmark_closes = _build_close_series(
-        periods=1200,
-        up_return=Decimal("0.0030"),
-        down_return=Decimal("-0.0015"),
-        down_every=23,
+def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
+    bars_by_symbol = {
+        "SPY": _ohlcv_frame(
+            [
+                100.0,
+                101.0,
+                102.0,
+                103.0,
+                104.0,
+                105.0,
+                106.0,
+                107.0,
+                108.0,
+                109.0,
+            ]
+        ),
+        "QQQ": _ohlcv_frame(
+            [
+                100.0,
+                100.5,
+                101.0,
+                102.0,
+                101.0,
+                102.5,
+                103.0,
+                104.0,
+                103.5,
+                104.5,
+            ]
+        ),
+    }
+    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol=bars_by_symbol,
+        candidates=candidates,
+        benchmark_symbol="SPY",
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+        benchmark_series_is_adjusted=True,
     )
-    with pytest.raises(RuntimeError, match="real backtest engine"):
-        build_gate_report(
-            gate_id="1",
-            benchmark_closes=benchmark_closes,
-            candidates=build_mandatory_candidate_registry(("SPY", "QQQ")),
-            window_start_utc=datetime(2023, 1, 1, tzinfo=UTC),
-            window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
-            benchmark_series_is_adjusted=True,
-        )
+
+    assert report.gate_id == "1"
+    assert report.benchmark_symbol == "SPY"
+    assert len(report.candidate_results) == 3
+    assert {result.candidate_id for result in report.candidate_results} == {
+        "trend-following-v1",
+        "vol-target-v1",
+        "mean-reversion-v1",
+    }
+    assert all(result.evidence_pack_id for result in report.candidate_results)
 
 
 def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> None:
