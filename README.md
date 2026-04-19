@@ -36,6 +36,9 @@ implementation that can:
 
 For the full step-by-step startup and operating guide, use the
 [TradingX Operator Manual](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/operations/operator_manual.md:1).
+For the canonical runtime/appliance file map used for future
+development, use
+[CURRENT_ARCHITECTURE.md](/Users/ahmedabd/Desktop/AI%20Projects/TradingX/docs/architecture/CURRENT_ARCHITECTURE.md:1).
 
 ## Core commands
 

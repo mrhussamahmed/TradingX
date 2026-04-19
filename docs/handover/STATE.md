@@ -7,12 +7,12 @@ created: 2026-04-17
 last_amended: 2026-04-19
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-19-022
+author_session: SESS-2026-04-19-023
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-022
+- Active session: SESS-2026-04-19-023
 - Active branch: main
 - Active phase: 12
 - Last completed gate: 0.5
@@ -50,6 +50,9 @@ author_session: SESS-2026-04-19-022
 - `ADR-0016` selects a supervised local trading appliance runtime with
   governed activation records, deterministic first-run selection, and
   proposal-only learning outputs.
+- `ARCHMAP-0001` is the canonical one-page runtime/appliance
+  architecture pointer for future development and must be updated when
+  canonical architecture files or precedence change.
 - `RUNBOOK-0003` is now the official operator instruction manual and
   must be updated whenever startup, operation, dashboard, validation, or
   recovery behavior changes.
