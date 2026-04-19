@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd  # type: ignore[import-untyped]
 
+from tradingx.costs import CostModelConfig, estimate_trade_costs
 from tradingx.risk_free import daily_risk_free_rate_for_date
 from tradingx.stats import lo_adjusted_sharpe_ratio
 
@@ -37,6 +38,7 @@ def run_daily_bar_backtest(
     *,
     target_weights: pd.DataFrame,
     initial_weights: dict[str, float] | None = None,
+    cost_model_config: CostModelConfig | None = None,
 ) -> DailyBarBacktestResult:
     _validate_inputs(bars_by_symbol, target_weights)
 
@@ -64,6 +66,19 @@ def run_daily_bar_backtest(
                     (current_open / previous_close) - 1.0
                 )
             daily_growth *= 1.0 + overnight_return
+            if cost_model_config is not None:
+                trade_cost_fraction = _trade_cost_fraction(
+                    bars_by_symbol=bars_by_symbol,
+                    current_weights=current_weights,
+                    target_weights={
+                        symbol: float(target_weights.iloc[bar_offset - 1][symbol])
+                        for symbol in symbols
+                    },
+                    bar_offset=bar_offset,
+                    equity=equity * daily_growth,
+                    cost_model_config=cost_model_config,
+                )
+                daily_growth *= 1.0 - trade_cost_fraction
             current_weights = {
                 symbol: float(target_weights.iloc[bar_offset - 1][symbol])
                 for symbol in symbols
@@ -215,6 +230,62 @@ def _validate_inputs(
             raise ValueError("All bar frames must share the target_weights index.")
 
 
+def _trade_cost_fraction(
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    current_weights: dict[str, float],
+    target_weights: dict[str, float],
+    bar_offset: int,
+    equity: float,
+    cost_model_config: CostModelConfig,
+) -> float:
+    if equity <= 0.0:
+        return 0.0
+
+    total_cost = 0.0
+    for symbol, current_weight in current_weights.items():
+        target_weight = target_weights[symbol]
+        delta_weight = target_weight - current_weight
+        if delta_weight == 0.0:
+            continue
+
+        symbol_bars = bars_by_symbol[symbol]
+        current_bar = symbol_bars.iloc[bar_offset]
+        fill_price = float(current_bar["open"])
+        trade_notional = abs(delta_weight) * equity
+        quantity = trade_notional / fill_price if fill_price > 0.0 else 0.0
+        bid_price = (
+            float(current_bar["bid"]) if "bid" in symbol_bars.columns else None
+        )
+        ask_price = (
+            float(current_bar["ask"]) if "ask" in symbol_bars.columns else None
+        )
+        sigma_20d_bps = _sigma_20d_bps(symbol_bars["close"], bar_offset)
+        daily_dollar_volume = float(current_bar["volume"]) * fill_price
+        trade_costs = estimate_trade_costs(
+            side="buy" if delta_weight > 0.0 else "sell",
+            quantity=quantity,
+            fill_price=fill_price,
+            bid_price=bid_price,
+            ask_price=ask_price,
+            daily_dollar_volume=daily_dollar_volume,
+            sigma_20d_bps=sigma_20d_bps,
+            config=cost_model_config,
+        )
+        total_cost += trade_costs.total
+    return total_cost / equity
+
+
+def _sigma_20d_bps(close_series: pd.Series, bar_offset: int) -> float:
+    if bar_offset <= 0:
+        return 0.0
+    close_returns = close_series.astype(float).pct_change()
+    window = close_returns.iloc[max(0, bar_offset - 20) : bar_offset]
+    if len(window.dropna()) < 2:
+        return 0.0
+    return float(window.std(ddof=1) * 10_000.0)
+
+
 def _total_return(returns: list[float]) -> float:
     equity = 1.0
     for value in returns:
@@ -241,6 +312,7 @@ def _max_drawdown(returns: list[float]) -> float:
 
 
 __all__ = (
+    "CostModelConfig",
     "DailyBarBacktestResult",
     "REQUIRED_OHLCV_COLUMNS",
     "TRADING_DAYS_PER_YEAR",

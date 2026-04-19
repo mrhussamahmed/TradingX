@@ -26,6 +26,17 @@ def _ohlcv_frame(*, opens: list[float], closes: list[float]) -> pd.DataFrame:
     )
 
 
+def _quote_enriched_ohlcv_frame(
+    *,
+    opens: list[float],
+    closes: list[float],
+) -> pd.DataFrame:
+    frame = _ohlcv_frame(opens=opens, closes=closes)
+    frame["bid"] = frame["open"] - 0.02
+    frame["ask"] = frame["open"] + 0.02
+    return frame
+
+
 def _risk_free_cache(path: Path) -> Path:
     pd.DataFrame(
         {
@@ -117,3 +128,25 @@ def test_smoke_summary_reports_zero_active_metrics_for_buy_and_hold_vs_benchmark
     )
     assert summary["active"]["excess_cagr"] == pytest.approx(0.0)
     assert summary["active"]["excess_sharpe"] == pytest.approx(0.0)
+
+
+def test_daily_bar_backtest_applies_costs_on_rebalance_trades() -> None:
+    module = importlib.import_module("tradingx.backtest")
+    bars = _quote_enriched_ohlcv_frame(
+        opens=[100.0, 100.0, 100.0],
+        closes=[100.0, 100.0, 100.0],
+    )
+    target_weights = pd.DataFrame(
+        {"SPY": [1.0, 0.0, 0.0]},
+        index=bars.index,
+        dtype=float,
+    )
+
+    result = module.run_daily_bar_backtest(
+        {"SPY": bars},
+        target_weights=target_weights,
+        cost_model_config=module.CostModelConfig(),
+    )
+
+    assert result.portfolio_returns.iloc[1] < 0.0
+    assert result.portfolio_returns.iloc[2] < 0.0
