@@ -5,9 +5,9 @@ from decimal import Decimal
 
 from tradingx.opportunity import OpportunitySelector
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     HistoricalWarmupRecord,
     MarketSnapshot,
-    ModelWeightSnapshot,
     PortfolioState,
     StrategyActivationRecord,
 )
@@ -72,7 +72,7 @@ def test_opportunity_selector_ranks_and_selects_best_candidate() -> None:
         activated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-1",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -163,7 +163,7 @@ def test_opportunity_selector_returns_no_trade_when_threshold_is_not_met() -> No
         activated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
         notes="Strict threshold.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-2",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -246,7 +246,7 @@ def test_opportunity_selector_uses_benchmark_symbol_key_for_regime_weight() -> N
         activated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-3",
         strategy_id="baseline-long-only-v1",
         status="approved",

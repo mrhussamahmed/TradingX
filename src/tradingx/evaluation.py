@@ -7,9 +7,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from tradingx.data import close_to_close_returns
 from tradingx.stats import lo_adjusted_sharpe_ratio
-from tradingx.strategy import build_candidate_return_series
 from tradingx.types import EvaluationEvidencePack, ScalarValue, StrategyCandidate
 
 LOGGER = logging.getLogger(__name__)
@@ -168,24 +166,4 @@ def evaluate_candidate(
     )
 
 
-class NautilusReplayEvaluationAdapter:
-    def evaluate_price_history(
-        self,
-        candidate: StrategyCandidate,
-        *,
-        benchmark_closes: Sequence[Decimal],
-        window_start_utc: datetime,
-        window_end_utc: datetime,
-    ) -> EvaluationEvidencePack:
-        candidate_returns = build_candidate_return_series(candidate, benchmark_closes)
-        benchmark_returns = close_to_close_returns(benchmark_closes)
-        return evaluate_candidate(
-            candidate,
-            candidate_returns=candidate_returns,
-            benchmark_returns=benchmark_returns,
-            window_start_utc=window_start_utc,
-            window_end_utc=window_end_utc,
-        )
-
-
-__all__ = ("NautilusReplayEvaluationAdapter", "evaluate_candidate")
+__all__ = ("evaluate_candidate",)

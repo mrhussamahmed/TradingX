@@ -10,6 +10,7 @@ from tradingx.config import TradingConfig
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -25,8 +26,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OperatorTimelineEvent,
     OpportunityScore,
     OpportunitySelectionRecord,
@@ -37,6 +36,10 @@ from tradingx.types import (
     ScalarValue,
     StrategyActivationRecord,
     WebServiceState,
+)
+from tradingx.weights import (
+    ApprovedWeightSnapshotNotFoundError,
+    ApprovedWeightSnapshotStore,
 )
 
 
@@ -104,6 +107,9 @@ class LocalWebReadModel:
         self._scheduler_manager = scheduler_manager or _IdleSchedulerManager()
         artifact_root = config.runtime.artifact_root
         self._operator_platform_root = artifact_root / "operator_platform"
+        self._approved_snapshot_store = ApprovedWeightSnapshotStore(
+            repo_root / "config" / "strategy" / "weights"
+        )
 
     def build_dashboard_snapshot(self) -> DashboardSnapshot:
         paper_report = self._paper_store.build_operator_evidence_report()
@@ -299,21 +305,16 @@ class LocalWebReadModel:
             return None
         return self._activation_from_payload(payloads[-1])
 
-    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None:
-        payloads = self._operator_platform_store().list_artifact_payloads(
-            "model_weight_snapshots"
-        )
-        if not payloads:
+    def get_latest_model_weight_snapshot(self) -> ApprovedWeightSnapshot | None:
+        activation = self.get_latest_strategy_activation()
+        if activation is None:
             return None
-        return self._model_snapshot_from_payload(payloads[-1])
-
-    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None:
-        payloads = self._operator_platform_store().list_artifact_payloads(
-            "model_weight_proposals"
-        )
-        if not payloads:
+        try:
+            return self._approved_snapshot_store.load_by_strategy_id(
+                activation.strategy_id
+            )
+        except ApprovedWeightSnapshotNotFoundError:
             return None
-        return self._model_proposal_from_payload(payloads[-1])
 
     def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None:
         payloads = self._operator_platform_store().list_artifact_payloads(
@@ -753,50 +754,6 @@ class LocalWebReadModel:
                 str(payload.get("activated_at_utc", ""))
             ),
             notes=str(payload.get("notes", "")),
-        )
-
-    def _model_snapshot_from_payload(
-        self,
-        payload: dict[str, object],
-    ) -> ModelWeightSnapshot:
-        return ModelWeightSnapshot(
-            snapshot_id=str(payload.get("snapshot_id", "")),
-            strategy_id=str(payload.get("strategy_id", "")),
-            status=str(payload.get("status", "")),
-            generated_at_utc=self._parse_datetime(
-                str(payload.get("generated_at_utc", ""))
-            ),
-            minimum_supporting_trades=int(
-                str(payload.get("minimum_supporting_trades", 0))
-            ),
-            weights={
-                str(key): Decimal(str(value))
-                for key, value in self._ensure_mapping(
-                    payload.get("weights", {})
-                ).items()
-            },
-        )
-
-    def _model_proposal_from_payload(
-        self,
-        payload: dict[str, object],
-    ) -> ModelWeightProposal:
-        return ModelWeightProposal(
-            proposal_id=str(payload.get("proposal_id", "")),
-            generated_at_utc=self._parse_datetime(
-                str(payload.get("generated_at_utc", ""))
-            ),
-            strategy_id=str(payload.get("strategy_id", "")),
-            supporting_trade_count=int(str(payload.get("supporting_trade_count", 0))),
-            baseline_snapshot_id=str(payload.get("baseline_snapshot_id", "")),
-            candidate_snapshot=self._model_snapshot_from_payload(
-                self._ensure_mapping(payload.get("candidate_snapshot", {}))
-            ),
-            improvement_score=Decimal(str(payload.get("improvement_score", "0"))),
-            statistically_significant=bool(
-                payload.get("statistically_significant", False)
-            ),
-            summary=str(payload.get("summary", "")),
         )
 
     def _opportunity_selection_from_payload(

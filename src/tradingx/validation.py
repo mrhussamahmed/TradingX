@@ -9,9 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from tradingx.data import close_to_close_returns
 from tradingx.evaluation import TRADING_DAYS_PER_YEAR, evaluate_candidate
-from tradingx.strategy import build_candidate_return_series
 from tradingx.types import (
     BenchmarkCloseSeries,
     StrategyCandidate,
@@ -396,70 +394,9 @@ def build_gate_report(
     window_end_utc: datetime,
     benchmark_series_is_adjusted: bool,
 ) -> ValidationReport:
-    benchmark_returns = close_to_close_returns(benchmark_closes)
-    candidate_results: list[ValidationCandidateResult] = []
-    for candidate in candidates:
-        candidate_returns = build_candidate_return_series(candidate, benchmark_closes)
-        if gate_id == "1":
-            candidate_result = _build_gate1_candidate_result(
-                candidate=candidate,
-                candidate_returns=candidate_returns,
-                benchmark_returns=benchmark_returns,
-                window_start_utc=window_start_utc,
-                window_end_utc=window_end_utc,
-                benchmark_series_is_adjusted=benchmark_series_is_adjusted,
-            )
-        elif gate_id == "2":
-            candidate_result = _build_gate2_candidate_result(
-                candidate=candidate,
-                candidate_returns=candidate_returns,
-                benchmark_returns=benchmark_returns,
-                window_start_utc=window_start_utc,
-                window_end_utc=window_end_utc,
-            )
-        else:
-            raise ValueError(f"Unsupported gate id: {gate_id}")
-        candidate_results.append(candidate_result)
-
-    if any(result.status == "pass" for result in candidate_results):
-        status = "pass"
-    elif any(result.status == "pending" for result in candidate_results):
-        status = "pending"
-    else:
-        status = "fail"
-
-    report_id = f"gate-{gate_id}-{window_end_utc.strftime('%Y%m%dT%H%M%SZ')}"
-    passing_candidates = ", ".join(
-        result.candidate_id for result in candidate_results if result.status == "pass"
-    )
-    return ValidationReport(
-        report_id=report_id,
-        gate_id=gate_id,
-        generated_at_utc=window_end_utc,
-        status=status,
-        benchmark_symbol="SPY",
-        window_start_utc=window_start_utc,
-        window_end_utc=window_end_utc,
-        candidate_results=tuple(candidate_results),
-        summary=(
-            f"Gate {gate_id} passed for {passing_candidates}."
-            if status == "pass"
-            else (
-                f"Gate {gate_id} remains pending due to incomplete evidence."
-                if status == "pending"
-                else f"Gate {gate_id} failed for every mandatory candidate."
-            )
-        ),
-        assumptions=(
-            "Mandatory candidates are evaluated against the same benchmark "
-            "return window.",
-            "Gate 2 parameter perturbation uses deterministic return-profile "
-            "stress until a richer strategy-parameter sweep exists.",
-        ),
-        evidence_refs=tuple(
-            f"evaluation_evidence/{result.evidence_pack_id}.json"
-            for result in candidate_results
-        ),
+    raise RuntimeError(
+        "Gate report generation is disabled until the real backtest engine lands; "
+        "the fake candidate return generator was deleted on 2026-04-19."
     )
 
 

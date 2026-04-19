@@ -25,10 +25,10 @@ from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.strategy import DeterministicBaselineStrategy
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     HistoricalWarmupRecord,
     MarketSnapshot,
-    ModelWeightSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     OrderRecord,
@@ -37,6 +37,7 @@ from tradingx.types import (
     StrategyActivationRecord,
     WebActionResult,
 )
+from tradingx.weights import ApprovedWeightSnapshotStore
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -168,10 +169,15 @@ class _WarmupService:
 
 
 class _ActivationGateway:
+    def __init__(self) -> None:
+        self._snapshot_store = ApprovedWeightSnapshotStore(
+            Path("config/strategy/weights")
+        )
+
     def load_or_create_active_records(
         self,
         symbols: tuple[str, ...],
-    ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]:
+    ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]:
         return (
             StrategyActivationRecord(
                 activation_id="activation-drill",
@@ -184,22 +190,14 @@ class _ActivationGateway:
                 activated_at_utc=datetime(2026, 4, 20, 11, 0, tzinfo=UTC),
                 notes="Week 1 drill activation.",
             ),
-            ModelWeightSnapshot(
-                snapshot_id="snapshot-drill",
-                strategy_id="baseline-long-only-v1",
-                status="approved",
-                generated_at_utc=datetime(2026, 4, 20, 11, 5, tzinfo=UTC),
-                minimum_supporting_trades=5,
-                weights={"signal": Decimal("1.0")},
-            ),
+            self._snapshot_store.load_by_strategy_id("baseline-long-only-v1"),
         )
 
     def get_latest_activation(self) -> StrategyActivationRecord | None:
         return None
 
-    def get_latest_snapshot(self, *, strategy_id: str) -> ModelWeightSnapshot | None:
-        del strategy_id
-        return None
+    def get_latest_snapshot(self, *, strategy_id: str) -> ApprovedWeightSnapshot | None:
+        return self._snapshot_store.load_by_strategy_id(strategy_id)
 
 
 class _OpportunityPlanner:
@@ -209,7 +207,7 @@ class _OpportunityPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord:
         del portfolio_state, activation, model_snapshot, warmup

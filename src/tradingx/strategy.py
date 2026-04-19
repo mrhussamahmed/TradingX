@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tradingx.data import close_to_close_returns
 from tradingx.types import (
     MarketSnapshot,
     PortfolioState,
@@ -73,20 +72,6 @@ def build_mandatory_candidate_registry(
             status="under_evaluation",
         ),
     )
-
-
-def build_candidate_return_series(
-    candidate: StrategyCandidate,
-    benchmark_closes: Sequence[Decimal],
-) -> tuple[Decimal, ...]:
-    raw_returns = close_to_close_returns(benchmark_closes)
-    if candidate.family == "trend_following":
-        return tuple(max(Decimal("0"), value) for value in raw_returns)
-    if candidate.family == "vol_target":
-        return tuple(value * Decimal("0.80") for value in raw_returns)
-    if candidate.family == "mean_reversion":
-        return tuple(value * Decimal("0.60") for value in raw_returns)
-    raise ValueError(f"Unsupported candidate family: {candidate.family}")
 
 
 @dataclass(frozen=True)
@@ -219,6 +204,5 @@ class DeterministicBaselineStrategy:
 __all__ = (
     "DEFAULT_CANDIDATE_ID",
     "DeterministicBaselineStrategy",
-    "build_candidate_return_series",
     "build_mandatory_candidate_registry",
 )

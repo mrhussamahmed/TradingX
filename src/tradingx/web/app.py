@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from tradingx.config import TradingConfig
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -27,8 +28,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OpportunitySelectionRecord,
     ReplaySession,
     ReplaySlippageSummary,
@@ -57,9 +56,7 @@ class ReadModelProtocol(Protocol):
 
     def get_latest_strategy_activation(self) -> StrategyActivationRecord | None: ...
 
-    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None: ...
-
-    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None: ...
+    def get_latest_model_weight_snapshot(self) -> ApprovedWeightSnapshot | None: ...
 
     def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None: ...
 
@@ -127,8 +124,6 @@ class ActionRunnerProtocol(Protocol):
     ) -> WebActionResult: ...
 
     def stop_runtime_host(self) -> WebActionResult: ...
-
-    def generate_learning_proposal(self) -> WebActionResult: ...
 
     def start_market_scheduler(
         self,
@@ -434,13 +429,6 @@ def create_app(
             content=_serialize(selection) if selection is not None else None
         )
 
-    @app.get("/api/runtime-host/proposal/latest")
-    def get_runtime_host_proposal() -> JSONResponse:
-        proposal = read_model.get_latest_model_weight_proposal()
-        return JSONResponse(
-            content=_serialize(proposal) if proposal is not None else None
-        )
-
     @app.get("/api/config/summary")
     def get_config_summary() -> JSONResponse:
         return JSONResponse(
@@ -491,13 +479,6 @@ def create_app(
     def post_runtime_host_stop() -> JSONResponse:
         _ensure_write_mode(config)
         return JSONResponse(content=_serialize(action_runner.stop_runtime_host()))
-
-    @app.post("/api/actions/runtime-host/learn")
-    def post_runtime_host_learn() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(action_runner.generate_learning_proposal())
-        )
 
     @app.post("/api/actions/scheduler/start")
     def post_scheduler_start(payload: SchedulerStartRequest) -> JSONResponse:

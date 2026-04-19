@@ -7,8 +7,8 @@ from decimal import Decimal
 from tradingx.config import TradingConfig
 from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     HistoricalWarmupRecord,
-    ModelWeightSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     PortfolioState,
@@ -104,7 +104,7 @@ class FakeActivationGateway:
     def __init__(
         self,
         activation: StrategyActivationRecord,
-        snapshot: ModelWeightSnapshot,
+        snapshot: ApprovedWeightSnapshot,
     ) -> None:
         self._activation = activation
         self._snapshot = snapshot
@@ -112,13 +112,13 @@ class FakeActivationGateway:
     def load_or_create_active_records(
         self,
         symbols: tuple[str, ...],
-    ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]:
+    ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]:
         return self._activation, self._snapshot
 
     def get_latest_activation(self) -> StrategyActivationRecord | None:
         return self._activation
 
-    def get_latest_snapshot(self, *, strategy_id: str) -> ModelWeightSnapshot | None:
+    def get_latest_snapshot(self, *, strategy_id: str) -> ApprovedWeightSnapshot | None:
         del strategy_id
         return self._snapshot
 
@@ -142,7 +142,7 @@ class FakeOpportunityPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord:
         return OpportunitySelectionRecord(
@@ -194,7 +194,7 @@ def test_runtime_host_bootstraps_to_trading_ready_and_starts_service(tmp_path) -
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-1",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -264,7 +264,7 @@ def test_runtime_host_halts_when_warmup_is_incomplete(tmp_path) -> None:
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-2",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -331,7 +331,7 @@ def test_runtime_host_halts_when_service_manager_rejects_start(tmp_path) -> None
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-3",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -399,7 +399,7 @@ def test_runtime_host_enters_recovery_required_when_startup_reconciliation_fails
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-3",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -479,7 +479,7 @@ def test_runtime_host_clearance_request_reconciles_back_to_nominal(tmp_path) -> 
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-4",
         strategy_id="baseline-long-only-v1",
         status="approved",

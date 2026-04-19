@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from tradingx.config import TradingConfig
-from tradingx.learning import PostTradeLearningService
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     HistoricalWarmupRecord,
-    ModelWeightSnapshot,
     OpportunitySelectionRecord,
     PortfolioState,
     ReconciliationSnapshot,
@@ -52,13 +51,13 @@ class ActivationGatewayProtocol(Protocol):
     def load_or_create_active_records(
         self,
         symbols: tuple[str, ...],
-    ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]: ...
+    ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]: ...
 
     def get_latest_activation(self) -> StrategyActivationRecord | None: ...
 
     def get_latest_snapshot(
         self, *, strategy_id: str
-    ) -> ModelWeightSnapshot | None: ...
+    ) -> ApprovedWeightSnapshot | None: ...
 
 
 class OpportunityPlannerProtocol(Protocol):
@@ -68,7 +67,7 @@ class OpportunityPlannerProtocol(Protocol):
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord: ...
 
@@ -101,7 +100,6 @@ class LocalRuntimeHostManager:
         opportunity_planner: OpportunityPlannerProtocol,
         portfolio_gateway: PortfolioGatewayProtocol,
         reconciliation_gateway: ReconciliationGatewayProtocol | None = None,
-        learning_service: PostTradeLearningService | None = None,
         paper_store_root: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
@@ -116,7 +114,6 @@ class LocalRuntimeHostManager:
         self._opportunity_planner = opportunity_planner
         self._portfolio_gateway = portfolio_gateway
         self._reconciliation_gateway = reconciliation_gateway
-        self._learning_service = learning_service or PostTradeLearningService()
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -231,52 +228,6 @@ class LocalRuntimeHostManager:
             status=result.status,
             message="Runtime host stop requested.",
             evidence_refs=result.evidence_refs,
-        )
-
-    def generate_learning_proposal(self) -> WebActionResult:
-        activation = self._activation_gateway.get_latest_activation()
-        if activation is None:
-            return WebActionResult(
-                action_id=f"action-{uuid.uuid4()}",
-                action_type="runtime_host_learn",
-                status="blocked",
-                message="No active strategy activation record is available.",
-                evidence_refs=(),
-            )
-        snapshot = self._activation_gateway.get_latest_snapshot(
-            strategy_id=activation.strategy_id
-        )
-        if snapshot is None:
-            return WebActionResult(
-                action_id=f"action-{uuid.uuid4()}",
-                action_type="runtime_host_learn",
-                status="blocked",
-                message="No approved model-weight snapshot is available.",
-                evidence_refs=(),
-            )
-        proposal = self._learning_service.generate_from_artifact_store(
-            paper_store=self._paper_store,
-            activation=activation,
-            baseline_snapshot=snapshot,
-            minimum_supporting_trades=snapshot.minimum_supporting_trades,
-        )
-        if proposal is None:
-            return WebActionResult(
-                action_id=f"action-{uuid.uuid4()}",
-                action_type="runtime_host_learn",
-                status="completed",
-                message=(
-                    "No statistically significant learning proposal is available yet."
-                ),
-                evidence_refs=(),
-            )
-        proposal_path = self._operator_store.write_model_weight_proposal(proposal)
-        return WebActionResult(
-            action_id=f"action-{uuid.uuid4()}",
-            action_type="runtime_host_learn",
-            status="completed",
-            message="Learning proposal generated.",
-            evidence_refs=(str(proposal_path),),
         )
 
     def _bootstrap_and_start(

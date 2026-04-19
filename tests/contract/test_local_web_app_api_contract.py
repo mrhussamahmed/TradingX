@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from tradingx.config import TradingConfig
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -19,8 +20,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     ReplaySession,
@@ -262,31 +261,15 @@ class FakeReadModel:
             notes="Baseline activation.",
         )
 
-    def get_latest_model_weight_snapshot(self) -> ModelWeightSnapshot | None:
+    def get_latest_model_weight_snapshot(self) -> ApprovedWeightSnapshot | None:
         timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
-        return ModelWeightSnapshot(
+        return ApprovedWeightSnapshot(
             snapshot_id="snapshot-1",
             strategy_id="baseline-long-only-v1",
             status="approved",
             generated_at_utc=timestamp,
             minimum_supporting_trades=5,
             weights={"signal": "1.0"},
-        )
-
-    def get_latest_model_weight_proposal(self) -> ModelWeightProposal | None:
-        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
-        snapshot = self.get_latest_model_weight_snapshot()
-        assert snapshot is not None
-        return ModelWeightProposal(
-            proposal_id="proposal-1",
-            generated_at_utc=timestamp,
-            strategy_id="baseline-long-only-v1",
-            supporting_trade_count=12,
-            baseline_snapshot_id="snapshot-1",
-            candidate_snapshot=snapshot,
-            improvement_score="0.15",
-            statistically_significant=True,
-            summary="Increase signal emphasis.",
         )
 
     def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None:
@@ -463,17 +446,6 @@ class FakeActionRunner:
             status="accepted",
             message="Runtime host stop requested.",
             evidence_refs=(),
-        )
-
-    def generate_learning_proposal(self) -> WebActionResult:
-        return WebActionResult(
-            action_id="action-runtime-learn",
-            action_type="runtime_host_learn",
-            status="completed",
-            message="Learning proposal generated.",
-            evidence_refs=(
-                "artifacts/operator_platform/model_weight_proposals/proposal-1.json",
-            ),
         )
 
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult:
@@ -685,7 +657,6 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     runtime_activation = client.get("/api/runtime-host/activation/latest")
     runtime_model = client.get("/api/runtime-host/model/latest")
     runtime_selection = client.get("/api/runtime-host/selection/latest")
-    runtime_proposal = client.get("/api/runtime-host/proposal/latest")
 
     assert overview.status_code == 200
     assert overview.json()["service_status"]["status"] == "running"
@@ -732,8 +703,6 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert runtime_model.json()["snapshot_id"] == "snapshot-1"
     assert runtime_selection.status_code == 200
     assert runtime_selection.json()["selected_symbol"] == "SPY"
-    assert runtime_proposal.status_code == 200
-    assert runtime_proposal.json()["proposal_id"] == "proposal-1"
 
 
 def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:
@@ -808,7 +777,6 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
         },
     )
     runtime_stop = client.post("/api/actions/runtime-host/stop")
-    runtime_learn = client.post("/api/actions/runtime-host/learn")
     recover = client.post(
         "/api/actions/recover",
         json={"symbol": "SPY"},
@@ -875,7 +843,6 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     assert runtime_start.status_code == 200
     assert runtime_start.json()["action_type"] == "runtime_host_start"
     assert runtime_stop.status_code == 200
-    assert runtime_learn.status_code == 200
     assert recover.status_code == 200
     assert benchmark.status_code == 200
     assert gate.status_code == 200

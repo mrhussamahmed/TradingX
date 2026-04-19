@@ -87,8 +87,6 @@ class RuntimeHostManagerProtocol(Protocol):
 
     def stop(self) -> WebActionResult: ...
 
-    def generate_learning_proposal(self) -> WebActionResult: ...
-
 
 class LocalServiceManager:
     def __init__(
@@ -453,17 +451,6 @@ class LocalWebActionRunner:
                 evidence_refs=(),
             )
         return self._runtime_host_manager.stop()
-
-    def generate_learning_proposal(self) -> WebActionResult:
-        if self._runtime_host_manager is None:
-            return WebActionResult(
-                action_id=f"action-{uuid.uuid4()}",
-                action_type="runtime_host_learn",
-                status="blocked",
-                message="Runtime host manager is unavailable.",
-                evidence_refs=(),
-            )
-        return self._runtime_host_manager.generate_learning_proposal()
 
     def start_market_scheduler(
         self,

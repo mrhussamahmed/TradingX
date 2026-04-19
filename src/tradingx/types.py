@@ -486,26 +486,16 @@ class StrategyActivationRecord:
 
 
 @dataclass(frozen=True)
-class ModelWeightSnapshot:
+class ApprovedWeightSnapshot:
+    # semantics: approved weights are operator-reviewed offline configuration
+    # artifacts loaded from committed YAML under config/strategy/weights/.
+    # Runtime code must not construct them from observations or learning output.
     snapshot_id: str
     strategy_id: str
     status: str
     generated_at_utc: datetime
     minimum_supporting_trades: int
     weights: dict[str, Decimal]
-
-
-@dataclass(frozen=True)
-class ModelWeightProposal:
-    proposal_id: str
-    generated_at_utc: datetime
-    strategy_id: str
-    supporting_trade_count: int
-    baseline_snapshot_id: str
-    candidate_snapshot: ModelWeightSnapshot
-    improvement_score: Decimal
-    statistically_significant: bool
-    summary: str
 
 
 @dataclass(frozen=True)
@@ -743,8 +733,7 @@ __all__ = (
     "MarketDaySchedulerState",
     "MarketSessionRecord",
     "MarketSnapshot",
-    "ModelWeightProposal",
-    "ModelWeightSnapshot",
+    "ApprovedWeightSnapshot",
     "OpportunityScore",
     "OpportunitySelectionRecord",
     "OperatorAlert",

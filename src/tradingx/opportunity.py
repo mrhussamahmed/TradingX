@@ -10,9 +10,9 @@ from tradingx.historical import HistoricalWarmupService
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.quant import ADV_FLOOR, PRICE_FLOOR, liquidity_weight, spread_bps
 from tradingx.types import (
+    ApprovedWeightSnapshot,
     HistoricalWarmupRecord,
     MarketSnapshot,
-    ModelWeightSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     PortfolioState,
@@ -33,7 +33,7 @@ class OpportunitySelector:
         market_snapshots: dict[str, MarketSnapshot],
         warmup: HistoricalWarmupRecord,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
     ) -> OpportunitySelectionRecord:
         benchmark_summary = warmup.return_summary.get(
             warmup.benchmark_symbol,
@@ -167,7 +167,7 @@ class OpportunitySelector:
         market_snapshots: dict[str, MarketSnapshot],
         warmup: HistoricalWarmupRecord,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
     ) -> OpportunitySelectionRecord:
         return self.select(
             symbols=symbols,
@@ -250,7 +250,7 @@ class RuntimeOpportunityPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord:
         market_snapshots = {

@@ -26,7 +26,6 @@ from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.journal import SqliteOmsJournal
-from tradingx.learning import PostTradeLearningService
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
@@ -456,16 +455,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 latest_selection_id=selection.selection_id,
             )
             runtime_state_path = operator_store.write_runtime_host_state(runtime_state)
-            learning_proposal = PostTradeLearningService().generate_from_artifact_store(
-                paper_store=FilesystemArtifactStore(
-                    config.runtime.artifact_root / "paper_loop"
-                ),
-                activation=activation,
-                baseline_snapshot=snapshot,
-                minimum_supporting_trades=snapshot.minimum_supporting_trades,
-            )
-            if learning_proposal is not None:
-                operator_store.write_model_weight_proposal(learning_proposal)
             runtime_service_result: Any | None = None
             if warmup_complete:
                 runtime_service_result = build_runtime_host_paper_service(config).run(
@@ -487,7 +476,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "model_snapshot": snapshot,
                     "selection": selection,
                     "selection_path": selection_path,
-                    "learning_proposal": learning_proposal,
                     "service_result": runtime_service_result,
                 },
             )

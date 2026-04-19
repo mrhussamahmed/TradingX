@@ -8,6 +8,7 @@ from decimal import Decimal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     AlertDrillRecord,
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     ClosedTradeRecord,
     EvaluationEvidencePack,
@@ -17,8 +18,6 @@ from tradingx.types import (
     GateAssessment,
     HistoricalWarmupRecord,
     MarketAutomationRunRecord,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OperatorAlert,
     OpportunityScore,
     OpportunitySelectionRecord,
@@ -94,7 +93,7 @@ def test_filesystem_artifact_store_writes_local_trading_appliance_artifacts(
             notes="Baseline activation.",
         )
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-1",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -103,19 +102,6 @@ def test_filesystem_artifact_store_writes_local_trading_appliance_artifacts(
         weights={"signal": Decimal("1.0")},
     )
     snapshot_path = store.write_model_weight_snapshot(snapshot)
-    proposal_path = store.write_model_weight_proposal(
-        ModelWeightProposal(
-            proposal_id="proposal-1",
-            generated_at_utc=timestamp,
-            strategy_id="baseline-long-only-v1",
-            supporting_trade_count=12,
-            baseline_snapshot_id="snapshot-1",
-            candidate_snapshot=snapshot,
-            improvement_score=Decimal("0.15"),
-            statistically_significant=True,
-            summary="Increase signal emphasis.",
-        )
-    )
     selection_path = store.write_opportunity_selection_record(
         OpportunitySelectionRecord(
             selection_id="selection-1",
@@ -149,7 +135,6 @@ def test_filesystem_artifact_store_writes_local_trading_appliance_artifacts(
     assert warmup_path == tmp_path / "historical_warmups" / "warmup-1.json"
     assert activation_path == tmp_path / "strategy_activations" / "activation-1.json"
     assert snapshot_path == tmp_path / "model_weight_snapshots" / "snapshot-1.json"
-    assert proposal_path == tmp_path / "model_weight_proposals" / "proposal-1.json"
     assert selection_path == tmp_path / "opportunity_selections" / "selection-1.json"
 
 

@@ -5,14 +5,43 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.controller import StrategyEvaluationController
-from tradingx.evaluation import NautilusReplayEvaluationAdapter
+from tradingx.evaluation import evaluate_candidate
 from tradingx.persistence import FilesystemArtifactStore
+
+
+class FakeEvaluationAdapter:
+    def evaluate_price_history(
+        self,
+        candidate,
+        *,
+        benchmark_closes,
+        window_start_utc,
+        window_end_utc,
+    ):
+        del benchmark_closes
+        return evaluate_candidate(
+            candidate,
+            candidate_returns=(
+                Decimal("0.010"),
+                Decimal("0.011"),
+                Decimal("-0.002"),
+                Decimal("0.009"),
+            ),
+            benchmark_returns=(
+                Decimal("0.004"),
+                Decimal("0.005"),
+                Decimal("-0.001"),
+                Decimal("0.003"),
+            ),
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+        )
 
 
 def test_strategy_evaluation_pipeline_persists_evidence_packs(tmp_path) -> None:
     store = FilesystemArtifactStore(tmp_path)
     controller = StrategyEvaluationController(
-        adapter=NautilusReplayEvaluationAdapter(),
+        adapter=FakeEvaluationAdapter(),
         artifacts=store,
     )
 

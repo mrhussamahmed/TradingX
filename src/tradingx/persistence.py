@@ -11,6 +11,7 @@ from typing import Any
 
 from tradingx.types import (
     AlertDrillRecord,
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     ClosedTradeRecord,
     DailySessionDigest,
@@ -23,8 +24,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketDayScheduleRecord,
     MarketSessionRecord,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OperatorAlert,
     OpportunitySelectionRecord,
     OrderRecord,
@@ -123,18 +122,11 @@ class FilesystemArtifactStore:
             record,
         )
 
-    def write_model_weight_snapshot(self, snapshot: ModelWeightSnapshot) -> Path:
+    def write_model_weight_snapshot(self, snapshot: ApprovedWeightSnapshot) -> Path:
         return self._write_json(
             "model_weight_snapshots",
             f"{snapshot.snapshot_id}.json",
             snapshot,
-        )
-
-    def write_model_weight_proposal(self, proposal: ModelWeightProposal) -> Path:
-        return self._write_json(
-            "model_weight_proposals",
-            f"{proposal.proposal_id}.json",
-            proposal,
         )
 
     def write_opportunity_selection_record(
@@ -398,7 +390,6 @@ class FilesystemArtifactStore:
             "historical_warmups",
             "strategy_activations",
             "model_weight_snapshots",
-            "model_weight_proposals",
             "opportunity_selections",
             "market_sessions",
             "daily_digests",

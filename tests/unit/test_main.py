@@ -16,6 +16,7 @@ from tradingx.snapshots import (
 )
 from tradingx.types import (
     AccountSnapshot,
+    ApprovedWeightSnapshot,
     ExecutionLifecycleRecord,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
@@ -24,7 +25,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketDaySchedulerRunResult,
-    ModelWeightSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     OrderRecord,
@@ -357,7 +357,7 @@ class FakeRuntimeActivationGateway:
     def __init__(
         self,
         activation: StrategyActivationRecord,
-        snapshot: ModelWeightSnapshot,
+        snapshot: ApprovedWeightSnapshot,
     ) -> None:
         self._activation = activation
         self._snapshot = snapshot
@@ -365,7 +365,7 @@ class FakeRuntimeActivationGateway:
     def load_or_create_active_records(
         self,
         symbols: tuple[str, ...],
-    ) -> tuple[StrategyActivationRecord, ModelWeightSnapshot]:
+    ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]:
         return self._activation, self._snapshot
 
 
@@ -406,7 +406,7 @@ class FakeRuntimeOpportunityPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         activation: StrategyActivationRecord,
-        model_snapshot: ModelWeightSnapshot,
+        model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord:
         return self._selection
@@ -431,11 +431,6 @@ class FakeRuntimeService:
             "max_cycles": max_cycles,
         }
         return {"cycles_completed": max_cycles or 0}
-
-
-class FakeLearningService:
-    def generate_from_artifact_store(self, **kwargs):
-        return None
 
 
 def test_parser_exposes_market_day_scheduler_command() -> None:
@@ -656,7 +651,7 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
         activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-1",
         strategy_id="baseline-long-only-v1",
         status="approved",
@@ -741,12 +736,6 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
         cli,
         "RuntimeOpportunityPlanner",
         lambda market_data_gateway: FakeRuntimeOpportunityPlanner(selection),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        cli,
-        "PostTradeLearningService",
-        lambda: FakeLearningService(),
         raising=False,
     )
     monkeypatch.setattr(

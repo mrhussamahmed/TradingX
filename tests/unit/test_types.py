@@ -7,6 +7,7 @@ from pathlib import Path
 import tradingx.types as types_module
 from tradingx.types import (
     AlertDrillRecord,
+    ApprovedWeightSnapshot,
     BotRuntimeState,
     ClosedTradeRecord,
     CommandCenterSnapshot,
@@ -28,8 +29,6 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketSessionRecord,
-    ModelWeightProposal,
-    ModelWeightSnapshot,
     OperatorAlert,
     OperatorTimelineEvent,
     OpportunityScore,
@@ -325,24 +324,13 @@ def test_local_trading_appliance_types_capture_runtime_activation_and_selection(
         activated_at_utc=timestamp,
         notes="Baseline activation.",
     )
-    snapshot = ModelWeightSnapshot(
+    snapshot = ApprovedWeightSnapshot(
         snapshot_id="snapshot-1",
         strategy_id="baseline-long-only-v1",
         status="approved",
         generated_at_utc=timestamp,
         minimum_supporting_trades=5,
         weights={"signal": Decimal("1.0")},
-    )
-    proposal = ModelWeightProposal(
-        proposal_id="proposal-1",
-        generated_at_utc=timestamp,
-        strategy_id="baseline-long-only-v1",
-        supporting_trade_count=12,
-        baseline_snapshot_id="snapshot-1",
-        candidate_snapshot=snapshot,
-        improvement_score=Decimal("0.15"),
-        statistically_significant=True,
-        summary="Increase signal emphasis.",
     )
     selection = OpportunitySelectionRecord(
         selection_id="selection-1",
@@ -384,7 +372,7 @@ def test_local_trading_appliance_types_capture_runtime_activation_and_selection(
 
     assert warmup.symbols_ready == ("SPY", "QQQ")
     assert activation.deploy_threshold == Decimal("0.5")
-    assert proposal.statistically_significant is True
+    assert snapshot.weights["signal"] == Decimal("1.0")
     assert selection.ranked_opportunities[0].symbol == "SPY"
     assert runtime.status == "trading_ready"
 
