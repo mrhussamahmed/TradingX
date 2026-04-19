@@ -205,9 +205,7 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
     bars_by_symbol = {
         "SPY": _quote_enriched_ohlcv_frame(
             [
-                100.0
-                + (0.4 * float(index))
-                + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
+                100.0 + (0.4 * float(index)) + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
                 for index in range(300)
             ]
         ),

@@ -196,9 +196,7 @@ def build_gate3_readiness_report(
         if str(payload.get("severity", "")) == "critical"
         and str(payload.get("category", "")) in P1_BUG_CATEGORIES
     )
-    slippage_limit = (
-        GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS * GATE3_SLIPPAGE_MULTIPLIER
-    )
+    slippage_limit = GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS * GATE3_SLIPPAGE_MULTIPLIER
     mean_slippage = _mean_absolute_slippage(execution_payloads)
     observed_hit_rate = _hit_rate(closed_trade_payloads)
     expected_hit_rate = reference_metrics.get("hit_rate") or reference_metrics.get(

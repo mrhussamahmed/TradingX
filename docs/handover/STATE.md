@@ -1,11 +1,11 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.7
+version: 1.0.8
 status: active
 created: 2026-04-17
 last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.6
+supersedes: STATE-0001@1.0.7
 superseded_by: null
 author_session: SESS-2026-04-19-028
 ---
@@ -63,6 +63,10 @@ author_session: SESS-2026-04-19-028
 - `ADR-0020` is now a draft proposal for tighter Gate 1 statistical
   criteria built around DSR, PBO, walk-forward, and the settled
   30%-tolerance rule. It is not active yet.
+- The canonical Stage 1 evaluation universe now defaults to
+  `SPY`, `QQQ`, `IWM`, `XLE`, `XLF`, `XLK`, `EEM`, `TLT`, with
+  `mean_reversion` trading the seven non-`SPY` symbols and using `SPY`
+  as benchmark-only.
 - `ARCHMAP-0001` is the canonical one-page runtime/appliance
   architecture pointer for future development and must be updated when
   canonical architecture files or precedence change.
@@ -132,9 +136,15 @@ author_session: SESS-2026-04-19-028
   - real signal primitives for trend, standalone `vol_target_spy`,
     cross-sectional mean reversion, shared volatility features, and
     generic sizing for non-pre-sized strategies
-  - Gate 1 and Gate 2 validation-report generation remains fail-closed
-    until the validation pipeline is rewired from synthetic close
-    series to real OHLCV-driven backtests
+  - Gate 1 and Gate 2 validation-report generation now fetch aligned
+    OHLCV histories, cross-check benchmark-close artifacts against the
+    fetched benchmark bars, and run real next-open backtests through the
+    daily-bar engine
+  - candidate adversarial checks now rerun the same backtest engine for
+    out-of-sample, parameter-sensitivity, regime-behavior, and
+    turnover-aware cost checks
+  - quote-aware cost sensitivity still requires bid/ask history; absent
+    quotes, those stresses fail closed rather than fabricating costs
   - a `prepare-benchmark-closes` workflow that fetches Alpaca daily
     benchmark closes into metadata-rich artifacts and lets `gate-report`
     infer dividend-adjusted status safely

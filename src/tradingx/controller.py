@@ -1365,10 +1365,7 @@ class GateValidationController:
         benchmark_series_is_adjusted: bool,
     ) -> GateReportResult:
         candidates = build_mandatory_candidate_registry(universe)
-        required_symbols = {
-            candidate.benchmark_symbol
-            for candidate in candidates
-        } | {
+        required_symbols = {candidate.benchmark_symbol for candidate in candidates} | {
             symbol for candidate in candidates for symbol in candidate.universe
         }
         bars_by_symbol = {

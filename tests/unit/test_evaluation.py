@@ -18,6 +18,7 @@ from tradingx.evaluation import (
     evaluate_candidate,
 )
 from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.types import ScalarValue
 
 
 def test_evaluation_module_shell_is_importable() -> None:
@@ -80,7 +81,7 @@ class FakeBacktestRunner:
         self,
         candidate,
         *,
-        parameter_overrides: dict[str, object] | None = None,
+        parameter_overrides: dict[str, ScalarValue] | None = None,
         cost_model_config: CostModelConfig | None = None,
     ) -> tuple[Decimal, ...]:
         del candidate
@@ -153,8 +154,9 @@ def test_parameter_sensitivity_check_fails_on_large_sharpe_drop() -> None:
     assert runner.parameter_calls
 
 
-def test_regime_behavior_check_fails_when_a_populated_regime_has_negative_sharpe(
-) -> None:
+def test_regime_behavior_check_fails_when_a_populated_regime_has_negative_sharpe() -> (
+    None
+):
     result = _regime_behavior_check(
         tuple(Decimal("-0.010") for _ in range(1200)),
         benchmark_bars=_benchmark_bars(),

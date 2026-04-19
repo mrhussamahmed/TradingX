@@ -254,12 +254,8 @@ def _trade_cost_fraction(
         fill_price = float(current_bar["open"])
         trade_notional = abs(delta_weight) * equity
         quantity = trade_notional / fill_price if fill_price > 0.0 else 0.0
-        bid_price = (
-            float(current_bar["bid"]) if "bid" in symbol_bars.columns else None
-        )
-        ask_price = (
-            float(current_bar["ask"]) if "ask" in symbol_bars.columns else None
-        )
+        bid_price = float(current_bar["bid"]) if "bid" in symbol_bars.columns else None
+        ask_price = float(current_bar["ask"]) if "ask" in symbol_bars.columns else None
         sigma_20d_bps = _sigma_20d_bps(symbol_bars["close"], bar_offset)
         daily_dollar_volume = float(current_bar["volume"]) * fill_price
         trade_costs = estimate_trade_costs(

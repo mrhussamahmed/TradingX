@@ -38,8 +38,9 @@ def test_estimate_trade_costs_uses_bid_ask_impact_and_sell_fees() -> None:
     )
 
 
-def test_estimate_trade_costs_requires_bid_ask_when_spread_multiplier_is_nonzero(
-) -> None:
+def test_estimate_trade_costs_requires_bid_ask_when_spread_multiplier_is_nonzero() -> (
+    None
+):
     module = importlib.import_module("tradingx.costs")
 
     with pytest.raises(ValueError, match="bid and ask prices are required"):

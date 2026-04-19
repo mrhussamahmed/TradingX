@@ -25,6 +25,7 @@ from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
 from tradingx.sizing import apply_position_sizing
 from tradingx.types import (
     BenchmarkCloseSeries,
+    ScalarValue,
     StrategyCandidate,
     ValidationCandidateResult,
     ValidationCriterionResult,
@@ -274,9 +275,7 @@ def _build_gate2_candidate_result(
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
     cost_stress_passed = "cost_sensitivity_pass" in adversarial_statuses
-    parameter_perturbation_passed = (
-        "parameter_sensitivity_pass" in adversarial_statuses
-    )
+    parameter_perturbation_passed = "parameter_sensitivity_pass" in adversarial_statuses
     walk_forward_windows = _rolling_windows(
         candidate_returns,
         window_size=GATE2_MIN_WALK_FORWARD_DAYS,
@@ -399,8 +398,8 @@ def _normalize_target_weights(target_weights: pd.DataFrame) -> pd.DataFrame:
     normalized = target_weights.fillna(0.0).astype(float).copy()
     gross_exposure = normalized.abs().sum(axis=1)
     for timestamp in normalized.index[gross_exposure > 1.0]:
-        normalized.loc[timestamp] = (
-            normalized.loc[timestamp] / float(gross_exposure.loc[timestamp])
+        normalized.loc[timestamp] = normalized.loc[timestamp] / float(
+            gross_exposure.loc[timestamp]
         )
     return normalized
 
@@ -487,7 +486,7 @@ def _candidate_returns(
     candidate: StrategyCandidate,
     *,
     bars_by_symbol: dict[str, pd.DataFrame],
-    parameter_overrides: dict[str, object] | None = None,
+    parameter_overrides: dict[str, ScalarValue] | None = None,
     cost_model_config: CostModelConfig | None = None,
 ) -> tuple[Decimal, ...]:
     configured_candidate = _candidate_with_parameter_overrides(
@@ -527,7 +526,7 @@ def _candidate_returns(
 def _candidate_with_parameter_overrides(
     candidate: StrategyCandidate,
     *,
-    parameter_overrides: dict[str, object] | None,
+    parameter_overrides: dict[str, ScalarValue] | None,
 ) -> StrategyCandidate:
     if not parameter_overrides:
         return candidate
@@ -574,7 +573,7 @@ def build_gate_report(
     def backtest_runner(
         rerun_candidate: StrategyCandidate,
         *,
-        parameter_overrides: dict[str, object] | None = None,
+        parameter_overrides: dict[str, ScalarValue] | None = None,
         cost_model_config: CostModelConfig | None = None,
     ) -> tuple[Decimal, ...]:
         return _candidate_returns(

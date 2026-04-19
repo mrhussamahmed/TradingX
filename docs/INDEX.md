@@ -73,7 +73,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
-| STATE-0001  | Project state     | 1.0.7   | active | `docs/handover/STATE.md`      |
+| STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
 | INDEX-0001  | Artifact index    | 1.2.20  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps

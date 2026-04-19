@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -24,10 +24,13 @@ REGIME_VOL_WINDOW_DAYS = 60
 REGIME_TREND_WINDOW_DAYS = 200
 
 
+BacktestRunner = Callable[..., tuple[Decimal, ...]]
+
+
 @dataclass(frozen=True)
 class AdversarialCheckContext:
     benchmark_bars: pd.DataFrame
-    backtest_runner: object
+    backtest_runner: BacktestRunner
     base_cost_model_config: CostModelConfig
 
 
@@ -113,8 +116,7 @@ def _metric_triplet(returns: Sequence[Decimal]) -> tuple[float | None, float, fl
 
 def _within_tolerance(reference: float, observed: float) -> bool:
     return (
-        abs(observed - reference)
-        / max(abs(reference), PROFILE_TOLERANCE_FLOOR)
+        abs(observed - reference) / max(abs(reference), PROFILE_TOLERANCE_FLOOR)
         <= PROFILE_TOLERANCE
     )
 
@@ -151,7 +153,7 @@ def _perturb_value(value: ScalarValue, factor: float) -> ScalarValue | None:
 def _parameter_sensitivity_check(
     candidate: StrategyCandidate,
     *,
-    backtest_runner: object,
+    backtest_runner: BacktestRunner,
     base_returns: Sequence[Decimal],
 ) -> str:
     base_sharpe = _sharpe_ratio(
@@ -263,7 +265,7 @@ def _regime_behavior_check(
 def _cost_sensitivity_check(
     candidate: StrategyCandidate,
     *,
-    backtest_runner: object,
+    backtest_runner: BacktestRunner,
     base_cost_model_config: CostModelConfig,
 ) -> str:
     stress_configs = (
