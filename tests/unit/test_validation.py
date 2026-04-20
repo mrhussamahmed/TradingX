@@ -10,11 +10,16 @@ from tradingx.costs import CostModelConfig
 from tradingx.evaluation import AdversarialCheckContext
 from tradingx.evaluation import _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
-from tradingx.types import StrategyCandidate
+from tradingx.types import (
+    BenchmarkStackPayload,
+    OperatingConstraintBudget,
+    StrategyCandidate,
+)
 from tradingx.validation import (
     _build_gate1_candidate_result,
     _candidate_returns,
     build_gate_report,
+    evaluate_hurdle_clearance,
 )
 from tradingx.validation import (
     _sharpe_ratio as validation_sharpe_ratio,
@@ -129,6 +134,31 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         "mean-reversion-v1",
     }
     assert all(result.evidence_pack_id for result in report.candidate_results)
+
+
+def test_hurdle_clearance_passes_when_candidate_beats_cash() -> None:
+    candidate_returns = tuple([Decimal("0.0003")] * 252)
+    hurdle_returns = tuple([Decimal("0.0002")] * 252)
+
+    result = evaluate_hurdle_clearance(
+        candidate_returns=candidate_returns,
+        hurdle_returns=hurdle_returns,
+    )
+
+    assert result.passed is True
+    assert result.criterion_id == "hurdle_clearance"
+
+
+def test_hurdle_clearance_fails_when_candidate_underperforms_cash() -> None:
+    candidate_returns = tuple([Decimal("0.0001")] * 252)
+    hurdle_returns = tuple([Decimal("0.0002")] * 252)
+
+    result = evaluate_hurdle_clearance(
+        candidate_returns=candidate_returns,
+        hurdle_returns=hurdle_returns,
+    )
+
+    assert result.passed is False
 
 
 def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> None:

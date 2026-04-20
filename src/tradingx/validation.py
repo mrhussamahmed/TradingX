@@ -137,6 +137,25 @@ def _rolling_windows(
     )
 
 
+def evaluate_hurdle_clearance(
+    *,
+    candidate_returns: tuple[Decimal, ...],
+    hurdle_returns: tuple[Decimal, ...],
+) -> ValidationCriterionResult:
+    candidate_metrics = _metric_pack(candidate_returns)
+    hurdle_metrics = _metric_pack(hurdle_returns)
+    passed = candidate_metrics["total_return"] > hurdle_metrics["total_return"]
+    return ValidationCriterionResult(
+        criterion_id="hurdle_clearance",
+        passed=passed,
+        threshold="Candidate total return must exceed the cash hurdle total return",
+        details=(
+            f"Candidate total return={candidate_metrics['total_return']:.3f}, "
+            f"cash hurdle total return={hurdle_metrics['total_return']:.3f}."
+        ),
+    )
+
+
 def _build_gate1_candidate_result(
     *,
     candidate: StrategyCandidate,
