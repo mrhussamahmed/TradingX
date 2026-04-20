@@ -209,6 +209,22 @@ class BenchmarkCloseSeries:
 
 
 @dataclass(frozen=True)
+class OperatingConstraintBudget:
+    max_drawdown_design: Decimal
+    max_drawdown_halt: Decimal
+    cdar_threshold: Decimal
+    cdar_confidence: Decimal
+
+
+@dataclass(frozen=True)
+class BenchmarkStackPayload:
+    hurdle_returns: tuple[Decimal, ...]
+    opportunity_cost_returns: tuple[Decimal, ...]
+    opportunity_cost_weights: tuple[tuple[str, Decimal], ...]
+    operating_constraint: OperatingConstraintBudget
+
+
+@dataclass(frozen=True)
 class GateReportResult:
     report: ValidationReport
     gate_assessment: GateAssessment
