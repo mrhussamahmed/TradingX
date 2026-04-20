@@ -5,7 +5,9 @@ from decimal import Decimal
 
 import pytest
 
-from tradingx.benchmark_stack import CashHurdle
+from collections.abc import Sequence
+
+from tradingx.benchmark_stack import CashHurdle, PassiveOpportunityCost
 
 
 class _FakeRiskFreeSeries:
@@ -14,6 +16,20 @@ class _FakeRiskFreeSeries:
 
     def get_daily_rate(self, session_date: date) -> Decimal:
         return self._daily_rates[session_date]
+
+
+class _FakeClosesProvider:
+    def __init__(self, closes_by_symbol: dict[str, list[Decimal]]) -> None:
+        self._closes_by_symbol = closes_by_symbol
+
+    def get_closes(
+        self,
+        symbol: str,
+        *,
+        session_dates: Sequence[date],
+    ) -> tuple[Decimal, ...]:
+        del session_dates
+        return tuple(self._closes_by_symbol[symbol])
 
 
 def test_cash_hurdle_daily_returns_uses_cached_daily_rates() -> None:
@@ -44,3 +60,63 @@ def test_cash_hurdle_rejects_empty_session_dates() -> None:
 
     with pytest.raises(ValueError):
         hurdle.daily_returns(session_dates=())
+
+
+def test_opportunity_cost_blends_weighted_returns_without_rebalance() -> None:
+    closes_provider = _FakeClosesProvider(
+        {
+            "SPY": [
+                Decimal("100"),
+                Decimal("101"),
+                Decimal("99.99"),
+                Decimal("101.9898"),
+            ],
+            "AGG": [
+                Decimal("100"),
+                Decimal("100"),
+                Decimal("100.5"),
+                Decimal("100.299"),
+            ],
+        }
+    )
+    opportunity_cost = PassiveOpportunityCost(
+        closes_provider=closes_provider,
+        weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    returns = opportunity_cost.daily_returns(
+        session_dates=(
+            date(2026, 1, 5),
+            date(2026, 1, 6),
+            date(2026, 1, 7),
+            date(2026, 1, 8),
+        )
+    )
+
+    assert float(returns[0]) == pytest.approx(0.006, abs=1e-6)
+    assert float(returns[1]) == pytest.approx(-0.0040357853, abs=1e-6)
+    assert float(returns[2]) == pytest.approx(0.0111731241, abs=1e-6)
+
+
+def test_opportunity_cost_rebalances_at_month_boundary() -> None:
+    closes_provider = _FakeClosesProvider(
+        {
+            "SPY": [Decimal("100"), Decimal("120"), Decimal("115")],
+            "AGG": [Decimal("100"), Decimal("100"), Decimal("101")],
+        }
+    )
+    opportunity_cost = PassiveOpportunityCost(
+        closes_provider=closes_provider,
+        weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    returns = opportunity_cost.daily_returns(
+        session_dates=(
+            date(2026, 1, 30),
+            date(2026, 1, 31),
+            date(2026, 2, 1),
+        )
+    )
+
+    assert float(returns[0]) == pytest.approx(0.12, abs=1e-6)
+    assert float(returns[1]) == pytest.approx(-0.021, abs=1e-6)
