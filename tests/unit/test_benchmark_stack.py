@@ -7,7 +7,8 @@ import pytest
 
 from collections.abc import Sequence
 
-from tradingx.benchmark_stack import CashHurdle, PassiveOpportunityCost
+from tradingx.benchmark_stack import BenchmarkStack, CashHurdle, PassiveOpportunityCost
+from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
 
 
 class _FakeRiskFreeSeries:
@@ -120,3 +121,59 @@ def test_opportunity_cost_rebalances_at_month_boundary() -> None:
 
     assert float(returns[0]) == pytest.approx(0.12, abs=1e-6)
     assert float(returns[1]) == pytest.approx(-0.021, abs=1e-6)
+
+
+def test_benchmark_stack_materializes_full_payload() -> None:
+    hurdle = CashHurdle(
+        risk_free_series=_FakeRiskFreeSeries(
+            {
+                date(2026, 1, 5): Decimal("0.0002"),
+                date(2026, 1, 6): Decimal("0.0002"),
+                date(2026, 1, 7): Decimal("0.0002"),
+            }
+        )
+    )
+    opportunity_cost = PassiveOpportunityCost(
+        closes_provider=_FakeClosesProvider(
+            {
+                "SPY": [Decimal("100"), Decimal("101"), Decimal("99.99")],
+                "AGG": [Decimal("100"), Decimal("100"), Decimal("100.5")],
+            }
+        ),
+        weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+    operating_constraint = OperatingConstraintBudget(
+        max_drawdown_design=Decimal("0.15"),
+        max_drawdown_halt=Decimal("0.25"),
+        cdar_threshold=Decimal("0.08"),
+        cdar_confidence=Decimal("0.95"),
+    )
+    stack = BenchmarkStack(
+        hurdle=hurdle,
+        opportunity_cost=opportunity_cost,
+        operating_constraint=operating_constraint,
+    )
+
+    payload = stack.materialize(
+        session_dates=(
+            date(2026, 1, 5),
+            date(2026, 1, 6),
+            date(2026, 1, 7),
+        )
+    )
+
+    assert isinstance(payload, BenchmarkStackPayload)
+    assert payload.hurdle_returns == (
+        Decimal("0.0002"),
+        Decimal("0.0002"),
+        Decimal("0.0002"),
+    )
+    assert payload.opportunity_cost_returns == (
+        Decimal("0.006"),
+        Decimal("-0.004035785288270377733598409543"),
+    )
+    assert payload.opportunity_cost_weights == (
+        ("SPY", Decimal("0.6")),
+        ("AGG", Decimal("0.4")),
+    )
+    assert payload.operating_constraint == operating_constraint

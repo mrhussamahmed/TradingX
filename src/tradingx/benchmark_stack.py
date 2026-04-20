@@ -6,6 +6,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol
 
+from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
+
 
 class RiskFreeSeriesProtocol(Protocol):
     def get_daily_rate(self, session_date: date) -> Decimal: ...
@@ -84,7 +86,25 @@ class PassiveOpportunityCost:
         return tuple(blended_returns)
 
 
+@dataclass(frozen=True)
+class BenchmarkStack:
+    hurdle: CashHurdle
+    opportunity_cost: PassiveOpportunityCost
+    operating_constraint: OperatingConstraintBudget
+
+    def materialize(self, *, session_dates: Sequence[date]) -> BenchmarkStackPayload:
+        return BenchmarkStackPayload(
+            hurdle_returns=self.hurdle.daily_returns(session_dates=session_dates),
+            opportunity_cost_returns=self.opportunity_cost.daily_returns(
+                session_dates=session_dates
+            ),
+            opportunity_cost_weights=self.opportunity_cost.weights,
+            operating_constraint=self.operating_constraint,
+        )
+
+
 __all__ = (
+    "BenchmarkStack",
     "CashHurdle",
     "ClosesProviderProtocol",
     "PassiveOpportunityCost",
