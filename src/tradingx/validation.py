@@ -27,6 +27,7 @@ from tradingx.stats import (
 )
 from tradingx.types import (
     BenchmarkCloseSeries,
+    BenchmarkStackPayload,
     OperatingConstraintBudget,
     ScalarValue,
     StrategyCandidate,
@@ -39,16 +40,6 @@ LOGGER = logging.getLogger(__name__)
 
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MIN_CAGR_EDGE = Decimal("0.02")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_MIN_SHARPE = Decimal("1.0")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_MIN_BENCHMARK_SHARPE_MULTIPLIER = Decimal("1.3")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_DRAWDOWN_TARGET = Decimal("0.12")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_MAX_DRAWDOWN_HARD_LIMIT = Decimal("0.15")
-# source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
-GATE1_MIN_CALMAR = Decimal("0.5")
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MIN_OUT_OF_SAMPLE_DAYS = 756
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
@@ -147,6 +138,8 @@ def evaluate_hurdle_clearance(
     candidate_returns: tuple[Decimal, ...],
     hurdle_returns: tuple[Decimal, ...],
 ) -> ValidationCriterionResult:
+    if len(candidate_returns) != len(hurdle_returns):
+        raise ValueError("candidate_returns and hurdle_returns must align in length.")
     candidate_metrics = _metric_pack(candidate_returns)
     hurdle_metrics = _metric_pack(hurdle_returns)
     passed = candidate_metrics["total_return"] > hurdle_metrics["total_return"]
@@ -167,6 +160,10 @@ def evaluate_opportunity_cost_edge(
     opportunity_cost_returns: tuple[Decimal, ...],
     opportunity_cost_weights: tuple[tuple[str, Decimal], ...],
 ) -> ValidationCriterionResult:
+    if len(candidate_returns) != len(opportunity_cost_returns):
+        raise ValueError(
+            "candidate_returns and opportunity_cost_returns must align in length."
+        )
     candidate_metrics = _metric_pack(candidate_returns)
     opportunity_cost_metrics = _metric_pack(opportunity_cost_returns)
     passed = candidate_metrics["cagr"] > opportunity_cost_metrics["cagr"] + float(
@@ -223,42 +220,46 @@ def evaluate_operating_constraint(
     )
 
 
+def evaluate_gate1_benchmark_criteria(
+    *,
+    candidate_returns: tuple[Decimal, ...],
+    benchmark_stack_payload: BenchmarkStackPayload,
+) -> tuple[ValidationCriterionResult, ...]:
+    return (
+        evaluate_hurdle_clearance(
+            candidate_returns=candidate_returns,
+            hurdle_returns=benchmark_stack_payload.hurdle_returns,
+        ),
+        evaluate_opportunity_cost_edge(
+            candidate_returns=candidate_returns,
+            opportunity_cost_returns=benchmark_stack_payload.opportunity_cost_returns,
+            opportunity_cost_weights=benchmark_stack_payload.opportunity_cost_weights,
+        ),
+        evaluate_operating_constraint(
+            candidate_returns=candidate_returns,
+            constraint=benchmark_stack_payload.operating_constraint,
+        ),
+    )
+
+
 def _build_gate1_candidate_result(
     *,
     candidate: StrategyCandidate,
     candidate_returns: tuple[Decimal, ...],
-    benchmark_returns: tuple[Decimal, ...],
+    benchmark_stack_payload: BenchmarkStackPayload,
     window_start_utc: datetime,
     window_end_utc: datetime,
-    benchmark_series_is_adjusted: bool,
     adversarial_context: AdversarialCheckContext,
 ) -> ValidationCandidateResult:
     evidence_pack = evaluate_candidate(
         candidate,
         candidate_returns=candidate_returns,
-        benchmark_returns=benchmark_returns,
+        benchmark_returns=benchmark_stack_payload.opportunity_cost_returns,
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
-    candidate_metrics = _metric_pack(candidate_returns)
-    benchmark_metrics = _metric_pack(benchmark_returns)
-    benchmark_edge_passed = candidate_metrics["cagr"] > benchmark_metrics[
-        "cagr"
-    ] + float(GATE1_MIN_CAGR_EDGE) or (
-        candidate_metrics["sharpe_ratio"] >= float(GATE1_MIN_SHARPE)
-        and candidate_metrics["sharpe_ratio"]
-        >= benchmark_metrics["sharpe_ratio"]
-        * float(GATE1_MIN_BENCHMARK_SHARPE_MULTIPLIER)
-    )
-    max_drawdown_target_passed = (
-        candidate_metrics["max_drawdown"] <= float(GATE1_DRAWDOWN_TARGET)
-    )
-    max_drawdown_hard_limit_passed = (
-        candidate_metrics["max_drawdown"] <= float(GATE1_MAX_DRAWDOWN_HARD_LIMIT)
-    )
-    calmar_passed = candidate_metrics["calmar_ratio"] >= float(GATE1_MIN_CALMAR)
 
     out_of_sample_passed = False
     history_complete = len(candidate_returns) >= GATE1_MIN_OUT_OF_SAMPLE_DAYS + 252
@@ -277,50 +278,10 @@ def _build_gate1_candidate_result(
             "window plus 756 out-of-sample trading days."
         )
 
-    adjusted_details = (
-        "Benchmark series was explicitly declared dividend-adjusted."
-        if benchmark_series_is_adjusted
-        else "Benchmark series adjustment was not declared by the operator."
-    )
-
-    criteria = (
-        ValidationCriterionResult(
-            criterion_id="benchmark_edge",
-            passed=benchmark_edge_passed,
-            threshold=(
-                "CAGR > benchmark CAGR + 2% absolute OR Lo-adjusted Sharpe >= 1.0 "
-                "and >= 1.3x benchmark Lo-adjusted Sharpe"
-            ),
-            details=(
-                f"Candidate CAGR={candidate_metrics['cagr']:.3f}, benchmark CAGR="
-                f"{benchmark_metrics['cagr']:.3f}, candidate Lo-adjusted Sharpe="
-                f"{candidate_metrics['sharpe_ratio']:.3f}, benchmark "
-                "Lo-adjusted Sharpe="
-                f"{benchmark_metrics['sharpe_ratio']:.3f}."
-            ),
-        ),
-        ValidationCriterionResult(
-            criterion_id="max_drawdown_target",
-            passed=max_drawdown_target_passed,
-            threshold="Design target max drawdown <= 12%",
-            details=(
-                f"Candidate max drawdown={candidate_metrics['max_drawdown']:.3f}."
-            ),
-        ),
-        ValidationCriterionResult(
-            criterion_id="max_drawdown_hard_limit",
-            passed=max_drawdown_hard_limit_passed,
-            threshold="Hard reject if max drawdown > 15%",
-            details=(
-                f"Candidate max drawdown={candidate_metrics['max_drawdown']:.3f}."
-            ),
-        ),
-        ValidationCriterionResult(
-            criterion_id="calmar",
-            passed=calmar_passed,
-            threshold="Calmar >= 0.5",
-            details=f"Candidate Calmar={candidate_metrics['calmar_ratio']:.3f}.",
-        ),
+    criteria = evaluate_gate1_benchmark_criteria(
+        candidate_returns=candidate_returns,
+        benchmark_stack_payload=benchmark_stack_payload,
+    ) + (
         ValidationCriterionResult(
             criterion_id="out_of_sample_profile",
             passed=out_of_sample_passed,
@@ -330,14 +291,8 @@ def _build_gate1_candidate_result(
             ),
             details=out_of_sample_details,
         ),
-        ValidationCriterionResult(
-            criterion_id="benchmark_adjustment",
-            passed=benchmark_series_is_adjusted,
-            threshold="Benchmark comparison uses a dividend-adjusted SPY series",
-            details=adjusted_details,
-        ),
     )
-    if not history_complete or not benchmark_series_is_adjusted:
+    if not history_complete:
         status = "pending"
     elif all(criterion.passed for criterion in criteria):
         status = "pass"
@@ -525,39 +480,17 @@ def _candidate_with_parameter_overrides(
     return replace(candidate, parameter_set=merged_parameter_set)
 
 
-def _benchmark_returns(
-    *,
-    bars_by_symbol: dict[str, pd.DataFrame],
-    benchmark_symbol: str,
-) -> tuple[Decimal, ...]:
-    bars = bars_by_symbol[benchmark_symbol]
-    result = run_daily_bar_backtest(
-        {benchmark_symbol: bars},
-        target_weights=pd.DataFrame(
-            {benchmark_symbol: [1.0] * len(bars)},
-            index=bars.index,
-            dtype=float,
-        ),
-        initial_weights={benchmark_symbol: 1.0},
-    )
-    return tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
-
-
 def build_gate_report(
     *,
     gate_id: str,
     bars_by_symbol: dict[str, pd.DataFrame],
     candidates: Sequence[StrategyCandidate],
-    benchmark_symbol: str,
+    benchmark_stack_payload: BenchmarkStackPayload,
     window_start_utc: datetime,
     window_end_utc: datetime,
-    benchmark_series_is_adjusted: bool,
 ) -> ValidationReport:
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
-    benchmark_returns = _benchmark_returns(
-        bars_by_symbol=aligned_bars,
-        benchmark_symbol=benchmark_symbol,
-    )
+    benchmark_returns = benchmark_stack_payload.opportunity_cost_returns
     base_cost_model_config = CostModelConfig()
 
     def backtest_runner(
@@ -576,8 +509,16 @@ def build_gate_report(
     candidate_results = []
     for candidate in candidates:
         candidate_returns = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
+        if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
+            raise ValueError(
+                "benchmark_stack_payload.hurdle_returns must align with candidate returns."
+            )
+        if len(candidate_returns) != len(benchmark_stack_payload.opportunity_cost_returns):
+            raise ValueError(
+                "benchmark_stack_payload.opportunity_cost_returns must align with candidate returns."
+            )
         adversarial_context = AdversarialCheckContext(
-            benchmark_bars=aligned_bars[benchmark_symbol],
+            benchmark_bars=aligned_bars[candidate.benchmark_symbol],
             backtest_runner=backtest_runner,
             base_cost_model_config=base_cost_model_config,
         )
@@ -585,10 +526,9 @@ def build_gate_report(
             result = _build_gate1_candidate_result(
                 candidate=candidate,
                 candidate_returns=candidate_returns,
-                benchmark_returns=benchmark_returns,
+                benchmark_stack_payload=benchmark_stack_payload,
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
-                benchmark_series_is_adjusted=benchmark_series_is_adjusted,
                 adversarial_context=adversarial_context,
             )
         elif gate_id == "2":
@@ -618,7 +558,9 @@ def build_gate_report(
         gate_id=gate_id,
         generated_at_utc=report_timestamp,
         status=report_status,
-        benchmark_symbol=benchmark_symbol,
+        benchmark_symbol="+".join(
+            symbol for symbol, _ in benchmark_stack_payload.opportunity_cost_weights
+        ),
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         candidate_results=tuple(candidate_results),
