@@ -185,6 +185,31 @@ def max_drawdown(returns: Sequence[float]) -> float:
     return worst
 
 
+def conditional_drawdown_at_risk(
+    returns: Sequence[float],
+    *,
+    confidence: float = 0.95,
+) -> float:
+    if not returns:
+        return 0.0
+    if confidence <= 0.0 or confidence >= 1.0:
+        raise ValueError("confidence must be in (0, 1).")
+
+    cumulative = 1.0
+    peak = 1.0
+    drawdowns: list[float] = []
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+        if cumulative > peak:
+            peak = cumulative
+        drawdowns.append((peak - cumulative) / peak)
+
+    drawdowns.sort(reverse=True)
+    tail_size = max(1, math.ceil((1.0 - confidence) * len(drawdowns)))
+    worst_tail = drawdowns[:tail_size]
+    return sum(worst_tail) / len(worst_tail)
+
+
 def _excess_returns(
     *,
     returns: Sequence[float],
@@ -218,6 +243,7 @@ __all__ = (
     "PAPER_PERIODS_PER_YEAR",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "conditional_drawdown_at_risk",
     "lo_adjusted_sharpe_ratio",
     "max_drawdown",
     "naive_annualized_sharpe_ratio",

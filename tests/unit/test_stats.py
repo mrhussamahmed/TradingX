@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from tradingx.stats import max_drawdown
+from tradingx.stats import conditional_drawdown_at_risk, max_drawdown
 
 
 def test_stats_module_shell_is_importable() -> None:
@@ -136,3 +136,34 @@ def test_max_drawdown_recovers_then_deeper_drop() -> None:
 
 def test_max_drawdown_empty_returns_is_zero() -> None:
     assert max_drawdown([]) == 0.0
+
+
+def test_conditional_drawdown_at_risk_flat_series_is_zero() -> None:
+    returns = [0.0] * 10
+
+    assert conditional_drawdown_at_risk(returns, confidence=0.95) == 0.0
+
+
+def test_conditional_drawdown_at_risk_matches_worst_tail_average() -> None:
+    returns = [
+        0.10,
+        -0.10,
+        -(1.0 / 9.0),
+        -0.125,
+    ]
+
+    result = conditional_drawdown_at_risk(returns, confidence=0.5)
+
+    assert result == pytest.approx(0.25, abs=1e-9)
+
+
+def test_conditional_drawdown_at_risk_rejects_invalid_confidence() -> None:
+    with pytest.raises(ValueError):
+        conditional_drawdown_at_risk([0.01, -0.02], confidence=0.0)
+
+    with pytest.raises(ValueError):
+        conditional_drawdown_at_risk([0.01, -0.02], confidence=1.0)
+
+
+def test_conditional_drawdown_at_risk_empty_returns_is_zero() -> None:
+    assert conditional_drawdown_at_risk([], confidence=0.95) == 0.0
