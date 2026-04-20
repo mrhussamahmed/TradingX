@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import json
@@ -14,7 +16,6 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
-    BenchmarkOption,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -33,6 +34,10 @@ from tradingx.types import (
     OperatorTimelineEvent,
     OpportunityScore,
     OpportunitySelectionRecord,
+    PerformanceDiagnostic,
+    PerformancePeriodBar,
+    PerformanceSeriesPoint,
+    PerformanceWindowSnapshot,
     PortfolioBenchmarkPanel,
     PortfolioBenchmarkRow,
     PortfolioCurvePanel,
@@ -48,12 +53,6 @@ from tradingx.types import (
     PortfolioStrategyPanel,
     PortfolioStrategyRow,
     PortfolioWorkspaceSnapshot,
-    PerformanceAnalyticsSnapshot,
-    PerformanceDiagnostic,
-    PerformanceKpi,
-    PerformancePeriodBar,
-    PerformanceSeriesPoint,
-    PerformanceWindowSnapshot,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,

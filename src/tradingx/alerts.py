@@ -228,7 +228,8 @@ class OperatorAlertDispatcher:
                 transport.send(alert)
             except Exception as error:
                 LOGGER.error(
-                    "Operator alert transport failed: alert_id=%s transport=%s error=%s",
+                    "Operator alert transport failed: "
+                    "alert_id=%s transport=%s error=%s",
                     alert.alert_id,
                     transport.target_name,
                     error,

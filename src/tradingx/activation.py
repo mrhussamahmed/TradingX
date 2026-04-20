@@ -97,7 +97,8 @@ class LocalActivationGateway:
             and not self._strategy_id_validator(strategy_id)
         ):
             raise ValueError(
-                f"Strategy activation {strategy_id} is not resolvable by the runtime planner."
+                "Strategy activation "
+                f"{strategy_id} is not resolvable by the runtime planner."
             )
 
 

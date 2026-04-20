@@ -115,7 +115,10 @@ class FilesystemArtifactStore:
         path = self._path_for("runtime_portfolio_plans", f"{plan_id}.json")
         if not path.exists():
             return None
-        from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
+        from tradingx.runtime_portfolio import (
+            RuntimePortfolioPlan,
+            RuntimePortfolioTrade,
+        )
         from tradingx.types import MarketSnapshot
 
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -126,7 +129,9 @@ class FilesystemArtifactStore:
             universe_snapshot_id=str(payload["universe_snapshot_id"]),
             benchmark_symbol=str(payload["benchmark_symbol"]),
             crash_overlay_active=bool(payload["crash_overlay_active"]),
-            symbols_considered=tuple(str(value) for value in payload["symbols_considered"]),
+            symbols_considered=tuple(
+                str(value) for value in payload["symbols_considered"]
+            ),
             current_weights={
                 str(symbol): Decimal(str(weight))
                 for symbol, weight in dict(payload["current_weights"]).items()

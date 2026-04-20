@@ -476,10 +476,10 @@ class RuntimeHeartbeatSnapshot:
     active_symbol: str
     selected_symbol: str
     decision: str
-    runtime_truth: tuple["RuntimeTruthItem", ...] = ()
-    symbol_rows: tuple["RuntimeSymbolHeartbeatRow", ...] = ()
-    decision_ladder: tuple["RuntimeDecisionLadderRow", ...] = ()
-    operator_guidance: "RuntimeOperatorGuidance | None" = None
+    runtime_truth: tuple[RuntimeTruthItem, ...] = ()
+    symbol_rows: tuple[RuntimeSymbolHeartbeatRow, ...] = ()
+    decision_ladder: tuple[RuntimeDecisionLadderRow, ...] = ()
+    operator_guidance: RuntimeOperatorGuidance | None = None
 
 
 @dataclass(frozen=True)

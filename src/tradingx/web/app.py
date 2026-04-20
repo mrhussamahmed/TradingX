@@ -29,8 +29,8 @@ from tradingx.types import (
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
     OpportunitySelectionRecord,
-    PortfolioWorkspaceSnapshot,
     PerformanceAnalyticsSnapshot,
+    PortfolioWorkspaceSnapshot,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
@@ -47,7 +47,9 @@ class ReadModelProtocol(Protocol):
 
     def build_portfolio_workspace_snapshot(self) -> PortfolioWorkspaceSnapshot: ...
 
-    def build_performance_analytics_snapshot(self) -> PerformanceAnalyticsSnapshot | PortfolioWorkspaceSnapshot: ...
+    def build_performance_analytics_snapshot(
+        self,
+    ) -> PerformanceAnalyticsSnapshot | PortfolioWorkspaceSnapshot: ...
 
     def list_documents(self) -> tuple[DocumentRecord, ...]: ...
 

@@ -208,7 +208,8 @@ def _build_gate1_candidate_result(
             details=(
                 f"Candidate CAGR={candidate_metrics['cagr']:.3f}, benchmark CAGR="
                 f"{benchmark_metrics['cagr']:.3f}, candidate Lo-adjusted Sharpe="
-                f"{candidate_metrics['sharpe_ratio']:.3f}, benchmark Lo-adjusted Sharpe="
+                f"{candidate_metrics['sharpe_ratio']:.3f}, benchmark "
+                "Lo-adjusted Sharpe="
                 f"{benchmark_metrics['sharpe_ratio']:.3f}."
             ),
         ),
@@ -575,7 +576,8 @@ def load_benchmark_close_series(path: Path) -> BenchmarkCloseSeries:
         payload = json.loads(raw_text)
     except json.JSONDecodeError:
         LOGGER.warning(
-            "Benchmark close series at %s uses legacy bare-number format without metadata.",
+            "Benchmark close series at %s uses legacy bare-number format "
+            "without metadata.",
             path,
         )
         tokens = [token.strip() for token in raw_text.replace("\n", ",").split(",")]
@@ -591,7 +593,8 @@ def load_benchmark_close_series(path: Path) -> BenchmarkCloseSeries:
         )
     if isinstance(payload, list):
         LOGGER.warning(
-            "Benchmark close series at %s uses legacy JSON-list format without metadata.",
+            "Benchmark close series at %s uses legacy JSON-list format "
+            "without metadata.",
             path,
         )
         return BenchmarkCloseSeries(

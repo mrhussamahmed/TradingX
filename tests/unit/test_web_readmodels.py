@@ -1,3 +1,5 @@
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -8,15 +10,15 @@ from tradingx.journal import SqliteOmsJournal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     BotRuntimeState,
-    HistoricalWarmupRecord,
-    OpportunityScore,
-    OpportunitySelectionRecord,
     EvaluationEvidencePack,
     GateAssessment,
+    HistoricalWarmupRecord,
     MarketAutomationRunRecord,
     OperatorAlert,
-    StrategyActivationRecord,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     ServiceCycleSnapshot,
+    StrategyActivationRecord,
     ValidationCandidateResult,
     ValidationCriterionResult,
     ValidationReport,

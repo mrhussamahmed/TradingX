@@ -7,14 +7,17 @@ from decimal import Decimal
 import pandas as pd
 
 from tradingx.costs import CostModelConfig
-from tradingx.evaluation import AdversarialCheckContext, _sharpe_ratio as evaluation_sharpe_ratio
+from tradingx.evaluation import AdversarialCheckContext
+from tradingx.evaluation import _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import StrategyCandidate
 from tradingx.validation import (
     _build_gate1_candidate_result,
     _candidate_returns,
-    _sharpe_ratio as validation_sharpe_ratio,
     build_gate_report,
+)
+from tradingx.validation import (
+    _sharpe_ratio as validation_sharpe_ratio,
 )
 
 
@@ -313,7 +316,10 @@ def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> N
     )
 
 
-def test_load_benchmark_close_series_warns_on_legacy_json_list(tmp_path, caplog) -> None:
+def test_load_benchmark_close_series_warns_on_legacy_json_list(
+    tmp_path,
+    caplog,
+) -> None:
     module = importlib.import_module("tradingx.validation")
     artifact_file = tmp_path / "legacy-benchmark.json"
     artifact_file.write_text(

@@ -611,7 +611,7 @@ class OperatorSupervisor:
             event_type="flatten_completed",
             severity="warning",
             message="Supervisor flatten completed.",
-            fields=summary,
+            fields={key: value for key, value in summary.items()},
         )
 
     def _log_event(

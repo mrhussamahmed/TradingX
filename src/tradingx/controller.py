@@ -327,11 +327,16 @@ class PaperTradingLoopController:
         strategy_fingerprint: str | None = None,
         universe_snapshot_id: str | None = None,
     ) -> TradingLoopResult:
-        resolved_portfolio_state = portfolio_state or self._portfolio.get_portfolio_state()
+        resolved_portfolio_state = (
+            portfolio_state or self._portfolio.get_portfolio_state()
+        )
         if self._session_start_equity is None:
             self._session_start_equity = resolved_portfolio_state.equity
         resolved_market_snapshot = market_snapshot
-        if resolved_market_snapshot is None and trade_intent.side in {"buy", "sell", "reduce"}:
+        if (
+            resolved_market_snapshot is None
+            and trade_intent.side in {"buy", "sell", "reduce"}
+        ):
             resolved_market_snapshot = self._market_data.get_market_snapshot(
                 trade_intent.symbol
             )
@@ -560,7 +565,8 @@ class PaperTradingLoopController:
 
         if market_snapshot is None:
             raise RuntimeError(
-                f"Market snapshot is required for actionable trade intent {trade_intent.intent_id}."
+                "Market snapshot is required for actionable trade intent "
+                f"{trade_intent.intent_id}."
             )
 
         risk_decision = self._risk.evaluate_trade_intent(

@@ -60,7 +60,7 @@ def _garch_vol(returns: pd.Series, *, garch_train_size: int) -> pd.Series:
         warnings.simplefilter("ignore")
         model = arch_model(
             clean_returns * 100.0,
-            vol="Garch",
+            vol="GARCH",
             p=1,
             q=1,
             mean="Zero",

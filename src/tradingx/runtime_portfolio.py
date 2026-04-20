@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
-from typing import Protocol
+from typing import Any, Protocol
 
 from tradingx.portfolio_construction import (
     CandidateRuntimeWeights,
@@ -16,6 +17,7 @@ from tradingx.types import (
     MarketSnapshot,
     PortfolioState,
     StrategyActivationRecord,
+    StrategyCandidate,
     TradeIntent,
 )
 
@@ -33,7 +35,7 @@ class MarketDataGatewayProtocol(Protocol):
         *,
         start_utc: datetime,
         end_utc: datetime,
-    ): ...
+    ) -> Any: ...
 
     def get_market_snapshot(self, symbol: str) -> MarketSnapshot: ...
 
@@ -83,7 +85,7 @@ class RuntimePortfolioPlanner:
         activation_gateway: ActivationGatewayProtocol | None = None,
         strategy_id: str | None = None,
         history_lookback_days: int = HISTORY_LOOKBACK_DAYS,
-        now_provider=None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._market_data = market_data
         self._activation_gateway = activation_gateway
@@ -102,8 +104,8 @@ class RuntimePortfolioPlanner:
         runtime_symbols = symbols
         strategy_id = self._strategy_id
         if self._activation_gateway is not None:
-            activation, _snapshot = self._activation_gateway.load_or_create_active_records(
-                symbols
+            activation, _snapshot = (
+                self._activation_gateway.load_or_create_active_records(symbols)
             )
             runtime_symbols = activation.approved_symbols or symbols
             strategy_id = activation.strategy_id
@@ -136,7 +138,10 @@ class RuntimePortfolioPlanner:
             current_positions=current_weights,
             account_equity=portfolio_state.equity,
         )
-        if any(weight < Decimal("0") for weight in runtime_weights.target_weights.values()):
+        if any(
+            weight < Decimal("0")
+            for weight in runtime_weights.target_weights.values()
+        ):
             raise UnsupportedRuntimePortfolioPlanError(
                 "Runtime portfolio planner only supports non-negative target weights "
                 f"for {candidate.candidate_id}."
@@ -164,14 +169,23 @@ class RuntimePortfolioPlanner:
                 generated_at=generated_at,
                 account_equity=portfolio_state.equity,
             )
-            if trade.side in {"buy", "sell", "reduce"} and symbol not in market_snapshots:
+            if (
+                trade.side in {"buy", "sell", "reduce"}
+                and symbol not in market_snapshots
+            ):
                 snapshot = self._market_data.get_market_snapshot(symbol)
                 market_snapshots[symbol] = snapshot
                 trade = self._build_planned_trade(
                     symbol=symbol,
                     current_weight=current_weights.get(symbol, Decimal("0")),
-                    target_weight=runtime_weights.target_weights.get(symbol, Decimal("0")),
-                    raw_target_weight=runtime_weights.raw_weights.get(symbol, Decimal("0")),
+                    target_weight=runtime_weights.target_weights.get(
+                        symbol,
+                        Decimal("0"),
+                    ),
+                    raw_target_weight=runtime_weights.raw_weights.get(
+                        symbol,
+                        Decimal("0"),
+                    ),
                     current_quantity=current_quantity,
                     last_trade_price=snapshot.last_trade_price,
                     candidate_id=candidate.candidate_id,
@@ -202,7 +216,10 @@ class RuntimePortfolioPlanner:
             benchmark_symbol=candidate.benchmark_symbol,
             crash_overlay_active=runtime_weights.crash_overlay_active,
             symbols_considered=tracked_symbols,
-            current_weights={symbol: current_weights.get(symbol, Decimal("0")) for symbol in tracked_symbols},
+            current_weights={
+                symbol: current_weights.get(symbol, Decimal("0"))
+                for symbol in tracked_symbols
+            },
             target_weights={
                 symbol: runtime_weights.target_weights.get(symbol, Decimal("0"))
                 for symbol in tracked_symbols
@@ -217,13 +234,13 @@ class RuntimePortfolioPlanner:
         *,
         strategy_id: str,
         symbols: tuple[str, ...],
-    ):
+    ) -> StrategyCandidate | None:
         for candidate in build_mandatory_candidate_registry(symbols):
             if candidate.candidate_id == strategy_id:
                 return candidate
         return None
 
-    def _load_bars(self, *, symbols: tuple[str, ...]):
+    def _load_bars(self, *, symbols: tuple[str, ...]) -> dict[str, Any]:
         end_utc = self._now_provider()
         start_utc = end_utc - timedelta(days=self._history_lookback_days)
         return {
@@ -257,17 +274,16 @@ class RuntimePortfolioPlanner:
         delta_quantity = target_quantity - current_quantity
         if delta_quantity > Decimal("0"):
             side = "buy"
-            quantity = delta_quantity
             reason_code = "target_weight_entry"
         elif delta_quantity < Decimal("0"):
-            quantity = abs(delta_quantity)
             side = "sell" if target_quantity == Decimal("0") else "reduce"
             reason_code = (
-                "target_weight_exit" if target_quantity == Decimal("0") else "target_weight_reduce"
+                "target_weight_exit"
+                if target_quantity == Decimal("0")
+                else "target_weight_reduce"
             )
         else:
             side = "hold"
-            quantity = Decimal("0")
             reason_code = "target_weight_hold"
 
         return RuntimePortfolioTrade(
@@ -321,7 +337,11 @@ def _target_quantity(
     account_equity: Decimal,
     last_trade_price: Decimal,
 ) -> Decimal:
-    if target_weight <= Decimal("0") or account_equity <= Decimal("0") or last_trade_price <= Decimal("0"):
+    if (
+        target_weight <= Decimal("0")
+        or account_equity <= Decimal("0")
+        or last_trade_price <= Decimal("0")
+    ):
         return Decimal("0")
     raw_quantity = (target_weight * account_equity) / last_trade_price
     return raw_quantity.quantize(Decimal("1"), rounding=ROUND_DOWN)
@@ -373,6 +393,7 @@ def _universe_snapshot_id(symbols: tuple[str, ...]) -> str:
 
 
 __all__ = (
+    "CandidateRuntimeWeights",
     "RuntimePortfolioPlan",
     "RuntimePortfolioPlanner",
     "RuntimePortfolioTrade",
