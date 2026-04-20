@@ -9,6 +9,7 @@ from prometheus_client import CollectorRegistry
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.runtime_logging import StructuredRuntimeLogger
 from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
 from tradingx.service import PaperTradingService
 from tradingx.types import (
@@ -225,8 +226,9 @@ class FakePortfolioPlanner:
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        default_quantity: Decimal,
     ) -> RuntimePortfolioPlan:
-        del symbols, portfolio_state
+        del symbols, portfolio_state, default_quantity
         timestamp = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
         market_snapshot = MarketSnapshot(
             symbol="SPY",
@@ -313,9 +315,22 @@ class FakeFailingPortfolioPlanner:
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        default_quantity: Decimal,
     ) -> RuntimePortfolioPlan:
-        del symbols, portfolio_state
+        del symbols, portfolio_state, default_quantity
         raise RuntimeError("unsupported runtime weights")
+
+
+class FakeNonePortfolioPlanner:
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+        default_quantity: Decimal,
+    ) -> RuntimePortfolioPlan | None:
+        del symbols, portfolio_state, default_quantity
+        return None
 
 
 def test_paper_trading_service_runs_multi_symbol_cycles_and_persists_summary(
@@ -551,7 +566,7 @@ def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> N
     assert result.last_cycle.cycle_status == "kill_requested"
 
 
-def test_paper_trading_service_degrades_gracefully_when_planner_fails(
+def test_paper_trading_service_fails_closed_when_planner_errors(
     tmp_path,
 ) -> None:
     loop_controller = FakeLoopController()
@@ -607,3 +622,35 @@ def test_paper_trading_service_executes_runtime_portfolio_plan_when_available(
         ("QQQ", "buy", Decimal("20")),
     ]
     assert result.last_cycle.cycle_status == "executed"
+
+
+def test_paper_trading_service_fails_closed_when_planner_returns_none(
+    tmp_path,
+) -> None:
+    loop_controller = FakeLoopController()
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=FilesystemArtifactStore(tmp_path),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=FakeNonePortfolioPlanner(),
+        runtime_logger=StructuredRuntimeLogger(
+            component="service",
+            root_dir=tmp_path / "data" / "logs",
+            now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        ),
+    )
+
+    result = service.run(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    assert loop_controller.calls == []
+    assert loop_controller.intent_calls == []
+    assert result.last_cycle.cycle_status == "recovery_required"

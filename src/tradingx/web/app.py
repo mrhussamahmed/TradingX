@@ -29,9 +29,12 @@ from tradingx.types import (
     MarketDayScheduleRecord,
     MarketDaySchedulerState,
     OpportunitySelectionRecord,
+    PortfolioWorkspaceSnapshot,
+    PerformanceAnalyticsSnapshot,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
+    RuntimeHeartbeatSnapshot,
     StrategyActivationRecord,
     WebActionResult,
 )
@@ -41,6 +44,10 @@ class ReadModelProtocol(Protocol):
     def build_dashboard_snapshot(self) -> DashboardSnapshot: ...
 
     def build_command_center_snapshot(self) -> CommandCenterSnapshot: ...
+
+    def build_portfolio_workspace_snapshot(self) -> PortfolioWorkspaceSnapshot: ...
+
+    def build_performance_analytics_snapshot(self) -> PerformanceAnalyticsSnapshot | PortfolioWorkspaceSnapshot: ...
 
     def list_documents(self) -> tuple[DocumentRecord, ...]: ...
 
@@ -59,6 +66,8 @@ class ReadModelProtocol(Protocol):
     def get_latest_model_weight_snapshot(self) -> ApprovedWeightSnapshot | None: ...
 
     def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None: ...
+
+    def build_runtime_heartbeat_snapshot(self) -> RuntimeHeartbeatSnapshot: ...
 
     def list_timeline_events(
         self,
@@ -314,6 +323,18 @@ def create_app(
     def get_research() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.build_research_snapshot()))
 
+    @app.get("/api/platform/portfolio")
+    def get_portfolio_workspace() -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(read_model.build_portfolio_workspace_snapshot())
+        )
+
+    @app.get("/api/platform/performance")
+    def get_performance_analytics() -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(read_model.build_portfolio_workspace_snapshot())
+        )
+
     @app.get("/api/platform/gate3/readiness")
     def get_gate3_readiness() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.build_gate3_readiness()))
@@ -402,6 +423,12 @@ def create_app(
     @app.get("/api/runtime-host/state")
     def get_runtime_host_state() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.get_runtime_host_state()))
+
+    @app.get("/api/runtime-host/heartbeat")
+    def get_runtime_host_heartbeat() -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(read_model.build_runtime_heartbeat_snapshot())
+        )
 
     @app.get("/api/runtime-host/warmup/latest")
     def get_runtime_host_warmup() -> JSONResponse:

@@ -4,7 +4,6 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
@@ -14,6 +13,7 @@ from tradingx.types import (
 from tradingx.weights import (
     ApprovedWeightSnapshotNotFoundError,
     ApprovedWeightSnapshotStore,
+    default_approved_weight_snapshot_root,
 )
 
 
@@ -24,12 +24,14 @@ class LocalActivationGateway:
         store: FilesystemArtifactStore,
         approved_snapshot_store: ApprovedWeightSnapshotStore | None = None,
         now_provider: Callable[[], datetime] | None = None,
+        strategy_id_validator: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
         self._approved_snapshot_store = approved_snapshot_store or (
-            ApprovedWeightSnapshotStore(Path("config/strategy/weights"))
+            ApprovedWeightSnapshotStore(default_approved_weight_snapshot_root())
         )
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
+        self._strategy_id_validator = strategy_id_validator
 
     def load_or_create_active_records(
         self,
@@ -48,7 +50,10 @@ class LocalActivationGateway:
                 activated_at_utc=self._now_provider(),
                 notes="Default local trading appliance activation.",
             )
+            self._validate_strategy_id(activation.strategy_id)
             self._store.write_strategy_activation_record(activation)
+        else:
+            self._validate_strategy_id(activation.strategy_id)
 
         snapshot = self.get_latest_snapshot(strategy_id=activation.strategy_id)
         if snapshot is None:
@@ -85,6 +90,15 @@ class LocalActivationGateway:
             return self._approved_snapshot_store.load_by_strategy_id(strategy_id)
         except ApprovedWeightSnapshotNotFoundError:
             return None
+
+    def _validate_strategy_id(self, strategy_id: str) -> None:
+        if (
+            self._strategy_id_validator is not None
+            and not self._strategy_id_validator(strategy_id)
+        ):
+            raise ValueError(
+                f"Strategy activation {strategy_id} is not resolvable by the runtime planner."
+            )
 
 
 __all__ = ("LocalActivationGateway",)

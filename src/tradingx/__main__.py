@@ -26,20 +26,21 @@ from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.journal import SqliteOmsJournal
+from tradingx.launcher import ControlCenterLaunchError, launch_control_center
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.process_lock import RuntimeLockError, runtime_process_lock
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
-from tradingx.runtime_portfolio import (
-    RuntimePortfolioPlanner,
-    UnsupportedRuntimePortfolioPlanError,
-)
 from tradingx.risk_free import (
     DEFAULT_RISK_FREE_CACHE_PATH,
     needs_risk_free_refresh,
     refresh_risk_free_cache,
+)
+from tradingx.runtime_portfolio import (
+    RuntimePortfolioPlanner,
+    UnsupportedRuntimePortfolioPlanError,
 )
 from tradingx.scheduler import build_default_market_day_scheduler
 from tradingx.service import (
@@ -308,6 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
     supervisor_parser.add_argument("--telegram-poll-seconds", type=int, default=None)
     supervisor_parser.add_argument("--max-loops", type=int, default=None)
 
+    launch_control_center_parser = subparsers.add_parser("launch-control-center")
+    launch_control_center_parser.add_argument("--env-file", default=".env")
+
     web_parser = subparsers.add_parser("web")
     web_parser.add_argument("--env-file", default=".env")
     web_parser.add_argument("--host", default=None)
@@ -408,7 +412,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             config.runtime.artifact_root / "operator_platform"
         )
         activation_gateway = LocalActivationGateway(store=operator_store)
-        activation, _snapshot = activation_gateway.load_or_create_active_records(symbols)
+        activation, _snapshot = activation_gateway.load_or_create_active_records(
+            symbols
+        )
         planner = RuntimePortfolioPlanner(
             market_data=build_default_market_data_gateway(config),
             activation_gateway=activation_gateway,
@@ -453,9 +459,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        artifact_path = FilesystemArtifactStore(Path(args.output_dir)).write_runtime_portfolio_plan(
-            plan
-        )
+        artifact_path = FilesystemArtifactStore(
+            Path(args.output_dir)
+        ).write_runtime_portfolio_plan(plan)
         payload = _serialize(plan)
         payload["artifact_path"] = str(artifact_path)
         print(json.dumps(payload, sort_keys=True))
@@ -902,6 +908,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
         print(json.dumps(_serialize(state), sort_keys=True))
+        return 0
+
+    if args.command == "launch-control-center":
+        config = TradingConfig.from_env_file(Path(args.env_file))
+        try:
+            payload = launch_control_center(
+                config=config,
+                repo_root=Path.cwd(),
+                env_file=Path(args.env_file),
+            )
+        except ControlCenterLaunchError as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "message": str(error),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        print(json.dumps(_serialize(payload), sort_keys=True))
         return 0
 
     if args.command == "web":

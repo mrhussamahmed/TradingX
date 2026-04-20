@@ -18,13 +18,16 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
-from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioPlanner
+from tradingx.runtime_portfolio import RuntimePortfolioPlan
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
 )
+from tradingx.runtime_strategy_registry import (
+    ActivatedRuntimePlanner,
+    build_default_runtime_registry,
+)
 from tradingx.types import (
-    OpportunitySelectionRecord,
     PortfolioState,
     ServiceCycleSnapshot,
     ServiceRunResult,
@@ -43,21 +46,13 @@ class PortfolioGatewayProtocol(Protocol):
     def get_portfolio_state(self) -> PortfolioState: ...
 
 
-class OpportunitySelectorProtocol(Protocol):
-    def select_for_service(
-        self,
-        *,
-        symbols: tuple[str, ...],
-        portfolio_state: PortfolioState,
-    ) -> OpportunitySelectionRecord: ...
-
-
 class PortfolioPlannerProtocol(Protocol):
     def plan_for_service(
         self,
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        default_quantity: Decimal,
     ) -> RuntimePortfolioPlan | None: ...
 
 
@@ -70,7 +65,6 @@ class PaperTradingService:
         artifacts: FilesystemArtifactStore,
         metrics: StageMetrics,
         regular_hours_checker: Callable[[datetime], bool],
-        opportunity_selector: OpportunitySelectorProtocol | None = None,
         now_provider: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[int], None] | None = None,
         monotonic_fn: Callable[[], float] | None = None,
@@ -86,7 +80,6 @@ class PaperTradingService:
         self._artifacts = artifacts
         self._metrics = metrics
         self._regular_hours_checker = regular_hours_checker
-        self._opportunity_selector = opportunity_selector
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._sleep_fn = sleep_fn or (lambda seconds: __import__("time").sleep(seconds))
         self._monotonic_fn = monotonic_fn or __import__("time").monotonic
@@ -193,6 +186,7 @@ class PaperTradingService:
                         self._portfolio_planner.plan_for_service(
                             symbols=symbols,
                             portfolio_state=initial_portfolio_state,
+                            default_quantity=quantity,
                         )
                         if self._portfolio_planner is not None
                         else None
@@ -249,110 +243,35 @@ class PaperTradingService:
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
-                elif not planner_failed:
-                    open_symbols = {
-                        position.symbol
-                        for position in initial_portfolio_state.positions
-                        if position.quantity != Decimal("0")
-                    }
-                    for symbol in symbols:
-                        if symbol not in open_symbols:
-                            continue
-                        result = self._loop_controller.run_trading_cycle(symbol, quantity)
-                        reason_code = result.trade_intent.reason_code
-                        control_type = self._result_control_type(result)
-                        symbol_results.append(
-                            ServiceSymbolResult(
-                                symbol=symbol,
-                                terminal_state=result.terminal_state,
-                                reason_code=reason_code,
-                                recovered=result.recovered,
-                                control_type=control_type,
-                            )
-                        )
-                        if result.terminal_state == "blocked_trade":
-                            blocked_trade_count += 1
-                            if control_type in {"stale_market_data", "stale_quote"}:
-                                cycle_status = "data_unavailable"
-                                self._log_cycle_event(
-                                    event_type="data_unavailable",
-                                    severity="warning",
-                                    message="Cycle blocked by stale market data.",
-                                    cycle_correlation_id=service_cycle_id,
-                                    fields={"symbol": symbol},
-                                )
-                        if not result.reconciliation.resolved:
-                            reconciliation_failure_count += 1
-                            cycle_status = "recovery_required"
-                    candidate_symbols = tuple(
-                        symbol for symbol in symbols if symbol not in open_symbols
+                elif self._portfolio_planner is None:
+                    (
+                        symbol_results,
+                        blocked_trade_count,
+                        reconciliation_failure_count,
+                        cycle_status,
+                    ) = self._run_legacy_symbol_cycles(
+                        symbols=symbols,
+                        quantity=quantity,
+                        portfolio_state=initial_portfolio_state,
+                        cycle_correlation_id=service_cycle_id,
+                        initial_cycle_status=cycle_status,
                     )
-                    if self._opportunity_selector is None:
-                        for symbol in candidate_symbols:
-                            result = self._loop_controller.run_trading_cycle(
-                                symbol,
-                                quantity,
-                            )
-                            reason_code = result.trade_intent.reason_code
-                            control_type = self._result_control_type(result)
-                            symbol_results.append(
-                                ServiceSymbolResult(
-                                    symbol=symbol,
-                                    terminal_state=result.terminal_state,
-                                    reason_code=reason_code,
-                                    recovered=result.recovered,
-                                    control_type=control_type,
-                                )
-                            )
-                            if result.terminal_state == "blocked_trade":
-                                blocked_trade_count += 1
-                                if control_type in {"stale_market_data", "stale_quote"}:
-                                    cycle_status = "data_unavailable"
-                                    self._log_cycle_event(
-                                        event_type="data_unavailable",
-                                        severity="warning",
-                                        message="Cycle blocked by stale market data.",
-                                        cycle_correlation_id=service_cycle_id,
-                                        fields={"symbol": symbol},
-                                    )
-                            if not result.reconciliation.resolved:
-                                reconciliation_failure_count += 1
-                                cycle_status = "recovery_required"
-                    elif candidate_symbols:
-                        selection = self._opportunity_selector.select_for_service(
-                            symbols=candidate_symbols,
-                            portfolio_state=initial_portfolio_state,
-                        )
-                        if selection.decision == "selected" and selection.selected_symbol:
-                            result = self._loop_controller.run_trading_cycle(
-                                selection.selected_symbol,
-                                quantity,
-                            )
-                            reason_code = result.trade_intent.reason_code
-                            control_type = self._result_control_type(result)
-                            symbol_results.append(
-                                ServiceSymbolResult(
-                                    symbol=selection.selected_symbol,
-                                    terminal_state=result.terminal_state,
-                                    reason_code=reason_code,
-                                    recovered=result.recovered,
-                                    control_type=control_type,
-                                )
-                            )
-                            if result.terminal_state == "blocked_trade":
-                                blocked_trade_count += 1
-                                if control_type in {"stale_market_data", "stale_quote"}:
-                                    cycle_status = "data_unavailable"
-                                    self._log_cycle_event(
-                                        event_type="data_unavailable",
-                                        severity="warning",
-                                        message="Cycle blocked by stale market data.",
-                                        cycle_correlation_id=service_cycle_id,
-                                        fields={"symbol": selection.selected_symbol},
-                                    )
-                            if not result.reconciliation.resolved:
-                                reconciliation_failure_count += 1
-                                cycle_status = "recovery_required"
+                elif not planner_failed:
+                    cycle_status = "recovery_required"
+                    self._log_cycle_event(
+                        event_type="planner_no_candidate",
+                        severity="warning",
+                        message="Runtime planner returned no executable plan.",
+                        cycle_correlation_id=service_cycle_id,
+                        fields={
+                            "reason": "planner_returned_none",
+                            "strategy_id": getattr(
+                                self._portfolio_planner,
+                                "last_strategy_id",
+                                "",
+                            ),
+                        },
+                    )
                 broker_status_after_cycle, portfolio_state = (
                     self._get_portfolio_state_guarded()
                 )
@@ -446,6 +365,109 @@ class PaperTradingService:
                 return "broker_unavailable", fallback
         return "broker_unavailable", fallback
 
+    def _run_legacy_symbol_cycles(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        quantity: Decimal,
+        portfolio_state: PortfolioState,
+        cycle_correlation_id: str,
+        initial_cycle_status: str,
+    ) -> tuple[list[ServiceSymbolResult], int, int, str]:
+        symbol_results: list[ServiceSymbolResult] = []
+        blocked_trade_count = 0
+        reconciliation_failure_count = 0
+        cycle_status = initial_cycle_status
+        open_symbols = {
+            position.symbol
+            for position in portfolio_state.positions
+            if position.quantity != Decimal("0")
+        }
+        for symbol in symbols:
+            if symbol not in open_symbols:
+                continue
+            result = self._loop_controller.run_trading_cycle(symbol, quantity)
+            self._record_loop_result(
+                result=result,
+                symbol_results=symbol_results,
+                cycle_correlation_id=cycle_correlation_id,
+            )
+            blocked_trade_count, reconciliation_failure_count, cycle_status = (
+                self._accumulate_cycle_outcome(
+                    result=result,
+                    blocked_trade_count=blocked_trade_count,
+                    reconciliation_failure_count=reconciliation_failure_count,
+                    cycle_status=cycle_status,
+                    cycle_correlation_id=cycle_correlation_id,
+                )
+            )
+        for symbol in tuple(symbol for symbol in symbols if symbol not in open_symbols):
+            result = self._loop_controller.run_trading_cycle(symbol, quantity)
+            self._record_loop_result(
+                result=result,
+                symbol_results=symbol_results,
+                cycle_correlation_id=cycle_correlation_id,
+            )
+            blocked_trade_count, reconciliation_failure_count, cycle_status = (
+                self._accumulate_cycle_outcome(
+                    result=result,
+                    blocked_trade_count=blocked_trade_count,
+                    reconciliation_failure_count=reconciliation_failure_count,
+                    cycle_status=cycle_status,
+                    cycle_correlation_id=cycle_correlation_id,
+                )
+            )
+        return (
+            symbol_results,
+            blocked_trade_count,
+            reconciliation_failure_count,
+            cycle_status,
+        )
+
+    def _record_loop_result(
+        self,
+        *,
+        result: TradingLoopResult,
+        symbol_results: list[ServiceSymbolResult],
+        cycle_correlation_id: str,
+    ) -> None:
+        del cycle_correlation_id
+        symbol_results.append(
+            ServiceSymbolResult(
+                symbol=result.trade_intent.symbol,
+                terminal_state=result.terminal_state,
+                reason_code=result.trade_intent.reason_code,
+                recovered=result.recovered,
+                control_type=self._result_control_type(result),
+            )
+        )
+
+    def _accumulate_cycle_outcome(
+        self,
+        *,
+        result: TradingLoopResult,
+        blocked_trade_count: int,
+        reconciliation_failure_count: int,
+        cycle_status: str,
+        cycle_correlation_id: str,
+    ) -> tuple[int, int, str]:
+        control_type = self._result_control_type(result)
+        if result.terminal_state == "blocked_trade":
+            blocked_trade_count += 1
+            if control_type in {"stale_market_data", "stale_quote"}:
+                cycle_status = "data_unavailable"
+                self._log_cycle_event(
+                    event_type="data_unavailable",
+                    severity="warning",
+                    message="Cycle blocked by stale market data.",
+                    cycle_correlation_id=cycle_correlation_id,
+                    fields={"symbol": result.trade_intent.symbol},
+                )
+        if not result.reconciliation.resolved:
+            reconciliation_failure_count += 1
+            cycle_status = "recovery_required"
+        return blocked_trade_count, reconciliation_failure_count, cycle_status
+
     def _broker_state_age_seconds(self, portfolio_state: PortfolioState) -> int:
         return max(
             0,
@@ -502,7 +524,7 @@ class PaperTradingService:
 def build_default_paper_service(
     config: TradingConfig,
     *,
-    opportunity_selector: OpportunitySelectorProtocol | None = None,
+    opportunity_selector: LiveOpportunitySelector | None = None,
 ) -> PaperTradingService:
     trading_client = TradingClient(
         config.paper_credentials.api_key,
@@ -513,16 +535,23 @@ def build_default_paper_service(
         config.runtime.artifact_root / "operator_platform"
     )
     market_data_gateway = build_default_market_data_gateway(config)
+    runtime_registry = build_default_runtime_registry(
+        market_data_gateway=market_data_gateway,
+        baseline_selector=opportunity_selector,
+    )
+    activation_gateway = LocalActivationGateway(
+        store=operator_store,
+        strategy_id_validator=runtime_registry.can_resolve,
+    )
     return PaperTradingService(
         loop_controller=build_default_paper_trading_controller(config),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
-        opportunity_selector=opportunity_selector,
-        portfolio_planner=RuntimePortfolioPlanner(
-            market_data=market_data_gateway,
-            activation_gateway=LocalActivationGateway(store=operator_store),
+        portfolio_planner=ActivatedRuntimePlanner(
+            activation_gateway=activation_gateway,
+            registry=runtime_registry,
         ),
         operator_control_store=OperatorControlStore(
             config.runtime.data_root / "control"

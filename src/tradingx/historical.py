@@ -41,11 +41,15 @@ class HistoricalWarmupService:
     ) -> HistoricalWarmupRecord:
         end_utc = self._now_provider()
         start_utc = end_utc - timedelta(days=warmup_days)
+        requested_symbols = tuple(symbols)
+        fetched_symbols = requested_symbols
+        if benchmark_symbol not in requested_symbols:
+            fetched_symbols = requested_symbols + (benchmark_symbol,)
         symbols_ready: list[str] = []
         symbols_blocked: dict[str, str] = {}
         return_summary: dict[str, dict[str, Decimal]] = {}
 
-        for symbol in tuple(symbols) + (benchmark_symbol,):
+        for symbol in fetched_symbols:
             series = self._market_data_gateway.get_daily_close_series(
                 symbol,
                 start_utc=start_utc,
@@ -53,7 +57,7 @@ class HistoricalWarmupService:
             )
             closes = series.closes
             if len(closes) < required_bar_count:
-                if symbol != benchmark_symbol:
+                if symbol in requested_symbols:
                     symbols_blocked[symbol] = "insufficient_bars"
                 continue
 
@@ -68,14 +72,14 @@ class HistoricalWarmupService:
                 "mean_return": decimal_mean(list(returns)),
                 "volatility": decimal_stddev(list(returns)),
             }
-            if symbol != benchmark_symbol:
+            if symbol in requested_symbols:
                 symbols_ready.append(symbol)
 
         return HistoricalWarmupRecord(
             warmup_id=f"warmup-{uuid.uuid4()}",
             generated_at_utc=end_utc,
             benchmark_symbol=benchmark_symbol,
-            symbols=tuple(symbols),
+            symbols=requested_symbols,
             window_start_utc=start_utc,
             window_end_utc=end_utc,
             required_bar_count=required_bar_count,

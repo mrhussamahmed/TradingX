@@ -72,6 +72,7 @@ uv run tradingx replay-slippage-report --paper-artifact-root artifacts/paper_loo
 uv run tradingx gate3-report --env-file .env
 uv run tradingx gate3-package --env-file .env
 uv run tradingx week1-rehearsal --env-file .env --output-dir artifacts/ops
+uv run tradingx launch-control-center --env-file .env
 uv run tradingx web --env-file .env
 ```
 
@@ -141,9 +142,16 @@ records and a replay-slippage summary under `artifacts/validation/`.
 
 ## Local website
 
+On macOS, you can start the control center without Terminal by
+double-clicking `TradingX Control Center.app` in the repo root. That
+launcher starts the local web control plane if needed and opens the
+dashboard in your browser. Actual bot start and stop still happen from
+the website `Runtime Host` panel.
+
 ```bash
 npm --prefix webapp install
 npm --prefix webapp run build
+uv run tradingx launch-control-center --env-file .env
 uv run tradingx web --env-file .env
 ```
 

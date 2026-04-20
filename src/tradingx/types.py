@@ -460,6 +460,67 @@ class BotRuntimeState:
 
 
 @dataclass(frozen=True)
+class RuntimeHeartbeatSnapshot:
+    heartbeat_state: str
+    heartbeat_summary: str
+    heartbeat_tone: str
+    cadence_seconds: int
+    cadence_label: str
+    last_evaluation_at_utc: datetime | None
+    next_evaluation_at_utc: datetime | None
+    last_decision: str
+    decision_reason: str
+    score_explanation: str
+    current_exposure: str
+    current_exposure_detail: str
+    active_symbol: str
+    selected_symbol: str
+    decision: str
+    runtime_truth: tuple["RuntimeTruthItem", ...] = ()
+    symbol_rows: tuple["RuntimeSymbolHeartbeatRow", ...] = ()
+    decision_ladder: tuple["RuntimeDecisionLadderRow", ...] = ()
+    operator_guidance: "RuntimeOperatorGuidance | None" = None
+
+
+@dataclass(frozen=True)
+class RuntimeTruthItem:
+    label: str
+    value: str
+    detail: str
+    tone: str
+
+
+@dataclass(frozen=True)
+class RuntimeSymbolHeartbeatRow:
+    symbol: str
+    status: str
+    score: str
+    threshold_gap: str
+    reason: str
+    warmup_state: str
+    exposure_state: str
+    tone: str
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionLadderRow:
+    rank: int
+    symbol: str
+    final_score: str
+    threshold: str
+    threshold_gap: str
+    primary_driver: str
+    disposition: str
+
+
+@dataclass(frozen=True)
+class RuntimeOperatorGuidance:
+    recommendation: str
+    detail: str
+    tone: str
+
+
+@dataclass(frozen=True)
 class HistoricalWarmupRecord:
     warmup_id: str
     generated_at_utc: datetime
@@ -707,9 +768,264 @@ class CommandCenterSnapshot:
     headline_incidents: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True)
+class PortfolioSourceNote:
+    source_id: str
+    label: str
+    tone: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class PortfolioMetricCard:
+    metric_id: str
+    label: str
+    value: str
+    delta: str
+    health: str
+    summary: str
+    detail: str
+    sparkline: tuple[str, ...]
+    provenance: PortfolioSourceNote | None = None
+
+
+@dataclass(frozen=True)
+class PortfolioSeriesPoint:
+    label: str
+    timestamp_utc: datetime | None
+    equity: str
+    cash: str
+    buying_power: str
+
+
+@dataclass(frozen=True)
+class PortfolioCurvePanel:
+    status: str
+    headline: str
+    detail: str
+    points: tuple[PortfolioSeriesPoint, ...]
+
+
+@dataclass(frozen=True)
+class PortfolioBenchmarkRow:
+    benchmark_id: str
+    label: str
+    portfolio_return: str
+    benchmark_return: str
+    excess_return: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class PortfolioBenchmarkPanel:
+    status: str
+    headline: str
+    detail: str
+    benchmark_rows: tuple[PortfolioBenchmarkRow, ...]
+
+
+@dataclass(frozen=True)
+class PortfolioStrategyRow:
+    strategy_id: str
+    label: str
+    status: str
+    pnl: str
+    trade_count: str
+    win_rate: str
+    max_drawdown: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class PortfolioStrategyPanel:
+    status: str
+    headline: str
+    detail: str
+    strategies: tuple[PortfolioStrategyRow, ...]
+
+
+@dataclass(frozen=True)
+class PortfolioKeyValue:
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class PortfolioEventSummary:
+    label: str
+    value: str
+    context: str
+
+
+@dataclass(frozen=True)
+class PortfolioExecutionPanel:
+    status: str
+    headline: str
+    detail: str
+    summary_metrics: tuple[PortfolioKeyValue, ...]
+    recent_events: tuple[PortfolioEventSummary, ...]
+    provenance: PortfolioSourceNote | None = None
+
+
+@dataclass(frozen=True)
+class PortfolioPositionRow:
+    symbol: str
+    quantity: str
+    market_value: str
+    exposure_pct: str
+    status: str
+
+
+@dataclass(frozen=True)
+class PortfolioPositionsPanel:
+    status: str
+    headline: str
+    detail: str
+    positions: tuple[PortfolioPositionRow, ...]
+
+
+@dataclass(frozen=True)
+class PortfolioDiagnostic:
+    diagnostic_id: str
+    title: str
+    detail: str
+    severity: str
+    owner: str
+    action: str
+
+
+@dataclass(frozen=True)
+class PortfolioWorkspaceSnapshot:
+    generated_at_utc: datetime
+    trading_mode: str
+    data_state: str
+    source_summary: str
+    source_notes: tuple[PortfolioSourceNote, ...]
+    metric_cards: tuple[PortfolioMetricCard, ...]
+    equity_curve: PortfolioCurvePanel
+    benchmark_panel: PortfolioBenchmarkPanel
+    strategy_panel: PortfolioStrategyPanel
+    execution_panel: PortfolioExecutionPanel
+    positions_panel: PortfolioPositionsPanel
+    diagnostics: tuple[PortfolioDiagnostic, ...]
+
+
+@dataclass(frozen=True)
+class PerformanceKpi:
+    metric_id: str
+    label: str
+    value: str
+    delta: str
+    tone: str
+    context: str
+    tooltip: str
+    sparkline: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BenchmarkOption:
+    benchmark_id: str
+    label: str
+
+
+@dataclass(frozen=True)
+class PerformanceSeriesPoint:
+    label: str
+    portfolio: Decimal
+    sp500: Decimal
+    nasdaq100: Decimal
+    custom: Decimal
+
+
+@dataclass(frozen=True)
+class BenchmarkComparisonRow:
+    benchmark_id: str
+    label: str
+    portfolio_return: str
+    benchmark_return: str
+    excess_return: str
+    alpha: str
+    beta: str
+    tracking_error: str
+    information_ratio: str
+    up_capture: str
+    down_capture: str
+    max_drawdown: str
+    correlation: str
+
+
+@dataclass(frozen=True)
+class PerformancePeriodBar:
+    label: str
+    value: Decimal
+
+
+@dataclass(frozen=True)
+class PerformanceWindowSnapshot:
+    window_id: str
+    label: str
+    series: tuple[PerformanceSeriesPoint, ...]
+    benchmark_rows: tuple[BenchmarkComparisonRow, ...]
+    period_bars: tuple[PerformancePeriodBar, ...]
+
+
+@dataclass(frozen=True)
+class StrategyAttributionRow:
+    strategy_id: str
+    label: str
+    pnl: str
+    total_return: str
+    sharpe_ratio: str
+    max_drawdown: str
+    win_rate: str
+    profit_factor: str
+    contribution_pct: str
+    stability_score: str
+    recent_trend: str
+    regime_fit: str
+    status: str
+
+
+@dataclass(frozen=True)
+class StrategyHeatmapCell:
+    strategy_id: str
+    regime: str
+    value: Decimal
+    tone: str
+
+
+@dataclass(frozen=True)
+class PerformanceDiagnostic:
+    diagnostic_id: str
+    title: str
+    detail: str
+    severity: str
+    owner: str
+    action: str
+
+
+@dataclass(frozen=True)
+class PerformanceAnalyticsSnapshot:
+    generated_at_utc: datetime
+    data_mode: str
+    source_summary: str
+    default_window: str
+    default_benchmark_id: str
+    current_regime: str
+    kpi_cards: tuple[PerformanceKpi, ...]
+    benchmark_options: tuple[BenchmarkOption, ...]
+    available_windows: tuple[str, ...]
+    performance_windows: dict[str, PerformanceWindowSnapshot]
+    strategy_rows: tuple[StrategyAttributionRow, ...]
+    strategy_heatmap: tuple[StrategyHeatmapCell, ...]
+    diagnostics: tuple[PerformanceDiagnostic, ...]
+
+
 __all__ = (
     "AccountSnapshot",
     "AlertDrillRecord",
+    "BenchmarkComparisonRow",
+    "BenchmarkOption",
     "BenchmarkCloseSeries",
     "BotRuntimeState",
     "ClosedTradeRecord",
@@ -739,7 +1055,27 @@ __all__ = (
     "OpportunitySelectionRecord",
     "OperatorAlert",
     "OrderRecord",
+    "PortfolioBenchmarkPanel",
+    "PortfolioBenchmarkRow",
+    "PortfolioCurvePanel",
+    "PortfolioDiagnostic",
+    "PortfolioEventSummary",
+    "PortfolioExecutionPanel",
+    "PortfolioKeyValue",
+    "PortfolioMetricCard",
+    "PortfolioPositionRow",
+    "PortfolioPositionsPanel",
+    "PortfolioSeriesPoint",
+    "PortfolioStrategyPanel",
+    "PortfolioStrategyRow",
     "PortfolioState",
+    "PortfolioWorkspaceSnapshot",
+    "PerformanceAnalyticsSnapshot",
+    "PerformanceDiagnostic",
+    "PerformanceKpi",
+    "PerformancePeriodBar",
+    "PerformanceSeriesPoint",
+    "PerformanceWindowSnapshot",
     "PositionSnapshot",
     "ReplaySlippageGenerationResult",
     "ReplaySlippageRecord",
@@ -748,12 +1084,15 @@ __all__ = (
     "RecoveryDrillRecord",
     "RiskControlEvent",
     "RoundTripResult",
+    "RuntimeHeartbeatSnapshot",
     "ScalarValue",
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",
     "StrategyActivationRecord",
+    "StrategyAttributionRow",
     "StrategyCandidate",
+    "StrategyHeatmapCell",
     "TradeIntent",
     "TradingLoopResult",
     "ValidationCandidateResult",

@@ -50,6 +50,133 @@ export type CommandCenterSnapshot = {
   headline_incidents: Array<{ incident_id: string; severity: string }>
 }
 
+export type PortfolioMetricCard = {
+  metric_id: string
+  label: string
+  value: string
+  delta: string
+  health: string
+  summary: string
+  detail: string
+  sparkline: string[]
+  provenance?: PortfolioSourceNote | null
+}
+
+export type PortfolioSourceNote = {
+  source_id: string
+  label: string
+  tone: string
+  detail: string
+}
+
+export type PortfolioSeriesPoint = {
+  label: string
+  timestamp_utc: string | null
+  equity: string
+  cash: string
+  buying_power: string
+}
+
+export type PortfolioCurvePanel = {
+  status: string
+  headline: string
+  detail: string
+  points: PortfolioSeriesPoint[]
+}
+
+export type PortfolioBenchmarkRow = {
+  benchmark_id: string
+  label: string
+  portfolio_return: string
+  benchmark_return: string
+  excess_return: string
+  detail: string
+}
+
+export type PortfolioBenchmarkPanel = {
+  status: string
+  headline: string
+  detail: string
+  benchmark_rows: PortfolioBenchmarkRow[]
+}
+
+export type PortfolioStrategyRow = {
+  strategy_id: string
+  label: string
+  status: string
+  pnl: string
+  trade_count: string
+  win_rate: string
+  max_drawdown: string
+  detail: string
+}
+
+export type PortfolioStrategyPanel = {
+  status: string
+  headline: string
+  detail: string
+  strategies: PortfolioStrategyRow[]
+}
+
+export type PortfolioKeyValue = {
+  label: string
+  value: string
+}
+
+export type PortfolioEventSummary = {
+  label: string
+  value: string
+  context: string
+}
+
+export type PortfolioExecutionPanel = {
+  status: string
+  headline: string
+  detail: string
+  summary_metrics: PortfolioKeyValue[]
+  recent_events: PortfolioEventSummary[]
+  provenance?: PortfolioSourceNote | null
+}
+
+export type PortfolioPositionRow = {
+  symbol: string
+  quantity: string
+  market_value: string
+  exposure_pct: string
+  status: string
+}
+
+export type PortfolioPositionsPanel = {
+  status: string
+  headline: string
+  detail: string
+  positions: PortfolioPositionRow[]
+}
+
+export type PortfolioDiagnostic = {
+  diagnostic_id: string
+  title: string
+  detail: string
+  severity: string
+  owner: string
+  action: string
+}
+
+export type PortfolioWorkspaceSnapshot = {
+  generated_at_utc: string
+  trading_mode: string
+  data_state: string
+  source_summary: string
+  source_notes: PortfolioSourceNote[]
+  metric_cards: PortfolioMetricCard[]
+  equity_curve: PortfolioCurvePanel
+  benchmark_panel: PortfolioBenchmarkPanel
+  strategy_panel: PortfolioStrategyPanel
+  execution_panel: PortfolioExecutionPanel
+  positions_panel: PortfolioPositionsPanel
+  diagnostics: PortfolioDiagnostic[]
+}
+
 export type IncidentRecord = {
   incident_id: string
   title: string
@@ -170,6 +297,62 @@ export type BotRuntimeState = {
   latest_selection_id: string
 }
 
+export type RuntimeTruthItem = {
+  label: string
+  value: string
+  detail: string
+  tone: string
+}
+
+export type RuntimeSymbolHeartbeatRow = {
+  symbol: string
+  status: string
+  score: string
+  threshold_gap: string
+  reason: string
+  warmup_state: string
+  exposure_state: string
+  tone: string
+}
+
+export type RuntimeDecisionLadderRow = {
+  rank: number
+  symbol: string
+  final_score: string
+  threshold: string
+  threshold_gap: string
+  primary_driver: string
+  disposition: string
+}
+
+export type RuntimeOperatorGuidance = {
+  recommendation: string
+  detail: string
+  tone: string
+}
+
+export type RuntimeHeartbeatSnapshot = {
+  heartbeat_state: string
+  heartbeat_summary: string
+  heartbeat_tone: string
+  cadence_seconds: number
+  cadence_label: string
+  last_evaluation_at_utc: string | null
+  next_evaluation_at_utc: string | null
+  last_decision: string
+  decision_reason: string
+  score_explanation: string
+  current_exposure: string
+  current_exposure_detail: string
+  active_symbol: string
+  selected_symbol: string
+  decision: string
+  runtime_truth: RuntimeTruthItem[]
+  symbol_rows: RuntimeSymbolHeartbeatRow[]
+  decision_ladder: RuntimeDecisionLadderRow[]
+  operator_guidance: RuntimeOperatorGuidance | null
+}
+
 export type HistoricalWarmupRecord = {
   warmup_id: string
   generated_at_utc: string
@@ -231,24 +414,113 @@ export type OpportunitySelectionRecord = {
   decision_reason: string
 }
 
-export type ModelWeightProposal = {
-  proposal_id: string
-  generated_at_utc: string
-  strategy_id: string
-  supporting_trade_count: number
-  baseline_snapshot_id: string
-  candidate_snapshot: ModelWeightSnapshot
-  improvement_score: string
-  statistically_significant: boolean
-  summary: string
-}
-
 export type ConfigProposal = {
   proposal_id: string
   target_area: string
   proposed_values: Record<string, unknown>
   diff_preview: string
   output_path: string
+}
+
+export type PerformanceKpi = {
+  metric_id: string
+  label: string
+  value: string
+  delta: string
+  tone: string
+  context: string
+  tooltip: string
+  sparkline: string[]
+}
+
+export type BenchmarkOption = {
+  benchmark_id: string
+  label: string
+}
+
+export type PerformanceSeriesPoint = {
+  label: string
+  portfolio: string
+  sp500: string
+  nasdaq100: string
+  custom: string
+}
+
+export type BenchmarkComparisonRow = {
+  benchmark_id: string
+  label: string
+  portfolio_return: string
+  benchmark_return: string
+  excess_return: string
+  alpha: string
+  beta: string
+  tracking_error: string
+  information_ratio: string
+  up_capture: string
+  down_capture: string
+  max_drawdown: string
+  correlation: string
+}
+
+export type PerformancePeriodBar = {
+  label: string
+  value: string
+}
+
+export type PerformanceWindowSnapshot = {
+  window_id: string
+  label: string
+  series: PerformanceSeriesPoint[]
+  benchmark_rows: BenchmarkComparisonRow[]
+  period_bars: PerformancePeriodBar[]
+}
+
+export type StrategyAttributionRow = {
+  strategy_id: string
+  label: string
+  pnl: string
+  total_return: string
+  sharpe_ratio: string
+  max_drawdown: string
+  win_rate: string
+  profit_factor: string
+  contribution_pct: string
+  stability_score: string
+  recent_trend: string
+  regime_fit: string
+  status: string
+}
+
+export type StrategyHeatmapCell = {
+  strategy_id: string
+  regime: string
+  value: string
+  tone: string
+}
+
+export type PerformanceDiagnostic = {
+  diagnostic_id: string
+  title: string
+  detail: string
+  severity: string
+  owner: string
+  action: string
+}
+
+export type PerformanceAnalyticsSnapshot = {
+  generated_at_utc: string
+  data_mode: string
+  source_summary: string
+  default_window: string
+  default_benchmark_id: string
+  current_regime: string
+  kpi_cards: PerformanceKpi[]
+  benchmark_options: BenchmarkOption[]
+  available_windows: string[]
+  performance_windows: Record<string, PerformanceWindowSnapshot>
+  strategy_rows: StrategyAttributionRow[]
+  strategy_heatmap: StrategyHeatmapCell[]
+  diagnostics: PerformanceDiagnostic[]
 }
 
 export type Gate3CriterionSnapshot = {

@@ -26,7 +26,12 @@ from tradingx.types import (
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
+    RuntimeHeartbeatSnapshot,
+    RuntimeDecisionLadderRow,
     StrategyActivationRecord,
+    RuntimeOperatorGuidance,
+    RuntimeSymbolHeartbeatRow,
+    RuntimeTruthItem,
     WebActionResult,
     WebServiceState,
 )
@@ -218,6 +223,89 @@ class FakeReadModel:
             ),
         )
 
+    def build_portfolio_workspace_snapshot(self) -> dict[str, object]:
+        return {
+            "generated_at_utc": datetime(2026, 4, 19, 12, 30, tzinfo=UTC),
+            "trading_mode": "paper",
+            "data_state": "partial",
+            "source_summary": "Account balances and execution evidence are real; benchmark comparison is waiting for persisted TradingX history.",
+            "metric_cards": [
+                {
+                    "metric_id": "equity",
+                    "label": "Total Equity",
+                    "value": "$100,030.00",
+                    "delta": "Flat vs seeded account",
+                    "health": "neutral",
+                    "summary": "Neutral because capital is preserved, but there is no completed live evidence yet.",
+                    "detail": "Equity is intact. This protects capital, but it does not yet demonstrate trading edge.",
+                    "sparkline": (),
+                },
+                {
+                    "metric_id": "execution_quality",
+                    "label": "Execution Quality",
+                    "value": "2 rejects",
+                    "delta": "Latest reason: insufficient buying power",
+                    "health": "bad",
+                    "summary": "Bad because the bot is attempting orders the account cannot currently support.",
+                    "detail": "Repeated rejected submissions indicate a sizing or risk-control mismatch that should be fixed before more automation.",
+                    "sparkline": ("2", "2"),
+                },
+            ],
+            "equity_curve": {
+                "status": "unavailable",
+                "headline": "No real TradingX equity curve yet",
+                "detail": "The portfolio curve will appear after at least one timestamped service cycle is recorded.",
+                "points": [],
+            },
+            "benchmark_panel": {
+                "status": "unavailable",
+                "headline": "Benchmark comparison waiting for evidence",
+                "detail": "TradingX needs a persisted equity history window before benchmark-relative analytics can be trusted.",
+                "benchmark_rows": [],
+            },
+            "strategy_panel": {
+                "status": "unavailable",
+                "headline": "Strategy attribution waiting for closed-trade evidence",
+                "detail": "Strategy contribution will unlock after TradingX records closed trades and realized P&L.",
+                "strategies": [],
+            },
+            "execution_panel": {
+                "status": "available",
+                "headline": "Execution journal is available",
+                "detail": "Recent order attempts are available from the OMS journal and are safe to inspect now.",
+                "summary_metrics": [
+                    {"label": "Reject Count", "value": "2"},
+                    {"label": "Latest Reason", "value": "insufficient buying power"},
+                ],
+                "recent_events": [
+                    {
+                        "label": "Reject",
+                        "value": "SPY buy rejected",
+                        "context": "insufficient buying power",
+                    }
+                ],
+            },
+            "positions_panel": {
+                "status": "available",
+                "headline": "No open positions",
+                "detail": "The account is flat right now.",
+                "positions": [],
+            },
+            "diagnostics": [
+                {
+                    "diagnostic_id": "runtime",
+                    "title": "Runtime is halted before warmup completed",
+                    "detail": "QQQ remains blocked by insufficient bars.",
+                    "severity": "warning",
+                    "owner": "Runtime Host",
+                    "action": "Refresh warmup inputs before broadening deployment.",
+                }
+            ],
+        }
+
+    def build_performance_analytics_snapshot(self) -> dict[str, object]:
+        return self.build_portfolio_workspace_snapshot()
+
     def get_runtime_host_state(self) -> BotRuntimeState:
         timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
         return BotRuntimeState(
@@ -230,6 +318,90 @@ class FakeReadModel:
             active_strategy_id="baseline-long-only-v1",
             active_model_snapshot_id="snapshot-1",
             latest_selection_id="selection-1",
+        )
+
+    def build_runtime_heartbeat_snapshot(self) -> RuntimeHeartbeatSnapshot:
+        timestamp = datetime(2026, 4, 19, 12, 5, tzinfo=UTC)
+        return RuntimeHeartbeatSnapshot(
+            heartbeat_state="Waiting for next evaluation",
+            heartbeat_summary=(
+                "TradingX evaluated the configured universe, found no deployable trade, "
+                "and is waiting for the next cadence tick."
+            ),
+            heartbeat_tone="info",
+            cadence_seconds=300,
+            cadence_label="Every 5m",
+            last_evaluation_at_utc=timestamp,
+            next_evaluation_at_utc=timestamp,
+            last_decision="No trade",
+            decision_reason="No eligible opportunity cleared the deploy threshold.",
+            score_explanation="SPY scored 0.4177 which is below the deploy threshold of 0.50.",
+            current_exposure="Flat",
+            current_exposure_detail="No open position is currently held in the paper account.",
+            active_symbol="SPY",
+            selected_symbol="",
+            decision="no_trade",
+            runtime_truth=(
+                RuntimeTruthItem(
+                    label="Session posture",
+                    value="Intraday monitor",
+                    detail="Mission Control is in its market-session monitoring posture.",
+                    tone="info",
+                ),
+                RuntimeTruthItem(
+                    label="Trading mode",
+                    value="Paper",
+                    detail="Orders remain in paper mode only.",
+                    tone="good",
+                ),
+            ),
+            symbol_rows=(
+                RuntimeSymbolHeartbeatRow(
+                    symbol="SPY",
+                    status="Below threshold",
+                    score="0.4177",
+                    threshold_gap="-0.0823",
+                    reason="Score remained below the deploy threshold.",
+                    warmup_state="Ready",
+                    exposure_state="Flat",
+                    tone="info",
+                ),
+                RuntimeSymbolHeartbeatRow(
+                    symbol="QQQ",
+                    status="Blocked",
+                    score="n/a",
+                    threshold_gap="n/a",
+                    reason="Insufficient daily bars for warmup coverage.",
+                    warmup_state="Blocked",
+                    exposure_state="Flat",
+                    tone="watch",
+                ),
+            ),
+            decision_ladder=(
+                RuntimeDecisionLadderRow(
+                    rank=1,
+                    symbol="SPY",
+                    final_score="0.4177",
+                    threshold="0.50",
+                    threshold_gap="-0.0823",
+                    primary_driver="Volatility penalty",
+                    disposition="Monitor",
+                ),
+                RuntimeDecisionLadderRow(
+                    rank=2,
+                    symbol="QQQ",
+                    final_score="n/a",
+                    threshold="0.50",
+                    threshold_gap="n/a",
+                    primary_driver="Warmup blocked",
+                    disposition="Blocked",
+                ),
+            ),
+            operator_guidance=RuntimeOperatorGuidance(
+                recommendation="Investigate warmup failure",
+                detail="QQQ is still blocked by warmup, so TradingX is evaluating an incomplete universe.",
+                tone="watch",
+            ),
         )
 
     def get_latest_historical_warmup(self):
@@ -652,7 +824,10 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     automation = client.get("/api/platform/gate3/automation/latest")
     scheduler_state = client.get("/api/platform/gate3/scheduler/state")
     scheduler_latest = client.get("/api/platform/gate3/scheduler/latest")
+    portfolio = client.get("/api/platform/portfolio")
+    performance = client.get("/api/platform/performance")
     runtime_state = client.get("/api/runtime-host/state")
+    runtime_heartbeat = client.get("/api/runtime-host/heartbeat")
     runtime_warmup = client.get("/api/runtime-host/warmup/latest")
     runtime_activation = client.get("/api/runtime-host/activation/latest")
     runtime_model = client.get("/api/runtime-host/model/latest")
@@ -693,8 +868,24 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert scheduler_state.json()["status"] == "waiting"
     assert scheduler_latest.status_code == 200
     assert scheduler_latest.json()["schedule_id"] == "schedule-1"
+    assert portfolio.status_code == 200
+    assert portfolio.json()["data_state"] == "partial"
+    assert portfolio.json()["metric_cards"][0]["metric_id"] == "equity"
+    assert portfolio.json()["benchmark_panel"]["status"] == "unavailable"
+    assert performance.status_code == 200
+    assert performance.json()["data_state"] == "partial"
+    assert performance.json()["execution_panel"]["headline"] == "Execution journal is available"
     assert runtime_state.status_code == 200
     assert runtime_state.json()["status"] == "trading_ready"
+    assert runtime_heartbeat.status_code == 200
+    assert runtime_heartbeat.json()["heartbeat_state"] == "Waiting for next evaluation"
+    assert runtime_heartbeat.json()["last_decision"] == "No trade"
+    assert runtime_heartbeat.json()["runtime_truth"][0]["label"] == "Session posture"
+    assert runtime_heartbeat.json()["symbol_rows"][0]["symbol"] == "SPY"
+    assert (
+        runtime_heartbeat.json()["operator_guidance"]["recommendation"]
+        == "Investigate warmup failure"
+    )
     assert runtime_warmup.status_code == 200
     assert runtime_warmup.json()["warmup_id"] == "warmup-1"
     assert runtime_activation.status_code == 200

@@ -25,10 +25,10 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketDaySchedulerRunResult,
+    MarketSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
     OrderRecord,
-    MarketSnapshot,
     PortfolioState,
     RoundTripResult,
     ServiceCycleSnapshot,
@@ -352,6 +352,23 @@ class FakeWebRunner:
             "config": config,
             "host": host,
             "port": port,
+        }
+
+
+class FakeControlCenterLauncher:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def __call__(self, *, config, repo_root: Path, env_file: Path):
+        self.called_with = {
+            "config": config,
+            "repo_root": repo_root,
+            "env_file": env_file,
+        }
+        return {
+            "status": "connected",
+            "dashboard_url": f"http://{config.web.host}:{config.web.port}",
+            "reused_existing_server": True,
         }
 
 
@@ -1384,6 +1401,75 @@ def test_main_runs_local_web_command(monkeypatch, tmp_path) -> None:
     assert fake_runner.called_with is not None
     assert fake_runner.called_with["host"] == "127.0.0.1"
     assert fake_runner.called_with["port"] == 9020
+
+
+def test_main_runs_launch_control_center_command(monkeypatch, tmp_path, capsys) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_WEB_HOST=127.0.0.1\n"
+        "TRADINGX_WEB_PORT=9010\n",
+        encoding="utf-8",
+    )
+    fake_launcher = FakeControlCenterLauncher()
+    monkeypatch.setattr(
+        cli,
+        "launch_control_center",
+        fake_launcher,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "launch-control-center",
+            "--env-file",
+            str(env_file),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "connected"
+    assert payload["dashboard_url"] == "http://127.0.0.1:9010"
+    assert fake_launcher.called_with is not None
+    assert fake_launcher.called_with["env_file"] == env_file
+    assert fake_launcher.called_with["repo_root"] == Path.cwd()
+
+
+def test_main_reports_launch_control_center_errors(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n",
+        encoding="utf-8",
+    )
+
+    def raise_error(*, config, repo_root: Path, env_file: Path):
+        del config, repo_root, env_file
+        raise cli.ControlCenterLaunchError("Control center did not become ready.")
+
+    monkeypatch.setattr(
+        cli,
+        "launch_control_center",
+        raise_error,
+        raising=False,
+    )
+
+    exit_code = cli.main(
+        [
+            "launch-control-center",
+            "--env-file",
+            str(env_file),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "error"
+    assert payload["message"] == "Control center did not become ready."
 
 
 def test_main_runs_replay_slippage_report_command(tmp_path, capsys) -> None:

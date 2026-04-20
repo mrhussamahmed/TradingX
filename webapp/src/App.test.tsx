@@ -5,57 +5,55 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 const overviewPayload = {
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
+  generated_at_utc: '2026-04-20T08:40:00+00:00',
   service_status: {
-    status: 'running',
-    active_symbols: ['SPY', 'QQQ'],
-    interval_seconds: 300,
-    cycles_completed: 4,
-    started_at_utc: '2026-04-18T17:00:00+00:00',
-    last_completed_at_utc: '2026-04-18T18:00:00+00:00',
+    status: 'halted',
+    active_symbols: ['SPY', 'QQQ', 'IWM'],
+    interval_seconds: 180,
+    cycles_completed: 0,
+    started_at_utc: null,
+    last_completed_at_utc: null,
     last_error: '',
   },
   account_summary: {
-    cash: '10025.00',
-    equity: '10030.00',
-    buying_power: '20030.00',
-    daily_pnl: '5.00',
+    cash: '99999.57',
+    equity: '99999.57',
+    buying_power: '399998.28',
+    daily_pnl: '0.00',
   },
-  positions: [{ symbol: 'SPY', quantity: '1', market_value: '101.00' }],
-  alerts: ['Blocked trade due to stale broker state.'],
-  gate_statuses: { '1': 'pass', '2': 'pending' },
-  recommendations: { promote_candidate: 1 },
+  positions: [],
+  alerts: [],
+  gate_statuses: {},
+  recommendations: {},
   document_summary: {
-    session_count: 3,
-    latest_state: 'Operator platform is in progress.',
+    session_count: 1,
+    latest_state: 'System waiting for the first supervised market cycle.',
   },
 }
 
 const commandCenterPayload = {
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
+  generated_at_utc: '2026-04-20T08:40:00+00:00',
   service_status: overviewPayload.service_status,
-  market_session_label: 'Regular session monitor',
-  session_mode: 'intraday',
+  market_session_label: 'Local operator monitor',
+  session_mode: 'standby',
   account_summary: overviewPayload.account_summary,
-  equity_curve: [
-    { label: '09:30', value: '10000.00' },
-    { label: '10:00', value: '10030.00' },
+  equity_curve: [],
+  exposure_breakdown: [],
+  watchlist: [
+    { symbol: 'SPY', status: 'monitor' },
+    { symbol: 'QQQ', status: 'monitor' },
+    { symbol: 'IWM', status: 'monitor' },
   ],
-  exposure_breakdown: [
-    { symbol: 'SPY', value: '65' },
-    { symbol: 'QQQ', value: '35' },
-  ],
-  watchlist: [{ symbol: 'SPY', status: 'active' }],
-  gate_statuses: { '1': 'pass', '2': 'pending' },
-  recommendations: { promote_candidate: 1 },
-  headline_incidents: [{ incident_id: 'incident-alert-1', severity: 'warning' }],
+  gate_statuses: {},
+  recommendations: {},
+  headline_incidents: [],
 }
 
 const configSummaryPayload = {
   config: {
     web_write_mode_enabled: true,
-    symbol_universe: ['SPY', 'QQQ'],
-    service_interval_seconds: 300,
+    symbol_universe: ['SPY', 'QQQ', 'IWM'],
+    service_interval_seconds: 180,
     web_refresh_interval_seconds: 15,
   },
   live_disable_report: {
@@ -70,55 +68,36 @@ const documentsPayload = [
     doc_id: 'STATE',
     title: 'Project state',
     path: 'docs/handover/STATE.md',
-    preview: 'Operator platform is in progress.',
+    preview: 'System waiting for the first supervised market cycle.',
     kind: 'state',
   },
 ]
 
-const proposalsPayload = [
-  {
-    proposal_id: 'proposal-1',
-    target_area: 'runtime',
-    proposed_values: {},
-    diff_preview: '+ TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ',
-    output_path: 'config/proposals/proposal-1.md',
-  },
-]
+const proposalsPayload: Array<Record<string, unknown>> = []
 
 const incidentsPayload = [
   {
     incident_id: 'incident-alert-1',
-    title: 'Blocked trade',
+    title: 'Warmup breadth incomplete',
     severity: 'warning',
     status: 'open',
-    category: 'risk',
-    summary: 'Stale broker state blocked a trade.',
-    first_seen_at_utc: '2026-04-18T18:00:00+00:00',
-    latest_seen_at_utc: '2026-04-18T18:00:00+00:00',
+    category: 'runtime',
+    summary: 'QQQ is still blocked because the warmup window is incomplete.',
+    first_seen_at_utc: '2026-04-20T08:35:00+00:00',
+    latest_seen_at_utc: '2026-04-20T08:35:00+00:00',
     acknowledged_at_utc: null,
     acknowledged_by: '',
     related_event_ids: ['event-1'],
-    evidence_refs: ['artifacts/paper_loop/operator_alerts/alert-1.json'],
-    suggested_action: 'Review broker state freshness.',
+    evidence_refs: ['artifacts/operator_platform/runtime_host/state.json'],
+    suggested_action: 'Refresh warmup inputs before broadening the universe.',
   },
 ]
 
 const researchPayload = {
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
-  gate_summaries: [{ gate_id: '1', status: 'pass' }],
-  candidate_summaries: [
-    {
-      candidate_id: 'trend-following-v1',
-      family: 'trend_following',
-      recommendation: 'promote_candidate',
-      benchmark_metrics: { sharpe: '1.0' },
-      candidate_metrics: { sharpe: '1.4' },
-      adversarial_checks: ['fee_stress'],
-      gate_statuses: { '1': 'pass' },
-      summary: 'Candidate cleared Gate 1.',
-    },
-  ],
-  decision_summary: 'Gate 1 passed.',
+  generated_at_utc: '2026-04-20T08:40:00+00:00',
+  gate_summaries: [],
+  candidate_summaries: [],
+  decision_summary: 'No gate assessments are available yet.',
 }
 
 const replayPayload = {
@@ -129,17 +108,17 @@ const replayPayload = {
   events: [
     {
       event_id: 'event-1',
-      event_type: 'operator_alert',
+      event_type: 'reject',
       symbol: 'SPY',
       severity: 'warning',
-      headline: 'Blocked trade',
-      details: 'Stale broker state blocked a trade.',
-      occurred_at_utc: '2026-04-18T18:00:00+00:00',
-      artifact_path: 'artifacts/paper_loop/operator_alerts/alert-1.json',
-      related_ids: ['alert-1'],
+      headline: 'Insufficient buying power',
+      details: 'Paper submit was rejected because requested exposure was too large.',
+      occurred_at_utc: '2026-04-20T08:35:00+00:00',
+      artifact_path: 'artifacts/ops/data/journal.db',
+      related_ids: ['incident-alert-1'],
     },
   ],
-  summary: 'Replay ready.',
+  summary: 'Replay contains the latest rejected execution attempts.',
 }
 
 const explorerPayload = [
@@ -147,389 +126,480 @@ const explorerPayload = [
     record_id: 'record-1',
     category: 'validation_report',
     title: 'Gate 1 report',
-    preview: 'Gate 1 passed with benchmark-relative edge.',
+    preview: 'No validated alpha report has been generated yet.',
     path: 'artifacts/validation/validation_reports/gate-1.json',
     symbol: 'SPY',
-    recorded_at_utc: '2026-04-18T18:00:00+00:00',
+    recorded_at_utc: '2026-04-20T08:10:00+00:00',
   },
 ]
 
 const digestPayload = {
   digest_id: 'digest-1',
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
-  session_label: 'session_close',
-  service_status: 'stopped',
-  blocked_trade_count: 1,
+  generated_at_utc: '2026-04-20T08:30:00+00:00',
+  session_label: 'session_preopen',
+  service_status: 'idle',
+  blocked_trade_count: 2,
   reconciliation_failure_count: 0,
-  latest_positions: ['SPY'],
+  latest_positions: [],
   top_incidents: ['incident-alert-1'],
-  recommended_actions: ['Review broker freshness.'],
+  recommended_actions: ['Complete warmup before resuming automation.'],
   evidence_refs: ['artifacts/operator_platform/daily_digests/digest-1.json'],
 }
 
 const gate3ReadinessPayload = {
   report_id: 'gate3-1',
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
+  generated_at_utc: '2026-04-20T08:40:00+00:00',
   status: 'pending',
-  closed_trade_count: 12,
-  calendar_days_observed: 21,
-  criteria: [
-    {
-      criterion_id: 'duration_or_trade_count',
-      status: 'pending',
-      threshold: 'At least 180 calendar days or 100 closed trades',
-      observed_value: '12 trades / 21 days',
-      details: 'Paper evidence is still accumulating.',
-      evidence_refs: ['artifacts/paper_loop/closed_trades/trade-1.json'],
-    },
-  ],
-  summary: 'Gate 3 evidence is still incomplete.',
-  required_operator_action: 'Continue paper trading and rerun Gate 3.',
+  closed_trade_count: 0,
+  calendar_days_observed: 0,
+  criteria: [],
+  summary: 'Gate 3 is waiting for real paper evidence.',
+  required_operator_action: 'Keep the paper runtime supervised until enough evidence exists.',
   evidence_refs: ['artifacts/validation/gate3_reports/gate3-1.json'],
 }
 
-const gate3PackagePayload = {
-  package_id: 'gate3-package-1',
-  generated_at_utc: '2026-04-18T18:00:00+00:00',
-  status: 'pending',
-  headline: 'Gate 3 is not ready for promotion.',
-  decision_summary: 'More paper evidence is required.',
-  criteria_statuses: { duration_or_trade_count: 'pending' },
-  evidence_refs: ['artifacts/validation/gate3_packages/gate3-package-1.json'],
-}
-
-const replaySlippageSummaryPayload = {
-  summary_id: 'replay-summary-1',
-  matched_execution_count: 12,
-  paper_mean_absolute_slippage_bps: '5.0',
-  replay_mean_absolute_slippage_bps: '7.5',
-  divergence_ratio: '1.5',
-  status: 'pass',
-  details: 'Replay divergence is within the allowed bound.',
-  generated_at_utc: '2026-04-18T18:05:00+00:00',
-}
-
-const marketAutomationPayload = {
-  run_id: 'automation-1',
-  started_at_utc: '2026-04-18T08:00:00+00:00',
-  completed_at_utc: '2026-04-18T08:30:00+00:00',
-  trading_day: '2026-04-18',
-  status: 'completed',
-  heartbeat_count: 2,
-  preopen_session_id: 'session-preopen-1',
-  heartbeat_session_ids: ['session-heartbeat-1', 'session-heartbeat-2'],
-  close_session_id: 'session-close-1',
-  latest_replay_summary_id: 'replay-summary-1',
-  latest_gate3_report_id: 'gate3-1',
-  latest_gate3_package_id: 'gate3-package-1',
-  summary: 'Automation completed with fresh evidence.',
-  evidence_refs: ['artifacts/operator_platform/market_automation_runs/automation-1.json'],
-}
+const gate3PackagePayload = null
+const replaySlippageSummaryPayload = null
+const marketAutomationPayload = null
 
 const schedulerStatePayload = {
-  status: 'waiting',
+  status: 'idle',
   poll_interval_seconds: 60,
-  active_symbols: ['SPY', 'QQQ'],
-  next_run_at_utc: '2026-04-21T13:30:00+00:00',
+  active_symbols: ['SPY'],
+  next_run_at_utc: null,
   last_started_at_utc: null,
   last_completed_at_utc: null,
-  active_trading_day: '2026-04-21',
+  active_trading_day: '',
   last_error: '',
 }
 
-const schedulerLatestPayload = {
-  schedule_id: 'schedule-1',
-  trading_day: '2026-04-18',
-  scheduled_open_at_utc: '2026-04-18T13:30:00+00:00',
-  launched_at_utc: '2026-04-18T13:30:05+00:00',
-  completed_at_utc: '2026-04-18T20:00:00+00:00',
-  status: 'completed',
-  automation_run_id: 'automation-1',
-  summary: 'Scheduled market day completed.',
-  evidence_refs: ['artifacts/operator_platform/market_day_schedules/schedule-1.json'],
+const schedulerLatestPayload = null
+
+const portfolioPayload = {
+  generated_at_utc: '2026-04-20T08:40:00+00:00',
+  trading_mode: 'paper',
+  data_state: 'partial',
+  source_summary:
+    'Account balances, runtime posture, and execution journal are live. Seeded-account comparisons still use the saved rehearsal baseline. Benchmark comparison and strategy attribution stay hidden until TradingX records real portfolio history.',
+  source_notes: [
+    {
+      source_id: 'live_account',
+      label: 'Live account',
+      tone: 'good',
+      detail:
+        'Equity, cash, buying power, positions, and balance snapshots come from the current paper account and live TradingX service artifacts.',
+    },
+    {
+      source_id: 'live_oms_journal',
+      label: 'Live OMS journal',
+      tone: 'good',
+      detail:
+        'Execution diagnostics come from the current local OMS journal at data/journal.db, not from rehearsal artifacts.',
+    },
+    {
+      source_id: 'rehearsal_baseline',
+      label: 'Rehearsal baseline',
+      tone: 'watch',
+      detail:
+        'Comparisons that mention the seeded account use the saved starting-state snapshot from artifacts/ops/paper_account_starting_state.json.',
+    },
+  ],
+  metric_cards: [
+    {
+      metric_id: 'equity',
+      label: 'Total Equity',
+      value: '$99,999.57',
+      delta: 'Flat vs seeded account',
+      health: 'neutral',
+      summary:
+        'Neutral for the main bot goal because capital is preserved, but no completed supervised cycle has produced edge yet.',
+      detail:
+        'The balance is intact. This is good for capital preservation, but it does not yet prove that the strategy can generate risk-adjusted returns.',
+      sparkline: [],
+      provenance: {
+        source_id: 'mixed_evidence',
+        label: 'Mixed evidence',
+        tone: 'watch',
+        detail:
+          'The current value is live, but its comparison anchor comes from the saved rehearsal baseline snapshot.',
+      },
+    },
+    {
+      metric_id: 'buying_power',
+      label: 'Buying Power',
+      value: '$399,998.28',
+      delta: 'Fully available',
+      health: 'neutral',
+      summary:
+        'Neutral because capital is available, but deployment is blocked until warmup and execution sizing are healthy.',
+      detail:
+        'High buying power is only useful when the runtime can deploy it safely. Right now it mostly indicates idle capacity.',
+      sparkline: [],
+      provenance: {
+        source_id: 'live_account',
+        label: 'Live account',
+        tone: 'good',
+        detail:
+          'Equity, cash, buying power, positions, and balance snapshots come from the current paper account and live TradingX service artifacts.',
+      },
+    },
+    {
+      metric_id: 'execution_quality',
+      label: 'Execution Quality',
+      value: '2 rejects',
+      delta: 'Latest reason: insufficient buying power',
+      health: 'bad',
+      summary:
+        'Bad for the bot goal because the bot is attempting orders the account cannot currently support.',
+      detail:
+        'Execution drag is not theoretical here. The latest journal shows repeated rejected submissions, which means the bot sizing or constraints need review before live supervision.',
+      sparkline: ['2', '2'],
+      provenance: {
+        source_id: 'live_oms_journal',
+        label: 'Live OMS journal',
+        tone: 'good',
+        detail:
+          'Execution diagnostics come from the current local OMS journal at data/journal.db, not from rehearsal artifacts.',
+      },
+    },
+  ],
+  equity_curve: {
+    status: 'unavailable',
+    headline: 'No real TradingX equity curve yet',
+    detail:
+      'The portfolio curve will appear after at least one timestamped service cycle is recorded.',
+    points: [],
+  },
+  benchmark_panel: {
+    status: 'unavailable',
+    headline: 'Benchmark comparison waiting for evidence',
+    detail:
+      'TradingX needs a persisted equity history window before benchmark-relative analytics can be trusted.',
+    benchmark_rows: [],
+  },
+  strategy_panel: {
+    status: 'unavailable',
+    headline: 'Strategy attribution waiting for closed-trade evidence',
+    detail:
+      'Strategy contribution will unlock after TradingX records closed trades and realized P&L.',
+    strategies: [],
+  },
+  execution_panel: {
+    status: 'available',
+    headline: 'Execution journal is available',
+    detail:
+      'Recent order attempts are available from the OMS journal and are safe to inspect now.',
+    provenance: {
+      source_id: 'live_oms_journal',
+      label: 'Live OMS journal',
+      tone: 'good',
+      detail:
+        'Execution diagnostics come from the current local OMS journal at data/journal.db, not from rehearsal artifacts.',
+    },
+    summary_metrics: [
+      { label: 'Reject Count', value: '2' },
+      { label: 'Latest Reason', value: 'insufficient buying power' },
+      { label: 'Latest Symbol', value: 'SPY' },
+    ],
+    recent_events: [
+      {
+        label: 'Reject',
+        value: 'SPY buy rejected',
+        context: 'insufficient buying power',
+      },
+    ],
+  },
+  positions_panel: {
+    status: 'available',
+    headline: 'No open positions',
+    detail: 'The account is flat right now.',
+    positions: [],
+  },
+  diagnostics: [
+    {
+      diagnostic_id: 'runtime',
+      title: 'Runtime is halted before warmup completed',
+      detail: 'QQQ remains blocked by insufficient warmup coverage.',
+      severity: 'warning',
+      owner: 'Runtime Host',
+      action: 'Complete warmup and retest order sizing before resuming automation.',
+    },
+  ],
 }
 
 const runtimeStatePayload = {
   status: 'trading_ready',
   status_reason: 'Runtime boot complete.',
-  active_symbols: ['SPY', 'QQQ'],
-  started_at_utc: '2026-04-19T12:00:00+00:00',
-  updated_at_utc: '2026-04-19T12:01:00+00:00',
+  active_symbols: ['SPY', 'QQQ', 'IWM'],
+  started_at_utc: '2026-04-20T08:55:00+00:00',
+  updated_at_utc: '2026-04-20T08:58:00+00:00',
   last_error: '',
   active_strategy_id: 'baseline-long-only-v1',
   active_model_snapshot_id: 'snapshot-1',
   latest_selection_id: 'selection-1',
 }
 
+const runtimeHeartbeatPayload = {
+  heartbeat_state: 'Waiting for next evaluation',
+  heartbeat_summary:
+    'TradingX evaluated the configured universe, found no deployable trade, and is waiting for the next cadence tick.',
+  heartbeat_tone: 'info',
+  cadence_seconds: 180,
+  cadence_label: 'Every 3m',
+  last_evaluation_at_utc: '2026-04-20T08:58:30+00:00',
+  next_evaluation_at_utc: '2026-04-20T09:01:30+00:00',
+  last_decision: 'No trade',
+  decision_reason: 'No eligible opportunity cleared the deploy threshold.',
+  score_explanation: 'SPY scored 0.4177 which is below the deploy threshold of 0.50.',
+  current_exposure: 'Flat',
+  current_exposure_detail: 'No open position is currently held in the paper account.',
+  active_symbol: 'SPY',
+  selected_symbol: '',
+  decision: 'no_trade',
+  runtime_truth: [
+    {
+      label: 'Session posture',
+      value: 'Intraday monitor',
+      detail: 'TradingX is actively supervising the market session.',
+      tone: 'info',
+    },
+    {
+      label: 'Trading mode',
+      value: 'Paper',
+      detail: 'TradingX is currently restricted to paper execution only.',
+      tone: 'good',
+    },
+    {
+      label: 'Runtime engine',
+      value: 'Active',
+      detail: 'The runtime host is active and capable of evaluating the configured universe.',
+      tone: 'good',
+    },
+    {
+      label: 'Open positions',
+      value: '0',
+      detail: 'The paper account is flat right now.',
+      tone: 'neutral',
+    },
+    {
+      label: 'Pending orders',
+      value: '0',
+      detail: 'No in-flight OMS orders are waiting for a terminal event.',
+      tone: 'neutral',
+    },
+    {
+      label: 'Evaluation freshness',
+      value: '<1m ago',
+      detail: 'This measures how recently TradingX completed a full opportunity review.',
+      tone: 'info',
+    },
+  ],
+  symbol_rows: [
+    {
+      symbol: 'SPY',
+      status: 'Below threshold',
+      score: '0.4177',
+      threshold_gap: '-0.0823',
+      reason: 'Score remained below the deploy threshold.',
+      warmup_state: 'Ready',
+      exposure_state: 'Flat',
+      tone: 'info',
+    },
+    {
+      symbol: 'QQQ',
+      status: 'Below threshold',
+      score: '0.3310',
+      threshold_gap: '-0.1690',
+      reason: 'Score remained below the deploy threshold.',
+      warmup_state: 'Ready',
+      exposure_state: 'Flat',
+      tone: 'info',
+    },
+    {
+      symbol: 'IWM',
+      status: 'Blocked',
+      score: 'n/a',
+      threshold_gap: 'n/a',
+      reason: 'Insufficient daily bars for warmup coverage.',
+      warmup_state: 'Blocked',
+      exposure_state: 'Flat',
+      tone: 'watch',
+    },
+  ],
+  decision_ladder: [
+    {
+      rank: 1,
+      symbol: 'SPY',
+      final_score: '0.4177',
+      threshold: '0.50',
+      threshold_gap: '-0.0823',
+      primary_driver: 'Volatility penalty',
+      disposition: 'Monitor',
+    },
+    {
+      rank: 2,
+      symbol: 'QQQ',
+      final_score: '0.3310',
+      threshold: '0.50',
+      threshold_gap: '-0.1690',
+      primary_driver: 'Volatility penalty',
+      disposition: 'Monitor',
+    },
+    {
+      rank: 3,
+      symbol: 'IWM',
+      final_score: 'n/a',
+      threshold: '0.50',
+      threshold_gap: 'n/a',
+      primary_driver: 'Warmup blocked',
+      disposition: 'Blocked',
+    },
+  ],
+  operator_guidance: {
+    recommendation: 'Investigate warmup failure',
+    detail:
+      'IWM is still blocked by warmup, so TradingX is evaluating an incomplete universe. Resolve the warmup gap before broadening unattended operation.',
+    tone: 'watch',
+  },
+}
+
 const warmupPayload = {
   warmup_id: 'warmup-1',
-  generated_at_utc: '2026-04-19T12:00:00+00:00',
+  generated_at_utc: '2026-04-20T08:10:00+00:00',
   benchmark_symbol: 'SPY',
-  symbols: ['SPY', 'QQQ'],
-  window_start_utc: '2026-02-01T00:00:00+00:00',
-  window_end_utc: '2026-04-18T00:00:00+00:00',
+  symbols: ['SPY', 'QQQ', 'IWM'],
+  window_start_utc: '2026-04-01T00:00:00+00:00',
+  window_end_utc: '2026-04-20T08:10:00+00:00',
   required_bar_count: 30,
   symbols_ready: ['SPY', 'QQQ'],
-  symbols_blocked: {},
-  return_summary: { SPY: { cumulative_return: '0.02' } },
+  symbols_blocked: { IWM: 'Insufficient daily bars for warmup coverage.' },
+  return_summary: { SPY: { cumulative_return: '0.02' }, QQQ: { cumulative_return: '0.01' } },
 }
 
 const activationPayload = {
   activation_id: 'activation-1',
   strategy_id: 'baseline-long-only-v1',
   strategy_version: '1.0.0',
-  approved_symbols: ['SPY', 'QQQ'],
-  deploy_threshold: '0.5',
+  approved_symbols: ['SPY', 'QQQ', 'IWM'],
+  deploy_threshold: '0.50',
   allow_fallback_weights: true,
   status: 'approved',
-  activated_at_utc: '2026-04-19T12:00:00+00:00',
-  notes: 'Baseline activation.',
+  activated_at_utc: '2026-04-19T19:53:17.819270+00:00',
+  notes: 'Default local trading appliance activation.',
 }
 
 const modelSnapshotPayload = {
   snapshot_id: 'snapshot-1',
   strategy_id: 'baseline-long-only-v1',
   status: 'approved',
-  generated_at_utc: '2026-04-19T12:00:00+00:00',
+  generated_at_utc: '2026-04-19T19:53:17.819270+00:00',
   minimum_supporting_trades: 5,
   weights: { signal: '1.0' },
 }
 
 const selectionPayload = {
   selection_id: 'selection-1',
-  generated_at_utc: '2026-04-19T12:01:00+00:00',
+  generated_at_utc: '2026-04-20T08:58:28+00:00',
   strategy_id: 'baseline-long-only-v1',
   model_snapshot_id: 'snapshot-1',
-  symbols_considered: ['SPY', 'QQQ'],
-  ranked_opportunities: [
-    {
-      symbol: 'SPY',
-      base_signal: '1.0',
-      regime_weight: '1.0',
-      model_weight: '1.0',
-      liquidity_weight: '1.0',
-      spread_penalty: '0.1',
-      volatility_penalty: '0.1',
-      portfolio_overlap_penalty: '0.0',
-      execution_cost_penalty: '0.0',
-      final_score: '0.8',
-      eligible: true,
-      ineligibility_reason: '',
-    },
-  ],
-  selected_symbol: 'SPY',
-  decision: 'selected',
-  decision_reason: 'Top ranked.',
+  symbols_considered: ['SPY', 'QQQ', 'IWM'],
+  ranked_opportunities: [],
+  selected_symbol: '',
+  decision: 'no_trade',
+  decision_reason: 'No eligible opportunity cleared the deploy threshold.',
 }
 
-const proposalPayload = {
-  proposal_id: 'proposal-1',
-  generated_at_utc: '2026-04-19T12:02:00+00:00',
-  strategy_id: 'baseline-long-only-v1',
-  supporting_trade_count: 12,
-  baseline_snapshot_id: 'snapshot-1',
-  candidate_snapshot: modelSnapshotPayload,
-  improvement_score: '0.15',
-  statistically_significant: true,
-  summary: 'Increase signal emphasis.',
-}
-
-const marketSessionsPayload = [
-  {
-    session_id: 'session-1',
-    session_label: 'session_preopen',
-    recorded_at_utc: '2026-04-18T08:00:00+00:00',
-    service_status: 'idle',
-    blocked_trade_count: 0,
-    reconciliation_failure_count: 0,
-    open_positions: ['SPY'],
-    top_incidents: ['incident-alert-1'],
-    recommended_actions: ['Continue paper evidence collection.'],
-    evidence_refs: ['artifacts/operator_platform/market_sessions/session-1.json'],
-  },
-]
-
-const recoveryDrillsPayload = [
-  {
-    drill_id: 'recovery-1',
-    symbol: 'SPY',
-    started_at_utc: '2026-04-18T08:00:00+00:00',
-    completed_at_utc: '2026-04-18T08:05:00+00:00',
-    status: 'completed',
-    summary: 'Recovery succeeded.',
-    evidence_refs: ['artifacts/paper_loop/recovery_drills/recovery-1.json'],
-  },
-]
-
-const alertDrillsPayload = [
-  {
-    drill_id: 'alert-1',
-    channel: 'smtp',
-    recorded_at_utc: '2026-04-18T08:06:00+00:00',
-    status: 'completed',
-    summary: 'SMTP delivered.',
-    evidence_refs: ['artifacts/paper_loop/alert_drills/alert-1.json'],
-  },
-]
+const marketSessionsPayload: Array<Record<string, unknown>> = []
+const recoveryDrillsPayload: Array<Record<string, unknown>> = []
+const alertDrillsPayload: Array<Record<string, unknown>> = []
 
 function mockFetch() {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
-    if (!init?.method || init.method === 'GET') {
-      if (url.endsWith('/api/overview')) {
-        return new Response(JSON.stringify(overviewPayload))
-      }
-      if (url.endsWith('/api/platform/command-center')) {
-        return new Response(JSON.stringify(commandCenterPayload))
-      }
-      if (url.endsWith('/api/config/summary')) {
-        return new Response(JSON.stringify(configSummaryPayload))
-      }
-      if (url.endsWith('/api/documents')) {
-        return new Response(JSON.stringify(documentsPayload))
-      }
-      if (url.endsWith('/api/config/proposals')) {
-        return new Response(JSON.stringify(proposalsPayload))
-      }
-      if (url.endsWith('/api/platform/incidents')) {
-        return new Response(JSON.stringify(incidentsPayload))
-      }
-      if (url.endsWith('/api/platform/research')) {
-        return new Response(JSON.stringify(researchPayload))
-      }
-      if (url.includes('/api/platform/replay')) {
-        return new Response(JSON.stringify(replayPayload))
-      }
-      if (url.includes('/api/platform/explorer')) {
-        return new Response(JSON.stringify(explorerPayload))
-      }
-      if (url.endsWith('/api/platform/digests/latest')) {
-        return new Response(JSON.stringify(digestPayload))
-      }
-      if (url.endsWith('/api/platform/gate3/readiness')) {
-        return new Response(JSON.stringify(gate3ReadinessPayload))
-      }
-      if (url.endsWith('/api/platform/gate3/promotions/latest')) {
-        return new Response(JSON.stringify(gate3PackagePayload))
-      }
-      if (url.endsWith('/api/platform/gate3/replay-slippage/latest')) {
-        return new Response(JSON.stringify(replaySlippageSummaryPayload))
-      }
-      if (url.endsWith('/api/platform/gate3/automation/latest')) {
-        return new Response(JSON.stringify(marketAutomationPayload))
-      }
-      if (url.endsWith('/api/platform/gate3/scheduler/state')) {
-        return new Response(JSON.stringify(schedulerStatePayload))
-      }
-      if (url.endsWith('/api/platform/gate3/scheduler/latest')) {
-        return new Response(JSON.stringify(schedulerLatestPayload))
-      }
-      if (url.endsWith('/api/runtime-host/state')) {
-        return new Response(JSON.stringify(runtimeStatePayload))
-      }
-      if (url.endsWith('/api/runtime-host/warmup/latest')) {
-        return new Response(JSON.stringify(warmupPayload))
-      }
-      if (url.endsWith('/api/runtime-host/activation/latest')) {
-        return new Response(JSON.stringify(activationPayload))
-      }
-      if (url.endsWith('/api/runtime-host/model/latest')) {
-        return new Response(JSON.stringify(modelSnapshotPayload))
-      }
-      if (url.endsWith('/api/runtime-host/selection/latest')) {
-        return new Response(JSON.stringify(selectionPayload))
-      }
-      if (url.endsWith('/api/runtime-host/proposal/latest')) {
-        return new Response(JSON.stringify(proposalPayload))
-      }
-      if (url.endsWith('/api/evidence/operator_alerts')) {
-        return new Response(JSON.stringify([]))
-      }
-      if (url.endsWith('/api/evidence/service_cycles')) {
-        return new Response(JSON.stringify([]))
-      }
-      if (url.endsWith('/api/evidence/validation_reports')) {
-        return new Response(JSON.stringify([]))
-      }
-      if (url.endsWith('/api/evidence/market_sessions')) {
-        return new Response(JSON.stringify(marketSessionsPayload))
-      }
-      if (url.endsWith('/api/evidence/recovery_drills')) {
-        return new Response(JSON.stringify(recoveryDrillsPayload))
-      }
-      if (url.endsWith('/api/evidence/alert_drills')) {
-        return new Response(JSON.stringify(alertDrillsPayload))
-      }
+    void init
+
+    if (url.endsWith('/api/overview')) {
+      return new Response(JSON.stringify(overviewPayload))
+    }
+    if (url.endsWith('/api/platform/command-center')) {
+      return new Response(JSON.stringify(commandCenterPayload))
+    }
+    if (url.endsWith('/api/config/summary')) {
+      return new Response(JSON.stringify(configSummaryPayload))
+    }
+    if (url.endsWith('/api/documents')) {
+      return new Response(JSON.stringify(documentsPayload))
+    }
+    if (url.endsWith('/api/config/proposals')) {
+      return new Response(JSON.stringify(proposalsPayload))
+    }
+    if (url.endsWith('/api/platform/incidents')) {
+      return new Response(JSON.stringify(incidentsPayload))
+    }
+    if (url.endsWith('/api/platform/research')) {
+      return new Response(JSON.stringify(researchPayload))
+    }
+    if (url.endsWith('/api/platform/portfolio')) {
+      return new Response(JSON.stringify(portfolioPayload))
+    }
+    if (url.endsWith('/api/platform/performance')) {
+      return new Response(JSON.stringify(portfolioPayload))
+    }
+    if (url.includes('/api/platform/replay')) {
+      return new Response(JSON.stringify(replayPayload))
+    }
+    if (url.includes('/api/platform/explorer')) {
+      return new Response(JSON.stringify(explorerPayload))
+    }
+    if (url.endsWith('/api/platform/digests/latest')) {
+      return new Response(JSON.stringify(digestPayload))
+    }
+    if (url.endsWith('/api/platform/gate3/readiness')) {
+      return new Response(JSON.stringify(gate3ReadinessPayload))
+    }
+    if (url.endsWith('/api/platform/gate3/promotions/latest')) {
+      return new Response(JSON.stringify(gate3PackagePayload))
+    }
+    if (url.endsWith('/api/platform/gate3/replay-slippage/latest')) {
+      return new Response(JSON.stringify(replaySlippageSummaryPayload))
+    }
+    if (url.endsWith('/api/platform/gate3/automation/latest')) {
+      return new Response(JSON.stringify(marketAutomationPayload))
+    }
+    if (url.endsWith('/api/platform/gate3/scheduler/state')) {
+      return new Response(JSON.stringify(schedulerStatePayload))
+    }
+    if (url.endsWith('/api/platform/gate3/scheduler/latest')) {
+      return new Response(JSON.stringify(schedulerLatestPayload))
+    }
+    if (url.endsWith('/api/runtime-host/state')) {
+      return new Response(JSON.stringify(runtimeStatePayload))
+    }
+    if (url.endsWith('/api/runtime-host/heartbeat')) {
+      return new Response(JSON.stringify(runtimeHeartbeatPayload))
+    }
+    if (url.endsWith('/api/runtime-host/warmup/latest')) {
+      return new Response(JSON.stringify(warmupPayload))
+    }
+    if (url.endsWith('/api/runtime-host/activation/latest')) {
+      return new Response(JSON.stringify(activationPayload))
+    }
+    if (url.endsWith('/api/runtime-host/model/latest')) {
+      return new Response(JSON.stringify(modelSnapshotPayload))
+    }
+    if (url.endsWith('/api/runtime-host/selection/latest')) {
+      return new Response(JSON.stringify(selectionPayload))
+    }
+    if (url.endsWith('/api/evidence/market_sessions')) {
+      return new Response(JSON.stringify(marketSessionsPayload))
+    }
+    if (url.endsWith('/api/evidence/recovery_drills')) {
+      return new Response(JSON.stringify(recoveryDrillsPayload))
+    }
+    if (url.endsWith('/api/evidence/alert_drills')) {
+      return new Response(JSON.stringify(alertDrillsPayload))
     }
 
-    if (url.endsWith('/api/actions/session/preopen')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-preopen',
-          action_type: 'session_preopen',
-          status: 'completed',
-          message: 'Pre-open checklist captured.',
-          evidence_refs: ['artifacts/operator_platform/daily_digests/preopen.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/session/heartbeat')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-heartbeat',
-          action_type: 'session_heartbeat',
-          status: 'completed',
-          message: 'Heartbeat captured.',
-          evidence_refs: ['artifacts/operator_platform/daily_digests/heartbeat.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/session/close')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-close',
-          action_type: 'session_close',
-          status: 'completed',
-          message: 'Session close digest generated.',
-          evidence_refs: ['artifacts/operator_platform/daily_digests/close.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/session/market-day')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-market-day',
-          action_type: 'market_day_run',
-          status: 'completed',
-          message: 'Market-day automation completed.',
-          evidence_refs: [
-            'artifacts/operator_platform/market_automation_runs/automation-1.json',
-          ],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/scheduler/start')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-scheduler-start',
-          action_type: 'market_scheduler_start',
-          status: 'accepted',
-          message: 'Scheduler started.',
-          evidence_refs: [],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/scheduler/stop')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-scheduler-stop',
-          action_type: 'market_scheduler_stop',
-          status: 'accepted',
-          message: 'Scheduler stop requested.',
-          evidence_refs: [],
-        }),
-      )
-    }
     if (url.endsWith('/api/actions/runtime-host/start')) {
       return new Response(
         JSON.stringify({
@@ -538,109 +608,6 @@ function mockFetch() {
           status: 'accepted',
           message: 'Runtime host started.',
           evidence_refs: [],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/runtime-host/stop')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-runtime-stop',
-          action_type: 'runtime_host_stop',
-          status: 'accepted',
-          message: 'Runtime host stop requested.',
-          evidence_refs: [],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/runtime-host/learn')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-runtime-learn',
-          action_type: 'runtime_host_learn',
-          status: 'completed',
-          message: 'Learning proposal generated.',
-          evidence_refs: ['artifacts/operator_platform/model_weight_proposals/proposal-1.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/incidents/incident-alert-1/acknowledge')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-ack',
-          action_type: 'incident_acknowledge',
-          status: 'completed',
-          message: 'Acknowledged incident-alert-1.',
-          evidence_refs: [
-            'artifacts/operator_platform/incident_acknowledgements/incident-alert-1.json',
-          ],
-        }),
-      )
-    }
-    if (url.endsWith('/api/config/proposals')) {
-      return new Response(
-        JSON.stringify({
-          proposal_id: 'proposal-2',
-          target_area: 'runtime',
-          proposed_values: { TRADINGX_SYMBOL_UNIVERSE: ['SPY', 'QQQ', 'IWM'] },
-          diff_preview: '+ TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ,IWM',
-          output_path: 'config/proposals/proposal-2.md',
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/recovery-drill')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-recovery-drill',
-          action_type: 'recovery_drill',
-          status: 'completed',
-          message: 'Recovery drill completed for SPY.',
-          evidence_refs: ['artifacts/paper_loop/recovery_drills/recovery-1.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/alert-drill')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-alert-drill',
-          action_type: 'alert_drill',
-          status: 'completed',
-          message: 'Alert drill completed for smtp.',
-          evidence_refs: ['artifacts/paper_loop/alert_drills/alert-1.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/gate3/report')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-gate3-report',
-          action_type: 'gate3_report',
-          status: 'completed',
-          message: 'Gate 3 readiness report generated.',
-          evidence_refs: ['artifacts/validation/gate3_reports/gate3-1.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/gate3/package')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-gate3-package',
-          action_type: 'gate3_package',
-          status: 'completed',
-          message: 'Gate 3 promotion package generated.',
-          evidence_refs: ['artifacts/validation/gate3_packages/gate3-package-1.json'],
-        }),
-      )
-    }
-    if (url.endsWith('/api/actions/replay-slippage/generate')) {
-      return new Response(
-        JSON.stringify({
-          action_id: 'action-replay',
-          action_type: 'replay_slippage_report',
-          status: 'completed',
-          message: 'Replay slippage report generated.',
-          evidence_refs: [
-            'artifacts/validation/replay_slippage_summaries/replay-summary-1.json',
-          ],
         }),
       )
     }
@@ -658,26 +625,87 @@ describe('App', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the operator platform workspace from API data', async () => {
-    mockFetch()
+  it('renders the redesigned workspace shell with mission control as the default view', async () => {
+    const fetchMock = mockFetch()
 
     render(<App />)
 
     expect(await screen.findByText('TradingX Operator Platform')).toBeInTheDocument()
-    expect(screen.getByText('Command Center')).toBeInTheDocument()
-    expect(screen.getByText('Research Studio')).toBeInTheDocument()
-    expect(screen.getByText('Gate 3 Ops')).toBeInTheDocument()
-    expect(screen.getByText('Incident Center')).toBeInTheDocument()
-    expect(screen.getByText('Replay Lab')).toBeInTheDocument()
-    expect(screen.getByText('Settings & Records')).toBeInTheDocument()
-    expect(await screen.findByText('Mission profile')).toBeInTheDocument()
-    expect((await screen.findAllByText('Regular session monitor'))[0]).toBeInTheDocument()
-    expect(screen.getByText('10030.00')).toBeInTheDocument()
-    expect(await screen.findByText('Runtime Host')).toBeInTheDocument()
-    expect(screen.getByText('baseline-long-only-v1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Mission Control' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Portfolio' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Research' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Performance' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Mission Control' })).toBeInTheDocument()
+    expect(screen.getByText('Bot Heartbeat')).toBeInTheDocument()
+    expect(screen.getByText('No trade')).toBeInTheDocument()
+    expect(screen.getByText('Runtime Intelligence')).toBeInTheDocument()
+    expect(screen.getByText('Runtime Truth')).toBeInTheDocument()
+    expect(screen.getByText('Symbol Heartbeat')).toBeInTheDocument()
+    expect(screen.getByText('Decision Ladder')).toBeInTheDocument()
+    expect(screen.getByText('Operator Guidance')).toBeInTheDocument()
+    expect(screen.getByText('Session posture')).toBeInTheDocument()
+    expect(screen.getAllByText('SPY')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('QQQ')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('IWM')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('Investigate warmup failure')[0]).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/platform/portfolio',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    )
   })
 
-  it('navigates operator views and runs bounded operator actions', async () => {
+  it('shows a guided portfolio by default, supports analyst mode, and explains metric meaning', async () => {
+    const user = userEvent.setup()
+
+    mockFetch()
+    render(<App />)
+
+    await screen.findByText('TradingX Operator Platform')
+
+    await user.click(screen.getByRole('button', { name: 'Portfolio' }))
+
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Guided' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getAllByText('Benchmark comparison waiting for evidence')[0]).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'TradingX needs a persisted equity history window before benchmark-relative analytics can be trusted.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Evidence provenance')).toBeInTheDocument()
+    expect(screen.getAllByText('Live account')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('Rehearsal baseline')[0]).toBeInTheDocument()
+    expect(screen.getAllByText('Mixed evidence')[0]).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /What this means for Total Equity/i }))
+
+    expect(
+      await screen.findByText(
+        'The balance is intact. This is good for capital preservation, but it does not yet prove that the strategy can generate risk-adjusted returns.',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'The current value is live, but its comparison anchor comes from the saved rehearsal baseline snapshot.',
+      ),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Analyst' }))
+
+    expect(screen.getByRole('button', { name: 'Analyst' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByText('Execution journal is available')).toBeInTheDocument()
+    expect(screen.getByText('Reject Count')).toBeInTheDocument()
+  })
+
+  it('organizes research and still exposes mission control actions', async () => {
     const fetchMock = mockFetch()
     const user = userEvent.setup()
 
@@ -685,119 +713,34 @@ describe('App', () => {
 
     await screen.findByText('TradingX Operator Platform')
 
-    await user.click(screen.getByRole('button', { name: 'Research Studio' }))
-    expect(await screen.findByText('trend-following-v1')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Incident Center' }))
-    expect(
-      (await screen.findAllByText('Stale broker state blocked a trade.'))[0],
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Acknowledge Incident' }))
-
-    await user.click(screen.getByRole('button', { name: 'Replay Lab' }))
-    expect(await screen.findByText('SPY replay')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Gate 3 Ops' }))
-    expect(await screen.findByText('Gate 3 evidence is still incomplete.')).toBeInTheDocument()
-    expect(await screen.findByText('Automation completed with fresh evidence.')).toBeInTheDocument()
-    expect(await screen.findByText('Scheduler cadence')).toBeInTheDocument()
-    expect(
-      await screen.findByRole('heading', { name: 'Replay Cross-Check' }),
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Generate Gate 3 Report' }))
-    await user.click(screen.getByRole('button', { name: 'Generate Promotion Package' }))
-    await user.click(screen.getByRole('button', { name: 'Refresh Replay Evidence' }))
-    await user.click(screen.getByRole('button', { name: 'Run Recovery Drill' }))
-    await user.click(screen.getByRole('button', { name: 'Run SMTP Drill' }))
-    await user.click(screen.getByRole('button', { name: 'Run Market Day' }))
-    await user.click(screen.getByRole('button', { name: 'Start Scheduler' }))
-    await user.click(screen.getByRole('button', { name: 'Stop Scheduler' }))
-
-    await user.click(screen.getByRole('button', { name: 'Settings & Records' }))
-    await user.type(screen.getByLabelText('Search records'), 'Gate')
-    expect(await screen.findByText('Gate 1 report')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Command Center' }))
+    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Start Bot' }))
-    await user.click(screen.getByRole('button', { name: 'Refresh Learning Proposal' }))
-    await user.click(screen.getByRole('button', { name: 'Stop Bot' }))
-    await user.click(screen.getByRole('button', { name: 'Session Pre-Open' }))
-    await user.click(screen.getByRole('button', { name: 'Session Heartbeat' }))
-    await user.click(screen.getByRole('button', { name: 'Session Close' }))
-
-    await user.type(screen.getByLabelText('Target Area'), 'runtime')
-    await user.type(screen.getByLabelText('Rationale'), 'Expand the symbol universe.')
-    await user.click(screen.getByLabelText('Proposed Values (JSON)'))
-    await user.paste('{"TRADINGX_SYMBOL_UNIVERSE":["SPY","QQQ","IWM"]}')
-    await user.click(screen.getByRole('button', { name: 'Save Proposal' }))
 
     await waitFor(() => {
-      expect(screen.getAllByText('proposal-2')[0]).toBeInTheDocument()
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/actions/runtime-host/start',
+        expect.objectContaining({ method: 'POST' }),
+      )
     })
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/runtime-host/start',
-      expect.objectContaining({ method: 'POST' }),
+    const runtimeStartCall = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/actions/runtime-host/start',
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/runtime-host/learn',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/runtime-host/stop',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/session/preopen',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/session/heartbeat',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/session/close',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/incidents/incident-alert-1/acknowledge',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/gate3/report',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/gate3/package',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/replay-slippage/generate',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/recovery-drill',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/alert-drill',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/session/market-day',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/scheduler/start',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/actions/scheduler/stop',
-      expect.objectContaining({ method: 'POST' }),
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/config/proposals',
-      expect.objectContaining({ method: 'POST' }),
-    )
+    expect(runtimeStartCall).toBeTruthy()
+    const runtimeStartInit = runtimeStartCall?.[1] as RequestInit | undefined
+    expect(JSON.parse(String(runtimeStartInit?.body))).toMatchObject({
+      symbols: ['SPY', 'QQQ', 'IWM'],
+      quantity: '1',
+      interval_seconds: 180,
+      max_cycles: null,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Research' }))
+
+    expect(await screen.findByRole('heading', { name: 'Research' })).toBeInTheDocument()
+    expect(screen.getByText('Replay & Audit')).toBeInTheDocument()
+    expect(screen.getByText('Evidence Library')).toBeInTheDocument()
+    expect(screen.getByText('Gate 1 report')).toBeInTheDocument()
+    expect(screen.getAllByText('SPY replay')[0]).toBeInTheDocument()
   })
 })

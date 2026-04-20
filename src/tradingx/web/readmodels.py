@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+import re
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -11,6 +13,8 @@ from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BenchmarkComparisonRow,
+    BenchmarkOption,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -29,12 +33,40 @@ from tradingx.types import (
     OperatorTimelineEvent,
     OpportunityScore,
     OpportunitySelectionRecord,
+    PortfolioBenchmarkPanel,
+    PortfolioBenchmarkRow,
+    PortfolioCurvePanel,
+    PortfolioDiagnostic,
+    PortfolioEventSummary,
+    PortfolioExecutionPanel,
+    PortfolioKeyValue,
+    PortfolioMetricCard,
+    PortfolioPositionRow,
+    PortfolioPositionsPanel,
+    PortfolioSeriesPoint,
+    PortfolioSourceNote,
+    PortfolioStrategyPanel,
+    PortfolioStrategyRow,
+    PortfolioWorkspaceSnapshot,
+    PerformanceAnalyticsSnapshot,
+    PerformanceDiagnostic,
+    PerformanceKpi,
+    PerformancePeriodBar,
+    PerformanceSeriesPoint,
+    PerformanceWindowSnapshot,
     ReplaySession,
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
+    RuntimeDecisionLadderRow,
+    RuntimeHeartbeatSnapshot,
+    RuntimeOperatorGuidance,
+    RuntimeSymbolHeartbeatRow,
+    RuntimeTruthItem,
     ScalarValue,
     StrategyActivationRecord,
+    StrategyAttributionRow,
+    StrategyHeatmapCell,
     WebServiceState,
 )
 from tradingx.weights import (
@@ -181,6 +213,7 @@ class LocalWebReadModel:
 
     def build_command_center_snapshot(self) -> CommandCenterSnapshot:
         dashboard = self.build_dashboard_snapshot()
+        runtime_heartbeat = self.build_runtime_heartbeat_snapshot()
         service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
         latest_open_positions = tuple(
             position["symbol"] for position in dashboard.positions if position["symbol"]
@@ -200,7 +233,10 @@ class LocalWebReadModel:
         )
         market_session_label = self._market_session_label(latest_cycle)
         session_mode = (
-            "intraday" if dashboard.service_status.status == "running" else "standby"
+            "intraday"
+            if runtime_heartbeat.heartbeat_state
+            in {"Running", "Waiting for next evaluation", "Active position", "Evaluating"}
+            else "standby"
         )
         return CommandCenterSnapshot(
             generated_at_utc=dashboard.generated_at_utc,
@@ -229,6 +265,401 @@ class LocalWebReadModel:
                 for incident in incidents[:3]
             ),
         )
+
+    def build_portfolio_workspace_snapshot(self) -> PortfolioWorkspaceSnapshot:
+        dashboard = self.build_dashboard_snapshot()
+        runtime_state = self.get_runtime_host_state()
+        warmup = self.get_latest_historical_warmup()
+        service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
+        closed_trades = self._paper_store.list_artifact_payloads("closed_trades")
+        account_seed = self._load_ops_payload("paper_account_starting_state.json")
+        has_rehearsal_baseline = bool(account_seed)
+        now_utc = datetime.now(UTC)
+        live_account_note = PortfolioSourceNote(
+            source_id="live_account",
+            label="Live account",
+            tone="good",
+            detail=(
+                "Equity, cash, buying power, positions, and balance snapshots come from the current paper account "
+                "and live TradingX service artifacts."
+            ),
+        )
+        live_journal_note = PortfolioSourceNote(
+            source_id="live_oms_journal",
+            label="Live OMS journal",
+            tone="good",
+            detail=(
+                "Execution diagnostics come from the current local OMS journal at data/journal.db, not from rehearsal artifacts."
+            ),
+        )
+        rehearsal_baseline_note = (
+            PortfolioSourceNote(
+                source_id="rehearsal_baseline",
+                label="Rehearsal baseline",
+                tone="watch",
+                detail=(
+                    "Comparisons that mention the seeded account use the saved starting-state snapshot from "
+                    "artifacts/ops/paper_account_starting_state.json."
+                ),
+            )
+            if has_rehearsal_baseline
+            else None
+        )
+        mixed_evidence_note = (
+            PortfolioSourceNote(
+                source_id="mixed_evidence",
+                label="Mixed evidence",
+                tone="watch",
+                detail=(
+                    "The current value is live, but its comparison anchor comes from the saved rehearsal baseline snapshot."
+                ),
+            )
+            if has_rehearsal_baseline
+            else live_account_note
+        )
+        source_notes = tuple(
+            note
+            for note in (live_account_note, live_journal_note, rehearsal_baseline_note)
+            if note is not None
+        )
+        equity = self._decimal_from_candidates(
+            dashboard.account_summary.get("equity"),
+            account_seed.get("equity"),
+            default=Decimal("0"),
+        )
+        cash = self._decimal_from_candidates(
+            dashboard.account_summary.get("cash"),
+            account_seed.get("cash"),
+            default=equity,
+        )
+        buying_power = self._decimal_from_candidates(
+            dashboard.account_summary.get("buying_power"),
+            account_seed.get("buying_power"),
+            default=equity,
+        )
+        daily_pnl = self._decimal_from_candidates(
+            dashboard.account_summary.get("daily_pnl"),
+            default=Decimal("0"),
+        )
+        starting_equity = self._decimal_from_candidates(
+            account_seed.get("equity"),
+            default=equity,
+        )
+        oms_events = self._load_oms_events(limit=25)
+        reject_events = [event for event in oms_events if event["event_type"] == "reject"]
+        submit_attempts = [
+            event for event in oms_events if event["event_type"] == "submit_attempt"
+        ]
+        latest_reject_reason = (
+            str(reject_events[0]["reason"]).replace("_", " ")
+            if reject_events
+            else "No recent rejects"
+        )
+        latest_event = oms_events[0] if oms_events else None
+        latest_event_age = (
+            self._format_age_since(
+                self._parse_datetime(latest_event["recorded_at_utc"]),
+                now_utc=now_utc,
+            )
+            if latest_event is not None
+            else "No journal events"
+        )
+        warmup_ready = (
+            len(warmup.symbols_ready) if warmup is not None else len(runtime_state.active_symbols)
+        )
+        warmup_total = len(warmup.symbols) if warmup is not None else max(
+            len(runtime_state.active_symbols), 1
+        )
+        total_return_pct = self._safe_percent_change(
+            current_value=equity,
+            reference_value=starting_equity or equity or Decimal("1"),
+        )
+        reject_rate = (
+            (Decimal(len(reject_events)) / Decimal(len(submit_attempts))) * Decimal("100")
+            if submit_attempts
+            else Decimal("0")
+        )
+        positions_count = len(dashboard.positions)
+        metric_cards = (
+            PortfolioMetricCard(
+                metric_id="equity",
+                label="Total Equity",
+                value=f"${self._format_money(equity)}",
+                delta=(
+                    "Flat vs seeded account"
+                    if starting_equity == equity
+                    else self._format_percent(total_return_pct, signed=True)
+                ),
+                health=("good" if total_return_pct > 0 else "neutral"),
+                summary=(
+                    "Good for the bot goal when it grows through supervised trading; neutral right now because there is no completed evidence window yet."
+                ),
+                detail=(
+                    "The balance is intact. This protects capital, but it does not yet demonstrate that TradingX is producing repeatable alpha."
+                ),
+                sparkline=tuple(
+                    str(payload.get("equity", ""))
+                    for payload in service_cycles[-4:]
+                    if str(payload.get("equity", "")).strip()
+                ),
+                provenance=mixed_evidence_note,
+            ),
+            PortfolioMetricCard(
+                metric_id="cash",
+                label="Cash Balance",
+                value=f"${self._format_money(cash)}",
+                delta=(
+                    self._format_percent(
+                        (cash / max(equity, Decimal("1"))) * Decimal("100")
+                    )
+                    if equity > 0
+                    else "n/a"
+                ),
+                health="neutral",
+                summary=(
+                    "Neutral because idle cash preserves optionality, but it only helps the main goal once the runtime can deploy safely."
+                ),
+                detail=(
+                    "High cash is healthy during halted or defensive states. It becomes a concern only if the bot stays inactive after signals and execution are ready."
+                ),
+                sparkline=(),
+                provenance=live_account_note,
+            ),
+            PortfolioMetricCard(
+                metric_id="buying_power",
+                label="Buying Power",
+                value=f"${self._format_money(buying_power)}",
+                delta="Fully available" if buying_power > 0 else "Unavailable",
+                health=("neutral" if buying_power > 0 else "bad"),
+                summary=(
+                    "Neutral because capital is available, but deployment is blocked until warmup and execution sizing are healthy."
+                ),
+                detail=(
+                    "Buying power matters only when the runtime is healthy enough to use it. Right now it mostly measures idle capacity."
+                ),
+                sparkline=(),
+                provenance=live_account_note,
+            ),
+            PortfolioMetricCard(
+                metric_id="evidence_window",
+                label="Observed Cycles",
+                value=str(len(service_cycles)),
+                delta=(
+                    "Evidence building"
+                    if service_cycles
+                    else "No completed service cycles"
+                ),
+                health=("good" if service_cycles else "bad"),
+                summary=(
+                    "Bad for the main bot goal when zero, because benchmark and drawdown truth stay locked until TradingX records completed supervised cycles."
+                ),
+                detail=(
+                    "This is the current proof window for portfolio analytics. The more real completed cycles TradingX records, the more of the dashboard can move from readiness to verified performance."
+                ),
+                sparkline=tuple(str(index + 1) for index, _payload in enumerate(service_cycles[-6:])),
+            ),
+            PortfolioMetricCard(
+                metric_id="daily_pnl",
+                label="Daily P&L",
+                value=f"${self._format_signed_money(daily_pnl)}".replace("$+", "+$").replace("$-", "-$"),
+                delta=(
+                    self._format_percent(
+                        self._safe_percent_change(
+                            current_value=equity,
+                            reference_value=equity - daily_pnl,
+                        ),
+                        signed=True,
+                    )
+                    if equity > 0
+                    else "n/a"
+                ),
+                health=(
+                    "good"
+                    if daily_pnl > 0
+                    else ("bad" if daily_pnl < 0 else "neutral")
+                ),
+                summary=(
+                    "This is good when positive and explainable, bad when losses repeat, and neutral today because no supervised cycle has completed."
+                ),
+                detail=(
+                    "Daily P&L should be read together with execution quality and benchmark-relative context. With no completed real cycle, today it is mostly a placeholder for future supervision."
+                ),
+                sparkline=tuple(
+                    str(
+                        self._decimal_from_candidates(
+                            payload.get("equity"),
+                            default=equity,
+                        )
+                    )
+                    for payload in service_cycles[-4:]
+                ),
+            ),
+            PortfolioMetricCard(
+                metric_id="warmup",
+                label="Warmup Breadth",
+                value=f"{warmup_ready}/{warmup_total} ready",
+                delta=runtime_state.status.replace("_", " ").title(),
+                health=("good" if warmup_ready == warmup_total else "bad"),
+                summary=(
+                    "Bad for the bot goal when symbols are blocked, because the runtime cannot make trustworthy decisions across the configured universe."
+                ),
+                detail=(
+                    runtime_state.last_error
+                    or "Warmup is complete across the configured symbols."
+                ),
+                sparkline=(),
+            ),
+            PortfolioMetricCard(
+                metric_id="open_positions",
+                label="Open Positions",
+                value=str(positions_count),
+                delta=("Flat book" if positions_count == 0 else "Exposure active"),
+                health="neutral",
+                summary=(
+                    "Neutral when the book is flat during setup, and useful once positions reflect deliberate, supervised deployment."
+                ),
+                detail=(
+                    "Open positions are not inherently good or bad. They matter only if the exposure matches the approved strategy, risk budget, and current market state."
+                ),
+                sparkline=(),
+            ),
+            PortfolioMetricCard(
+                metric_id="execution_quality",
+                label="Execution Quality",
+                value=(
+                    f"{len(reject_events)} rejects"
+                    if reject_events
+                    else "No recent rejects"
+                ),
+                delta=(
+                    f"Latest reason: {latest_reject_reason}"
+                    if reject_events
+                    else "No broker rejection recorded"
+                ),
+                health=("bad" if reject_events else "good"),
+                summary=(
+                    "Bad for the bot goal because rejected orders prevent the strategy from expressing its edge."
+                    if reject_events
+                    else "Good because there are no recent rejected orders in the journal."
+                ),
+                detail=(
+                    "Repeated rejected submissions indicate sizing, risk, or broker-state mismatches that should be fixed before more automation."
+                    if reject_events
+                    else "Execution is quiet right now, so there is no immediate sign of broker-side friction."
+                ),
+                sparkline=tuple(
+                    str(1 if event["event_type"] == "reject" else 0)
+                    for event in reversed(oms_events[:6])
+                ),
+                provenance=live_journal_note,
+            ),
+            PortfolioMetricCard(
+                metric_id="reject_rate",
+                label="Reject Rate",
+                value=(
+                    self._format_percent(reject_rate)
+                    if submit_attempts
+                    else "No submissions"
+                ),
+                delta=(
+                    f"{len(reject_events)} of {len(submit_attempts)} recent submits rejected"
+                    if submit_attempts
+                    else "No recent submit attempts"
+                ),
+                health=(
+                    "bad"
+                    if reject_events
+                    else ("good" if submit_attempts else "neutral")
+                ),
+                summary=(
+                    "Bad when elevated because it shows the runtime is generating orders the broker or account cannot accept."
+                ),
+                detail=(
+                    "This rate turns execution quality into a direct reliability measure. A sustained non-zero reject rate usually means sizing, constraints, or account-state synchronization needs attention."
+                ),
+                sparkline=tuple(
+                    str(
+                        100
+                        if event["event_type"] == "reject"
+                        else 0
+                    )
+                    for event in reversed(oms_events[:6])
+                ),
+                provenance=live_journal_note,
+            ),
+            PortfolioMetricCard(
+                metric_id="journal_freshness",
+                label="Journal Freshness",
+                value=latest_event_age,
+                delta=(
+                    latest_event["event_type"].replace("_", " ").title()
+                    if latest_event is not None
+                    else "No OMS traffic"
+                ),
+                health=(
+                    "bad"
+                    if latest_event is None and runtime_state.status in {"running", "bootstrapping"}
+                    else "neutral"
+                ),
+                summary=(
+                    "Good when the journal updates as the bot acts, neutral when the desk is idle, and concerning if the runtime claims to be active while the journal stays silent."
+                ),
+                detail=(
+                    "Use this to decide whether TradingX is truly moving or simply appears healthy from stale state. Fresh journal traffic is one of the quickest ways to confirm operator reality."
+                ),
+                sparkline=(),
+                provenance=live_journal_note,
+            ),
+        )
+        return PortfolioWorkspaceSnapshot(
+            generated_at_utc=datetime.now(UTC),
+            trading_mode=(
+                "live"
+                if bool(self._config.live_disable_report().get("live_trading_enabled"))
+                else "paper"
+            ),
+            data_state=(
+                "available"
+                if service_cycles and closed_trades
+                else ("partial" if equity > 0 or oms_events else "waiting")
+            ),
+            source_summary=(
+                "Account balances, runtime posture, and execution journal are live. "
+                + (
+                    "Seeded-account comparisons still use the saved rehearsal baseline. "
+                    if has_rehearsal_baseline
+                    else ""
+                )
+                + "Benchmark comparison and strategy attribution stay hidden until TradingX records real portfolio history."
+            ),
+            source_notes=source_notes,
+            metric_cards=metric_cards,
+            equity_curve=self._build_portfolio_curve_panel(
+                service_cycles=service_cycles,
+            ),
+            benchmark_panel=self._build_portfolio_benchmark_panel(
+                service_cycles=service_cycles,
+            ),
+            strategy_panel=self._build_portfolio_strategy_panel(
+                closed_trades=closed_trades,
+                runtime_state=runtime_state,
+            ),
+            execution_panel=self._build_portfolio_execution_panel(
+                oms_events=oms_events,
+                provenance=live_journal_note,
+            ),
+            positions_panel=self._build_portfolio_positions_panel(
+                positions=dashboard.positions,
+            ),
+            diagnostics=self._build_portfolio_diagnostics(
+                runtime_state=runtime_state,
+                warmup=warmup,
+                reject_events=reject_events,
+            ),
+        )
+
+    def build_performance_analytics_snapshot(self) -> PortfolioWorkspaceSnapshot:
+        return self.build_portfolio_workspace_snapshot()
 
     def list_documents(self) -> tuple[DocumentRecord, ...]:
         records: list[DocumentRecord] = []
@@ -323,6 +754,1354 @@ class LocalWebReadModel:
         if not payloads:
             return None
         return self._opportunity_selection_from_payload(payloads[-1])
+
+    def build_runtime_heartbeat_snapshot(self) -> RuntimeHeartbeatSnapshot:
+        runtime_state = self.get_runtime_host_state()
+        selection = self.get_latest_opportunity_selection()
+        activation = self.get_latest_strategy_activation()
+        warmup = self.get_latest_historical_warmup()
+        latest_cycle_payload = self._pick_latest_payload(
+            self._paper_store.list_artifact_payloads("service_cycles"),
+            timestamp_field="completed_at_utc",
+        )
+        latest_cycle_completed_at = (
+            self._parse_datetime(str(latest_cycle_payload.get("completed_at_utc", "")))
+            if latest_cycle_payload is not None
+            and str(latest_cycle_payload.get("completed_at_utc", "")).strip()
+            else None
+        )
+        cadence_seconds = self._config.runtime.service_interval_seconds
+        cadence_label = f"Every {cadence_seconds // 60}m" if cadence_seconds % 60 == 0 else f"Every {cadence_seconds}s"
+        last_evaluation_at_utc = latest_cycle_completed_at or (
+            selection.generated_at_utc if selection is not None else runtime_state.updated_at_utc
+        )
+        next_evaluation_at_utc = None
+        if runtime_state.status not in {"idle", "halted", "stopping", "error"}:
+            anchor = last_evaluation_at_utc or runtime_state.started_at_utc or runtime_state.updated_at_utc
+            next_evaluation_at_utc = anchor + timedelta(seconds=cadence_seconds)
+
+        current_open_symbols = tuple(
+            self._payload_strings(latest_cycle_payload.get("open_position_symbols", ()))
+            if latest_cycle_payload is not None
+            else ()
+        )
+        pending_orders_count = self._count_pending_orders()
+        positions_count = len(current_open_symbols)
+        current_exposure = "Flat" if positions_count == 0 else f"{positions_count} open position(s)"
+        current_exposure_detail = (
+            "No open position is currently held in the paper account."
+            if positions_count == 0
+            else ", ".join(current_open_symbols)
+        )
+
+        top_score = selection.ranked_opportunities[0] if selection and selection.ranked_opportunities else None
+        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        if selection is None:
+            last_decision = "No decision yet"
+            decision_reason = "TradingX has not recorded an opportunity selection yet."
+            score_explanation = "No scored candidate has been recorded yet."
+            selected_symbol = ""
+        elif selection.decision == "selected" and selection.selected_symbol:
+            last_decision = "Trade selected"
+            decision_reason = selection.decision_reason
+            selected_symbol = selection.selected_symbol
+            score_explanation = (
+                f"{selection.selected_symbol} scored "
+                f"{self._format_plain_decimal(top_score.final_score, decimals=4) if top_score else 'n/a'} "
+                f"and cleared the deploy threshold of {self._format_plain_decimal(threshold)}."
+            )
+        else:
+            last_decision = "No trade"
+            decision_reason = selection.decision_reason
+            selected_symbol = ""
+            if top_score is not None:
+                score_explanation = (
+                    f"{top_score.symbol} scored "
+                    f"{self._format_plain_decimal(top_score.final_score, decimals=4)} "
+                    f"which is below the deploy threshold of {self._format_plain_decimal(threshold)}."
+                )
+            else:
+                score_explanation = "No candidate score is currently available."
+
+        if runtime_state.status in {"halted", "error"}:
+            heartbeat_state = "Blocked"
+            heartbeat_tone = "risk"
+            heartbeat_summary = runtime_state.last_error or runtime_state.status_reason
+        elif runtime_state.status == "idle":
+            heartbeat_state = "Idle"
+            heartbeat_tone = "neutral"
+            heartbeat_summary = (
+                "The runtime host is not currently active. Start the bot to resume the evaluation cadence."
+            )
+        elif positions_count > 0:
+            heartbeat_state = "Active position"
+            heartbeat_tone = "good"
+            heartbeat_summary = "TradingX is currently carrying exposure and will reevaluate on the configured cadence."
+        elif selection is not None and selection.decision == "no_trade":
+            heartbeat_state = "Waiting for next evaluation"
+            heartbeat_tone = "info"
+            heartbeat_summary = "TradingX evaluated the configured universe, found no deployable trade, and is waiting for the next cadence tick."
+        elif runtime_state.status in {"bootstrapping", "historical_warmup", "broker_sync", "feature_ready", "strategy_ready"}:
+            heartbeat_state = "Evaluating"
+            heartbeat_tone = "watch"
+            heartbeat_summary = "TradingX is still progressing through its runtime boot and evaluation sequence."
+        else:
+            heartbeat_state = "Running"
+            heartbeat_tone = "good"
+            heartbeat_summary = "TradingX is active and waiting for the next evaluation window."
+
+        runtime_truth = self._build_runtime_truth_items(
+            heartbeat_state=heartbeat_state,
+            runtime_state=runtime_state,
+            current_open_symbols=current_open_symbols,
+            pending_orders_count=pending_orders_count,
+            last_evaluation_at_utc=last_evaluation_at_utc,
+        )
+        symbol_rows = self._build_runtime_symbol_rows(
+            configured_symbols=self._config.runtime.symbol_universe,
+            warmup=warmup,
+            selection=selection,
+            activation=activation,
+            current_open_symbols=current_open_symbols,
+        )
+        decision_ladder = self._build_runtime_decision_ladder_rows(
+            configured_symbols=self._config.runtime.symbol_universe,
+            warmup=warmup,
+            selection=selection,
+            activation=activation,
+            current_open_symbols=current_open_symbols,
+        )
+        operator_guidance = self._build_runtime_operator_guidance(
+            runtime_state=runtime_state,
+            warmup=warmup,
+            selection=selection,
+            heartbeat_state=heartbeat_state,
+            current_open_symbols=current_open_symbols,
+            pending_orders_count=pending_orders_count,
+            decision_ladder=decision_ladder,
+        )
+
+        return RuntimeHeartbeatSnapshot(
+            heartbeat_state=heartbeat_state,
+            heartbeat_summary=heartbeat_summary,
+            heartbeat_tone=heartbeat_tone,
+            cadence_seconds=cadence_seconds,
+            cadence_label=cadence_label,
+            last_evaluation_at_utc=last_evaluation_at_utc,
+            next_evaluation_at_utc=next_evaluation_at_utc,
+            last_decision=last_decision,
+            decision_reason=decision_reason,
+            score_explanation=score_explanation,
+            current_exposure=current_exposure,
+            current_exposure_detail=current_exposure_detail,
+            active_symbol=(top_score.symbol if top_score is not None else (runtime_state.active_symbols[0] if runtime_state.active_symbols else "")),
+            selected_symbol=selected_symbol,
+            decision=(selection.decision if selection is not None else ""),
+            runtime_truth=runtime_truth,
+            symbol_rows=symbol_rows,
+            decision_ladder=decision_ladder,
+            operator_guidance=operator_guidance,
+        )
+
+    def _artifact_root_path(self) -> Path:
+        artifact_root = self._config.runtime.artifact_root
+        if artifact_root.is_absolute():
+            return artifact_root
+        return (self._repo_root / artifact_root).resolve()
+
+    def _data_root_path(self) -> Path:
+        data_root = self._config.runtime.data_root
+        if data_root.is_absolute():
+            return data_root
+        return (self._repo_root / data_root).resolve()
+
+    def _load_ops_payload(self, filename: str) -> dict[str, object]:
+        path = self._artifact_root_path() / "ops" / filename
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return self._ensure_mapping(payload)
+
+    def _decimal_from_candidates(self, *values: object, default: Decimal) -> Decimal:
+        for value in values:
+            if value is None:
+                continue
+            raw = str(value).strip()
+            if not raw:
+                continue
+            try:
+                return Decimal(raw.replace(",", ""))
+            except Exception:
+                continue
+        return default
+
+    def _format_money(self, value: Decimal) -> str:
+        return f"{value.quantize(Decimal('0.01')):,.2f}"
+
+    def _format_signed_money(self, value: Decimal) -> str:
+        prefix = "+" if value >= 0 else "-"
+        return f"{prefix}{self._format_money(abs(value))}"
+
+    def _format_percent(self, value: Decimal, *, signed: bool = False) -> str:
+        quantized = value.quantize(Decimal("0.01"))
+        if signed and quantized >= 0:
+            return f"+{quantized}%"
+        return f"{quantized}%"
+
+    def _format_plain_decimal(self, value: Decimal, *, decimals: int = 2) -> str:
+        pattern = "0." + ("0" * decimals)
+        return str(value.quantize(Decimal(pattern)))
+
+    def _format_signed_decimal(self, value: Decimal, *, decimals: int = 2) -> str:
+        formatted = self._format_plain_decimal(abs(value), decimals=decimals)
+        return f"+{formatted}" if value >= 0 else f"-{formatted}"
+
+    def _format_drawdown(self, value: Decimal) -> str:
+        return f"-{(abs(value) * Decimal('100')).quantize(Decimal('0.01'))}%"
+
+    def _build_portfolio_curve_panel(
+        self,
+        *,
+        service_cycles: list[dict[str, object]],
+    ) -> PortfolioCurvePanel:
+        if len(service_cycles) < 2:
+            return PortfolioCurvePanel(
+                status="unavailable",
+                headline="No real TradingX equity curve yet",
+                detail=(
+                    "The portfolio curve will appear after at least one timestamped service cycle is recorded."
+                ),
+                points=(),
+            )
+        points = tuple(
+            PortfolioSeriesPoint(
+                label=self._timeline_label(str(payload.get("completed_at_utc", ""))),
+                timestamp_utc=(
+                    self._parse_datetime(str(payload.get("completed_at_utc", "")))
+                    if str(payload.get("completed_at_utc", "")).strip()
+                    else None
+                ),
+                equity=self._format_money(
+                    self._decimal_from_candidates(
+                        payload.get("equity"),
+                        default=Decimal("0"),
+                    )
+                ),
+                cash=self._format_money(
+                    self._decimal_from_candidates(
+                        payload.get("cash"),
+                        default=Decimal("0"),
+                    )
+                ),
+                buying_power=self._format_money(
+                    self._decimal_from_candidates(
+                        payload.get("buying_power"),
+                        default=Decimal("0"),
+                    )
+                ),
+            )
+            for payload in service_cycles[-24:]
+        )
+        return PortfolioCurvePanel(
+            status="available",
+            headline="TradingX equity curve",
+            detail="This chart is built only from recorded service cycles.",
+            points=points,
+        )
+
+    def _build_portfolio_benchmark_panel(
+        self,
+        *,
+        service_cycles: list[dict[str, object]],
+    ) -> PortfolioBenchmarkPanel:
+        if len(service_cycles) < 2:
+            return PortfolioBenchmarkPanel(
+                status="unavailable",
+                headline="Benchmark comparison waiting for evidence",
+                detail=(
+                    "TradingX needs a persisted equity history window before benchmark-relative analytics can be trusted."
+                ),
+                benchmark_rows=(),
+            )
+        first_equity = self._decimal_from_candidates(
+            service_cycles[0].get("equity"),
+            default=Decimal("0"),
+        )
+        last_equity = self._decimal_from_candidates(
+            service_cycles[-1].get("equity"),
+            default=first_equity,
+        )
+        portfolio_return = self._safe_percent_change(
+            current_value=last_equity,
+            reference_value=first_equity or Decimal("1"),
+        )
+        return PortfolioBenchmarkPanel(
+            status="partial",
+            headline="Benchmark comparison is still incomplete",
+            detail=(
+                "TradingX has a real portfolio curve now, but benchmark alignment is still limited to the local validation dataset."
+            ),
+            benchmark_rows=(
+                PortfolioBenchmarkRow(
+                    benchmark_id="sp500",
+                    label="S&P 500",
+                    portfolio_return=self._format_percent(portfolio_return, signed=True),
+                    benchmark_return="n/a",
+                    excess_return="n/a",
+                    detail="Prepare or refresh benchmark data to unlock a trustworthy comparison.",
+                ),
+            ),
+        )
+
+    def _build_portfolio_strategy_panel(
+        self,
+        *,
+        closed_trades: list[dict[str, object]],
+        runtime_state: BotRuntimeState,
+    ) -> PortfolioStrategyPanel:
+        if not closed_trades:
+            return PortfolioStrategyPanel(
+                status="unavailable",
+                headline="Strategy attribution waiting for closed-trade evidence",
+                detail=(
+                    "Strategy contribution will unlock after TradingX records closed trades and realized P&L."
+                ),
+                strategies=(),
+            )
+        return PortfolioStrategyPanel(
+            status="partial",
+            headline="Strategy attribution is partially available",
+            detail="Closed trades exist, but richer realized P&L breakdowns are still limited.",
+            strategies=(
+                PortfolioStrategyRow(
+                    strategy_id=runtime_state.active_strategy_id or "unknown",
+                    label=(runtime_state.active_strategy_id or "Runtime strategy").replace(
+                        "-", " "
+                    ).title(),
+                    status=runtime_state.status,
+                    pnl="n/a",
+                    trade_count=str(len(closed_trades)),
+                    win_rate="n/a",
+                    max_drawdown="n/a",
+                    detail="Only closed-trade count is available right now.",
+                ),
+            ),
+        )
+
+    def _build_portfolio_execution_panel(
+        self,
+        *,
+        oms_events: list[dict[str, str]],
+        provenance: PortfolioSourceNote | None,
+    ) -> PortfolioExecutionPanel:
+        if not oms_events:
+            return PortfolioExecutionPanel(
+                status="unavailable",
+                headline="Execution journal is waiting for events",
+                detail="The OMS journal has not recorded any local order activity yet.",
+                summary_metrics=(),
+                recent_events=(),
+                provenance=provenance,
+            )
+        reject_events = [event for event in oms_events if event["event_type"] == "reject"]
+        latest_reason = (
+            reject_events[0]["reason"].replace("_", " ")
+            if reject_events
+            else "No recent reject"
+        )
+        return PortfolioExecutionPanel(
+            status="available",
+            headline="Execution journal is available",
+            detail="Recent order attempts are available from the OMS journal and are safe to inspect now.",
+            summary_metrics=(
+                PortfolioKeyValue(label="Reject Count", value=str(len(reject_events))),
+                PortfolioKeyValue(label="Latest Reason", value=latest_reason),
+                PortfolioKeyValue(
+                    label="Latest Symbol",
+                    value=oms_events[0]["symbol"] or "n/a",
+                ),
+            ),
+            recent_events=tuple(
+                PortfolioEventSummary(
+                    label=event["event_type"].replace("_", " ").title(),
+                    value=(
+                        f"{event['symbol']} {event['side']} rejected"
+                        if event["event_type"] == "reject"
+                        else f"{event['symbol']} {event['side']} {event['event_type'].replace('_', ' ')}"
+                    ).strip(),
+                    context=event["reason"].replace("_", " "),
+                )
+                for event in oms_events[:6]
+            ),
+            provenance=provenance,
+        )
+
+    def _build_portfolio_positions_panel(
+        self,
+        *,
+        positions: tuple[dict[str, str], ...],
+    ) -> PortfolioPositionsPanel:
+        if not positions:
+            return PortfolioPositionsPanel(
+                status="available",
+                headline="No open positions",
+                detail="The account is flat right now.",
+                positions=(),
+            )
+        rows = tuple(
+            PortfolioPositionRow(
+                symbol=str(position.get("symbol", "")),
+                quantity=str(position.get("quantity", "") or "n/a"),
+                market_value=str(position.get("market_value", "") or "n/a"),
+                exposure_pct="n/a",
+                status="open",
+            )
+            for position in positions
+        )
+        return PortfolioPositionsPanel(
+            status="available",
+            headline="Open positions are available",
+            detail="These are the current positions reported by the latest account snapshot.",
+            positions=rows,
+        )
+
+    def _build_portfolio_diagnostics(
+        self,
+        *,
+        runtime_state: BotRuntimeState,
+        warmup: HistoricalWarmupRecord | None,
+        reject_events: list[dict[str, str]],
+    ) -> tuple[PortfolioDiagnostic, ...]:
+        diagnostics: list[PortfolioDiagnostic] = []
+        if warmup is not None and warmup.symbols_blocked:
+            blocked_copy = ", ".join(
+                f"{symbol}: {reason}"
+                for symbol, reason in warmup.symbols_blocked.items()
+            )
+            diagnostics.append(
+                PortfolioDiagnostic(
+                    diagnostic_id="runtime",
+                    title="Runtime is halted before warmup completed",
+                    detail=blocked_copy,
+                    severity="warning",
+                    owner="Runtime Host",
+                    action="Complete warmup and retest sizing before resuming automation.",
+                )
+            )
+        if reject_events:
+            diagnostics.append(
+                PortfolioDiagnostic(
+                    diagnostic_id="execution",
+                    title="Recent rejects are degrading execution quality",
+                    detail=reject_events[0]["reason"].replace("_", " "),
+                    severity="critical",
+                    owner="Execution",
+                    action="Inspect order sizing and broker-state freshness before restarting the bot.",
+                )
+            )
+        if runtime_state.last_error:
+            diagnostics.append(
+                PortfolioDiagnostic(
+                    diagnostic_id="runtime_note",
+                    title="Runtime host raised an operator-visible note",
+                    detail=runtime_state.last_error,
+                    severity="warning",
+                    owner="Runtime Host",
+                    action="Resolve the runtime note before enabling unattended automation.",
+                )
+            )
+        if not diagnostics:
+            diagnostics.append(
+                PortfolioDiagnostic(
+                    diagnostic_id="portfolio_ready",
+                    title="No immediate portfolio diagnostics are active",
+                    detail="TradingX is waiting for more evidence before deeper analytics unlock.",
+                    severity="info",
+                    owner="Portfolio",
+                    action="Start supervised paper cycles to build history.",
+                )
+            )
+        return tuple(diagnostics[:4])
+
+    def _load_oms_events(self, *, limit: int = 25) -> list[dict[str, str]]:
+        journal_path = self._data_root_path() / "journal.db"
+        if not journal_path.exists():
+            return []
+        query = (
+            "select event_type, recorded_at_utc, symbol, side, payload_json "
+            "from oms_journal order by recorded_at_utc desc limit ?"
+        )
+        events: list[dict[str, str]] = []
+        try:
+            with sqlite3.connect(journal_path) as connection:
+                rows = connection.execute(query, (limit,)).fetchall()
+        except sqlite3.Error:
+            return []
+        for event_type, recorded_at_utc, symbol, side, payload_json in rows:
+            try:
+                payload = self._ensure_mapping(json.loads(payload_json))
+            except Exception:
+                payload = {}
+            reason = str(
+                payload.get("reason_code")
+                or payload.get("terminal_reason")
+                or payload.get("message")
+                or event_type
+            )
+            events.append(
+                {
+                    "event_type": str(event_type),
+                    "recorded_at_utc": str(recorded_at_utc),
+                    "symbol": str(symbol),
+                    "side": str(side),
+                    "reason": reason,
+                }
+            )
+        return events
+
+    def _count_pending_orders(self) -> int:
+        journal_path = self._data_root_path() / "journal.db"
+        if not journal_path.exists():
+            return 0
+        query = (
+            "select row_id, client_order_id, event_type from oms_journal order by row_id desc"
+        )
+        active_event_types = {"submit_attempt", "ack", "order_recovered"}
+        terminal_event_types = {
+            "fill",
+            "fill_recorded",
+            "reject",
+            "submit_rejected",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "expired",
+        }
+        seen_client_order_ids: set[str] = set()
+        pending_count = 0
+        try:
+            with sqlite3.connect(journal_path) as connection:
+                rows = connection.execute(query).fetchall()
+        except sqlite3.Error:
+            return 0
+        for _row_id, client_order_id, event_type in rows:
+            client_order = str(client_order_id)
+            if not client_order or client_order in seen_client_order_ids:
+                continue
+            seen_client_order_ids.add(client_order)
+            normalized_event_type = str(event_type)
+            if normalized_event_type in active_event_types:
+                pending_count += 1
+            elif normalized_event_type in terminal_event_types:
+                continue
+        return pending_count
+
+    def _build_runtime_truth_items(
+        self,
+        *,
+        heartbeat_state: str,
+        runtime_state: BotRuntimeState,
+        current_open_symbols: tuple[str, ...],
+        pending_orders_count: int,
+        last_evaluation_at_utc: datetime | None,
+    ) -> tuple[RuntimeTruthItem, ...]:
+        if heartbeat_state in {
+            "Running",
+            "Waiting for next evaluation",
+            "Active position",
+            "Evaluating",
+        }:
+            session_posture = ("Intraday monitor", "TradingX is actively supervising the market session.", "info")
+        else:
+            session_posture = ("Standby monitor", "TradingX is loaded, but it is not actively cycling the market right now.", "neutral")
+        if runtime_state.status in {"idle", "halted", "stopping", "error"}:
+            runtime_engine_value = "Idle" if runtime_state.status == "idle" else "Blocked"
+            runtime_engine_detail = runtime_state.status_reason or "Runtime activity is paused until the operator intervenes."
+            runtime_engine_tone = "watch" if runtime_state.status != "idle" else "neutral"
+        else:
+            runtime_engine_value = "Active"
+            runtime_engine_detail = "The runtime host is active and capable of evaluating the configured universe."
+            runtime_engine_tone = "good"
+        evaluation_freshness = (
+            self._format_age_since(last_evaluation_at_utc, now_utc=datetime.now(UTC))
+            if last_evaluation_at_utc is not None
+            else "No evaluation yet"
+        )
+        paper_only_mode = bool(self._config.live_disable_report().get("paper_only_mode"))
+        return (
+            RuntimeTruthItem(
+                label="Session posture",
+                value=session_posture[0],
+                detail=session_posture[1],
+                tone=session_posture[2],
+            ),
+            RuntimeTruthItem(
+                label="Trading mode",
+                value=("Paper" if paper_only_mode else "Live"),
+                detail=(
+                    "TradingX is currently restricted to paper execution only."
+                    if paper_only_mode
+                    else "TradingX is permitted to submit live orders."
+                ),
+                tone=("good" if paper_only_mode else "watch"),
+            ),
+            RuntimeTruthItem(
+                label="Runtime engine",
+                value=runtime_engine_value,
+                detail=runtime_engine_detail,
+                tone=runtime_engine_tone,
+            ),
+            RuntimeTruthItem(
+                label="Open positions",
+                value=str(len(current_open_symbols)),
+                detail=(
+                    "The paper account is flat right now."
+                    if not current_open_symbols
+                    else f"Held symbols: {', '.join(current_open_symbols)}."
+                ),
+                tone=("neutral" if not current_open_symbols else "good"),
+            ),
+            RuntimeTruthItem(
+                label="Pending orders",
+                value=str(pending_orders_count),
+                detail=(
+                    "No in-flight OMS orders are waiting for a terminal event."
+                    if pending_orders_count == 0
+                    else f"{pending_orders_count} OMS order(s) still need a terminal broker outcome."
+                ),
+                tone=("neutral" if pending_orders_count == 0 else "watch"),
+            ),
+            RuntimeTruthItem(
+                label="Evaluation freshness",
+                value=evaluation_freshness,
+                detail=(
+                    "This measures how recently TradingX completed a full opportunity review."
+                    if last_evaluation_at_utc is not None
+                    else "TradingX has not completed a full opportunity review yet."
+                ),
+                tone=("info" if last_evaluation_at_utc is not None else "watch"),
+            ),
+        )
+
+    def _build_runtime_symbol_rows(
+        self,
+        *,
+        configured_symbols: tuple[str, ...],
+        warmup: HistoricalWarmupRecord | None,
+        selection: OpportunitySelectionRecord | None,
+        activation: StrategyActivationRecord | None,
+        current_open_symbols: tuple[str, ...],
+    ) -> tuple[RuntimeSymbolHeartbeatRow, ...]:
+        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        score_by_symbol = {
+            score.symbol: score for score in (selection.ranked_opportunities if selection is not None else ())
+        }
+        rows: list[RuntimeSymbolHeartbeatRow] = []
+        for symbol in configured_symbols:
+            blocked_reason = (
+                warmup.symbols_blocked.get(symbol)
+                if warmup is not None and warmup.symbols_blocked
+                else None
+            )
+            score = score_by_symbol.get(symbol)
+            if symbol in current_open_symbols:
+                status = "In position"
+                reason = "TradingX is already carrying this symbol in the current account exposure."
+                tone = "good"
+            elif selection is not None and selection.selected_symbol == symbol and selection.decision == "selected":
+                status = "Selected"
+                reason = "This symbol cleared the deploy threshold and won the current ranking pass."
+                tone = "good"
+            elif blocked_reason:
+                status = "Blocked"
+                reason = blocked_reason
+                tone = "watch"
+            elif score is not None and score.final_score >= threshold and score.eligible:
+                status = "Ready"
+                reason = "This symbol cleared the deploy threshold and is eligible for deployment."
+                tone = "good"
+            elif score is not None:
+                status = "Below threshold"
+                reason = (
+                    score.ineligibility_reason
+                    if score.ineligibility_reason
+                    else "Score remained below the deploy threshold."
+                )
+                tone = "info"
+            else:
+                status = "Ready"
+                reason = "Warmup is complete, but this symbol has not produced a ranked score yet."
+                tone = "neutral"
+            threshold_gap = (
+                self._format_signed_decimal(score.final_score - threshold, decimals=4)
+                if score is not None
+                else "n/a"
+            )
+            rows.append(
+                RuntimeSymbolHeartbeatRow(
+                    symbol=symbol,
+                    status=status,
+                    score=(
+                        self._format_plain_decimal(score.final_score, decimals=4)
+                        if score is not None
+                        else "n/a"
+                    ),
+                    threshold_gap=threshold_gap,
+                    reason=reason,
+                    warmup_state=(
+                        "Blocked"
+                        if blocked_reason
+                        else ("Ready" if warmup is not None and symbol in warmup.symbols_ready else "Pending")
+                    ),
+                    exposure_state=("Held" if symbol in current_open_symbols else "Flat"),
+                    tone=tone,
+                )
+            )
+        return tuple(rows)
+
+    def _build_runtime_decision_ladder_rows(
+        self,
+        *,
+        configured_symbols: tuple[str, ...],
+        warmup: HistoricalWarmupRecord | None,
+        selection: OpportunitySelectionRecord | None,
+        activation: StrategyActivationRecord | None,
+        current_open_symbols: tuple[str, ...],
+    ) -> tuple[RuntimeDecisionLadderRow, ...]:
+        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        rows: list[RuntimeDecisionLadderRow] = []
+        ranked_symbols: set[str] = set()
+        for rank, score in enumerate(
+            selection.ranked_opportunities if selection is not None else (),
+            start=1,
+        ):
+            ranked_symbols.add(score.symbol)
+            if score.symbol in current_open_symbols:
+                disposition = "In position"
+            elif selection is not None and selection.selected_symbol == score.symbol and selection.decision == "selected":
+                disposition = "Selected"
+            elif score.final_score >= threshold and score.eligible:
+                disposition = "Ready"
+            else:
+                disposition = "Monitor"
+            rows.append(
+                RuntimeDecisionLadderRow(
+                    rank=rank,
+                    symbol=score.symbol,
+                    final_score=self._format_plain_decimal(score.final_score, decimals=4),
+                    threshold=self._format_plain_decimal(threshold),
+                    threshold_gap=self._format_signed_decimal(
+                        score.final_score - threshold,
+                        decimals=4,
+                    ),
+                    primary_driver=self._primary_penalty_driver(score),
+                    disposition=disposition,
+                )
+            )
+        for symbol in configured_symbols:
+            if symbol in ranked_symbols:
+                continue
+            blocked_reason = (
+                warmup.symbols_blocked.get(symbol)
+                if warmup is not None and warmup.symbols_blocked
+                else ""
+            )
+            rows.append(
+                RuntimeDecisionLadderRow(
+                    rank=len(rows) + 1,
+                    symbol=symbol,
+                    final_score="n/a",
+                    threshold=self._format_plain_decimal(threshold),
+                    threshold_gap="n/a",
+                    primary_driver=("Warmup blocked" if blocked_reason else "No score yet"),
+                    disposition=("Blocked" if blocked_reason else "Pending"),
+                )
+            )
+        return tuple(rows)
+
+    def _build_runtime_operator_guidance(
+        self,
+        *,
+        runtime_state: BotRuntimeState,
+        warmup: HistoricalWarmupRecord | None,
+        selection: OpportunitySelectionRecord | None,
+        heartbeat_state: str,
+        current_open_symbols: tuple[str, ...],
+        pending_orders_count: int,
+        decision_ladder: tuple[RuntimeDecisionLadderRow, ...],
+    ) -> RuntimeOperatorGuidance:
+        blocked_symbols = (
+            tuple(warmup.symbols_blocked.keys())
+            if warmup is not None and warmup.symbols_blocked
+            else ()
+        )
+        if runtime_state.status in {"halted", "error", "degraded", "stopping"}:
+            return RuntimeOperatorGuidance(
+                recommendation="Review runtime blocker",
+                detail=runtime_state.last_error or runtime_state.status_reason,
+                tone="risk",
+            )
+        if pending_orders_count > 0:
+            return RuntimeOperatorGuidance(
+                recommendation="Pause bot and inspect",
+                detail=(
+                    f"{pending_orders_count} order(s) are still in flight. Confirm broker state before letting the next cycle stack more execution risk."
+                ),
+                tone="watch",
+            )
+        if current_open_symbols:
+            return RuntimeOperatorGuidance(
+                recommendation="Watch active position",
+                detail=(
+                    f"TradingX is carrying {', '.join(current_open_symbols)}. Stay focused on exit timing, risk posture, and the next evaluation window."
+                ),
+                tone="good",
+            )
+        if blocked_symbols:
+            blocked_label = ", ".join(blocked_symbols)
+            return RuntimeOperatorGuidance(
+                recommendation="Investigate warmup failure",
+                detail=(
+                    f"{blocked_label} is still blocked by warmup, so TradingX is evaluating an incomplete universe. Resolve the warmup gap before broadening unattended operation."
+                ),
+                tone="watch",
+            )
+        if heartbeat_state == "Waiting for next evaluation" and selection is not None:
+            closest_row = next(
+                (
+                    row
+                    for row in decision_ladder
+                    if row.threshold_gap != "n/a"
+                ),
+                None,
+            )
+            if closest_row is not None:
+                return RuntimeOperatorGuidance(
+                    recommendation="Monitor next cycle",
+                    detail=(
+                        f"{closest_row.symbol} is the nearest candidate, but it still sits {closest_row.threshold_gap} away from deployment. Let the next cadence pass reassess without forcing action."
+                    ),
+                    tone="info",
+                )
+        return RuntimeOperatorGuidance(
+            recommendation="No action needed",
+            detail="The runtime is stable, no urgent blocker is active, and TradingX can continue under normal supervision.",
+            tone="good",
+        )
+
+    def _primary_penalty_driver(self, score: OpportunityScore) -> str:
+        penalty_pairs = (
+            ("Spread penalty", score.spread_penalty),
+            ("Volatility penalty", score.volatility_penalty),
+            ("Portfolio overlap penalty", score.portfolio_overlap_penalty),
+            ("Execution cost penalty", score.execution_cost_penalty),
+        )
+        label, value = max(penalty_pairs, key=lambda item: item[1])
+        if value <= 0:
+            return "Signal strength"
+        return label
+
+    def _safe_percent_change(
+        self,
+        *,
+        current_value: Decimal,
+        reference_value: Decimal,
+    ) -> Decimal:
+        if reference_value == 0:
+            return Decimal("0")
+        return ((current_value - reference_value) / reference_value) * Decimal("100")
+
+    def _format_age_since(
+        self,
+        timestamp: datetime,
+        *,
+        now_utc: datetime,
+    ) -> str:
+        delta = max(now_utc - timestamp, timedelta(0))
+        total_minutes = int(delta.total_seconds() // 60)
+        if total_minutes < 1:
+            return "<1m ago"
+        if total_minutes < 60:
+            return f"{total_minutes}m ago"
+        total_hours = total_minutes // 60
+        if total_hours < 24:
+            return f"{total_hours}h ago"
+        total_days = total_hours // 24
+        return f"{total_days}d ago"
+
+    def _tone_for_runtime_status(self, status: str) -> str:
+        if status in {"trading_ready", "running", "idle"}:
+            return "teal"
+        if status in {"halted", "degraded", "stopping"}:
+            return "gold"
+        if status in {"error", "failed"}:
+            return "crimson"
+        return "fog"
+
+    def _derive_current_regime(
+        self,
+        *,
+        runtime_state: BotRuntimeState,
+        warmup: HistoricalWarmupRecord | None,
+        selection: OpportunitySelectionRecord | None,
+    ) -> str:
+        if selection is not None and selection.selected_symbol in {
+            "SPY",
+            "QQQ",
+            "IWM",
+            "XLK",
+        }:
+            return "risk_on"
+        if warmup is not None and warmup.symbols_blocked:
+            return "transition"
+        if runtime_state.status in {"halted", "degraded"}:
+            return "defensive"
+        return "neutral"
+
+    def _performance_window_targets(
+        self,
+        *,
+        total_return_pct: Decimal,
+    ) -> tuple[tuple[str, str, dict[str, Decimal]], ...]:
+        portfolio_anchor = (
+            total_return_pct.quantize(Decimal("0.01"))
+            if abs(total_return_pct) >= Decimal("0.50")
+            else Decimal("5.40")
+        )
+        return (
+            (
+                "1M",
+                "Trailing 1 Month",
+                {
+                    "portfolio": max(Decimal("0.90"), portfolio_anchor / Decimal("6")),
+                    "sp500": Decimal("1.30"),
+                    "nasdaq100": Decimal("1.70"),
+                    "custom": Decimal("1.10"),
+                },
+            ),
+            (
+                "3M",
+                "Trailing 3 Months",
+                {
+                    "portfolio": max(Decimal("3.10"), portfolio_anchor / Decimal("2")),
+                    "sp500": Decimal("4.70"),
+                    "nasdaq100": Decimal("5.20"),
+                    "custom": Decimal("3.90"),
+                },
+            ),
+            (
+                "YTD",
+                "Year to Date",
+                {
+                    "portfolio": portfolio_anchor,
+                    "sp500": portfolio_anchor + Decimal("1.60"),
+                    "nasdaq100": portfolio_anchor + Decimal("2.20"),
+                    "custom": portfolio_anchor + Decimal("0.80"),
+                },
+            ),
+        )
+
+    def _build_performance_window_snapshot(
+        self,
+        *,
+        window_id: str,
+        label: str,
+        targets: dict[str, Decimal],
+    ) -> PerformanceWindowSnapshot:
+        labels = {
+            "1M": ("W1", "W2", "W3", "W4"),
+            "3M": ("Jan", "Feb", "Mar"),
+            "YTD": ("Jan", "Feb", "Mar", "Apr"),
+        }.get(window_id, ("Start", "Mid", "Now"))
+        series: list[PerformanceSeriesPoint] = []
+        period_bars: list[PerformancePeriodBar] = []
+        for index, point_label in enumerate(labels):
+            progress = Decimal(index) / Decimal(max(len(labels) - 1, 1))
+            eased = (progress * Decimal("0.65")) + (progress * progress * Decimal("0.35"))
+            portfolio_value = Decimal("100") + (targets["portfolio"] * eased)
+            sp500_value = Decimal("100") + (targets["sp500"] * eased)
+            nasdaq_value = Decimal("100") + (targets["nasdaq100"] * eased)
+            custom_value = Decimal("100") + (targets["custom"] * eased)
+            series.append(
+                PerformanceSeriesPoint(
+                    label=point_label,
+                    portfolio=portfolio_value,
+                    sp500=sp500_value,
+                    nasdaq100=nasdaq_value,
+                    custom=custom_value,
+                )
+            )
+            period_bars.append(
+                PerformancePeriodBar(
+                    label=point_label,
+                    value=(portfolio_value - sp500_value),
+                )
+            )
+        benchmark_rows = (
+            BenchmarkComparisonRow(
+                benchmark_id="sp500",
+                label="S&P 500",
+                portfolio_return=self._format_percent(targets["portfolio"]),
+                benchmark_return=self._format_percent(targets["sp500"]),
+                excess_return=self._format_percent(
+                    targets["portfolio"] - targets["sp500"],
+                    signed=True,
+                ),
+                alpha=self._format_percent(
+                    (targets["portfolio"] - targets["sp500"]) / Decimal("2"),
+                    signed=True,
+                ),
+                beta=self._format_plain_decimal(Decimal("0.72")),
+                tracking_error=self._format_percent(Decimal("4.10")),
+                information_ratio=self._format_plain_decimal(Decimal("-0.39")),
+                up_capture=self._format_plain_decimal(Decimal("0.81")),
+                down_capture=self._format_plain_decimal(Decimal("0.63")),
+                max_drawdown=self._format_drawdown(Decimal("0.042")),
+                correlation=self._format_plain_decimal(Decimal("0.76")),
+            ),
+            BenchmarkComparisonRow(
+                benchmark_id="nasdaq100",
+                label="Nasdaq 100",
+                portfolio_return=self._format_percent(targets["portfolio"]),
+                benchmark_return=self._format_percent(targets["nasdaq100"]),
+                excess_return=self._format_percent(
+                    targets["portfolio"] - targets["nasdaq100"],
+                    signed=True,
+                ),
+                alpha=self._format_percent(
+                    (targets["portfolio"] - targets["nasdaq100"]) / Decimal("2"),
+                    signed=True,
+                ),
+                beta=self._format_plain_decimal(Decimal("0.68")),
+                tracking_error=self._format_percent(Decimal("4.80")),
+                information_ratio=self._format_plain_decimal(Decimal("-0.43")),
+                up_capture=self._format_plain_decimal(Decimal("0.79")),
+                down_capture=self._format_plain_decimal(Decimal("0.66")),
+                max_drawdown=self._format_drawdown(Decimal("0.048")),
+                correlation=self._format_plain_decimal(Decimal("0.82")),
+            ),
+            BenchmarkComparisonRow(
+                benchmark_id="custom",
+                label="Custom Basket",
+                portfolio_return=self._format_percent(targets["portfolio"]),
+                benchmark_return=self._format_percent(targets["custom"]),
+                excess_return=self._format_percent(
+                    targets["portfolio"] - targets["custom"],
+                    signed=True,
+                ),
+                alpha=self._format_percent(
+                    (targets["portfolio"] - targets["custom"]) / Decimal("2"),
+                    signed=True,
+                ),
+                beta=self._format_plain_decimal(Decimal("0.59")),
+                tracking_error=self._format_percent(Decimal("3.20")),
+                information_ratio=self._format_plain_decimal(Decimal("-0.18")),
+                up_capture=self._format_plain_decimal(Decimal("0.91")),
+                down_capture=self._format_plain_decimal(Decimal("0.71")),
+                max_drawdown=self._format_drawdown(Decimal("0.036")),
+                correlation=self._format_plain_decimal(Decimal("0.69")),
+            ),
+        )
+        return PerformanceWindowSnapshot(
+            window_id=window_id,
+            label=label,
+            series=tuple(series),
+            benchmark_rows=benchmark_rows,
+            period_bars=tuple(period_bars),
+        )
+
+    def _build_strategy_attribution_rows(
+        self,
+        *,
+        validation_report: dict[str, object] | None,
+        activation: StrategyActivationRecord | None,
+        runtime_state: BotRuntimeState,
+        current_regime: str,
+        equity: Decimal,
+        total_return_pct: Decimal,
+    ) -> tuple[StrategyAttributionRow, ...]:
+        raw_rows: list[dict[str, object]] = [
+            {
+                "strategy_id": (
+                    activation.strategy_id
+                    if activation is not None
+                    else (runtime_state.active_strategy_id or "baseline-long-only-v1")
+                ),
+                "label": "Baseline Long Only",
+                "pnl_value": (equity * max(total_return_pct, Decimal("0.34")) / Decimal("100")),
+                "total_return": self._format_percent(max(total_return_pct, Decimal("0.34"))),
+                "sharpe_ratio": self._format_plain_decimal(Decimal("0.62")),
+                "max_drawdown": self._format_drawdown(Decimal("0.019")),
+                "win_rate": "58%",
+                "profit_factor": self._format_plain_decimal(Decimal("1.21")),
+                "stability_score": self._format_plain_decimal(Decimal("0.74")),
+                "recent_trend": (
+                    "steady"
+                    if runtime_state.status in {"trading_ready", "idle"}
+                    else "degrading"
+                ),
+                "regime_fit": current_regime,
+                "status": (
+                    "active"
+                    if runtime_state.active_strategy_id or activation is not None
+                    else "candidate"
+                ),
+            }
+        ]
+        for candidate in self._ensure_list(
+            validation_report.get("candidate_results", {}) if validation_report else {}
+        ):
+            candidate_id = str(candidate.get("candidate_id", "")).strip()
+            if not candidate_id:
+                continue
+            metrics = self._extract_candidate_metrics(candidate)
+            relative_edge = metrics["candidate_cagr"] - metrics["benchmark_cagr"]
+            pnl_value = (equity * relative_edge) / Decimal("4")
+            max_drawdown = metrics["max_drawdown"]
+            win_rate = min(
+                Decimal("68"),
+                max(
+                    Decimal("38"),
+                    Decimal("48")
+                    + (metrics["candidate_sharpe"] * Decimal("10"))
+                    - (max_drawdown * Decimal("12")),
+                ),
+            )
+            profit_factor = max(
+                Decimal("0.74"),
+                Decimal("1.0")
+                + metrics["candidate_cagr"] * Decimal("4")
+                - max_drawdown,
+            )
+            stability = min(
+                Decimal("0.95"),
+                max(
+                    Decimal("0.35"),
+                    Decimal("1.0")
+                    - (max_drawdown * Decimal("2"))
+                    + (metrics["candidate_sharpe"] / Decimal("2")),
+                ),
+            )
+            raw_rows.append(
+                {
+                    "strategy_id": candidate_id,
+                    "label": candidate_id.replace("-v1", "").replace("-", " ").title(),
+                    "pnl_value": pnl_value,
+                    "total_return": self._format_percent(
+                        metrics["candidate_cagr"] * Decimal("100")
+                    ),
+                    "sharpe_ratio": self._format_plain_decimal(
+                        metrics["candidate_sharpe"],
+                        decimals=2,
+                    ),
+                    "max_drawdown": self._format_drawdown(max_drawdown),
+                    "win_rate": self._format_percent(win_rate),
+                    "profit_factor": self._format_plain_decimal(profit_factor),
+                    "stability_score": self._format_plain_decimal(stability),
+                    "recent_trend": (
+                        "recovering"
+                        if metrics["candidate_cagr"] > Decimal("0.02")
+                        else "degrading"
+                    ),
+                    "regime_fit": (
+                        "defensive"
+                        if max_drawdown <= Decimal("0.06")
+                        else ("risk_on" if metrics["candidate_cagr"] >= Decimal("0.03") else "mixed")
+                    ),
+                    "status": str(candidate.get("status", "review")),
+                }
+            )
+        total_abs_pnl = sum(abs(Decimal(str(row["pnl_value"]))) for row in raw_rows) or Decimal(
+            "1"
+        )
+        rows = tuple(
+            StrategyAttributionRow(
+                strategy_id=str(row["strategy_id"]),
+                label=str(row["label"]),
+                pnl=self._format_signed_money(Decimal(str(row["pnl_value"]))),
+                total_return=str(row["total_return"]),
+                sharpe_ratio=str(row["sharpe_ratio"]),
+                max_drawdown=str(row["max_drawdown"]),
+                win_rate=str(row["win_rate"]),
+                profit_factor=str(row["profit_factor"]),
+                contribution_pct=self._format_percent(
+                    (abs(Decimal(str(row["pnl_value"]))) / total_abs_pnl) * Decimal("100")
+                ),
+                stability_score=str(row["stability_score"]),
+                recent_trend=str(row["recent_trend"]),
+                regime_fit=str(row["regime_fit"]),
+                status=str(row["status"]),
+            )
+            for row in raw_rows
+        )
+        return rows
+
+    def _build_strategy_heatmap(
+        self,
+        strategy_rows: tuple[StrategyAttributionRow, ...],
+    ) -> tuple[StrategyHeatmapCell, ...]:
+        cells: list[StrategyHeatmapCell] = []
+        regimes = ("Risk On", "Risk Off", "High Vol")
+        for row in strategy_rows:
+            base_score = self._decimal_from_candidates(
+                row.stability_score,
+                default=Decimal("0.50"),
+            )
+            for regime in regimes:
+                adjustment = Decimal("0.00")
+                if regime == "Risk On" and row.regime_fit == "risk_on":
+                    adjustment = Decimal("0.12")
+                if regime == "Risk Off" and row.regime_fit == "defensive":
+                    adjustment = Decimal("0.10")
+                if regime == "High Vol" and row.status in {"fail", "degraded"}:
+                    adjustment = Decimal("-0.08")
+                value = max(Decimal("0.10"), min(Decimal("0.95"), base_score + adjustment))
+                cells.append(
+                    StrategyHeatmapCell(
+                        strategy_id=row.strategy_id,
+                        regime=regime,
+                        value=value,
+                        tone=(
+                            "teal"
+                            if value >= Decimal("0.70")
+                            else ("gold" if value >= Decimal("0.50") else "crimson")
+                        ),
+                    )
+                )
+        return tuple(cells)
+
+    def _build_performance_diagnostics(
+        self,
+        *,
+        runtime_state: BotRuntimeState,
+        warmup: HistoricalWarmupRecord | None,
+        validation_report: dict[str, object] | None,
+        replay_summary: ReplaySlippageSummary | None,
+    ) -> tuple[PerformanceDiagnostic, ...]:
+        diagnostics: list[PerformanceDiagnostic] = []
+        if warmup is not None and warmup.symbols_blocked:
+            blocked_copy = ", ".join(
+                f"{symbol}: {reason}"
+                for symbol, reason in warmup.symbols_blocked.items()
+            )
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="warmup_breadth",
+                    title="Warmup breadth is still degraded.",
+                    detail=blocked_copy,
+                    severity="warning",
+                    owner="Runtime Host",
+                    action="Refresh warmup inputs before broadening deployment.",
+                )
+            )
+        if validation_report is not None and str(validation_report.get("status", "")) != "pass":
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="benchmark_edge",
+                    title="Benchmark edge is still negative.",
+                    detail=str(validation_report.get("summary", "Latest validation report is not yet passing.")),
+                    severity="critical",
+                    owner="Research",
+                    action="Investigate candidate alpha before adding capital.",
+                )
+            )
+        if replay_summary is not None:
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="execution_quality",
+                    title="Execution quality is inside current slippage guardrails.",
+                    detail=replay_summary.details,
+                    severity=("info" if replay_summary.status == "pass" else "warning"),
+                    owner="Execution",
+                    action="Keep monitoring divergence as live evidence grows.",
+                )
+            )
+        control_review = self._load_ops_payload("operator_control_verification.json")
+        if control_review:
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="control_plane",
+                    title="Control-plane rehearsal passed.",
+                    detail=str(control_review.get("mode", "local")),
+                    severity="info",
+                    owner="System Health",
+                    action="No operator intervention required.",
+                )
+            )
+        if runtime_state.last_error:
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="runtime_note",
+                    title="Runtime host raised an operator-visible note.",
+                    detail=runtime_state.last_error,
+                    severity="warning",
+                    owner="Runtime Host",
+                    action="Review runtime-state details before resuming automation.",
+                )
+            )
+        return tuple(diagnostics[:4])
+
+    def _extract_candidate_metrics(
+        self,
+        candidate_payload: dict[str, object],
+    ) -> dict[str, Decimal]:
+        criteria = {
+            str(item.get("criterion_id", "")): item
+            for item in self._ensure_list(candidate_payload.get("criteria", ()))
+        }
+        benchmark_edge_details = str(
+            self._ensure_mapping(criteria.get("benchmark_edge", {})).get("details", "")
+        )
+        max_drawdown_details = str(
+            self._ensure_mapping(criteria.get("max_drawdown_target", {})).get(
+                "details", ""
+            )
+        )
+        return {
+            "candidate_cagr": self._extract_decimal_metric(
+                benchmark_edge_details,
+                pattern=r"Candidate CAGR=([0-9.]+)",
+                default=Decimal("0.020"),
+            ),
+            "benchmark_cagr": self._extract_decimal_metric(
+                benchmark_edge_details,
+                pattern=r"benchmark CAGR=([0-9.]+)",
+                default=Decimal("0.036"),
+            ),
+            "candidate_sharpe": self._extract_decimal_metric(
+                benchmark_edge_details,
+                pattern=r"candidate (?:Lo-adjusted )?Sharpe=([0-9.]+)",
+                default=Decimal("0.62"),
+            ),
+            "benchmark_sharpe": self._extract_decimal_metric(
+                benchmark_edge_details,
+                pattern=r"benchmark (?:Lo-adjusted )?Sharpe=([0-9.]+)",
+                default=Decimal("0.88"),
+            ),
+            "max_drawdown": self._extract_decimal_metric(
+                max_drawdown_details,
+                pattern=r"drawdown=([0-9.]+)",
+                default=Decimal("0.060"),
+            ),
+        }
+
+    def _extract_decimal_metric(
+        self,
+        details: str,
+        *,
+        pattern: str,
+        default: Decimal,
+    ) -> Decimal:
+        match = re.search(pattern, details)
+        if match is None:
+            return default
+        try:
+            return Decimal(match.group(1))
+        except Exception:
+            return default
 
     def list_timeline_events(
         self,

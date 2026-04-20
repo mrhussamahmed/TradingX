@@ -38,6 +38,7 @@ from tradingx.types import (
     WebActionResult,
 )
 from tradingx.weights import ApprovedWeightSnapshotStore
+from tradingx.weights import default_approved_weight_snapshot_root
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -171,7 +172,7 @@ class _WarmupService:
 class _ActivationGateway:
     def __init__(self) -> None:
         self._snapshot_store = ApprovedWeightSnapshotStore(
-            Path("config/strategy/weights")
+            default_approved_weight_snapshot_root()
         )
 
     def load_or_create_active_records(

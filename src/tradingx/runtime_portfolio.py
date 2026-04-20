@@ -81,11 +81,13 @@ class RuntimePortfolioPlanner:
         *,
         market_data: MarketDataGatewayProtocol,
         activation_gateway: ActivationGatewayProtocol | None = None,
+        strategy_id: str | None = None,
         history_lookback_days: int = HISTORY_LOOKBACK_DAYS,
         now_provider=None,
     ) -> None:
         self._market_data = market_data
         self._activation_gateway = activation_gateway
+        self._strategy_id = strategy_id
         self._history_lookback_days = history_lookback_days
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
 
@@ -94,16 +96,22 @@ class RuntimePortfolioPlanner:
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        default_quantity: Decimal = Decimal("0"),
     ) -> RuntimePortfolioPlan | None:
-        if self._activation_gateway is None:
+        del default_quantity
+        runtime_symbols = symbols
+        strategy_id = self._strategy_id
+        if self._activation_gateway is not None:
+            activation, _snapshot = self._activation_gateway.load_or_create_active_records(
+                symbols
+            )
+            runtime_symbols = activation.approved_symbols or symbols
+            strategy_id = activation.strategy_id
+        if strategy_id is None:
             return None
         generated_at = self._now_provider()
-        activation, _snapshot = self._activation_gateway.load_or_create_active_records(
-            symbols
-        )
-        runtime_symbols = activation.approved_symbols or symbols
         candidate = self._candidate_for_strategy(
-            strategy_id=activation.strategy_id,
+            strategy_id=strategy_id,
             symbols=runtime_symbols,
         )
         if candidate is None:

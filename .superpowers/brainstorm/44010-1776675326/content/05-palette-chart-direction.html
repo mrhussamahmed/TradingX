@@ -1,0 +1,812 @@
+<style>
+  .intro {
+    display: grid;
+    gap: 12px;
+    max-width: 980px;
+    margin-bottom: 26px;
+  }
+
+  .intro p {
+    margin: 0;
+  }
+
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .card {
+    min-height: 820px;
+  }
+
+  .card-image {
+    padding: 16px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(255, 255, 255, 0.01));
+  }
+
+  .palette-shell {
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  }
+
+  .palette-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .top-left,
+  .top-right {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    padding: 5px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 10px;
+  }
+
+  .shell-body {
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .swatch {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .swatch-color {
+    height: 56px;
+  }
+
+  .swatch-meta {
+    padding: 8px;
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .metric {
+    padding: 10px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+  }
+
+  .metric h5 {
+    margin: 0 0 6px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .metric strong {
+    display: block;
+    font-size: 18px;
+    letter-spacing: -0.03em;
+  }
+
+  .metric span {
+    font-size: 10px;
+    opacity: 0.72;
+  }
+
+  .chart-panel,
+  .detail-panel {
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+    padding: 12px;
+  }
+
+  .chart-head,
+  .detail-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 11px;
+  }
+
+  .chart-head strong,
+  .detail-head strong {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .chart-frame {
+    position: relative;
+    height: 200px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .axis-y {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 20px;
+    width: 36px;
+    display: grid;
+    grid-template-rows: repeat(4, 1fr);
+    font-size: 10px;
+    text-align: right;
+    padding-right: 8px;
+    align-items: end;
+    opacity: 0.62;
+  }
+
+  .axis-x {
+    position: absolute;
+    left: 42px;
+    right: 0;
+    bottom: 0;
+    height: 20px;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    font-size: 10px;
+    opacity: 0.62;
+  }
+
+  .plot {
+    position: absolute;
+    left: 42px;
+    right: 0;
+    top: 0;
+    bottom: 20px;
+    border-left: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+
+  .gridline {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(255,255,255,0.08);
+  }
+
+  .gridline.a { top: 20%; }
+  .gridline.b { top: 45%; }
+  .gridline.c { top: 70%; }
+
+  .crosshair {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 66%;
+    width: 1px;
+    background: rgba(255,255,255,0.24);
+    z-index: 2;
+  }
+
+  .tooltip-box {
+    position: absolute;
+    top: 18px;
+    right: 14px;
+    z-index: 3;
+    padding: 8px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 10px;
+    line-height: 1.35;
+    background: rgba(7, 12, 18, 0.92);
+    box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+  }
+
+  .plot svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .plot path {
+    fill: none;
+    stroke-width: 1.65;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .plot circle {
+    r: 2.8;
+  }
+
+  .legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 10px;
+    opacity: 0.76;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+  }
+
+  .detail-body {
+    display: grid;
+    gap: 9px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  .detail-row {
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .detail-row strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+  }
+
+  .mini-note {
+    margin-top: 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    opacity: 0.76;
+  }
+
+  .ink {
+    background: #05070b;
+    color: #edf2f7;
+  }
+
+  .ink .palette-topbar,
+  .ink .swatch-meta,
+  .ink .chart-head,
+  .ink .detail-head,
+  .ink .mini-note {
+    color: #c3cfdd;
+  }
+
+  .ink .metric,
+  .ink .chart-panel,
+  .ink .detail-panel {
+    background: #0d131b;
+  }
+
+  .ink .chip.live {
+    color: #94b7ff;
+    border-color: rgba(77, 124, 255, 0.26);
+    background: rgba(77, 124, 255, 0.12);
+  }
+
+  .ink .chip.warn {
+    color: #ffb4be;
+    border-color: rgba(216, 92, 115, 0.24);
+    background: rgba(216, 92, 115, 0.12);
+  }
+
+  .ink .positive { color: #2fbf88; }
+  .ink .negative { color: #d85c73; }
+  .ink .primary-line { stroke: #4d7cff; }
+  .ink .benchmark-line { stroke: #8da2bf; }
+  .ink .drawdown-line { stroke: #d85c73; }
+  .ink .point-fill { fill: #4d7cff; }
+  .ink .legend-primary { background: #4d7cff; }
+  .ink .legend-benchmark { background: #8da2bf; }
+  .ink .legend-drawdown { background: #d85c73; }
+
+  .graphite {
+    background: #06080c;
+    color: #eef3f6;
+  }
+
+  .graphite .palette-topbar,
+  .graphite .swatch-meta,
+  .graphite .chart-head,
+  .graphite .detail-head,
+  .graphite .mini-note {
+    color: #c7d0d9;
+  }
+
+  .graphite .metric,
+  .graphite .chart-panel,
+  .graphite .detail-panel {
+    background: #10151c;
+  }
+
+  .graphite .chip.live {
+    color: #74a7ff;
+    border-color: rgba(58, 118, 255, 0.24);
+    background: rgba(58, 118, 255, 0.12);
+  }
+
+  .graphite .chip.warn {
+    color: #f09aab;
+    border-color: rgba(206, 79, 95, 0.22);
+    background: rgba(206, 79, 95, 0.12);
+  }
+
+  .graphite .positive { color: #39b980; }
+  .graphite .negative { color: #ce4f5f; }
+  .graphite .primary-line { stroke: #3a76ff; }
+  .graphite .benchmark-line { stroke: #95a3b5; }
+  .graphite .drawdown-line { stroke: #ce4f5f; }
+  .graphite .point-fill { fill: #3a76ff; }
+  .graphite .legend-primary { background: #3a76ff; }
+  .graphite .legend-benchmark { background: #95a3b5; }
+  .graphite .legend-drawdown { background: #ce4f5f; }
+
+  .carbon {
+    background: #040608;
+    color: #edf1f4;
+  }
+
+  .carbon .palette-topbar,
+  .carbon .swatch-meta,
+  .carbon .chart-head,
+  .carbon .detail-head,
+  .carbon .mini-note {
+    color: #c1cad5;
+  }
+
+  .carbon .metric,
+  .carbon .chart-panel,
+  .carbon .detail-panel {
+    background: #0f1419;
+  }
+
+  .carbon .chip.live {
+    color: #8db8ff;
+    border-color: rgba(62, 110, 214, 0.24);
+    background: rgba(62, 110, 214, 0.12);
+  }
+
+  .carbon .chip.warn {
+    color: #e7a2a2;
+    border-color: rgba(201, 90, 90, 0.24);
+    background: rgba(201, 90, 90, 0.12);
+  }
+
+  .carbon .positive { color: #4aa36f; }
+  .carbon .negative { color: #c95a5a; }
+  .carbon .primary-line { stroke: #3e6ed6; }
+  .carbon .benchmark-line { stroke: #93a0ad; }
+  .carbon .drawdown-line { stroke: #c95a5a; }
+  .carbon .point-fill { fill: #3e6ed6; }
+  .carbon .legend-primary { background: #3e6ed6; }
+  .carbon .legend-benchmark { background: #93a0ad; }
+  .carbon .legend-drawdown { background: #c95a5a; }
+
+  .recommend {
+    border-color: rgba(58, 118, 255, 0.25);
+    box-shadow: 0 0 0 1px rgba(58, 118, 255, 0.12) inset;
+  }
+</style>
+
+<div class="intro">
+  <h2>Dark palette and chart treatment refinement</h2>
+  <p class="subtitle">
+    This pass addresses the exact issues you called out: no cyan, no gold, darker overall tone, thinner financial-style lines, visible axes, numeric values, benchmark context, and a KPI detail pattern that explains whether a metric is good or bad for the bot and why.
+  </p>
+  <p class="subtitle">
+    Also, I’m removing vague labels like <code>attribution language</code>. That area would become explicit things like <code>Attribution Controls</code>, <code>Strategy Filters</code>, <code>Metric View</code>, or <code>Benchmark Selector</code> depending on what it actually does.
+  </p>
+</div>
+
+<div class="cards">
+  <div class="card" data-choice="palette-ink-sapphire" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="palette-shell ink">
+        <div class="palette-topbar">
+          <div class="top-left">
+            <span>Mission Control</span>
+            <span class="chip live">Paper</span>
+            <span class="chip warn">review needed</span>
+          </div>
+          <div class="top-right">
+            <span>Ink / Sapphire</span>
+          </div>
+        </div>
+        <div class="shell-body">
+          <div class="swatches">
+            <div class="swatch">
+              <div class="swatch-color" style="background:#05070b"></div>
+              <div class="swatch-meta">Background<br>#05070B</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#0d131b"></div>
+              <div class="swatch-meta">Panel<br>#0D131B</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#4d7cff"></div>
+              <div class="swatch-meta">Primary<br>#4D7CFF</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#2fbf88"></div>
+              <div class="swatch-meta">Positive<br>#2FBF88</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#d85c73"></div>
+              <div class="swatch-meta">Negative<br>#D85C73</div>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="metric">
+              <h5>Total Return</h5>
+              <strong class="positive">+3.8%</strong>
+              <span>vs benchmark: slightly behind</span>
+            </div>
+            <div class="metric">
+              <h5>Excess Return</h5>
+              <strong class="negative">-1.1%</strong>
+              <span>current state: bad for alpha goal</span>
+            </div>
+            <div class="metric">
+              <h5>Max Drawdown</h5>
+              <strong>-3.9%</strong>
+              <span>current state: acceptable if capped below policy</span>
+            </div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="chart-head">
+              <strong>Portfolio vs S&amp;P 500</strong>
+              <span>rebased to 100</span>
+            </div>
+            <div class="chart-frame">
+              <div class="axis-y">
+                <span>108</span>
+                <span>104</span>
+                <span>100</span>
+                <span>96</span>
+              </div>
+              <div class="plot">
+                <div class="gridline a"></div>
+                <div class="gridline b"></div>
+                <div class="gridline c"></div>
+                <div class="crosshair"></div>
+                <div class="tooltip-box">
+                  Apr 18<br>
+                  Portfolio: <span class="positive">103.8</span><br>
+                  S&amp;P 500: 104.9
+                </div>
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <path class="primary-line" d="M0,74 L19,65 L37,58 L54,46 L75,39 L100,33"></path>
+                  <path class="benchmark-line" d="M0,76 L19,67 L37,56 L54,40 L75,29 L100,24"></path>
+                  <circle class="point-fill" cx="75" cy="39"></circle>
+                </svg>
+              </div>
+              <div class="axis-x">
+                <span>Jan</span>
+                <span>Feb</span>
+                <span>Mar</span>
+                <span>Apr</span>
+                <span>Now</span>
+              </div>
+            </div>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-swatch legend-primary"></span>Portfolio</span>
+              <span class="legend-item"><span class="legend-swatch legend-benchmark"></span>S&amp;P 500</span>
+              <span class="legend-item"><span class="legend-swatch legend-drawdown"></span>Drawdown / alert state</span>
+            </div>
+          </div>
+
+          <div class="detail-panel">
+            <div class="detail-head">
+              <strong>KPI detail pattern</strong>
+              <span>click metric or expand inline</span>
+            </div>
+            <div class="detail-body">
+              <div class="detail-row">
+                <strong>Why this matters</strong>
+                Excess return tells you whether the bot is adding value beyond passive exposure.
+              </div>
+              <div class="detail-row">
+                <strong>Current state</strong>
+                <span class="negative">Bad right now</span> because the bot is underperforming the benchmark over the active review window.
+              </div>
+              <div class="detail-row">
+                <strong>What to investigate</strong>
+                Strategy lag, execution drag, regime mismatch, or risk blocks suppressing edge.
+              </div>
+            </div>
+          </div>
+          <div class="mini-note">Tone: darkest and cleanest. Strong blue information accent, restrained green/red only when operationally meaningful.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Ink / Sapphire</h3>
+      <p>Deepest dark theme. Feels very controlled and institutional. Best if you want the app to look quieter and more serious.</p>
+    </div>
+  </div>
+
+  <div class="card recommend" data-choice="palette-graphite-cobalt" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="palette-shell graphite">
+        <div class="palette-topbar">
+          <div class="top-left">
+            <span>Portfolio</span>
+            <span class="chip live">Paper</span>
+            <span class="chip warn">benchmark lag</span>
+          </div>
+          <div class="top-right">
+            <span>Graphite / Cobalt</span>
+          </div>
+        </div>
+        <div class="shell-body">
+          <div class="swatches">
+            <div class="swatch">
+              <div class="swatch-color" style="background:#06080c"></div>
+              <div class="swatch-meta">Background<br>#06080C</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#10151c"></div>
+              <div class="swatch-meta">Panel<br>#10151C</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#3a76ff"></div>
+              <div class="swatch-meta">Primary<br>#3A76FF</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#39b980"></div>
+              <div class="swatch-meta">Positive<br>#39B980</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#ce4f5f"></div>
+              <div class="swatch-meta">Negative<br>#CE4F5F</div>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="metric">
+              <h5>Alpha</h5>
+              <strong class="negative">-0.8%</strong>
+              <span>state: bad for benchmark-beating objective</span>
+            </div>
+            <div class="metric">
+              <h5>Beta</h5>
+              <strong>0.71</strong>
+              <span>state: controlled market dependence</span>
+            </div>
+            <div class="metric">
+              <h5>Information Ratio</h5>
+              <strong class="negative">-0.32</strong>
+              <span>state: weak risk-adjusted excess return</span>
+            </div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="chart-head">
+              <strong>Portfolio vs Nasdaq 100</strong>
+              <span>90 day window</span>
+            </div>
+            <div class="chart-frame">
+              <div class="axis-y">
+                <span>110</span>
+                <span>105</span>
+                <span>100</span>
+                <span>95</span>
+              </div>
+              <div class="plot">
+                <div class="gridline a"></div>
+                <div class="gridline b"></div>
+                <div class="gridline c"></div>
+                <div class="crosshair" style="left:72%"></div>
+                <div class="tooltip-box">
+                  Apr 18<br>
+                  Portfolio: <span class="positive">104.4</span><br>
+                  NDX: 106.2
+                </div>
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <path class="primary-line" d="M0,75 L18,67 L36,61 L53,51 L72,43 L100,35"></path>
+                  <path class="benchmark-line" d="M0,77 L18,68 L36,56 L53,41 L72,26 L100,19"></path>
+                  <circle class="point-fill" cx="72" cy="43"></circle>
+                </svg>
+              </div>
+              <div class="axis-x">
+                <span>Jan</span>
+                <span>Feb</span>
+                <span>Mar</span>
+                <span>Apr</span>
+                <span>Now</span>
+              </div>
+            </div>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-swatch legend-primary"></span>Portfolio</span>
+              <span class="legend-item"><span class="legend-swatch legend-benchmark"></span>Benchmark</span>
+              <span class="legend-item"><span class="legend-swatch legend-drawdown"></span>Negative spread / risk signal</span>
+            </div>
+          </div>
+
+          <div class="detail-panel">
+            <div class="detail-head">
+              <strong>Metric explanation card</strong>
+              <span>for Portfolio workspace</span>
+            </div>
+            <div class="detail-body">
+              <div class="detail-row">
+                <strong>Metric</strong>
+                Alpha vs benchmark
+              </div>
+              <div class="detail-row">
+                <strong>Meaning now</strong>
+                <span class="negative">Bad</span> because the bot is not generating true excess return beyond market beta.
+              </div>
+              <div class="detail-row">
+                <strong>Bot-goal interpretation</strong>
+                If this stays negative, the complexity of the system is not being justified by results.
+              </div>
+            </div>
+          </div>
+          <div class="mini-note">Tone: balanced and most versatile. Still dark, but a bit more legible and active than the deepest option.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Graphite / Cobalt</h3>
+      <p>My recommendation. Darker than the current app, cleaner than the first mockups, and strong enough for charts without feeling flashy.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="palette-carbon-steel" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="palette-shell carbon">
+        <div class="palette-topbar">
+          <div class="top-left">
+            <span>Research</span>
+            <span class="chip live">Replay ready</span>
+            <span class="chip warn">2 notes</span>
+          </div>
+          <div class="top-right">
+            <span>Carbon / Steel</span>
+          </div>
+        </div>
+        <div class="shell-body">
+          <div class="swatches">
+            <div class="swatch">
+              <div class="swatch-color" style="background:#040608"></div>
+              <div class="swatch-meta">Background<br>#040608</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#0f1419"></div>
+              <div class="swatch-meta">Panel<br>#0F1419</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#3e6ed6"></div>
+              <div class="swatch-meta">Primary<br>#3E6ED6</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#4aa36f"></div>
+              <div class="swatch-meta">Positive<br>#4AA36F</div>
+            </div>
+            <div class="swatch">
+              <div class="swatch-color" style="background:#c95a5a"></div>
+              <div class="swatch-meta">Negative<br>#C95A5A</div>
+            </div>
+          </div>
+
+          <div class="kpis">
+            <div class="metric">
+              <h5>Fill Quality</h5>
+              <strong>0.82</strong>
+              <span>state: acceptable, not strong</span>
+            </div>
+            <div class="metric">
+              <h5>Feed Lag</h5>
+              <strong class="negative">420ms</strong>
+              <span>state: monitor if rising</span>
+            </div>
+            <div class="metric">
+              <h5>Signal Drift</h5>
+              <strong>Low</strong>
+              <span>state: stable inputs</span>
+            </div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="chart-head">
+              <strong>Execution latency by day</strong>
+              <span>p50 / p95 overlay</span>
+            </div>
+            <div class="chart-frame">
+              <div class="axis-y">
+                <span>800</span>
+                <span>600</span>
+                <span>400</span>
+                <span>200</span>
+              </div>
+              <div class="plot">
+                <div class="gridline a"></div>
+                <div class="gridline b"></div>
+                <div class="gridline c"></div>
+                <div class="crosshair" style="left:58%"></div>
+                <div class="tooltip-box">
+                  Thu<br>
+                  p50: 240ms<br>
+                  p95: <span class="negative">680ms</span>
+                </div>
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <path class="primary-line" d="M0,74 L20,70 L40,64 L58,57 L80,52 L100,47"></path>
+                  <path class="drawdown-line" d="M0,42 L20,48 L40,36 L58,29 L80,33 L100,24"></path>
+                  <circle class="point-fill" cx="58" cy="57"></circle>
+                </svg>
+              </div>
+              <div class="axis-x">
+                <span>Mon</span>
+                <span>Tue</span>
+                <span>Wed</span>
+                <span>Thu</span>
+                <span>Fri</span>
+              </div>
+            </div>
+            <div class="legend">
+              <span class="legend-item"><span class="legend-swatch legend-primary"></span>p50 latency</span>
+              <span class="legend-item"><span class="legend-swatch legend-drawdown"></span>p95 latency</span>
+            </div>
+          </div>
+
+          <div class="detail-panel">
+            <div class="detail-head">
+              <strong>Research metric annotation</strong>
+              <span>less PM, more diagnostic</span>
+            </div>
+            <div class="detail-body">
+              <div class="detail-row">
+                <strong>Metric</strong>
+                Feed lag
+              </div>
+              <div class="detail-row">
+                <strong>Meaning now</strong>
+                Elevated lag is <span class="negative">bad</span> because stale data can degrade selection quality and execution timing.
+              </div>
+              <div class="detail-row">
+                <strong>Action path</strong>
+                Inspect data freshness, websocket stability, and timing deltas in replay.
+              </div>
+            </div>
+          </div>
+          <div class="mini-note">Tone: slightly softer and more understated. Good if you want the product to feel more sober and less “screen-lit.”</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Carbon / Steel</h3>
+      <p>Most muted and understated. Strong if you want the app to feel almost monochrome, with only small signals of color.</p>
+    </div>
+  </div>
+</div>

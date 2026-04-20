@@ -4,12 +4,18 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.config import TradingConfig
+from tradingx.journal import SqliteOmsJournal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    BotRuntimeState,
+    HistoricalWarmupRecord,
+    OpportunityScore,
+    OpportunitySelectionRecord,
     EvaluationEvidencePack,
     GateAssessment,
     MarketAutomationRunRecord,
     OperatorAlert,
+    StrategyActivationRecord,
     ServiceCycleSnapshot,
     ValidationCandidateResult,
     ValidationCriterionResult,
@@ -24,6 +30,14 @@ class FakeServiceManager:
         self._state = state
 
     def get_state(self) -> WebServiceState:
+        return self._state
+
+
+class FakeRuntimeHostManager:
+    def __init__(self, state: BotRuntimeState) -> None:
+        self._state = state
+
+    def get_state(self) -> BotRuntimeState:
         return self._state
 
 
@@ -125,6 +139,19 @@ def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
                 last_error="",
             )
         ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY", "QQQ"),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="snapshot-1",
+                latest_selection_id="selection-1",
+            )
+        ),
     )
 
     snapshot = read_model.build_dashboard_snapshot()
@@ -171,6 +198,19 @@ def test_local_web_read_model_lists_artifact_payloads_by_category(tmp_path) -> N
                 started_at_utc=None,
                 last_completed_at_utc=None,
                 last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY", "QQQ"),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="snapshot-1",
+                latest_selection_id="selection-1",
             )
         ),
     )
@@ -365,6 +405,19 @@ def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
                 last_error="",
             )
         ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY", "QQQ"),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="snapshot-1",
+                latest_selection_id="selection-1",
+            )
+        ),
     )
 
     command_center = read_model.build_command_center_snapshot()
@@ -438,3 +491,392 @@ def test_local_web_read_model_reads_latest_market_automation_run(tmp_path) -> No
     assert record is not None
     assert record.run_id == "automation-1"
     assert record.heartbeat_count == 2
+
+
+def test_local_web_read_model_prefers_live_oms_journal_over_ops_rehearsal_journal(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=(),
+            cash=Decimal("99999.57"),
+            equity=Decimal("99999.57"),
+            buying_power=Decimal("399998.28"),
+        )
+    )
+
+    ops_journal = SqliteOmsJournal(tmp_path / "artifacts" / "ops" / "data" / "journal.db")
+    ops_journal.append_event(
+        event_type="reject",
+        recorded_at_utc=timestamp,
+        decision_snapshot_id="decision-ops",
+        cycle_correlation_id="cycle-ops",
+        client_order_id="client-ops",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={
+            "reason_code": "insufficient_buying_power",
+            "message": '{"message":"insufficient buying power for requested exposure"}',
+        },
+    )
+
+    live_journal = SqliteOmsJournal(tmp_path / "data" / "journal.db")
+    live_journal.append_event(
+        event_type="submit_attempt",
+        recorded_at_utc=timestamp,
+        decision_snapshot_id="decision-live",
+        cycle_correlation_id="cycle-live",
+        client_order_id="client-live",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "baseline_long_entry"},
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=paper_store,
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY",),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="approved-baseline-long-only-v1",
+                latest_selection_id="selection-1",
+            )
+        ),
+    )
+
+    snapshot = read_model.build_portfolio_workspace_snapshot()
+    execution_quality = next(
+        card for card in snapshot.metric_cards if card.metric_id == "execution_quality"
+    )
+    reject_rate = next(
+        card for card in snapshot.metric_cards if card.metric_id == "reject_rate"
+    )
+
+    assert execution_quality.value == "No recent rejects"
+    assert execution_quality.delta == "No broker rejection recorded"
+    assert reject_rate.value == "0.00%"
+    assert snapshot.execution_panel.summary_metrics[0].value == "0"
+
+
+def test_local_web_read_model_labels_live_and_rehearsal_portfolio_sources(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=(),
+            cash=Decimal("99999.57"),
+            equity=Decimal("99999.57"),
+            buying_power=Decimal("399998.28"),
+        )
+    )
+    live_journal = SqliteOmsJournal(tmp_path / "data" / "journal.db")
+    live_journal.append_event(
+        event_type="submit_attempt",
+        recorded_at_utc=timestamp,
+        decision_snapshot_id="decision-live",
+        cycle_correlation_id="cycle-live",
+        client_order_id="client-live",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "baseline_long_entry"},
+    )
+    ops_root = tmp_path / "artifacts" / "ops"
+    ops_root.mkdir(parents=True, exist_ok=True)
+    (ops_root / "paper_account_starting_state.json").write_text(
+        (
+            "{\n"
+            '  "buying_power": "399998.28",\n'
+            '  "cash": "99999.57",\n'
+            '  "equity": "99999.57",\n'
+            '  "recorded_at_utc": "2026-04-19T21:30:18.589286+00:00"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=paper_store,
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY",),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="approved-baseline-long-only-v1",
+                latest_selection_id="selection-1",
+            )
+        ),
+    )
+
+    snapshot = read_model.build_portfolio_workspace_snapshot()
+    equity_card = next(card for card in snapshot.metric_cards if card.metric_id == "equity")
+
+    assert [note.label for note in snapshot.source_notes] == [
+        "Live account",
+        "Live OMS journal",
+        "Rehearsal baseline",
+    ]
+    assert equity_card.provenance is not None
+    assert equity_card.provenance.label == "Mixed evidence"
+    assert snapshot.execution_panel.provenance is not None
+    assert snapshot.execution_panel.provenance.label == "Live OMS journal"
+
+
+def test_local_web_read_model_builds_runtime_heartbeat_from_latest_cycle_and_selection(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    timestamp = datetime(2026, 4, 20, 14, 58, 30, tzinfo=UTC)
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-1",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=(),
+            cash=Decimal("99999.57"),
+            equity=Decimal("99999.57"),
+            buying_power=Decimal("399998.28"),
+        )
+    )
+    operator_store.write_historical_warmup_record(
+        HistoricalWarmupRecord(
+            warmup_id="warmup-1",
+            generated_at_utc=timestamp,
+            benchmark_symbol="SPY",
+            symbols=("SPY", "QQQ", "IWM"),
+            window_start_utc=timestamp,
+            window_end_utc=timestamp,
+            required_bar_count=30,
+            symbols_ready=("SPY", "QQQ"),
+            symbols_blocked={"IWM": "Insufficient daily bars for warmup coverage."},
+            return_summary={
+                "SPY": {
+                    "cumulative_return": "0.03633208383570791129794373504",
+                    "mean_return": "0.0",
+                    "volatility": "0.01047064497825575500",
+                },
+                "QQQ": {
+                    "cumulative_return": "0.0284019921010000000000000000",
+                    "mean_return": "0.0",
+                    "volatility": "0.01200000000000000000",
+                },
+            },
+        )
+    )
+    operator_store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-1",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY", "QQQ", "IWM"),
+            deploy_threshold="0.50",
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=timestamp,
+            notes="Three-symbol supervised dry-run activation.",
+        )
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY", "QQQ", "IWM"),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("0.3633208383570791129794373504"),
+                    regime_weight=Decimal("1.028718329115396922360880821"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.50"),
+                    spread_penalty=Decimal("0.02545536825432741260323566014"),
+                    volatility_penalty=Decimal("0.1047064497825575500"),
+                    portfolio_overlap_penalty=Decimal("0.0"),
+                    execution_cost_penalty=Decimal("0.01272768412716370630161783007"),
+                    final_score=Decimal("0.4177427064872007865966329969"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+                OpportunityScore(
+                    symbol="QQQ",
+                    base_signal=Decimal("0.2900"),
+                    regime_weight=Decimal("1.0200"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.35"),
+                    spread_penalty=Decimal("0.0180"),
+                    volatility_penalty=Decimal("0.0420"),
+                    portfolio_overlap_penalty=Decimal("0.0"),
+                    execution_cost_penalty=Decimal("0.0080"),
+                    final_score=Decimal("0.3310"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="",
+            decision="no_trade",
+            decision_reason="No eligible opportunity cleared the deploy threshold.",
+        )
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "TRADINGX_SERVICE_INTERVAL_SECONDS": "300",
+                "TRADINGX_SYMBOL_UNIVERSE": "SPY,QQQ,IWM",
+            }
+        ),
+        paper_store=paper_store,
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY", "QQQ", "IWM"),
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="approved-baseline-long-only-v1",
+                latest_selection_id="selection-1",
+            )
+        ),
+    )
+
+    heartbeat = read_model.build_runtime_heartbeat_snapshot()
+
+    assert heartbeat.heartbeat_state == "Waiting for next evaluation"
+    assert heartbeat.last_decision == "No trade"
+    assert heartbeat.current_exposure == "Flat"
+    assert heartbeat.cadence_label == "Every 5m"
+    assert heartbeat.last_evaluation_at_utc == timestamp
+    assert heartbeat.next_evaluation_at_utc == datetime(
+        2026, 4, 20, 15, 3, 30, tzinfo=UTC
+    )
+    assert (
+        heartbeat.score_explanation
+        == "SPY scored 0.4177 which is below the deploy threshold of 0.50."
+    )
+    truth_items = {item.label: item.value for item in heartbeat.runtime_truth}
+    assert truth_items["Session posture"] == "Intraday monitor"
+    assert truth_items["Trading mode"] == "Paper"
+    assert truth_items["Runtime engine"] == "Active"
+    assert truth_items["Open positions"] == "0"
+    assert truth_items["Pending orders"] == "0"
+
+    symbol_rows = {row.symbol: row for row in heartbeat.symbol_rows}
+    assert symbol_rows["SPY"].status == "Below threshold"
+    assert symbol_rows["SPY"].threshold_gap == "-0.0823"
+    assert symbol_rows["QQQ"].status == "Below threshold"
+    assert symbol_rows["QQQ"].reason == "Score remained below the deploy threshold."
+    assert symbol_rows["IWM"].status == "Blocked"
+    assert symbol_rows["IWM"].warmup_state == "Blocked"
+    assert (
+        symbol_rows["IWM"].reason == "Insufficient daily bars for warmup coverage."
+    )
+
+    assert [row.symbol for row in heartbeat.decision_ladder] == ["SPY", "QQQ", "IWM"]
+    assert heartbeat.decision_ladder[0].primary_driver == "Volatility penalty"
+    assert heartbeat.decision_ladder[1].primary_driver == "Volatility penalty"
+    assert heartbeat.decision_ladder[2].disposition == "Blocked"
+
+    assert heartbeat.operator_guidance is not None
+    assert heartbeat.operator_guidance.recommendation == "Investigate warmup failure"
+    assert (
+        heartbeat.operator_guidance.detail
+        == "IWM is still blocked by warmup, so TradingX is evaluating an incomplete universe. Resolve the warmup gap before broadening unattended operation."
+    )

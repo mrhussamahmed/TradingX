@@ -1,0 +1,126 @@
+#!/bin/zsh
+
+set -u
+
+show_error() {
+  /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+  display dialog item 1 of argv buttons {"OK"} default button "OK" with icon stop with title "TradingX Control Center"
+end run
+APPLESCRIPT
+}
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$APP_ROOT/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env"
+LOG_FILE="$REPO_ROOT/data/logs/control_center_app.log"
+LAUNCH_SCRIPT="$REPO_ROOT/scripts/start_control_center_server.command"
+VENV_PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+log_line() {
+  printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$LOG_FILE"
+}
+
+read_env_value() {
+  local key="$1"
+  /usr/bin/awk -F= -v key="$key" '
+    $1 == key {
+      gsub(/\r/, "", $2)
+      print $2
+      exit
+    }
+  ' "$ENV_FILE"
+}
+
+WEB_HOST="$(read_env_value TRADINGX_WEB_HOST)"
+WEB_PORT="$(read_env_value TRADINGX_WEB_PORT)"
+
+if [[ -z "$WEB_HOST" ]]; then
+  WEB_HOST="127.0.0.1"
+fi
+
+if [[ "$WEB_HOST" == "0.0.0.0" ]]; then
+  WEB_HOST="127.0.0.1"
+fi
+
+if [[ -z "$WEB_PORT" ]]; then
+  WEB_PORT="8765"
+fi
+
+DASHBOARD_URL="http://$WEB_HOST:$WEB_PORT"
+HEALTH_URL="$DASHBOARD_URL/api/config/summary"
+
+server_ready() {
+  /usr/bin/curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1
+}
+
+open_dashboard() {
+  /usr/bin/open "$DASHBOARD_URL"
+}
+
+launch_via_terminal() {
+  /usr/bin/osascript - "$LAUNCH_SCRIPT" <<'APPLESCRIPT'
+on run argv
+  set launchScript to item 1 of argv
+  tell application "Terminal"
+    do script "/bin/zsh " & quoted form of launchScript & "; exit"
+  end tell
+end run
+APPLESCRIPT
+}
+
+launch_via_python() {
+  "$VENV_PYTHON_BIN" -m tradingx launch-control-center --env-file "$ENV_FILE"
+}
+
+log_line "launcher_invoked repo_root=$REPO_ROOT"
+log_line "dashboard_url=$DASHBOARD_URL"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  log_line "env_missing path=$ENV_FILE"
+  show_error "TradingX env file not found at $ENV_FILE."
+  exit 1
+fi
+
+if [[ ! -x "$LAUNCH_SCRIPT" ]]; then
+  if [[ -x "$VENV_PYTHON_BIN" ]]; then
+    log_line "launch_script_missing_fallback_python path=$LAUNCH_SCRIPT"
+    if launch_via_python; then
+      exit 0
+    fi
+    log_line "python_fallback_failed path=$VENV_PYTHON_BIN"
+    show_error "TradingX Control Center failed to launch. See $LOG_FILE."
+    exit 1
+  fi
+  log_line "launch_script_missing path=$LAUNCH_SCRIPT"
+  show_error "TradingX launcher script not found at $LAUNCH_SCRIPT."
+  exit 1
+fi
+
+if server_ready; then
+  log_line "server_already_running"
+  open_dashboard
+  exit 0
+fi
+
+if ! launch_via_terminal; then
+  log_line "terminal_launch_failed"
+  show_error "TradingX could not ask Terminal to start the control center."
+  exit 1
+fi
+
+for _ in {1..30}; do
+  if server_ready; then
+    log_line "server_started_via_terminal"
+    open_dashboard
+    exit 0
+  fi
+  sleep 1
+done
+
+log_line "server_start_timeout"
+show_error "TradingX Control Center did not start in time. See $LOG_FILE."
+exit 1

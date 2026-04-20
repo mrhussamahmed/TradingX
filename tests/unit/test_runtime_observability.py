@@ -166,6 +166,20 @@ class FakeLoopController:
         )
 
 
+class FakeNonePortfolioPlanner:
+    last_strategy_id = "baseline-long-only-v1"
+
+    def plan_for_service(
+        self,
+        *,
+        symbols,
+        portfolio_state,
+        default_quantity,
+    ):
+        del symbols, portfolio_state, default_quantity
+        return None
+
+
 class FakeChildProcess:
     def __init__(self, pid: int) -> None:
         self.pid = pid
@@ -299,6 +313,46 @@ def test_paper_trading_service_writes_cycle_logs(tmp_path) -> None:
         payload["event_type"] == "cycle_completed"
         and payload["cycle_correlation_id"]
         and payload["fields"]["cycle_status"] == "executed"
+        for payload in payloads
+    )
+
+
+def test_paper_trading_service_logs_planner_no_candidate_event(tmp_path) -> None:
+    service = PaperTradingService(
+        loop_controller=FakeLoopController(),
+        portfolio=FakePortfolio(),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=FakeNonePortfolioPlanner(),
+        runtime_logger=StructuredRuntimeLogger(
+            component="service",
+            root_dir=tmp_path / "data" / "logs",
+            now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        ),
+    )
+
+    result = service.run(
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    assert result.last_cycle.cycle_status == "recovery_required"
+    payloads = [
+        json.loads(line)
+        for line in (tmp_path / "data" / "logs" / "service.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert any(
+        payload["event_type"] == "planner_no_candidate"
+        and payload["severity"] == "warning"
+        and payload["fields"]["reason"] == "planner_returned_none"
+        and payload["fields"]["strategy_id"] == "baseline-long-only-v1"
         for payload in payloads
     )
 

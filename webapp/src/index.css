@@ -1,32 +1,11 @@
 :root {
-  --shell-night: #071019;
-  --shell-midnight: #0f1b2c;
-  --shell-reef: #112b35;
-  --shell-card: rgba(11, 19, 31, 0.78);
-  --shell-card-strong: rgba(16, 25, 39, 0.9);
-  --shell-card-soft: rgba(19, 31, 47, 0.66);
-  --shell-line: rgba(255, 255, 255, 0.1);
-  --shell-line-strong: rgba(255, 255, 255, 0.18);
-  --glow-teal: rgba(65, 214, 194, 0.26);
-  --glow-gold: rgba(255, 196, 107, 0.24);
-  --glow-rose: rgba(255, 138, 138, 0.18);
-  --shadow-deep: 0 40px 90px rgba(3, 7, 16, 0.5);
-  --paper: #f5efe2;
-  --mist: #dfe9ea;
-  --ink: #f7f2e8;
-  --ink-soft: #a6b7c4;
-  --ink-muted: #7e91a3;
-  --line: rgba(255, 255, 255, 0.1);
-  --heading: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', serif;
-  --body: 'Avenir Next', 'Trebuchet MS', sans-serif;
+  --heading: 'Canela', 'Iowan Old Style', 'Palatino Linotype', serif;
+  --body: 'IBM Plex Sans', 'Avenir Next', 'Segoe UI', sans-serif;
   --mono: 'IBM Plex Mono', 'SFMono-Regular', 'Menlo', monospace;
 
   font-family: var(--body);
-  color: var(--ink);
-  background:
-    radial-gradient(circle at top left, rgba(255, 196, 107, 0.18), transparent 24%),
-    radial-gradient(circle at top right, rgba(65, 214, 194, 0.16), transparent 26%),
-    linear-gradient(180deg, #09111c 0%, #0d1726 38%, #0b1420 100%);
+  color: #edf2f8;
+  background: #05080d;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -40,10 +19,7 @@
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    radial-gradient(circle at 15% 10%, rgba(255, 196, 107, 0.1), transparent 20%),
-    radial-gradient(circle at 82% 12%, rgba(65, 214, 194, 0.12), transparent 18%),
-    linear-gradient(160deg, #071019 0%, #0b1727 45%, #09111c 100%);
+  background: #05080d;
 }
 
 button,
@@ -56,7 +32,7 @@ h1,
 h2,
 h3 {
   font-family: var(--heading);
-  color: var(--ink);
+  color: #f3f6fb;
 }
 
 h1 {
@@ -90,6 +66,6 @@ a {
 }
 
 ::selection {
-  background: rgba(65, 214, 194, 0.28);
-  color: var(--paper);
+  background: rgba(135, 163, 199, 0.32);
+  color: #f8fbff;
 }

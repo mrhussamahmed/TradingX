@@ -1,0 +1,527 @@
+<style>
+  .overview {
+    display: grid;
+    gap: 26px;
+  }
+
+  .hero {
+    display: grid;
+    gap: 14px;
+    max-width: 980px;
+  }
+
+  .hero p {
+    margin: 0;
+  }
+
+  .shell {
+    border-radius: 22px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(180deg, rgba(7, 11, 19, 0.96), rgba(7, 11, 18, 0.92));
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+  }
+
+  .shell-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .top-left,
+  .top-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(208, 220, 232, 0.78);
+    margin-right: 10px;
+  }
+
+  .chip {
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(240, 246, 250, 0.84);
+  }
+
+  .chip.live {
+    background: rgba(61, 181, 166, 0.12);
+    color: #9bf5e8;
+    border-color: rgba(61, 181, 166, 0.22);
+  }
+
+  .chip.warn {
+    background: rgba(240, 181, 79, 0.12);
+    color: #ffdca2;
+    border-color: rgba(240, 181, 79, 0.18);
+  }
+
+  .chip.dim {
+    color: rgba(208, 220, 232, 0.6);
+  }
+
+  .mode-switcher {
+    display: flex;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .mode-card {
+    flex: 1;
+    padding: 12px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .mode-card.active {
+    background: linear-gradient(135deg, rgba(33, 95, 93, 0.94), rgba(14, 53, 61, 0.92));
+    border-color: rgba(61, 181, 166, 0.24);
+  }
+
+  .mode-card h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+  }
+
+  .mode-card p {
+    margin: 0;
+    color: rgba(216, 227, 236, 0.75);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .shell-body {
+    display: grid;
+    grid-template-columns: 90px 1fr 280px;
+    min-height: 700px;
+  }
+
+  .nav-rail,
+  .context-rail {
+    padding: 16px 12px;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.015);
+  }
+
+  .context-rail {
+    border-right: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .nav-rail ul,
+  .context-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 8px;
+  }
+
+  .nav-rail li,
+  .context-item {
+    padding: 10px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(238, 244, 248, 0.82);
+  }
+
+  .nav-rail li.active {
+    background: linear-gradient(135deg, rgba(33, 95, 93, 0.92), rgba(14, 53, 61, 0.9));
+  }
+
+  .canvas {
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .row {
+    display: grid;
+    gap: 12px;
+  }
+
+  .row.kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .row.main {
+    grid-template-columns: 1.15fr 1fr;
+  }
+
+  .row.bottom {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: linear-gradient(180deg, rgba(18, 27, 40, 0.92), rgba(8, 14, 23, 0.92));
+  }
+
+  .panel h4 {
+    margin: 0 0 12px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(208, 220, 232, 0.65);
+  }
+
+  .metric {
+    display: grid;
+    gap: 8px;
+  }
+
+  .metric strong {
+    font-size: 24px;
+    letter-spacing: -0.03em;
+    color: #f4f8fb;
+  }
+
+  .metric span {
+    color: rgba(208, 220, 232, 0.68);
+    font-size: 12px;
+  }
+
+  .chart {
+    height: 140px;
+    border-radius: 14px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+      linear-gradient(180deg, rgba(9, 13, 20, 0.96), rgba(9, 13, 20, 0.84));
+    position: relative;
+    overflow: hidden;
+  }
+
+  .chart::before,
+  .chart::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    height: 1px;
+    background: rgba(255,255,255,0.06);
+  }
+
+  .chart::before { top: 42px; }
+  .chart::after { top: 92px; }
+
+  .chart svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .chart path {
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .chart path.primary { stroke: #95f5e8; }
+  .chart path.secondary { stroke: #ffcf79; opacity: 0.9; }
+  .chart path.tertiary { stroke: #7ebcff; opacity: 0.82; }
+
+  .table {
+    display: grid;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .table .header,
+  .table .entry {
+    display: grid;
+    gap: 8px;
+  }
+
+  .table.orders .header,
+  .table.orders .entry {
+    grid-template-columns: 1.1fr .8fr .8fr .8fr;
+  }
+
+  .table.benchmarks .header,
+  .table.benchmarks .entry {
+    grid-template-columns: 1.2fr .8fr .8fr .7fr;
+  }
+
+  .table .header {
+    color: rgba(208, 220, 232, 0.55);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 10px;
+  }
+
+  .table .entry {
+    color: rgba(238, 244, 248, 0.84);
+  }
+
+  .alerts {
+    display: grid;
+    gap: 8px;
+  }
+
+  .alert {
+    padding: 10px 11px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .alert strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+
+  .alert span {
+    font-size: 12px;
+    color: rgba(216, 227, 236, 0.72);
+    line-height: 1.45;
+  }
+
+  .alert.warn {
+    border-color: rgba(240, 181, 79, 0.18);
+  }
+
+  .alert.critical {
+    border-color: rgba(219, 92, 92, 0.22);
+  }
+
+  .mode-notes {
+    display: grid;
+    gap: 12px;
+  }
+
+  .mode-note {
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .mode-note h5 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(208, 220, 232, 0.63);
+  }
+
+  .mode-note p {
+    margin: 0;
+    font-size: 12px;
+    color: rgba(224, 232, 238, 0.76);
+    line-height: 1.45;
+  }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .summary .option {
+    min-height: 100%;
+  }
+</style>
+
+<div class="overview">
+  <div class="hero">
+    <h2>Unified TradingX shell with switchable work modes</h2>
+    <p class="subtitle">
+      This combines all three directions into one product. The app keeps a single darker professional shell, one data layer, one permissions model, and one navigation system, but the default layout and emphasis change depending on what you need to do.
+    </p>
+  </div>
+
+  <div class="shell">
+    <div class="shell-topbar">
+      <div class="top-left">
+        <span class="brand">TradingX</span>
+        <span class="chip live">Paper</span>
+        <span class="chip live">Runtime running</span>
+        <span class="chip warn">1 intervention needed</span>
+      </div>
+      <div class="top-right">
+        <span class="chip">Global search</span>
+        <span class="chip">Layouts</span>
+        <span class="chip dim">No fake metrics</span>
+      </div>
+    </div>
+
+    <div class="mode-switcher">
+      <div class="mode-card active">
+        <h3>Mission Control</h3>
+        <p>Default for market hours. Focuses on runtime, orders, alerts, exposure, and fast intervention.</p>
+      </div>
+      <div class="mode-card">
+        <h3>Portfolio Intelligence</h3>
+        <p>Switches the center canvas toward P&amp;L, benchmarks, attribution, and what is helping or hurting.</p>
+      </div>
+      <div class="mode-card">
+        <h3>Workbench</h3>
+        <p>Lets you assemble saved layouts for specialized review without changing the underlying app or controls.</p>
+      </div>
+    </div>
+
+    <div class="shell-body">
+      <div class="nav-rail">
+        <ul>
+          <li class="active">Home</li>
+          <li>Orders</li>
+          <li>Risk</li>
+          <li>Positions</li>
+          <li>Performance</li>
+          <li>Audit</li>
+        </ul>
+      </div>
+
+      <div class="canvas">
+        <div class="row kpis">
+          <div class="panel metric">
+            <h4>Net Liq</h4>
+            <strong>$100,421.88</strong>
+            <span>Hide when unavailable</span>
+          </div>
+          <div class="panel metric">
+            <h4>Daily P&amp;L</h4>
+            <strong>+$412.44</strong>
+            <span>Real session movement only</span>
+          </div>
+          <div class="panel metric">
+            <h4>Risk Used</h4>
+            <strong>42%</strong>
+            <span>Operator limit context</span>
+          </div>
+          <div class="panel metric">
+            <h4>Required Action</h4>
+            <strong>Review</strong>
+            <span>Warmup degraded for QQQ</span>
+          </div>
+        </div>
+
+        <div class="row main">
+          <div class="panel">
+            <h4>Center canvas changes by mode</h4>
+            <div class="chart">
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                <path class="primary" d="M0,72 L12,68 L26,61 L43,56 L58,42 L76,35 L100,29"></path>
+                <path class="secondary" d="M0,77 L12,74 L26,66 L43,60 L58,48 L76,41 L100,36"></path>
+                <path class="tertiary" d="M0,78 L12,76 L26,70 L43,66 L58,58 L76,53 L100,46"></path>
+              </svg>
+            </div>
+            <div class="summary">
+              <div class="option">
+                <div class="content">
+                  <h3>Mission Control</h3>
+                  <p>Orders, runtime, alerts, risk state, execution quality, safe controls.</p>
+                </div>
+              </div>
+              <div class="option">
+                <div class="content">
+                  <h3>Portfolio Intelligence</h3>
+                  <p>Benchmark spread, attribution, drawdown, strategy ranking, degradation.</p>
+                </div>
+              </div>
+              <div class="option">
+                <div class="content">
+                  <h3>Workbench</h3>
+                  <p>Saved review layouts for risk, audit, research, or system health.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h4>Orders & intervention strip</h4>
+            <div class="table orders">
+              <div class="header"><span>Order</span><span>Status</span><span>Age</span><span>Action</span></div>
+              <div class="entry"><span>SPY buy</span><span>Filled</span><span>11s</span><span>View</span></div>
+              <div class="entry"><span>QQQ rebalance</span><span>Blocked</span><span>2m</span><span>Investigate</span></div>
+              <div class="entry"><span>IWM rebalance</span><span>Queued</span><span>8s</span><span>Monitor</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="row bottom">
+          <div class="panel">
+            <h4>Performance slice when you switch to intelligence mode</h4>
+            <div class="table benchmarks">
+              <div class="header"><span>Benchmark</span><span>Excess</span><span>Alpha</span><span>Beta</span></div>
+              <div class="entry"><span>S&amp;P 500</span><span>-1.6%</span><span>-0.8%</span><span>0.72</span></div>
+              <div class="entry"><span>Nasdaq 100</span><span>-2.1%</span><span>-1.0%</span><span>0.68</span></div>
+              <div class="entry"><span>Custom basket</span><span>-0.8%</span><span>-0.4%</span><span>0.59</span></div>
+            </div>
+          </div>
+          <div class="panel">
+            <h4>Alert language becomes operational</h4>
+            <div class="alerts">
+              <div class="alert warn">
+                <strong>Warmup breadth degraded</strong>
+                <span>Only ready symbols should remain tradable until data coverage recovers.</span>
+              </div>
+              <div class="alert critical">
+                <strong>Benchmark edge still negative</strong>
+                <span>No capital expansion until strategy evidence improves versus passive baselines.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="context-rail">
+        <div class="mode-notes">
+          <div class="mode-note">
+            <h5>Why this architecture</h5>
+            <p>All three modes exist, but they share the same product so the user is not relearning navigation, permissions, or terminology.</p>
+          </div>
+          <div class="mode-note">
+            <h5>Data rule</h5>
+            <p>Unavailable metrics become hidden or explicitly unavailable. No synthetic fill just to make panels look complete.</p>
+          </div>
+          <div class="mode-note">
+            <h5>Control rule</h5>
+            <p>Operator Plus controls are allowed. Manual trade entry and unsafe config mutation stay out of the main UI.</p>
+          </div>
+          <div class="mode-note">
+            <h5>Visual rule</h5>
+            <p>Thinner charts, calmer contrast, darker shell, less decorative noise, and stronger hierarchy around actions and risk.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="options">
+    <div class="option" data-choice="unified-modes-yes" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>Yes, build the unified multi-mode shell</h3>
+        <p>One app, one navigation model, one data model, three switchable work modes.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="unified-modes-adjust" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>Use this direction, but adjust the mode concept</h3>
+        <p>The combined architecture is right, but the labels, scope, or emphasis should change.</p>
+      </div>
+    </div>
+  </div>
+</div>

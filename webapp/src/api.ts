@@ -18,14 +18,16 @@ import type {
   MarketAutomationRunRecord,
   MarketDayScheduleRecord,
   MarketDaySchedulerState,
-  ModelWeightProposal,
   ModelWeightSnapshot,
   OpportunitySelectionRecord,
   MarketSessionRecord,
+  PortfolioWorkspaceSnapshot,
+  PerformanceAnalyticsSnapshot,
   ReplaySlippageSummary,
   ReplaySession,
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
+  RuntimeHeartbeatSnapshot,
   StrategyActivationRecord,
 } from './types'
 
@@ -66,6 +68,10 @@ export function getRuntimeHostState() {
   return request<BotRuntimeState>('/api/runtime-host/state')
 }
 
+export function getRuntimeHostHeartbeat() {
+  return request<RuntimeHeartbeatSnapshot>('/api/runtime-host/heartbeat')
+}
+
 export function getRuntimeHostWarmup() {
   return request<HistoricalWarmupRecord | null>('/api/runtime-host/warmup/latest')
 }
@@ -82,10 +88,6 @@ export function getRuntimeHostSelection() {
   return request<OpportunitySelectionRecord | null>('/api/runtime-host/selection/latest')
 }
 
-export function getRuntimeHostProposal() {
-  return request<ModelWeightProposal | null>('/api/runtime-host/proposal/latest')
-}
-
 export function getConfigProposals() {
   return request<ConfigProposal[]>('/api/config/proposals')
 }
@@ -100,6 +102,14 @@ export function getIncidents() {
 
 export function getResearch() {
   return request<ResearchStudioSnapshot>('/api/platform/research')
+}
+
+export function getPortfolioWorkspace() {
+  return request<PortfolioWorkspaceSnapshot>('/api/platform/portfolio')
+}
+
+export function getPerformanceAnalytics() {
+  return request<PerformanceAnalyticsSnapshot>('/api/platform/performance')
 }
 
 export function getReplay(params: {
@@ -210,12 +220,6 @@ export function postRuntimeHostStart(payload: {
 
 export function postRuntimeHostStop() {
   return request<ActionResult>('/api/actions/runtime-host/stop', {
-    method: 'POST',
-  })
-}
-
-export function postRuntimeHostLearn() {
-  return request<ActionResult>('/api/actions/runtime-host/learn', {
     method: 'POST',
   })
 }

@@ -64,7 +64,7 @@ class FakeMarketData:
         )
 
 
-def test_runtime_portfolio_planner_returns_none_for_legacy_baseline_strategy() -> None:
+def test_weight_based_runtime_portfolio_planner_returns_none_for_baseline_strategy() -> None:
     planner = RuntimePortfolioPlanner(
         market_data=FakeMarketData(),
         activation_gateway=FakeActivationGateway(strategy_id="baseline-long-only-v1"),
@@ -81,8 +81,10 @@ def test_runtime_portfolio_planner_returns_none_for_legacy_baseline_strategy() -
             positions=(),
             open_orders=(),
         ),
+        default_quantity=Decimal("0"),
     )
 
+    # Baseline execution is handled by ActivatedRuntimePlanner + BaselineLongOnlyPlanner.
     assert plan is None
 
 
@@ -135,6 +137,7 @@ def test_runtime_portfolio_planner_builds_reduce_then_buy_trade_intents(
             ),
             open_orders=(),
         ),
+        default_quantity=Decimal("0"),
     )
 
     assert plan is not None
@@ -196,6 +199,7 @@ def test_runtime_portfolio_planner_uses_activation_approved_symbols_for_candidat
             positions=(),
             open_orders=(),
         ),
+        default_quantity=Decimal("0"),
     )
 
     assert plan is not None
@@ -240,4 +244,5 @@ def test_runtime_portfolio_planner_rejects_negative_target_weights(
                 positions=(),
                 open_orders=(),
             ),
+            default_quantity=Decimal("0"),
         )

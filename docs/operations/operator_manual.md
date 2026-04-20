@@ -146,6 +146,19 @@ Common optional settings:
 npm --prefix webapp run build
 ```
 
+### 4a. Optional no-terminal launcher
+
+On macOS, this workspace also includes `TradingX Control Center.app` in
+the repo root. Double-clicking it starts the local control center if it
+is not already running, then opens the dashboard in your default
+browser.
+
+Requirements:
+
+- `.venv` exists from `uv sync --all-groups`
+- `.env` exists and is populated
+- the app bundle stays in the repo root so it can find the workspace
+
 ### 5. Verify the config loads safely
 
 ```bash
@@ -222,15 +235,28 @@ Important semantics:
 
 This is now the preferred operator workflow.
 
-1. Start the local website:
+1. Start the control center in one of these ways:
+
+Preferred no-terminal path on macOS:
+
+- double-click `TradingX Control Center.app`
+
+CLI launcher equivalent:
+
+```bash
+uv run tradingx launch-control-center --env-file .env
+```
+
+Lower-level web-server fallback:
 
 ```bash
 uv run tradingx web --env-file .env
 ```
 
-2. Open [http://127.0.0.1:8765](http://127.0.0.1:8765)
-3. Enable `TRADINGX_WEB_WRITE_MODE_ENABLED=true` in `.env` if you want
-   action buttons live.
+2. Open [http://127.0.0.1:8765](http://127.0.0.1:8765) if it does not
+   open automatically.
+3. The website stays local-only. Write actions follow the current
+   `.env` setting for `TRADINGX_WEB_WRITE_MODE_ENABLED`.
 4. Use the `Runtime Host` panel in the `Command Center` view:
    - `Start Bot`
    - `Refresh Learning Proposal`
@@ -355,6 +381,18 @@ Important limitation:
 
 ## Start the local website
 
+Preferred no-terminal path on macOS:
+
+- double-click `TradingX Control Center.app`
+
+Launcher CLI equivalent:
+
+```bash
+uv run tradingx launch-control-center --env-file .env
+```
+
+Lower-level fallback:
+
 ```bash
 uv run tradingx web --env-file .env
 ```
@@ -445,9 +483,14 @@ Use this for:
 uv run tradingx config-summary --env-file .env
 uv run tradingx live-disable-status --env-file .env
 ```
-2. Start the website.
+2. Start the control center.
+
+Preferred no-terminal path on macOS:
+- double-click `TradingX Control Center.app`
+
+CLI launcher equivalent:
 ```bash
-uv run tradingx web --env-file .env
+uv run tradingx launch-control-center --env-file .env
 ```
 3. Open the `Command Center` and use `Start Bot` in the `Runtime Host`
    panel if you want the supervised appliance workflow.

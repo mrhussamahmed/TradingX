@@ -1,0 +1,397 @@
+<style>
+  .intro {
+    display: grid;
+    gap: 12px;
+    max-width: 1020px;
+    margin-bottom: 24px;
+  }
+
+  .layout-frame {
+    display: grid;
+    gap: 18px;
+  }
+
+  .global-shell {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 22px;
+    overflow: hidden;
+    background: linear-gradient(180deg, rgba(4,6,8,0.96), rgba(7,10,13,0.92));
+    box-shadow: 0 24px 70px rgba(0,0,0,0.35);
+  }
+
+  .shell-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+  }
+
+  .top-left,
+  .top-right {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(204, 214, 225, 0.78);
+    margin-right: 10px;
+  }
+
+  .chip {
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: rgba(238,243,247,0.82);
+  }
+
+  .chip.primary {
+    color: #8db8ff;
+    border-color: rgba(62,110,214,0.24);
+    background: rgba(62,110,214,0.12);
+  }
+
+  .chip.bad {
+    color: #e7a2a2;
+    border-color: rgba(201,90,90,0.24);
+    background: rgba(201,90,90,0.12);
+  }
+
+  .workspace-switcher {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.015);
+  }
+
+  .workspace-pill {
+    padding: 12px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.07);
+    background: rgba(255,255,255,0.03);
+  }
+
+  .workspace-pill.active {
+    border-color: rgba(62,110,214,0.26);
+    background: linear-gradient(135deg, rgba(34,54,92,0.9), rgba(17,28,44,0.92));
+  }
+
+  .workspace-pill h3 {
+    margin: 0 0 5px;
+    font-size: 14px;
+  }
+
+  .workspace-pill p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(212, 223, 232, 0.74);
+  }
+
+  .map-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .map-card {
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: linear-gradient(180deg, rgba(8,11,15,0.96), rgba(12,16,20,0.92));
+  }
+
+  .map-card-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.02);
+  }
+
+  .map-card-header h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+  }
+
+  .map-card-header p {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(207, 217, 227, 0.74);
+  }
+
+  .map-card-body {
+    padding: 14px;
+    display: grid;
+    gap: 12px;
+  }
+
+  .page-block {
+    padding: 12px 12px 10px;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+  }
+
+  .page-block h4 {
+    margin: 0 0 7px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(198, 208, 218, 0.64);
+  }
+
+  .page-block strong {
+    display: block;
+    margin-bottom: 7px;
+    font-size: 13px;
+    color: #eef2f5;
+  }
+
+  .page-block ul {
+    padding-left: 16px;
+    margin: 0;
+    display: grid;
+    gap: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: rgba(220,227,233,0.78);
+  }
+
+  .important {
+    border-color: rgba(62,110,214,0.2);
+    box-shadow: 0 0 0 1px rgba(62,110,214,0.08) inset;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .option {
+    min-height: 100%;
+  }
+</style>
+
+<div class="layout-frame">
+  <div class="intro">
+    <h2>Page-by-page layout and workspace map</h2>
+    <p class="subtitle">
+      This section defines what the product actually is. Instead of one overloaded dashboard, TradingX becomes three distinct workspaces with a few focused pages each. The goal is to make it obvious where to go for live operation, performance review, or deep investigation.
+    </p>
+  </div>
+
+  <div class="global-shell">
+    <div class="shell-topbar">
+      <div class="top-left">
+        <span class="brand">TradingX</span>
+        <span class="chip primary">paper</span>
+        <span class="chip primary">carbon / steel</span>
+        <span class="chip bad">real data only</span>
+      </div>
+      <div class="top-right">
+        <span class="chip">global search</span>
+        <span class="chip">command palette</span>
+        <span class="chip">workspace switcher</span>
+      </div>
+    </div>
+
+    <div class="workspace-switcher">
+      <div class="workspace-pill active">
+        <h3>Mission Control</h3>
+        <p>Market-hours cockpit. Runtime, orders, positions, risk, interventions.</p>
+      </div>
+      <div class="workspace-pill">
+        <h3>Portfolio</h3>
+        <p>Performance, benchmarking, attribution, drawdown, interpretation.</p>
+      </div>
+      <div class="workspace-pill">
+        <h3>Research</h3>
+        <p>Replay, evidence, diagnostics, audit trails, saved review layouts.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="map-grid">
+    <div class="map-card">
+      <div class="map-card-header">
+        <h3>Mission Control</h3>
+        <p>Default workspace during active operations. Everything here must help the operator decide what to do now.</p>
+      </div>
+      <div class="map-card-body">
+        <div class="page-block important">
+          <h4>Home</h4>
+          <strong>Market Desk</strong>
+          <ul>
+            <li>Bot status, broker/feed health, risk budget, open alerts</li>
+            <li>Orders needing attention and positions overview</li>
+            <li>Operator-plus actions: pause, retry sync, recovery, bounded reruns</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Orders</h4>
+          <strong>Execution Queue</strong>
+          <ul>
+            <li>Active orders, fills, blocked orders, rejections, age, latency</li>
+            <li>Execution quality snapshot and “what needs action” sorting</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Risk</h4>
+          <strong>Exposure & Guardrails</strong>
+          <ul>
+            <li>Gross/net exposure, concentration, overnight exposure, budget usage</li>
+            <li>Intervention events and what control is constraining the bot</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Positions</h4>
+          <strong>Live Book</strong>
+          <ul>
+            <li>Open positions, P&amp;L, entry context, holding time, risk status</li>
+            <li>Drill into the latest decision behind each position</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Incidents</h4>
+          <strong>Operator Alerts</strong>
+          <ul>
+            <li>Critical/warning/info queue with acknowledgements and next steps</li>
+            <li>No passive noise; every alert must point to an action or reason to ignore</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="map-card">
+      <div class="map-card-header">
+        <h3>Portfolio</h3>
+        <p>Performance workspace with two internal views: guided by default, analyst on demand.</p>
+      </div>
+      <div class="map-card-body">
+        <div class="page-block important">
+          <h4>Home</h4>
+          <strong>Performance Summary</strong>
+          <ul>
+            <li>Goal-oriented summary: is the bot achieving its objective or not?</li>
+            <li>Key metrics with interpretation: good or bad, and why</li>
+            <li>Guided view by default with toggle to Analyst density</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Benchmarks</h4>
+          <strong>Relative Performance</strong>
+          <ul>
+            <li>Portfolio vs S&amp;P 500, Nasdaq 100, custom baselines</li>
+            <li>Alpha, beta, excess return, up/down capture, drawdown comparison</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Strategies</h4>
+          <strong>Attribution & Contribution</strong>
+          <ul>
+            <li>Which strategies are helping, hurting, unstable, or consuming risk</li>
+            <li>Clear controls like strategy filter, benchmark selector, metric view</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Drawdowns</h4>
+          <strong>Capital Protection</strong>
+          <ul>
+            <li>Drawdown timeline, recovery speed, benchmark-relative downside behavior</li>
+            <li>Answer whether the bot is protecting capital better than passive exposure</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Diagnostics</h4>
+          <strong>Performance Leaks</strong>
+          <ul>
+            <li>Execution drag, slippage trends, weak signals, blocked profits, regime mismatch</li>
+            <li>Prioritized “what to improve next” backed by evidence</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="map-card">
+      <div class="map-card-header">
+        <h3>Research</h3>
+        <p>Replay and diagnostics workspace. This is where the operator becomes investigator.</p>
+      </div>
+      <div class="map-card-body">
+        <div class="page-block important">
+          <h4>Home</h4>
+          <strong>Replay & Diagnostics Hub</strong>
+          <ul>
+            <li>Entry point for trade replay, decision tracing, and system investigation</li>
+            <li>Top evidence, recent failures, open diagnostic threads</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Replay</h4>
+          <strong>Trade Narrative</strong>
+          <ul>
+            <li>Signal, risk gate, selection logic, order path, fill outcome, aftermath</li>
+            <li>Used to answer exactly what happened and why</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Evidence</h4>
+          <strong>Artifact Explorer</strong>
+          <ul>
+            <li>Validation reports, incident trails, digests, scheduler logs, summaries</li>
+            <li>Searchable and grouped by purpose, not raw file chaos</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Diagnostics</h4>
+          <strong>System Health</strong>
+          <ul>
+            <li>Data lag, feed freshness, runtime state, drift, model freshness, queue backlog</li>
+            <li>Focus on technical root cause analysis rather than live operation</li>
+          </ul>
+        </div>
+        <div class="page-block">
+          <h4>Layouts</h4>
+          <strong>Saved Review Surfaces</strong>
+          <ul>
+            <li>Custom analyst layouts for replay-heavy, diagnostics-heavy, or audit-heavy work</li>
+            <li>Lives here so customization does not pollute Mission Control</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="summary-grid">
+    <div class="option">
+      <div class="content">
+        <h3>Global pages outside workspaces</h3>
+        <p>`Settings`, `Permissions`, and `Data Availability` stay global, not embedded inside every workspace.</p>
+      </div>
+    </div>
+    <div class="option">
+      <div class="content">
+        <h3>Page naming rule</h3>
+        <p>Pages should say exactly what they do. No vague labels like “studio” or “language” without a clear operational meaning.</p>
+      </div>
+    </div>
+    <div class="option">
+      <div class="content">
+        <h3>Navigation rule</h3>
+        <p>The operator always knows whether they are operating the bot, judging performance, or investigating behavior.</p>
+      </div>
+    </div>
+  </div>
+</div>

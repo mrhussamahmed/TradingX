@@ -11,6 +11,10 @@ class ApprovedWeightSnapshotNotFoundError(FileNotFoundError):
     pass
 
 
+def default_approved_weight_snapshot_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "config" / "strategy" / "weights"
+
+
 class ApprovedWeightSnapshotStore:
     def __init__(self, root_dir: Path) -> None:
         self._root_dir = root_dir
@@ -80,4 +84,5 @@ class ApprovedWeightSnapshotStore:
 __all__ = (
     "ApprovedWeightSnapshotNotFoundError",
     "ApprovedWeightSnapshotStore",
+    "default_approved_weight_snapshot_root",
 )
