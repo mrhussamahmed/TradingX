@@ -20,6 +20,7 @@ from tradingx.validation import (
     _candidate_returns,
     build_gate_report,
     evaluate_hurdle_clearance,
+    evaluate_opportunity_cost_edge,
 )
 from tradingx.validation import (
     _sharpe_ratio as validation_sharpe_ratio,
@@ -156,6 +157,35 @@ def test_hurdle_clearance_fails_when_candidate_underperforms_cash() -> None:
     result = evaluate_hurdle_clearance(
         candidate_returns=candidate_returns,
         hurdle_returns=hurdle_returns,
+    )
+
+    assert result.passed is False
+
+
+def test_opportunity_cost_edge_passes_when_candidate_beats_60_40() -> None:
+    candidate_returns = tuple([Decimal("0.0005")] * 252)
+    opportunity_cost_returns = tuple([Decimal("0.0003")] * 252)
+
+    result = evaluate_opportunity_cost_edge(
+        candidate_returns=candidate_returns,
+        opportunity_cost_returns=opportunity_cost_returns,
+        opportunity_cost_weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    assert result.passed is True
+    assert result.criterion_id == "opportunity_cost_edge"
+    assert "SPY:0.6" in result.details
+    assert "AGG:0.4" in result.details
+
+
+def test_opportunity_cost_edge_fails_when_candidate_underperforms_60_40() -> None:
+    candidate_returns = tuple([Decimal("0.0001")] * 252)
+    opportunity_cost_returns = tuple([Decimal("0.0004")] * 252)
+
+    result = evaluate_opportunity_cost_edge(
+        candidate_returns=candidate_returns,
+        opportunity_cost_returns=opportunity_cost_returns,
+        opportunity_cost_weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
     )
 
     assert result.passed is False

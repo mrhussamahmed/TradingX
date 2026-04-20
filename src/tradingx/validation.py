@@ -156,6 +156,34 @@ def evaluate_hurdle_clearance(
     )
 
 
+def evaluate_opportunity_cost_edge(
+    *,
+    candidate_returns: tuple[Decimal, ...],
+    opportunity_cost_returns: tuple[Decimal, ...],
+    opportunity_cost_weights: tuple[tuple[str, Decimal], ...],
+) -> ValidationCriterionResult:
+    candidate_metrics = _metric_pack(candidate_returns)
+    opportunity_cost_metrics = _metric_pack(opportunity_cost_returns)
+    passed = candidate_metrics["cagr"] > opportunity_cost_metrics["cagr"] + float(
+        GATE1_MIN_CAGR_EDGE
+    )
+    composition = "+".join(
+        f"{symbol}:{weight.normalize()}" for symbol, weight in opportunity_cost_weights
+    )
+    return ValidationCriterionResult(
+        criterion_id="opportunity_cost_edge",
+        passed=passed,
+        threshold=(
+            f"Candidate CAGR must exceed {composition} CAGR by "
+            f"{GATE1_MIN_CAGR_EDGE:.2f} absolute"
+        ),
+        details=(
+            f"Candidate CAGR={candidate_metrics['cagr']:.3f}, "
+            f"{composition} CAGR={opportunity_cost_metrics['cagr']:.3f}."
+        ),
+    )
+
+
 def _build_gate1_candidate_result(
     *,
     candidate: StrategyCandidate,
