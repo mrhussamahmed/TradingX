@@ -144,3 +144,18 @@ def test_regular_hours_calendar_returns_next_session_window_after_close() -> Non
     assert session.trading_day == "2026-04-20"
     assert session.open_at_utc == datetime(2026, 4, 20, 13, 30, tzinfo=UTC)
     assert session.close_at_utc == datetime(2026, 4, 20, 20, 0, tzinfo=UTC)
+
+
+def test_regular_hours_calendar_returns_session_dates_between_bounds() -> None:
+    calendar = AlpacaRegularHoursCalendar()
+
+    session_dates = calendar.session_dates_between(
+        datetime(2026, 4, 20, 0, 0, tzinfo=UTC),
+        datetime(2026, 4, 22, 23, 59, tzinfo=UTC),
+    )
+
+    assert session_dates == (
+        datetime(2026, 4, 20, tzinfo=UTC).date(),
+        datetime(2026, 4, 21, tzinfo=UTC).date(),
+        datetime(2026, 4, 22, tzinfo=UTC).date(),
+    )

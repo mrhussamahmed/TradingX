@@ -182,6 +182,39 @@ def test_opportunity_cost_rebalances_at_month_boundary() -> None:
     assert float(returns[1]) == pytest.approx(-0.021, abs=1e-6)
 
 
+def test_opportunity_cost_uses_leading_prior_close_when_available() -> None:
+    opportunity_cost = PassiveOpportunityCost(
+        closes_provider=_FakeClosesProvider(
+            {
+                "SPY": [
+                    Decimal("99"),
+                    Decimal("100"),
+                    Decimal("101"),
+                    Decimal("99.99"),
+                ],
+                "AGG": [
+                    Decimal("100"),
+                    Decimal("100"),
+                    Decimal("100"),
+                    Decimal("100.5"),
+                ],
+            }
+        ),
+        weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    returns = opportunity_cost.daily_returns(
+        session_dates=(
+            date(2026, 1, 5),
+            date(2026, 1, 6),
+            date(2026, 1, 7),
+        )
+    )
+
+    assert len(returns) == 3
+    assert float(returns[0]) == pytest.approx(0.0060606061, abs=1e-6)
+
+
 def test_benchmark_stack_materializes_full_payload() -> None:
     hurdle = CashHurdle(
         risk_free_series=_FakeRiskFreeSeries(

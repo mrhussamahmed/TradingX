@@ -55,6 +55,7 @@ from tradingx.strategy import (
     build_mandatory_candidate_registry,
 )
 from tradingx.types import (
+    BenchmarkStackPayload,
     ClosedTradeRecord,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
@@ -1454,11 +1455,10 @@ class GateValidationController:
         self,
         *,
         gate_id: str,
-        benchmark_closes: tuple[Decimal, ...],
+        benchmark_stack_payload: BenchmarkStackPayload,
         window_start_utc: datetime,
         window_end_utc: datetime,
         universe: tuple[str, ...],
-        benchmark_series_is_adjusted: bool,
     ) -> GateReportResult:
         candidates = build_mandatory_candidate_registry(universe)
         required_symbols = {candidate.benchmark_symbol for candidate in candidates} | {
@@ -1472,24 +1472,13 @@ class GateValidationController:
             )
             for symbol in sorted(required_symbols)
         }
-        benchmark_symbol = candidates[0].benchmark_symbol if candidates else "SPY"
-        benchmark_bars = bars_by_symbol[benchmark_symbol]
-        fetched_closes = tuple(
-            Decimal(str(value)) for value in benchmark_bars["close"].tolist()
-        )
-        if fetched_closes != benchmark_closes:
-            raise ValueError(
-                "Benchmark close artifact does not match the fetched benchmark bars."
-            )
-
         report = build_gate_report(
             gate_id=gate_id,
             bars_by_symbol=bars_by_symbol,
             candidates=candidates,
-            benchmark_symbol=benchmark_symbol,
+            benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
-            benchmark_series_is_adjusted=benchmark_series_is_adjusted,
         )
         report_path = self._artifacts.write_validation_report(report)
         self._metrics.record_evidence_artifact("validation_report")

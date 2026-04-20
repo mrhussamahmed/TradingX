@@ -65,12 +65,33 @@ class PassiveOpportunityCost:
             symbol: self.closes_provider.get_closes(symbol, session_dates=session_dates)
             for symbol, _ in self.weights
         }
+        expected_close_counts = {len(session_dates), len(session_dates) + 1}
+        for symbol, closes in closes_by_symbol.items():
+            if len(closes) not in expected_close_counts:
+                raise ValueError(
+                    f"{symbol} closes must contain either len(session_dates) or "
+                    "len(session_dates) + 1 observations."
+                )
+
         current_weights = {symbol: weight for symbol, weight in self.weights}
         blended_returns: list[Decimal] = []
+        has_leading_prior_close = all(
+            len(closes) == len(session_dates) + 1 for closes in closes_by_symbol.values()
+        )
+        period_count = len(session_dates) if has_leading_prior_close else len(session_dates) - 1
 
-        for index in range(1, len(session_dates)):
-            previous_date = session_dates[index - 1]
-            current_date = session_dates[index]
+        for index in range(period_count):
+            if has_leading_prior_close:
+                previous_date = session_dates[index - 1] if index > 0 else session_dates[0]
+                current_date = session_dates[index]
+                previous_close_index = index
+                current_close_index = index + 1
+            else:
+                previous_date = session_dates[index]
+                current_date = session_dates[index + 1]
+                previous_close_index = index
+                current_close_index = index + 1
+
             if current_date.month != previous_date.month:
                 current_weights = {symbol: weight for symbol, weight in self.weights}
 
@@ -79,8 +100,8 @@ class PassiveOpportunityCost:
             total_weight = Decimal("0")
             for symbol, weight in current_weights.items():
                 closes = closes_by_symbol[symbol]
-                previous_close = closes[index - 1]
-                current_close = closes[index]
+                previous_close = closes[previous_close_index]
+                current_close = closes[current_close_index]
                 if previous_close == Decimal("0"):
                     raise ValueError(f"previous close for {symbol} must be non-zero.")
                 symbol_return = (current_close / previous_close) - Decimal("1")
@@ -130,13 +151,20 @@ class _MarketDataClosesAdapter:
             raise ValueError("session_dates must be non-empty.")
         series = self.market_data_gateway.get_daily_close_series(
             symbol,
-            start_utc=datetime.combine(session_dates[0], datetime.min.time(), UTC),
+            start_utc=datetime.combine(session_dates[0], datetime.min.time(), UTC)
+            - timedelta(days=7),
             end_utc=datetime.combine(session_dates[-1], datetime.min.time(), UTC)
             + timedelta(days=1),
             feed="iex",
             adjustment="dividend",
         )
-        return series.closes
+        required_count = len(session_dates) + 1
+        if len(series.closes) < required_count:
+            raise ValueError(
+                f"Need at least {required_count} closes for {symbol}; "
+                f"received {len(series.closes)}."
+            )
+        return series.closes[-required_count:]
 
 
 def build_default_benchmark_stack(

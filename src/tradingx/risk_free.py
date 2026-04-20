@@ -10,13 +10,17 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from decimal import Decimal
 from typing import cast
 from urllib.request import Request, urlopen
 
 import pandas as pd  # type: ignore[import-untyped]
+
+from tradingx.config import TradingConfig
 
 DEFAULT_RISK_FREE_CACHE_PATH = Path("data/reference/risk_free_daily.csv")
 # source: https://fred.stlouisfed.org/series/DGS3MO (retrieved 2026-04-19)
@@ -26,6 +30,16 @@ TRADING_DAYS_PER_YEAR = 252
 CACHE_REFRESH_INTERVAL = timedelta(days=7)
 
 RiskFreeFetcher = Callable[[str, str, date, date], pd.DataFrame]
+
+
+@dataclass(frozen=True)
+class CachedRiskFreeSeries:
+    cache_path: Path
+
+    def get_daily_rate(self, session_date: date) -> Decimal:
+        return Decimal(
+            str(daily_risk_free_rate_for_date(self.cache_path, as_of_date=session_date))
+        )
 
 
 def needs_risk_free_refresh(
@@ -89,6 +103,17 @@ def daily_risk_free_rate_for_date(cache_path: Path, *, as_of_date: date) -> floa
             f"{as_of_date.isoformat()}."
         )
     return float(available.iloc[-1])
+
+
+def build_default_risk_free_series(
+    config: TradingConfig,
+    *,
+    cache_path: Path | None = None,
+) -> CachedRiskFreeSeries:
+    resolved_cache_path = cache_path or (
+        config.runtime.data_root / "reference" / DEFAULT_RISK_FREE_CACHE_PATH.name
+    )
+    return CachedRiskFreeSeries(resolved_cache_path)
 
 
 def _normalize_risk_free_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -182,10 +207,12 @@ def _download_text(url: str) -> str:
 
 __all__ = (
     "CACHE_REFRESH_INTERVAL",
+    "CachedRiskFreeSeries",
     "DEFAULT_RISK_FREE_CACHE_PATH",
     "RISK_FREE_SERIES_CODE",
     "RISK_FREE_SOURCE",
     "TRADING_DAYS_PER_YEAR",
+    "build_default_risk_free_series",
     "daily_risk_free_rate_for_date",
     "load_risk_free_cache",
     "needs_risk_free_refresh",

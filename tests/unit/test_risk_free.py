@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -120,3 +121,35 @@ def test_daily_risk_free_rate_raises_before_first_cached_observation(
 
     with pytest.raises(ValueError, match="No cached risk-free rate is available"):
         module.daily_risk_free_rate_for_date(cache_path, as_of_date=date(2026, 4, 1))
+
+
+def test_build_default_risk_free_series_uses_runtime_data_root(tmp_path: Path) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    config_module = importlib.import_module("tradingx.config")
+    cache_path = tmp_path / "data" / "reference" / "risk_free_daily.csv"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "date": ["2026-04-03"],
+            "annualized_rate": [0.0462],
+            "daily_rate": [(1.0462 ** (1.0 / 252.0)) - 1.0],
+        }
+    ).to_csv(cache_path, index=False)
+
+    config = config_module.TradingConfig(
+        paper_credentials=config_module.PaperCredentials(
+            api_key="paper-key",
+            api_secret="paper-secret",
+            account_id="paper-account",
+        ),
+        live_controls=config_module.LiveTradingControls(),
+        alerting=config_module.AlertingConfig(),
+        runtime=config_module.RuntimeConfig(data_root=tmp_path / "data"),
+        web=config_module.WebAppConfig(),
+    )
+
+    series = module.build_default_risk_free_series(config)
+
+    assert float(series.get_daily_rate(date(2026, 4, 5))) == pytest.approx(
+        (1.0462 ** (1.0 / 252.0)) - 1.0
+    )

@@ -692,9 +692,83 @@ def write_benchmark_close_series(path: Path, series: BenchmarkCloseSeries) -> Pa
     return path
 
 
+def load_benchmark_stack_payload(path: Path) -> BenchmarkStackPayload:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Benchmark stack payload must be a JSON object.")
+
+    hurdle_returns = payload.get("hurdle_returns")
+    opportunity_cost_returns = payload.get("opportunity_cost_returns")
+    opportunity_cost_weights = payload.get("opportunity_cost_weights")
+    operating_constraint = payload.get("operating_constraint")
+    if not isinstance(hurdle_returns, list) or not isinstance(
+        opportunity_cost_returns,
+        list,
+    ):
+        raise ValueError(
+            "Benchmark stack payload must contain hurdle_returns and "
+            "opportunity_cost_returns lists."
+        )
+    if not isinstance(opportunity_cost_weights, list) or not isinstance(
+        operating_constraint,
+        dict,
+    ):
+        raise ValueError(
+            "Benchmark stack payload must contain opportunity_cost_weights "
+            "and operating_constraint."
+        )
+    return BenchmarkStackPayload(
+        hurdle_returns=tuple(Decimal(str(value)) for value in hurdle_returns),
+        opportunity_cost_returns=tuple(
+            Decimal(str(value)) for value in opportunity_cost_returns
+        ),
+        opportunity_cost_weights=tuple(
+            (str(item["symbol"]), Decimal(str(item["weight"])))
+            for item in opportunity_cost_weights
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal(
+                str(operating_constraint["max_drawdown_design"])
+            ),
+            max_drawdown_halt=Decimal(str(operating_constraint["max_drawdown_halt"])),
+            cdar_threshold=Decimal(str(operating_constraint["cdar_threshold"])),
+            cdar_confidence=Decimal(str(operating_constraint["cdar_confidence"])),
+        ),
+    )
+
+
+def write_benchmark_stack_payload(
+    path: Path,
+    payload: BenchmarkStackPayload,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = {
+        "hurdle_returns": [str(value) for value in payload.hurdle_returns],
+        "opportunity_cost_returns": [
+            str(value) for value in payload.opportunity_cost_returns
+        ],
+        "opportunity_cost_weights": [
+            {"symbol": symbol, "weight": str(weight)}
+            for symbol, weight in payload.opportunity_cost_weights
+        ],
+        "operating_constraint": {
+            "max_drawdown_design": str(
+                payload.operating_constraint.max_drawdown_design
+            ),
+            "max_drawdown_halt": str(payload.operating_constraint.max_drawdown_halt),
+            "cdar_threshold": str(payload.operating_constraint.cdar_threshold),
+            "cdar_confidence": str(payload.operating_constraint.cdar_confidence),
+        },
+    }
+    path.write_text(json.dumps(serialized, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
 __all__ = (
     "build_gate_report",
     "load_benchmark_close_series",
+    "load_benchmark_stack_payload",
     "load_close_series",
     "write_benchmark_close_series",
+    "write_benchmark_stack_payload",
 )

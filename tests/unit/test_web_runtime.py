@@ -354,14 +354,18 @@ def test_local_web_action_runner_rejects_gate_report_benchmark_outside_artifact_
     benchmark_file.write_text(
         json.dumps(
             {
-                "symbol": "SPY",
-                "window_start_utc": "2026-04-01T00:00:00+00:00",
-                "window_end_utc": "2026-04-17T00:00:00+00:00",
-                "generated_at_utc": "2026-04-17T21:15:00+00:00",
-                "feed": "iex",
-                "adjustment": "dividend",
-                "series_is_adjusted": True,
-                "closes": ["100", "101", "102"],
+                "hurdle_returns": ["0.0001", "0.0001"],
+                "opportunity_cost_returns": ["0.0002", "0.0002"],
+                "opportunity_cost_weights": [
+                    {"symbol": "SPY", "weight": "0.6"},
+                    {"symbol": "AGG", "weight": "0.4"},
+                ],
+                "operating_constraint": {
+                    "max_drawdown_design": "0.15",
+                    "max_drawdown_halt": "0.25",
+                    "cdar_threshold": "0.08",
+                    "cdar_confidence": "0.95",
+                },
             }
         ),
         encoding="utf-8",
