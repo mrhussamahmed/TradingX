@@ -210,6 +210,24 @@ def conditional_drawdown_at_risk(
     return sum(worst_tail) / len(worst_tail)
 
 
+def calmar_ratio(
+    returns: Sequence[float],
+    *,
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+) -> float:
+    if not returns:
+        return 0.0
+
+    cumulative = 1.0
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+    annualized = cumulative ** (periods_per_year / len(returns)) - 1.0
+    mdd = max_drawdown(returns)
+    if mdd == 0.0:
+        return float("inf") if annualized > 0.0 else 0.0
+    return annualized / mdd
+
+
 def _excess_returns(
     *,
     returns: Sequence[float],
@@ -241,6 +259,7 @@ __all__ = (
     "DEFAULT_AUTOCORRELATION_LAGS",
     "DEFAULT_PERIODS_PER_YEAR",
     "PAPER_PERIODS_PER_YEAR",
+    "calmar_ratio",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
     "conditional_drawdown_at_risk",

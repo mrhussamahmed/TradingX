@@ -5,7 +5,11 @@ import math
 
 import pytest
 
-from tradingx.stats import conditional_drawdown_at_risk, max_drawdown
+from tradingx.stats import (
+    calmar_ratio,
+    conditional_drawdown_at_risk,
+    max_drawdown,
+)
 
 
 def test_stats_module_shell_is_importable() -> None:
@@ -167,3 +171,21 @@ def test_conditional_drawdown_at_risk_rejects_invalid_confidence() -> None:
 
 def test_conditional_drawdown_at_risk_empty_returns_is_zero() -> None:
     assert conditional_drawdown_at_risk([], confidence=0.95) == 0.0
+
+
+def test_calmar_ratio_returns_zero_for_empty_series() -> None:
+    assert calmar_ratio([]) == 0.0
+
+
+def test_calmar_ratio_returns_infinity_for_positive_zero_drawdown() -> None:
+    returns = [0.01, 0.02, 0.005]
+
+    assert math.isinf(calmar_ratio(returns))
+
+
+def test_calmar_ratio_matches_annualized_return_divided_by_max_drawdown() -> None:
+    returns = [0.10, -0.05, 0.02]
+
+    result = calmar_ratio(returns, periods_per_year=3)
+
+    assert result == pytest.approx(1.318, abs=1e-3)
