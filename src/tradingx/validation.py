@@ -20,9 +20,14 @@ from tradingx.evaluation import (
     evaluate_candidate,
 )
 from tradingx.portfolio_construction import build_candidate_target_weight_history
-from tradingx.stats import lo_adjusted_sharpe_ratio
+from tradingx.stats import (
+    conditional_drawdown_at_risk,
+    lo_adjusted_sharpe_ratio,
+    max_drawdown,
+)
 from tradingx.types import (
     BenchmarkCloseSeries,
+    OperatingConstraintBudget,
     ScalarValue,
     StrategyCandidate,
     ValidationCandidateResult,
@@ -180,6 +185,40 @@ def evaluate_opportunity_cost_edge(
         details=(
             f"Candidate CAGR={candidate_metrics['cagr']:.3f}, "
             f"{composition} CAGR={opportunity_cost_metrics['cagr']:.3f}."
+        ),
+    )
+
+
+def evaluate_operating_constraint(
+    *,
+    candidate_returns: tuple[Decimal, ...],
+    constraint: OperatingConstraintBudget,
+) -> ValidationCriterionResult:
+    float_returns = _to_float_sequence(candidate_returns)
+    observed_max_drawdown = Decimal(str(max_drawdown(float_returns)))
+    observed_cdar = Decimal(
+        str(
+            conditional_drawdown_at_risk(
+                float_returns,
+                confidence=float(constraint.cdar_confidence),
+            )
+        )
+    )
+    passed = (
+        observed_max_drawdown <= constraint.max_drawdown_design
+        and observed_cdar <= constraint.cdar_threshold
+    )
+    return ValidationCriterionResult(
+        criterion_id="operating_constraint",
+        passed=passed,
+        threshold=(
+            f"max_drawdown <= {constraint.max_drawdown_design} and "
+            f"CDaR@{constraint.cdar_confidence} <= {constraint.cdar_threshold}"
+        ),
+        details=(
+            f"max_drawdown={observed_max_drawdown:.3f}, "
+            f"CDaR={observed_cdar:.3f}, "
+            f"halt={constraint.max_drawdown_halt:.3f}."
         ),
     )
 

@@ -21,6 +21,7 @@ from tradingx.validation import (
     build_gate_report,
     evaluate_hurdle_clearance,
     evaluate_opportunity_cost_edge,
+    evaluate_operating_constraint,
 )
 from tradingx.validation import (
     _sharpe_ratio as validation_sharpe_ratio,
@@ -189,6 +190,42 @@ def test_opportunity_cost_edge_fails_when_candidate_underperforms_60_40() -> Non
     )
 
     assert result.passed is False
+
+
+def test_operating_constraint_passes_within_budget() -> None:
+    returns = tuple([Decimal("0.01")] * 10 + [Decimal("-0.005")] * 5)
+    constraint = OperatingConstraintBudget(
+        max_drawdown_design=Decimal("0.15"),
+        max_drawdown_halt=Decimal("0.25"),
+        cdar_threshold=Decimal("0.08"),
+        cdar_confidence=Decimal("0.95"),
+    )
+
+    result = evaluate_operating_constraint(
+        candidate_returns=returns,
+        constraint=constraint,
+    )
+
+    assert result.criterion_id == "operating_constraint"
+    assert result.passed is True
+
+
+def test_operating_constraint_fails_when_mdd_exceeds_design() -> None:
+    returns = tuple([Decimal("0.01")] * 20 + [Decimal("-0.03")] * 12)
+    constraint = OperatingConstraintBudget(
+        max_drawdown_design=Decimal("0.15"),
+        max_drawdown_halt=Decimal("0.25"),
+        cdar_threshold=Decimal("0.08"),
+        cdar_confidence=Decimal("0.95"),
+    )
+
+    result = evaluate_operating_constraint(
+        candidate_returns=returns,
+        constraint=constraint,
+    )
+
+    assert result.passed is False
+    assert "max_drawdown" in result.details
 
 
 def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> None:
