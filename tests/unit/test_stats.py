@@ -5,6 +5,8 @@ import math
 
 import pytest
 
+from tradingx.stats import max_drawdown
+
 
 def test_stats_module_shell_is_importable() -> None:
     module = importlib.import_module("tradingx.stats")
@@ -104,3 +106,33 @@ def test_deflated_sharpe_ratio_reproduces_bailey_2014_normal_case() -> None:
     )
 
     assert dsr == pytest.approx(0.9505, abs=1e-4)
+
+
+def test_max_drawdown_flat_series_is_zero() -> None:
+    returns = [0.0, 0.0, 0.0, 0.0]
+
+    assert max_drawdown(returns) == 0.0
+
+
+def test_max_drawdown_monotone_up_is_zero() -> None:
+    returns = [0.01, 0.02, 0.005, 0.01]
+
+    assert max_drawdown(returns) == 0.0
+
+
+def test_max_drawdown_single_dip() -> None:
+    returns = [0.10, -0.20]
+
+    assert abs(max_drawdown(returns) - 0.20) < 1e-9
+
+
+def test_max_drawdown_recovers_then_deeper_drop() -> None:
+    returns = [0.10, -0.05, 0.15, -0.30, 0.05]
+
+    result = max_drawdown(returns)
+
+    assert abs(result - 0.30) < 1e-9
+
+
+def test_max_drawdown_empty_returns_is_zero() -> None:
+    assert max_drawdown([]) == 0.0

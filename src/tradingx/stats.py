@@ -168,6 +168,23 @@ def deflated_sharpe_ratio(
     )
 
 
+def max_drawdown(returns: Sequence[float]) -> float:
+    if not returns:
+        return 0.0
+
+    cumulative = 1.0
+    peak = 1.0
+    worst = 0.0
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = (peak - cumulative) / peak
+        if drawdown > worst:
+            worst = drawdown
+    return worst
+
+
 def _excess_returns(
     *,
     returns: Sequence[float],
@@ -202,6 +219,7 @@ __all__ = (
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
     "lo_adjusted_sharpe_ratio",
+    "max_drawdown",
     "naive_annualized_sharpe_ratio",
     "probabilistic_sharpe_ratio",
 )
