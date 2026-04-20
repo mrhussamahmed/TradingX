@@ -120,6 +120,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0007 | TradingX week-1 dry-run controls design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-week1-dry-run-controls-design.md` |
 | DESIGN-0008 | TradingX operator control plane design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-operator-control-plane-design.md` |
 | DESIGN-0009 | TradingX operator platform redesign | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-operator-platform-redesign-design.md` |
+| DESIGN-0010 | TradingX runtime intelligence design | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-runtime-intelligence-design.md` |
 
 ### Specifications (SPEC-NNNN)
 
@@ -151,6 +152,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0009 | TradingX week-1 dry-run controls implementation plan | 1.0.0 | active | `specs/009-week1-dry-run-controls/plan.md` |
 | PLAN-0010 | TradingX operator control plane implementation plan | 1.0.0 | active | `specs/010-operator-control-plane/plan.md` |
 | PLAN-0011 | TradingX operator platform redesign implementation plan | 1.0.0 | active | `specs/011-operator-platform-redesign/plan.md` |
+| PLAN-0012 | TradingX runtime intelligence implementation plan | 1.0.0 | active | `specs/012-runtime-intelligence/plan.md` |
 
 ### Task lists (TASKS-NNNN)
 
