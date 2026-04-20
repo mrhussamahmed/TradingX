@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 
+from tradingx.config import TradingConfig
 from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
 
 
@@ -20,6 +21,18 @@ class ClosesProviderProtocol(Protocol):
         *,
         session_dates: Sequence[date],
     ) -> tuple[Decimal, ...]: ...
+
+
+class MarketDataGatewayProtocol(Protocol):
+    def get_daily_close_series(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str,
+        adjustment: str,
+    ): ...
 
 
 @dataclass(frozen=True)
@@ -103,10 +116,56 @@ class BenchmarkStack:
         )
 
 
+@dataclass(frozen=True)
+class _MarketDataClosesAdapter:
+    market_data_gateway: MarketDataGatewayProtocol
+
+    def get_closes(
+        self,
+        symbol: str,
+        *,
+        session_dates: Sequence[date],
+    ) -> tuple[Decimal, ...]:
+        if not session_dates:
+            raise ValueError("session_dates must be non-empty.")
+        series = self.market_data_gateway.get_daily_close_series(
+            symbol,
+            start_utc=datetime.combine(session_dates[0], datetime.min.time(), UTC),
+            end_utc=datetime.combine(session_dates[-1], datetime.min.time(), UTC)
+            + timedelta(days=1),
+            feed="iex",
+            adjustment="dividend",
+        )
+        return series.closes
+
+
+def build_default_benchmark_stack(
+    config: TradingConfig,
+    *,
+    market_data_gateway: MarketDataGatewayProtocol,
+    risk_free_series: RiskFreeSeriesProtocol,
+) -> BenchmarkStack:
+    del config
+    return BenchmarkStack(
+        hurdle=CashHurdle(risk_free_series=risk_free_series),
+        opportunity_cost=PassiveOpportunityCost(
+            closes_provider=_MarketDataClosesAdapter(market_data_gateway),
+            weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal("0.15"),
+            max_drawdown_halt=Decimal("0.25"),
+            cdar_threshold=Decimal("0.08"),
+            cdar_confidence=Decimal("0.95"),
+        ),
+    )
+
+
 __all__ = (
     "BenchmarkStack",
     "CashHurdle",
     "ClosesProviderProtocol",
     "PassiveOpportunityCost",
     "RiskFreeSeriesProtocol",
+    "build_default_benchmark_stack",
 )

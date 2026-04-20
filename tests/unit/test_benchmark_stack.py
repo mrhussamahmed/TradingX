@@ -7,8 +7,27 @@ import pytest
 
 from collections.abc import Sequence
 
-from tradingx.benchmark_stack import BenchmarkStack, CashHurdle, PassiveOpportunityCost
-from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
+from datetime import UTC, datetime
+
+from tradingx.benchmark_stack import (
+    BenchmarkStack,
+    CashHurdle,
+    PassiveOpportunityCost,
+    build_default_benchmark_stack,
+)
+from tradingx.config import (
+    AlertingConfig,
+    LiveTradingControls,
+    PaperCredentials,
+    RuntimeConfig,
+    TradingConfig,
+    WebAppConfig,
+)
+from tradingx.types import (
+    BenchmarkCloseSeries,
+    BenchmarkStackPayload,
+    OperatingConstraintBudget,
+)
 
 
 class _FakeRiskFreeSeries:
@@ -31,6 +50,46 @@ class _FakeClosesProvider:
     ) -> tuple[Decimal, ...]:
         del session_dates
         return tuple(self._closes_by_symbol[symbol])
+
+
+class _StubMarketDataGateway:
+    def __init__(self, closes_by_symbol: dict[str, list[Decimal]]) -> None:
+        self._closes_by_symbol = closes_by_symbol
+
+    def get_daily_close_series(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+        feed: str,
+        adjustment: str,
+    ) -> BenchmarkCloseSeries:
+        del start_utc, end_utc, feed, adjustment
+        return BenchmarkCloseSeries(
+            symbol=symbol,
+            closes=tuple(self._closes_by_symbol[symbol]),
+            window_start_utc=datetime(2026, 1, 5, tzinfo=UTC),
+            window_end_utc=datetime(2026, 1, 7, tzinfo=UTC),
+            generated_at_utc=datetime(2026, 1, 8, tzinfo=UTC),
+            feed="iex",
+            adjustment="dividend",
+            series_is_adjusted=True,
+        )
+
+
+def _build_trading_config() -> TradingConfig:
+    return TradingConfig(
+        paper_credentials=PaperCredentials(
+            api_key="paper-key",
+            api_secret="paper-secret",
+            account_id="paper-account",
+        ),
+        live_controls=LiveTradingControls(),
+        alerting=AlertingConfig(),
+        runtime=RuntimeConfig(),
+        web=WebAppConfig(),
+    )
 
 
 def test_cash_hurdle_daily_returns_uses_cached_daily_rates() -> None:
@@ -177,3 +236,26 @@ def test_benchmark_stack_materializes_full_payload() -> None:
         ("AGG", Decimal("0.4")),
     )
     assert payload.operating_constraint == operating_constraint
+
+
+def test_build_default_benchmark_stack_wires_default_dependencies() -> None:
+    stack = build_default_benchmark_stack(
+        _build_trading_config(),
+        market_data_gateway=_StubMarketDataGateway(
+            {
+                "SPY": [Decimal("100"), Decimal("101")],
+                "AGG": [Decimal("100"), Decimal("100")],
+            }
+        ),
+        risk_free_series=_FakeRiskFreeSeries({date(2026, 1, 5): Decimal("0.0002")}),
+    )
+
+    assert isinstance(stack, BenchmarkStack)
+    assert stack.opportunity_cost.weights == (
+        ("SPY", Decimal("0.6")),
+        ("AGG", Decimal("0.4")),
+    )
+    assert stack.operating_constraint.max_drawdown_design == Decimal("0.15")
+    assert stack.operating_constraint.max_drawdown_halt == Decimal("0.25")
+    assert stack.operating_constraint.cdar_threshold == Decimal("0.08")
+    assert stack.operating_constraint.cdar_confidence == Decimal("0.95")
