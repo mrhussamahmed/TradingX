@@ -1268,7 +1268,7 @@ uv run python scripts/compare_vol_forecasts.py \
 
 - [ ] **Step 2: Inspect the report and identify the trend-family winner**
 
-Open `docs/research/vol_estimator_comparison_2026-04-21.md`. The aggregate-winner line names the method with lowest mean MSFE across symbols under the trend-sleeve harness.
+Open `docs/research/vol_estimator_comparison_2026-04-21.md`. The aggregate-winner line is produced by `_pick_aggregate_winner(forecast_metrics)` (from Step 3): it picks the method with the lowest `pooled_rmse_vol` across methods that produced ≥1 valid prediction, under the trend-sleeve harness.
 
 - [ ] **Step 3: Conditional retune**
 
@@ -1382,13 +1382,20 @@ No TBD / TODO / "implement later" strings. Every code block is concrete. Task 9 
 - `RegimeSnapshot` fields added in Task 4 match the dataclass used in Tasks 5–6.
 - `TREASURY_SERIES_CODES` constant in Task 3 is tuple `("DGS2", "DGS10")`; matched in tests.
 - `forecast_volatility` signature extended in Task 1 with `har_rv_components` parameter; existing callers unaffected because of the default.
-- `_forecast_error_metrics` return shape (`dict[str, dict[str, float]]` with keys `msfe`, `n_obs`) used consistently between Task 7 impl and Task 8 aggregation.
+- `_forecast_error_metrics` returns the **method-keyed** shape
+  `dict[str, dict[str, object]]` preserved from the live contract.
+  Per-method entries expose `prediction_count`, `pooled_mae_vol`,
+  `pooled_rmse_vol`, `pooled_msfe_vol`, `pooled_qlike`, and a
+  nested `symbols` dict keyed by symbol carrying
+  `prediction_count`, `mae_vol`, `rmse_vol`, `msfe_vol`, `qlike`.
+  Tasks 7, 8, and 9 all consume this shape; `_pick_aggregate_winner`
+  (Task 9) reads `pooled_rmse_vol` as the winner criterion.
 
 ### Open judgment calls left to the implementer
 
 1. **VIX data source** — per DESIGN-0013 §"Decisions still open", try Alpaca first; fall back to FRED `VIXCLS`. If neither is reliable, `classify_regime` already handles `vix_close=None`.
 2. **HAR-RV fitting cadence** — the plan codifies expanding-window OLS (Task 1's implementation). If performance on research bars is pathologically slow, switch to a single global fit and note the choice in the commit message.
-3. **CLI shape of `scripts/compare_vol_forecasts.py`** — Task 9 Step 1 assumes a `--methods` and `--output` flag pattern. If the script's existing argparse doesn't match, adapt the invocation and flag names rather than rewriting the script's CLI contract.
+3. **CLI shape of `scripts/compare_vol_forecasts.py`** — Task 9 Step 5 proposes keeping the existing `--output-file` (JSON payload) and adding a new `--report-output` flag for the markdown report. If the script's current argparse exposes different flag names (e.g., `--artifact-dir` already handles output layout), adapt the invocation to match what `build_parser` emits rather than rewriting the CLI contract. The requirement is that both a JSON artifact and a markdown report are produced on the same run.
 
 ### Execution handoff
 
