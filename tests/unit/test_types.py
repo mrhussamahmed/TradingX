@@ -194,6 +194,83 @@ def test_evaluation_evidence_pack_has_dsr_and_north_star_fields() -> None:
     assert "deflated_sharpe_ratio" in field_names
     assert "north_star_sharpe_met" in field_names
     assert "annualized_cost_drag_bps" in field_names
+    assert "marginal_sharpe_delta" in field_names
+    assert "marginal_calmar_delta" in field_names
+    assert "marginal_cdar_delta" in field_names
+
+
+def test_evaluation_evidence_pack_accepts_marginal_deltas() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    pack = EvaluationEvidencePack(
+        evidence_pack_id="pack-1",
+        candidate_id="c-1",
+        window_start_utc=now,
+        window_end_utc=now,
+        benchmark_metrics={},
+        candidate_metrics={},
+        adversarial_checks=(),
+        recommendation="",
+        assumptions=(),
+        marginal_sharpe_delta=Decimal("0.05"),
+        marginal_calmar_delta=Decimal("0.03"),
+        marginal_cdar_delta=Decimal("-0.01"),
+    )
+
+    assert pack.marginal_sharpe_delta == Decimal("0.05")
+    assert pack.marginal_calmar_delta == Decimal("0.03")
+    assert pack.marginal_cdar_delta == Decimal("-0.01")
+
+
+def test_evaluation_evidence_pack_marginal_deltas_default_to_none() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    pack = EvaluationEvidencePack(
+        evidence_pack_id="pack-1",
+        candidate_id="c-1",
+        window_start_utc=now,
+        window_end_utc=now,
+        benchmark_metrics={},
+        candidate_metrics={},
+        adversarial_checks=(),
+        recommendation="",
+        assumptions=(),
+    )
+
+    assert pack.marginal_sharpe_delta is None
+    assert pack.marginal_calmar_delta is None
+    assert pack.marginal_cdar_delta is None
+
+
+def test_validation_candidate_result_accepts_marginal_deltas() -> None:
+    result = ValidationCandidateResult(
+        candidate_id="c-1",
+        gate_id="1",
+        status="pass",
+        evidence_pack_id="pack-1",
+        criteria=(),
+        summary="",
+        marginal_sharpe_delta=Decimal("0.05"),
+        marginal_calmar_delta=Decimal("0.03"),
+        marginal_cdar_delta=Decimal("-0.01"),
+    )
+
+    assert result.marginal_sharpe_delta == Decimal("0.05")
+    assert result.marginal_calmar_delta == Decimal("0.03")
+    assert result.marginal_cdar_delta == Decimal("-0.01")
+
+
+def test_validation_candidate_result_marginal_deltas_default_to_none() -> None:
+    result = ValidationCandidateResult(
+        candidate_id="c-1",
+        gate_id="1",
+        status="pass",
+        evidence_pack_id="pack-1",
+        criteria=(),
+        summary="",
+    )
+
+    assert result.marginal_sharpe_delta is None
+    assert result.marginal_calmar_delta is None
+    assert result.marginal_cdar_delta is None
 
 
 def test_trade_intent_and_risk_control_event_capture_stage_one_fields() -> None:

@@ -119,3 +119,26 @@ def test_build_today_summary_counts_cycles_snapshots_and_journal_rows(tmp_path) 
     assert summary["decision_snapshot_count"] == 1
     assert summary["journal_event_count"] == 1
     assert summary["blocked_reason_counts"] == {}
+
+
+def test_sleeve_halt_store_records_and_reads_halt(tmp_path) -> None:
+    store = OperatorControlStore(tmp_path / "data" / "control")
+
+    store.halt_sleeve(sleeve_id="trend-following-v1", reason="signal drift")
+    assert store.is_sleeve_halted(sleeve_id="trend-following-v1") is True
+    assert store.is_sleeve_halted(sleeve_id="vol-target-v1") is False
+
+    store.resume_sleeve(sleeve_id="trend-following-v1")
+    assert store.is_sleeve_halted(sleeve_id="trend-following-v1") is False
+
+
+def test_sleeve_halt_store_persists_reason_and_timestamp(tmp_path) -> None:
+    store = OperatorControlStore(tmp_path / "data" / "control")
+
+    store.halt_sleeve(sleeve_id="trend-following-v1", reason="drift alarm")
+    record = store.get_sleeve_halt_record(sleeve_id="trend-following-v1")
+
+    assert record is not None
+    assert record["reason"] == "drift alarm"
+    assert record["halted"] is True
+    assert str(record["at_utc"]).endswith("Z")

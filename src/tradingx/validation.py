@@ -250,7 +250,44 @@ def evaluate_gate1_benchmark_criteria(
     )
 
 
-def _build_gate1_candidate_result(
+def evaluate_marginal_portfolio_contribution(
+    *,
+    candidate_returns: tuple[Decimal, ...],
+    portfolio_without_candidate_returns: tuple[Decimal, ...],
+    portfolio_with_candidate_returns: tuple[Decimal, ...],
+) -> ValidationCriterionResult:
+    del candidate_returns
+    without_pack = _metric_pack(portfolio_without_candidate_returns)
+    with_pack = _metric_pack(portfolio_with_candidate_returns)
+    without_cdar = conditional_drawdown_at_risk(
+        _to_float_sequence(portfolio_without_candidate_returns),
+        confidence=0.95,
+    )
+    with_cdar = conditional_drawdown_at_risk(
+        _to_float_sequence(portfolio_with_candidate_returns),
+        confidence=0.95,
+    )
+    sharpe_delta = with_pack["sharpe_ratio"] - without_pack["sharpe_ratio"]
+    calmar_delta = with_pack["calmar_ratio"] - without_pack["calmar_ratio"]
+    cdar_delta = with_cdar - without_cdar
+    passed = sharpe_delta > 0 and calmar_delta > 0 and cdar_delta <= 0
+    return ValidationCriterionResult(
+        criterion_id="marginal_portfolio_contribution",
+        passed=passed,
+        threshold=(
+            "Adding candidate improves portfolio Sharpe AND Calmar "
+            "AND does not worsen CDaR@95%"
+        ),
+        details=(
+            f"sharpe_delta={sharpe_delta:.4f}, "
+            f"calmar_delta={calmar_delta:.4f}, "
+            f"cdar_delta={cdar_delta:.4f} "
+            "(cdar_delta <= 0 required; sharpe and calmar > 0 required)."
+        ),
+    )
+
+
+def _build_gate1_candidate_result_pass1(
     *,
     candidate: StrategyCandidate,
     candidate_returns: tuple[Decimal, ...],
@@ -260,7 +297,7 @@ def _build_gate1_candidate_result(
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext,
     trials_ledger: TrialsLedger | None = None,
-) -> ValidationCandidateResult:
+) -> tuple[ValidationCandidateResult, EvaluationEvidencePack]:
     evidence_pack = evaluate_candidate(
         candidate,
         candidate_returns=candidate_returns,
@@ -319,23 +356,50 @@ def _build_gate1_candidate_result(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
     )
-    return ValidationCandidateResult(
-        candidate_id=candidate.candidate_id,
-        gate_id="1",
-        status=status,
-        evidence_pack_id=evidence_pack.evidence_pack_id,
-        criteria=criteria,
-        summary=(
-            "Gate 1 evidence is complete and all criteria passed."
-            if status == "pass"
-            else (
-                "Gate 1 evidence is incomplete."
-                if status == "pending"
-                else "Gate 1 criteria failed."
-            )
+    return (
+        ValidationCandidateResult(
+            candidate_id=candidate.candidate_id,
+            gate_id="1",
+            status=status,
+            evidence_pack_id=evidence_pack.evidence_pack_id,
+            criteria=criteria,
+            summary=(
+                "Gate 1 evidence is complete and all criteria passed."
+                if status == "pass"
+                else (
+                    "Gate 1 evidence is incomplete."
+                    if status == "pending"
+                    else "Gate 1 criteria failed."
+                )
+            ),
+            annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps,
         ),
-        annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps,
+        evidence_pack,
     )
+
+
+def _build_gate1_candidate_result(
+    *,
+    candidate: StrategyCandidate,
+    candidate_returns: tuple[Decimal, ...],
+    annualized_cost_drag_bps: Decimal | None = None,
+    benchmark_stack_payload: BenchmarkStackPayload,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+    adversarial_context: AdversarialCheckContext,
+    trials_ledger: TrialsLedger | None = None,
+) -> ValidationCandidateResult:
+    result, _ = _build_gate1_candidate_result_pass1(
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
+        benchmark_stack_payload=benchmark_stack_payload,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        adversarial_context=adversarial_context,
+        trials_ledger=trials_ledger,
+    )
+    return result
 
 
 def _build_gate2_candidate_result(
@@ -560,6 +624,157 @@ def _candidate_with_parameter_overrides(
     return replace(candidate, parameter_set=merged_parameter_set)
 
 
+def _criterion_status(criterion: ValidationCriterionResult) -> str:
+    return "pass" if criterion.passed else "fail"
+
+
+def _reconcile_gate1_status(pass1_status: str, marginal_status: str) -> str:
+    if pass1_status in {"fail", "pending"}:
+        return pass1_status
+    return "pass" if marginal_status == "pass" else marginal_status
+
+
+def _marginal_deltas(
+    *,
+    portfolio_without_candidate_returns: tuple[Decimal, ...],
+    portfolio_with_candidate_returns: tuple[Decimal, ...],
+) -> tuple[Decimal, Decimal, Decimal]:
+    without_pack = _metric_pack(portfolio_without_candidate_returns)
+    with_pack = _metric_pack(portfolio_with_candidate_returns)
+    without_cdar = conditional_drawdown_at_risk(
+        _to_float_sequence(portfolio_without_candidate_returns),
+        confidence=0.95,
+    )
+    with_cdar = conditional_drawdown_at_risk(
+        _to_float_sequence(portfolio_with_candidate_returns),
+        confidence=0.95,
+    )
+    return (
+        Decimal(str(with_pack["sharpe_ratio"] - without_pack["sharpe_ratio"])),
+        Decimal(str(with_pack["calmar_ratio"] - without_pack["calmar_ratio"])),
+        Decimal(str(with_cdar - without_cdar)),
+    )
+
+
+def _simulate_two_sleeve_book(
+    candidates: tuple[StrategyCandidate, ...],
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    regime_snapshots_by_date: dict[date, RegimeSnapshot],
+    cost_model_config: CostModelConfig | None,
+) -> tuple[Decimal, ...]:
+    from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+    from tradingx.portfolio.construction import simulate_portfolio_returns
+    from tradingx.sleeves.base import build_sleeve_from_candidate
+
+    sleeves = tuple(build_sleeve_from_candidate(candidate) for candidate in candidates)
+    budget_per = Decimal("1") / Decimal(len(sleeves))
+    blueprint = PortfolioBlueprint(
+        blueprint_id="gate1-marginal-eval",
+        sleeve_budgets=tuple(
+            SleeveRiskBudget(
+                sleeve_id=sleeve.sleeve_id,
+                budget_fraction_of_equity=budget_per,
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            )
+            for sleeve in sleeves
+        ),
+    )
+    result = simulate_portfolio_returns(
+        sleeves,
+        blueprint=blueprint,
+        bars_by_symbol=bars_by_symbol,
+        regime_snapshots_by_date=regime_snapshots_by_date,
+        cost_model_config=cost_model_config,
+    )
+    return tuple(
+        Decimal(str(value))
+        for value in result.backtest_result.portfolio_returns.tolist()
+    )
+
+
+def _apply_marginal_pass_to_gate1_result(
+    *,
+    candidate: StrategyCandidate,
+    pass1_result: ValidationCandidateResult,
+    pass1_pack: EvaluationEvidencePack,
+    pass1_returns: tuple[Decimal, ...],
+    annualized_cost_drag_bps: Decimal | None,
+    sibling_candidate: StrategyCandidate,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    regime_snapshots_by_date: dict[date, RegimeSnapshot],
+    benchmark_stack_payload: BenchmarkStackPayload,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+    adversarial_context: AdversarialCheckContext,
+    base_cost_model_config: CostModelConfig | None,
+    trials_ledger: TrialsLedger | None = None,
+) -> tuple[ValidationCandidateResult, EvaluationEvidencePack]:
+    portfolio_without_candidate_returns = _simulate_two_sleeve_book(
+        (sibling_candidate,),
+        bars_by_symbol=bars_by_symbol,
+        regime_snapshots_by_date=regime_snapshots_by_date,
+        cost_model_config=base_cost_model_config,
+    )
+    portfolio_with_candidate_returns = _simulate_two_sleeve_book(
+        (candidate, sibling_candidate),
+        bars_by_symbol=bars_by_symbol,
+        regime_snapshots_by_date=regime_snapshots_by_date,
+        cost_model_config=base_cost_model_config,
+    )
+    marginal_criterion = evaluate_marginal_portfolio_contribution(
+        candidate_returns=pass1_returns,
+        portfolio_without_candidate_returns=portfolio_without_candidate_returns,
+        portfolio_with_candidate_returns=portfolio_with_candidate_returns,
+    )
+    (
+        marginal_sharpe_delta,
+        marginal_calmar_delta,
+        marginal_cdar_delta,
+    ) = _marginal_deltas(
+        portfolio_without_candidate_returns=portfolio_without_candidate_returns,
+        portfolio_with_candidate_returns=portfolio_with_candidate_returns,
+    )
+    pass2_pack = evaluate_candidate(
+        candidate,
+        candidate_returns=pass1_returns,
+        benchmark_returns=benchmark_stack_payload.opportunity_cost_returns,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        adversarial_context=adversarial_context,
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
+        trials_ledger=trials_ledger,
+        marginal_sharpe_delta=marginal_sharpe_delta,
+        marginal_calmar_delta=marginal_calmar_delta,
+        marginal_cdar_delta=marginal_cdar_delta,
+    )
+    combined_criteria = pass1_result.criteria + (marginal_criterion,)
+    final_status = _reconcile_gate1_status(
+        pass1_result.status,
+        _criterion_status(marginal_criterion),
+    )
+    final_result = replace(
+        pass1_result,
+        status=final_status,
+        evidence_pack_id=pass2_pack.evidence_pack_id,
+        criteria=combined_criteria,
+        summary=(
+            "Gate 1 evidence is complete and all criteria passed."
+            if final_status == "pass"
+            else (
+                "Gate 1 evidence is incomplete."
+                if final_status == "pending"
+                else "Gate 1 criteria failed."
+            )
+        ),
+        annualized_cost_drag_bps=pass2_pack.annualized_cost_drag_bps,
+        marginal_sharpe_delta=marginal_sharpe_delta,
+        marginal_calmar_delta=marginal_calmar_delta,
+        marginal_cdar_delta=marginal_cdar_delta,
+    )
+    return final_result, pass2_pack
+
+
 def build_gate_report(
     *,
     gate_id: str,
@@ -573,6 +788,16 @@ def build_gate_report(
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
     benchmark_returns = benchmark_stack_payload.opportunity_cost_returns
     base_cost_model_config = CostModelConfig()
+    sleeve_candidates = tuple(
+        candidate for candidate in candidates if candidate.sleeve_class_path is not None
+    )
+    if gate_id == "1" and len(sleeve_candidates) != 2:
+        raise NotImplementedError(
+            "Marginal-portfolio-contribution criterion in tranche 1.4 is scoped "
+            "to the two-sleeve case; found "
+            f"{len(sleeve_candidates)} sleeve-backed candidates. "
+            "Generalization for 3+ sleeves is deferred."
+        )
 
     def backtest_runner(
         rerun_candidate: StrategyCandidate,
@@ -588,31 +813,35 @@ def build_gate_report(
         )
         return returns
 
-    candidate_results = []
-    for candidate in candidates:
-        candidate_returns, candidate_cost_drag_bps = _candidate_returns(
-            candidate,
-            bars_by_symbol=aligned_bars,
-        )
-        if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
-            raise ValueError(
-                "benchmark_stack_payload.hurdle_returns must align with "
-                "candidate returns."
+    if gate_id == "1":
+        pass1_results: dict[str, ValidationCandidateResult] = {}
+        pass1_packs: dict[str, EvaluationEvidencePack] = {}
+        pass1_returns: dict[str, tuple[Decimal, ...]] = {}
+        pass1_cost_drag: dict[str, Decimal | None] = {}
+
+        for candidate in candidates:
+            candidate_returns, candidate_cost_drag_bps = _candidate_returns(
+                candidate,
+                bars_by_symbol=aligned_bars,
             )
-        if len(candidate_returns) != len(
-            benchmark_stack_payload.opportunity_cost_returns
-        ):
-            raise ValueError(
-                "benchmark_stack_payload.opportunity_cost_returns must align "
-                "with candidate returns."
+            if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
+                raise ValueError(
+                    "benchmark_stack_payload.hurdle_returns must align with "
+                    "candidate returns."
+                )
+            if len(candidate_returns) != len(
+                benchmark_stack_payload.opportunity_cost_returns
+            ):
+                raise ValueError(
+                    "benchmark_stack_payload.opportunity_cost_returns must align "
+                    "with candidate returns."
+                )
+            adversarial_context = AdversarialCheckContext(
+                benchmark_bars=aligned_bars[candidate.benchmark_symbol],
+                backtest_runner=backtest_runner,
+                base_cost_model_config=base_cost_model_config,
             )
-        adversarial_context = AdversarialCheckContext(
-            benchmark_bars=aligned_bars[candidate.benchmark_symbol],
-            backtest_runner=backtest_runner,
-            base_cost_model_config=base_cost_model_config,
-        )
-        if gate_id == "1":
-            result = _build_gate1_candidate_result(
+            result, pack = _build_gate1_candidate_result_pass1(
                 candidate=candidate,
                 candidate_returns=candidate_returns,
                 annualized_cost_drag_bps=candidate_cost_drag_bps,
@@ -622,7 +851,60 @@ def build_gate_report(
                 adversarial_context=adversarial_context,
                 trials_ledger=trials_ledger,
             )
-        elif gate_id == "2":
+            pass1_results[candidate.candidate_id] = result
+            pass1_packs[candidate.candidate_id] = pack
+            pass1_returns[candidate.candidate_id] = candidate_returns
+            pass1_cost_drag[candidate.candidate_id] = candidate_cost_drag_bps
+
+        regimes_for_book = _build_default_regime_snapshots(
+            sleeve_candidates[0],
+            bars_by_symbol=aligned_bars,
+        )
+        candidate_results: list[ValidationCandidateResult] = []
+        for candidate in candidates:
+            pass1_entry = pass1_results[candidate.candidate_id]
+            if candidate.sleeve_class_path is None:
+                candidate_results.append(pass1_entry)
+                continue
+            sibling = next(
+                sibling_candidate
+                for sibling_candidate in sleeve_candidates
+                if sibling_candidate.candidate_id != candidate.candidate_id
+            )
+            adversarial_context = AdversarialCheckContext(
+                benchmark_bars=aligned_bars[candidate.benchmark_symbol],
+                backtest_runner=backtest_runner,
+                base_cost_model_config=base_cost_model_config,
+            )
+            final_result, _ = _apply_marginal_pass_to_gate1_result(
+                candidate=candidate,
+                pass1_result=pass1_entry,
+                pass1_pack=pass1_packs[candidate.candidate_id],
+                pass1_returns=pass1_returns[candidate.candidate_id],
+                annualized_cost_drag_bps=pass1_cost_drag[candidate.candidate_id],
+                sibling_candidate=sibling,
+                bars_by_symbol=aligned_bars,
+                regime_snapshots_by_date=regimes_for_book,
+                benchmark_stack_payload=benchmark_stack_payload,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+                adversarial_context=adversarial_context,
+                base_cost_model_config=base_cost_model_config,
+                trials_ledger=trials_ledger,
+            )
+            candidate_results.append(final_result)
+    elif gate_id == "2":
+        candidate_results = []
+        for candidate in candidates:
+            candidate_returns, candidate_cost_drag_bps = _candidate_returns(
+                candidate,
+                bars_by_symbol=aligned_bars,
+            )
+            adversarial_context = AdversarialCheckContext(
+                benchmark_bars=aligned_bars[candidate.benchmark_symbol],
+                backtest_runner=backtest_runner,
+                base_cost_model_config=base_cost_model_config,
+            )
             result = _build_gate2_candidate_result(
                 candidate=candidate,
                 candidate_returns=candidate_returns,
@@ -633,10 +915,9 @@ def build_gate_report(
                 adversarial_context=adversarial_context,
                 trials_ledger=trials_ledger,
             )
-        else:
-            raise ValueError(f"Unsupported gate_id: {gate_id}")
-        candidate_results.append(result)
-
+            candidate_results.append(result)
+    else:
+        raise ValueError(f"Unsupported gate_id: {gate_id}")
     statuses = {result.status for result in candidate_results}
     if statuses == {"pass"}:
         report_status = "pass"
@@ -926,6 +1207,7 @@ def _config_fingerprint(candidate: StrategyCandidate) -> str:
 
 __all__ = (
     "build_gate_report",
+    "evaluate_marginal_portfolio_contribution",
     "load_benchmark_close_series",
     "load_benchmark_stack_payload",
     "load_close_series",

@@ -211,6 +211,56 @@ def test_evaluate_candidate_cost_drag_is_none_when_not_supplied() -> None:
     assert evidence.annualized_cost_drag_bps is None
 
 
+def test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        marginal_sharpe_delta=Decimal("0.12"),
+        marginal_calmar_delta=Decimal("0.04"),
+        marginal_cdar_delta=Decimal("-0.02"),
+    )
+
+    assert evidence.marginal_sharpe_delta == Decimal("0.12")
+    assert evidence.marginal_calmar_delta == Decimal("0.04")
+    assert evidence.marginal_cdar_delta == Decimal("-0.02")
+    assert evidence.evidence_pack_id.endswith("-marginal")
+
+
+def test_evaluate_candidate_marginal_inputs_default_to_none() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+    )
+
+    assert evidence.marginal_sharpe_delta is None
+    assert evidence.marginal_calmar_delta is None
+    assert evidence.marginal_cdar_delta is None
+
+
 def test_evaluate_candidate_populates_dsr_when_trials_sufficient(
     tmp_path,
 ) -> None:

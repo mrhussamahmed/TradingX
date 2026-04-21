@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 
 from tradingx.config import TradingConfig
 from tradingx.runtime_host import LocalRuntimeHostManager
@@ -14,6 +17,7 @@ from tradingx.types import (
     PortfolioState,
     ReconciliationSnapshot,
     StrategyActivationRecord,
+    WebActionResult,
 )
 
 
@@ -171,6 +175,145 @@ class FakeOpportunityPlanner:
             decision="selected",
             decision_reason="Top-ranked eligible opportunity.",
         )
+
+
+class HardHaltServiceManager(FakeServiceManager):
+    def __init__(
+        self,
+        *,
+        stop_status: str = "accepted",
+        stop_message: str = "Stop requested.",
+        raise_on_stop: bool = False,
+    ) -> None:
+        super().__init__()
+        self.stop_status = stop_status
+        self.stop_message = stop_message
+        self.raise_on_stop = raise_on_stop
+        self.stop_call_count = 0
+        self.events: list[str] = []
+
+    def stop(self):
+        self.stop_call_count += 1
+        self.events.append("stop")
+        if self.raise_on_stop:
+            raise RuntimeError("boom")
+        return WebActionResult(
+            action_id="action-stop",
+            action_type="paper_service_stop",
+            status=self.stop_status,
+            message=self.stop_message,
+            evidence_refs=(),
+        )
+
+    @property
+    def stop_called_before_state_transition(self) -> bool:
+        try:
+            stop_index = self.events.index("stop")
+            state_index = self.events.index("state")
+        except ValueError:
+            return False
+        return stop_index < state_index
+
+    def reset_call_log(self) -> None:
+        self.stop_call_count = 0
+        self.events.clear()
+
+
+@dataclass(frozen=True)
+class RuntimeHostFixture:
+    host: LocalRuntimeHostManager
+    service_manager: HardHaltServiceManager
+
+
+def _runtime_host_fixture(
+    tmp_path,
+    *,
+    stop_status: str = "accepted",
+    stop_message: str = "Stop requested.",
+    raise_on_stop: bool = False,
+) -> RuntimeHostFixture:
+    activation = StrategyActivationRecord(
+        activation_id="activation-hh",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY",),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Hard halt fixture.",
+    )
+    snapshot = ApprovedWeightSnapshot(
+        snapshot_id="snapshot-hh",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 15, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={
+            "signal": Decimal("1.0"),
+            "regime": Decimal("1.0"),
+            "liquidity": Decimal("1.0"),
+            "spread_penalty": Decimal("1.0"),
+            "volatility_penalty": Decimal("1.0"),
+            "portfolio_overlap_penalty": Decimal("1.0"),
+            "execution_cost_penalty": Decimal("1.0"),
+        },
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-hh",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY",),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY",),
+        symbols_blocked={},
+        return_summary={"benchmark": {"cumulative_return": Decimal("0.02")}},
+    )
+    service_manager = HardHaltServiceManager(
+        stop_status=stop_status,
+        stop_message=stop_message,
+        raise_on_stop=raise_on_stop,
+    )
+    manager = LocalRuntimeHostManager(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        operator_store_root=tmp_path / "artifacts" / "operator_platform",
+        service_manager=service_manager,
+        warmup_service=FakeWarmupService(warmup),
+        activation_gateway=FakeActivationGateway(activation, snapshot),
+        opportunity_planner=FakeOpportunityPlanner(),
+        portfolio_gateway=FakePortfolioGateway(),
+    )
+    original_set_state = manager._set_state
+
+    def _recording_set_state(**changes: object) -> None:
+        service_manager.events.append("state")
+        original_set_state(**changes)
+
+    manager._set_state = _recording_set_state  # type: ignore[method-assign]
+    return RuntimeHostFixture(host=manager, service_manager=service_manager)
+
+
+@pytest.fixture
+def runtime_host_fixture(tmp_path) -> RuntimeHostFixture:
+    return _runtime_host_fixture(tmp_path)
+
+
+@pytest.fixture
+def runtime_host_fixture_with_raising_stop(tmp_path) -> RuntimeHostFixture:
+    return _runtime_host_fixture(tmp_path, raise_on_stop=True)
+
+
+@pytest.fixture
+def runtime_host_fixture_with_blocked_stop(tmp_path) -> RuntimeHostFixture:
+    return _runtime_host_fixture(
+        tmp_path,
+        stop_status="blocked",
+        stop_message="locked",
+    )
 
 
 def _wait_for(predicate, *, timeout_seconds: float = 1.0) -> None:
@@ -556,3 +699,54 @@ def test_runtime_host_clearance_request_reconciles_back_to_nominal(tmp_path) -> 
     assert reconciliation_gateway.calls == 2
     assert state.last_error == ""
     assert service_manager.calls == [(("SPY",), Decimal("1"), 300, 1)]
+
+
+def test_trigger_hard_halt_stops_service_then_transitions_state(
+    runtime_host_fixture: RuntimeHostFixture,
+) -> None:
+    host = runtime_host_fixture.host
+    service_manager = runtime_host_fixture.service_manager
+
+    result = host.trigger_hard_halt(reason="portfolio_hard_halt: trailing MDD 26%")
+
+    assert result.status == "accepted"
+    assert service_manager.stop_called_before_state_transition is True
+    assert host.get_state().status == "recovery_required"
+    assert "portfolio_hard_halt" in host.get_state().last_error
+
+
+def test_trigger_hard_halt_raises_is_recorded_as_halted(
+    runtime_host_fixture_with_raising_stop: RuntimeHostFixture,
+) -> None:
+    host = runtime_host_fixture_with_raising_stop.host
+
+    result = host.trigger_hard_halt(reason="test")
+
+    assert result.status == "error"
+    assert host.get_state().status == "halted"
+    assert "test" in host.get_state().last_error
+
+
+def test_trigger_hard_halt_non_success_status_is_recorded_as_halted(
+    runtime_host_fixture_with_blocked_stop: RuntimeHostFixture,
+) -> None:
+    host = runtime_host_fixture_with_blocked_stop.host
+
+    result = host.trigger_hard_halt(reason="test")
+
+    assert result.status == "error"
+    assert host.get_state().status == "halted"
+
+
+def test_trigger_hard_halt_is_idempotent_when_already_recovery_required(
+    runtime_host_fixture: RuntimeHostFixture,
+) -> None:
+    host = runtime_host_fixture.host
+    host.trigger_hard_halt(reason="first")
+    service_manager = runtime_host_fixture.service_manager
+    service_manager.reset_call_log()
+
+    result = host.trigger_hard_halt(reason="second")
+
+    assert result.status == "noop"
+    assert service_manager.stop_call_count == 0
