@@ -38,6 +38,7 @@ def test_compare_vol_forecasts_script_writes_artifact_and_summary(
     _write_ohlcv_csv(csv_dir / "SPY.csv", seed_price=100.0)
     _write_ohlcv_csv(csv_dir / "QQQ.csv", seed_price=90.0)
     output_file = tmp_path / "artifact.json"
+    report_output = tmp_path / "artifact.md"
 
     repo_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
@@ -50,6 +51,8 @@ def test_compare_vol_forecasts_script_writes_artifact_and_summary(
             "SPY,QQQ",
             "--output-file",
             str(output_file),
+            "--report-output",
+            str(report_output),
             "--garch-train-size",
             "60",
             "--realized-window",
@@ -63,7 +66,9 @@ def test_compare_vol_forecasts_script_writes_artifact_and_summary(
     payload = json.loads(result.stdout)
 
     assert output_file.exists()
+    assert report_output.exists()
     assert payload["symbols"] == ["SPY", "QQQ"]
-    assert set(payload["forecast_metrics"]) == {"realized", "ewma", "garch"}
-    assert set(payload["backtest_metrics"]) == {"realized", "ewma", "garch"}
+    assert set(payload["forecast_metrics"]) == {"realized", "ewma", "garch", "har_rv"}
+    assert set(payload["backtest_metrics"]) == {"realized", "ewma", "garch", "har_rv"}
+    assert payload["aggregate_winner"] in {"realized", "ewma", "garch", "har_rv", None}
     assert isinstance(payload["garch_material_win"], bool)
