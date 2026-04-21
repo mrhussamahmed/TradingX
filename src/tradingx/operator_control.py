@@ -69,6 +69,46 @@ class OperatorControlStore:
         self._remove_marker("clearance_request")
         return self._write_state(now=now, last_command="clearance_cleared")
 
+    def halt_sleeve(self, *, sleeve_id: str, reason: str) -> None:
+        path = self._sleeve_halt_path(sleeve_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sleeve_id": sleeve_id,
+            "halted": True,
+            "reason": reason,
+            "at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def resume_sleeve(self, *, sleeve_id: str) -> None:
+        path = self._sleeve_halt_path(sleeve_id)
+        if path.exists():
+            path.unlink()
+
+    def is_sleeve_halted(self, *, sleeve_id: str) -> bool:
+        record = self.get_sleeve_halt_record(sleeve_id=sleeve_id)
+        if record is None:
+            return False
+        return bool(record.get("halted", False))
+
+    def is_halted(self, *, sleeve_id: str) -> bool:
+        return self.is_sleeve_halted(sleeve_id=sleeve_id)
+
+    def get_sleeve_halt_record(self, *, sleeve_id: str) -> dict[str, Any] | None:
+        path = self._sleeve_halt_path(sleeve_id)
+        if not path.exists():
+            return None
+        try:
+            return cast(
+                dict[str, Any],
+                json.loads(path.read_text(encoding="utf-8")),
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+
     def read_telegram_offset(self) -> int | None:
         if not self._offset_path.exists():
             return None
@@ -95,6 +135,9 @@ class OperatorControlStore:
 
     def _marker_path(self, name: str) -> Path:
         return self._root_dir / name
+
+    def _sleeve_halt_path(self, sleeve_id: str) -> Path:
+        return self._root_dir / "sleeve_halts" / f"{sleeve_id}.json"
 
     def _read_state_payload(self) -> dict[str, Any]:
         if not self._state_path.exists():

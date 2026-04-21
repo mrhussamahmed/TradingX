@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Final, Protocol, cast
 
 from tradingx.config import TradingConfig
 from tradingx.persistence import FilesystemArtifactStore
@@ -86,6 +86,11 @@ class _PendingStartRequest:
     quantity: Decimal
     interval_seconds: int
     max_cycles: int | None
+
+
+SERVICE_STOP_SUCCESS_STATUSES: Final[frozenset[str]] = frozenset(
+    {"accepted", "completed"}
+)
 
 
 class LocalRuntimeHostManager:
@@ -230,6 +235,69 @@ class LocalRuntimeHostManager:
             evidence_refs=result.evidence_refs,
         )
 
+    def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
+        with self._lock:
+            if self._state.status == "recovery_required":
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="runtime_host_hard_halt",
+                    status="noop",
+                    message="Runtime host already in recovery_required.",
+                    evidence_refs=(),
+                )
+            try:
+                stop_result = self._service_manager.stop()
+            except Exception as exc:
+                self._set_state(
+                    status="halted",
+                    status_reason="Hard halt requested; service stop raised.",
+                    last_error=f"{reason}; service stop error: {exc}",
+                )
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="runtime_host_hard_halt",
+                    status="error",
+                    message=f"Hard halt service stop raised: {exc}",
+                    evidence_refs=(),
+                )
+            if stop_result.status not in SERVICE_STOP_SUCCESS_STATUSES:
+                self._set_state(
+                    status="halted",
+                    status_reason=(
+                        "Hard halt requested; service stop returned "
+                        f"{stop_result.status!r}."
+                    ),
+                    last_error=(
+                        f"{reason}; service stop returned "
+                        f"{stop_result.status}: {stop_result.message}"
+                    ),
+                )
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="runtime_host_hard_halt",
+                    status="error",
+                    message=(
+                        "Hard halt service stop did not succeed "
+                        f"({stop_result.status}): {stop_result.message}"
+                    ),
+                    evidence_refs=stop_result.evidence_refs,
+                )
+            self._set_state(
+                status="recovery_required",
+                status_reason=(
+                    f"Hard halt triggered: {reason}. "
+                    "Service stopped; operator clearance required."
+                ),
+                last_error=reason,
+            )
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="runtime_host_hard_halt",
+            status="accepted",
+            message=f"Hard halt: {reason}",
+            evidence_refs=stop_result.evidence_refs,
+        )
+
     def _bootstrap_and_start(
         self,
         *,
@@ -371,4 +439,4 @@ class LocalRuntimeHostManager:
             self._operator_store.write_runtime_host_state(self._state)
 
 
-__all__ = ("LocalRuntimeHostManager",)
+__all__ = ("LocalRuntimeHostManager", "SERVICE_STOP_SUCCESS_STATUSES")

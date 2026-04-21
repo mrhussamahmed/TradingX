@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -240,9 +241,11 @@ class RuntimeOpportunityPlanner:
         *,
         market_data_gateway: MarketSnapshotGatewayProtocol,
         selector: OpportunitySelector | None = None,
+        hard_halt_gate: Callable[[], bool] | None = None,
     ) -> None:
         self._market_data_gateway = market_data_gateway
         self._selector = selector or OpportunitySelector()
+        self._hard_halt_gate = hard_halt_gate
 
     def plan(
         self,
@@ -253,6 +256,18 @@ class RuntimeOpportunityPlanner:
         model_snapshot: ApprovedWeightSnapshot,
         warmup: HistoricalWarmupRecord,
     ) -> OpportunitySelectionRecord:
+        if self._hard_halt_gate is not None and self._hard_halt_gate():
+            return OpportunitySelectionRecord(
+                selection_id=f"selection-{uuid.uuid4()}",
+                generated_at_utc=datetime.now(UTC),
+                strategy_id=activation.strategy_id,
+                model_snapshot_id=model_snapshot.snapshot_id,
+                symbols_considered=symbols,
+                ranked_opportunities=(),
+                selected_symbol="",
+                decision="abort",
+                decision_reason="hard_halt_active",
+            )
         market_snapshots = {
             symbol: self._market_data_gateway.get_market_snapshot(symbol)
             for symbol in symbols

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib
 import json
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
 from tradingx.costs import CostModelConfig
 from tradingx.evaluation import AdversarialCheckContext
@@ -18,9 +20,13 @@ from tradingx.types import (
     OperatingConstraintBudget,
     RegimeSnapshot,
     StrategyCandidate,
+    ValidationCandidateResult,
 )
 from tradingx.validation import (
+    _apply_marginal_pass_to_gate1_result,
+    _build_default_regime_snapshots,
     _build_gate1_candidate_result,
+    _build_gate1_candidate_result_pass1,
     _candidate_returns,
     build_gate_report,
     evaluate_gate1_benchmark_criteria,
@@ -782,3 +788,193 @@ def test_validation_sharpe_ratio_matches_evaluation_sharpe_definition() -> None:
         returns=returns,
         risk_free_daily_rates=[0.0] * len(returns),
     )
+
+
+@dataclass(frozen=True)
+class _Gate1MarginalFixtures:
+    bars: dict[str, pd.DataFrame]
+    benchmark_stack: BenchmarkStackPayload
+    window_start: object
+    window_end: object
+    regime_snapshots: dict[date, RegimeSnapshot]
+    adversarial_context: AdversarialCheckContext
+    base_cost_model_config: CostModelConfig
+    trend_candidate: StrategyCandidate
+    vol_candidate: StrategyCandidate
+    mean_reversion_candidate: StrategyCandidate
+    trend_pass1_triplet: tuple[
+        ValidationCandidateResult,
+        EvaluationEvidencePack,
+        tuple[Decimal, ...],
+    ]
+    trend_cost_drag_bps: Decimal
+
+
+def _gate1_marginal_fixtures() -> _Gate1MarginalFixtures:
+    registry = build_mandatory_candidate_registry(("SPY", "QQQ"))
+    trend_candidate, vol_candidate, mean_reversion_candidate = registry
+    spy_closes = [
+        float(value)
+        for value in _build_close_series(
+            periods=400,
+            up_return=Decimal("0.003"),
+            down_return=Decimal("-0.001"),
+            down_every=7,
+        )
+    ]
+    qqq_closes = [
+        float(value)
+        for value in _build_close_series(
+            periods=400,
+            up_return=Decimal("0.0025"),
+            down_return=Decimal("-0.0012"),
+            down_every=6,
+        )
+    ]
+    bars = {
+        "SPY": _quote_enriched_ohlcv_frame(spy_closes),
+        "QQQ": _quote_enriched_ohlcv_frame(qqq_closes),
+    }
+    benchmark_stack = _benchmark_stack_payload_for_periods(len(bars["SPY"]))
+    base_cost_model_config = CostModelConfig()
+
+    def backtest_runner(
+        rerun_candidate: StrategyCandidate,
+        *,
+        parameter_overrides=None,
+        cost_model_config: CostModelConfig | None = None,
+    ) -> tuple[Decimal, ...]:
+        returns, _ = _candidate_returns(
+            rerun_candidate,
+            bars_by_symbol=bars,
+            parameter_overrides=parameter_overrides,
+            cost_model_config=cost_model_config,
+        )
+        return returns
+
+    trend_returns, trend_cost_drag_bps = _candidate_returns(
+        trend_candidate,
+        bars_by_symbol=bars,
+    )
+    adversarial_context = AdversarialCheckContext(
+        benchmark_bars=bars["SPY"],
+        backtest_runner=backtest_runner,
+        base_cost_model_config=base_cost_model_config,
+    )
+    trend_pass1_result, trend_pass1_pack = _build_gate1_candidate_result_pass1(
+        candidate=trend_candidate,
+        candidate_returns=trend_returns,
+        annualized_cost_drag_bps=trend_cost_drag_bps,
+        benchmark_stack_payload=benchmark_stack,
+        window_start_utc=bars["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars["SPY"].index[-1].to_pydatetime(),
+        adversarial_context=adversarial_context,
+    )
+    return _Gate1MarginalFixtures(
+        bars=bars,
+        benchmark_stack=benchmark_stack,
+        window_start=bars["SPY"].index[0].to_pydatetime(),
+        window_end=bars["SPY"].index[-1].to_pydatetime(),
+        regime_snapshots=_build_default_regime_snapshots(
+            trend_candidate,
+            bars_by_symbol=bars,
+        ),
+        adversarial_context=adversarial_context,
+        base_cost_model_config=base_cost_model_config,
+        trend_candidate=trend_candidate,
+        vol_candidate=vol_candidate,
+        mean_reversion_candidate=mean_reversion_candidate,
+        trend_pass1_triplet=(trend_pass1_result, trend_pass1_pack, trend_returns),
+        trend_cost_drag_bps=trend_cost_drag_bps,
+    )
+
+
+def test_gate1_rejects_registry_with_not_two_sleeve_backed_candidates() -> None:
+    one_sleeve = (
+        StrategyCandidate(
+            candidate_id="only-sleeve-v1",
+            family="x",
+            benchmark_symbol="SPY",
+            universe=("SPY",),
+            parameter_set={},
+            status="under_evaluation",
+            sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
+        ),
+    )
+    bars = {"SPY": _ohlcv_frame([100.0, 101.0])}
+
+    with pytest.raises(NotImplementedError, match="two-sleeve case"):
+        build_gate_report(
+            gate_id="1",
+            bars_by_symbol=bars,
+            candidates=one_sleeve,
+            benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+                len(bars["SPY"])
+            ),
+            window_start_utc=bars["SPY"].index[0].to_pydatetime(),
+            window_end_utc=bars["SPY"].index[-1].to_pydatetime(),
+        )
+
+
+def test_gate1_evaluates_marginal_contribution_for_two_sleeves() -> None:
+    fixtures = _gate1_marginal_fixtures()
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol=fixtures.bars,
+        candidates=(
+            fixtures.trend_candidate,
+            fixtures.vol_candidate,
+            fixtures.mean_reversion_candidate,
+        ),
+        benchmark_stack_payload=fixtures.benchmark_stack,
+        window_start_utc=fixtures.window_start,
+        window_end_utc=fixtures.window_end,
+    )
+
+    by_id = {result.candidate_id: result for result in report.candidate_results}
+    trend = by_id["trend-following-v1"]
+    vol = by_id["vol-target-v1"]
+    mr = by_id["mean-reversion-v1"]
+
+    assert "marginal_portfolio_contribution" in {
+        criterion.criterion_id for criterion in trend.criteria
+    }
+    assert "marginal_portfolio_contribution" in {
+        criterion.criterion_id for criterion in vol.criteria
+    }
+    assert "marginal_portfolio_contribution" not in {
+        criterion.criterion_id for criterion in mr.criteria
+    }
+    assert trend.marginal_sharpe_delta is not None
+    assert vol.marginal_sharpe_delta is not None
+    assert mr.marginal_sharpe_delta is None
+
+
+def test_gate1_marginal_deltas_land_on_evidence_pack_not_just_result() -> None:
+    fixtures = _gate1_marginal_fixtures()
+    pass1_result, pass1_pack, pass1_returns = fixtures.trend_pass1_triplet
+
+    final_result, final_pack = _apply_marginal_pass_to_gate1_result(
+        candidate=fixtures.trend_candidate,
+        pass1_result=pass1_result,
+        pass1_pack=pass1_pack,
+        pass1_returns=pass1_returns,
+        annualized_cost_drag_bps=fixtures.trend_cost_drag_bps,
+        sibling_candidate=fixtures.vol_candidate,
+        bars_by_symbol=fixtures.bars,
+        regime_snapshots_by_date=fixtures.regime_snapshots,
+        benchmark_stack_payload=fixtures.benchmark_stack,
+        window_start_utc=fixtures.window_start,
+        window_end_utc=fixtures.window_end,
+        adversarial_context=fixtures.adversarial_context,
+        base_cost_model_config=fixtures.base_cost_model_config,
+    )
+
+    assert final_pack.marginal_sharpe_delta is not None
+    assert final_pack.marginal_calmar_delta is not None
+    assert final_pack.marginal_cdar_delta is not None
+    assert final_result.evidence_pack_id == final_pack.evidence_pack_id
+    assert final_result.evidence_pack_id != pass1_pack.evidence_pack_id
+    assert final_result.marginal_sharpe_delta == final_pack.marginal_sharpe_delta
+    assert final_result.marginal_calmar_delta == final_pack.marginal_calmar_delta
+    assert final_result.marginal_cdar_delta == final_pack.marginal_cdar_delta

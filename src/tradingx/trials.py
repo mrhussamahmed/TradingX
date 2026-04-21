@@ -97,6 +97,19 @@ class TrialsLedger:
             rows = connection.execute(query, params).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    def records_for_candidate(
+        self,
+        candidate_id: str,
+        *,
+        window_start_utc: datetime | None = None,
+        window_end_utc: datetime | None = None,
+    ) -> tuple[TrialRecord, ...]:
+        return self.list_for_candidate(
+            candidate_id,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+        )
+
     def trial_statistics_for_family(self, family: str) -> TrialStatistics:
         with self._connect() as connection:
             rows = connection.execute(

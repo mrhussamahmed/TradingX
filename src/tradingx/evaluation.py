@@ -413,6 +413,9 @@ def evaluate_candidate(
     adversarial_context: AdversarialCheckContext | None = None,
     annualized_cost_drag_bps: Decimal | None = None,
     trials_ledger: TrialsLedger | None = None,
+    marginal_sharpe_delta: Decimal | None = None,
+    marginal_calmar_delta: Decimal | None = None,
+    marginal_cdar_delta: Decimal | None = None,
 ) -> EvaluationEvidencePack:
     candidate_metrics_numeric = _build_metric_pack(candidate_returns)
     benchmark_metrics_numeric = _build_metric_pack(benchmark_returns)
@@ -475,9 +478,21 @@ def evaluate_candidate(
     else:
         recommendation = "reject"
 
+    evidence_pack_suffix = ""
+    if any(
+        value is not None
+        for value in (
+            marginal_sharpe_delta,
+            marginal_calmar_delta,
+            marginal_cdar_delta,
+        )
+    ):
+        evidence_pack_suffix = "-marginal"
+
     return EvaluationEvidencePack(
         evidence_pack_id=(
             f"{candidate.candidate_id}-{window_end_utc.strftime('%Y%m%dT%H%M%SZ')}"
+            f"{evidence_pack_suffix}"
         ),
         candidate_id=candidate.candidate_id,
         window_start_utc=window_start_utc,
@@ -494,6 +509,9 @@ def evaluate_candidate(
         annualized_cost_drag_bps=annualized_cost_drag_bps,
         deflated_sharpe_ratio=deflated_sharpe,
         north_star_sharpe_met=north_star_sharpe_met,
+        marginal_sharpe_delta=marginal_sharpe_delta,
+        marginal_calmar_delta=marginal_calmar_delta,
+        marginal_cdar_delta=marginal_cdar_delta,
     )
 
 

@@ -1,13 +1,13 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.1.0
+version: 1.2.0
 status: active
 created: 2026-04-17
 last_amended: 2026-04-21
 supersedes: null
 superseded_by: null
-author_session: claude-opus-4.7-2026-04-21
+author_session: codex-gpt-5
 ---
 
 # Stage 1 acceptance gates
@@ -76,22 +76,27 @@ reframed gate logic in
 - `operating_constraint`: maximum drawdown <= 15% design target AND
   CDaR@95% confidence <= 8% threshold. Both are enforced as pass/fail
   criteria by `evaluate_operating_constraint` at validation time. The
-  25% maximum-drawdown hard-halt threshold is recorded as design
-  intent and carried in the `OperatingConstraintBudget` payload but
-  is not yet enforced by a runtime halt trigger; runtime enforcement
-  ships with tranche 1's drawdown-defense subsystem.
+  25% maximum-drawdown hard-halt threshold is also enforced at runtime
+  by `PortfolioHardHaltController`, which triggers
+  `LocalRuntimeHostManager.trigger_hard_halt(...)`, stops the service,
+  transitions the host to `recovery_required`, and requires operator
+  clearance before restart.
 - `out_of_sample_profile`: at least 756 trading days (three years)
   of out-of-sample data with metrics remaining within 30% of the
   in-sample profile on Sharpe, CAGR, and MaxDD
   (`|metric_OOS - metric_IS| / max(|metric_IS|, 0.3) <= 0.30`).
+- `marginal_portfolio_contribution`: for each sleeve-backed candidate,
+  adding the candidate to the reference book of mandatory sleeve-backed
+  candidates must strictly improve portfolio Sharpe AND Calmar AND not
+  worsen portfolio CDaR@95%. For tranche 1.4, the reference book is the
+  registry-pinned sibling — the other mandatory sleeve-backed candidate
+  from `build_mandatory_candidate_registry()` with
+  `sleeve_class_path is not None`, independent of the sibling's own Gate 1
+  outcome. Generalization for 3+ sleeve-backed candidates is deferred to
+  the tranche that introduces a third sleeve-backed candidate.
 
 **Deferred to tranche 1 hardening**
 
-- Marginal portfolio contribution: a surviving sleeve must also
-  improve the portfolio's Sharpe, Calmar, and CDaR when added to
-  the existing book with cost and correlation accounted for. This
-  criterion ships when tranche 1's multi-sleeve portfolio
-  construction lands.
 - Deflated Sharpe Ratio: the primitive exists in `stats.py` but is
   not yet invoked by `evaluate_candidate` and the evidence pack has
   no DSR field. Wiring DSR into the candidate evaluation pipeline
