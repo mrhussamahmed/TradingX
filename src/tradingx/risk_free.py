@@ -23,8 +23,10 @@ import pandas as pd  # type: ignore[import-untyped]
 from tradingx.config import TradingConfig
 
 DEFAULT_RISK_FREE_CACHE_PATH = Path("data/reference/risk_free_daily.csv")
+DEFAULT_TREASURY_YIELD_CACHE_PATH = Path("data/reference/treasury_yields_daily.csv")
 # source: https://fred.stlouisfed.org/series/DGS3MO (retrieved 2026-04-19)
 RISK_FREE_SERIES_CODE = "DGS3MO"
+TREASURY_SERIES_CODES = ("DGS2", "DGS10")
 RISK_FREE_SOURCE = "fred"
 TRADING_DAYS_PER_YEAR = 252
 CACHE_REFRESH_INTERVAL = timedelta(days=7)
@@ -138,6 +140,80 @@ def _normalize_risk_free_frame(frame: pd.DataFrame) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
+def _normalize_treasury_frame(frame_by_code: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    if set(frame_by_code.keys()) != set(TREASURY_SERIES_CODES):
+        missing = set(TREASURY_SERIES_CODES) - set(frame_by_code.keys())
+        raise ValueError(
+            f"Missing Treasury series in fetch response: {sorted(missing)}"
+        )
+    aligned = pd.concat(
+        [
+            frame.rename(columns={code: code.lower()})
+            for code, frame in frame_by_code.items()
+        ],
+        axis=1,
+    ).dropna()
+    aligned.index = pd.to_datetime(aligned.index, utc=True).normalize()
+    aligned = aligned.sort_index(kind="stable")
+    aligned["spread_2s10s_bps"] = (aligned["dgs10"] - aligned["dgs2"]) * 100.0
+    return pd.DataFrame(
+        {
+            "date": aligned.index.strftime("%Y-%m-%d"),
+            "dgs2": aligned["dgs2"].astype(float).values,
+            "dgs10": aligned["dgs10"].astype(float).values,
+            "spread_2s10s_bps": aligned["spread_2s10s_bps"].astype(float).values,
+        }
+    ).reset_index(drop=True)
+
+
+def refresh_treasury_yield_cache(
+    cache_path: Path,
+    *,
+    start_date: date,
+    end_date: date,
+    now_utc: datetime,
+    fetcher: RiskFreeFetcher | None = None,
+) -> Path:
+    if end_date < start_date:
+        raise ValueError("end_date must be on or after start_date.")
+    active_fetcher = fetcher or _default_fred_fetcher
+    frame_by_code = {
+        code: active_fetcher(code, RISK_FREE_SOURCE, start_date, end_date)
+        for code in TREASURY_SERIES_CODES
+    }
+    normalized = _normalize_treasury_frame(frame_by_code)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_csv(cache_path, index=False)
+    timestamp = now_utc.astimezone(UTC).timestamp()
+    os.utime(cache_path, (timestamp, timestamp))
+    return cache_path
+
+
+def load_treasury_yield_cache(cache_path: Path) -> pd.DataFrame:
+    frame = pd.read_csv(cache_path)
+    expected_columns = {"date", "dgs2", "dgs10", "spread_2s10s_bps"}
+    if set(frame.columns) != expected_columns:
+        raise ValueError(
+            "Treasury yield cache must contain exactly date, dgs2, dgs10, and "
+            "spread_2s10s_bps columns."
+        )
+    loaded = frame.copy()
+    loaded["date"] = pd.to_datetime(loaded["date"], utc=True).dt.normalize()
+    return loaded.sort_values("date", kind="stable").reset_index(drop=True)
+
+
+def yield_curve_spread_for_date(cache_path: Path, *, as_of_date: date) -> Decimal:
+    frame = load_treasury_yield_cache(cache_path)
+    keyed = frame.set_index("date")["spread_2s10s_bps"]
+    target = pd.Timestamp(as_of_date).tz_localize(UTC)
+    available = keyed.loc[keyed.index <= target]
+    if available.empty:
+        raise ValueError(
+            f"No cached Treasury spread is available on or before {as_of_date.isoformat()}."
+        )
+    return Decimal(str(float(available.iloc[-1])))
+
+
 def _default_fred_fetcher(
     symbol: str,
     source: str,
@@ -207,12 +283,17 @@ __all__ = (
     "CACHE_REFRESH_INTERVAL",
     "CachedRiskFreeSeries",
     "DEFAULT_RISK_FREE_CACHE_PATH",
+    "DEFAULT_TREASURY_YIELD_CACHE_PATH",
     "RISK_FREE_SERIES_CODE",
     "RISK_FREE_SOURCE",
+    "TREASURY_SERIES_CODES",
     "TRADING_DAYS_PER_YEAR",
     "build_default_risk_free_series",
     "daily_risk_free_rate_for_date",
     "load_risk_free_cache",
+    "load_treasury_yield_cache",
     "needs_risk_free_refresh",
     "refresh_risk_free_cache",
+    "refresh_treasury_yield_cache",
+    "yield_curve_spread_for_date",
 )
