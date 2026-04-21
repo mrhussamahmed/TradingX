@@ -43,6 +43,47 @@ class FakeRuntimeHostManager:
         return self._state
 
 
+def _minimal_runtime_state(timestamp: datetime) -> BotRuntimeState:
+    return BotRuntimeState(
+        status="trading_ready",
+        status_reason="Runtime boot complete.",
+        active_symbols=("SPY",),
+        started_at_utc=timestamp,
+        updated_at_utc=timestamp,
+        last_error="",
+        active_strategy_id="baseline-long-only-v1",
+        active_model_snapshot_id="approved-baseline-long-only-v1",
+        latest_selection_id="selection-1",
+    )
+
+
+def _minimal_read_model(tmp_path, timestamp: datetime) -> LocalWebReadModel:
+    return LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(_minimal_runtime_state(timestamp)),
+    )
+
+
 def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
     tmp_path,
 ) -> None:
@@ -248,6 +289,72 @@ def test_local_web_read_model_parse_datetime_tolerates_invalid_iso(tmp_path) -> 
     parsed = read_model._parse_datetime("not-a-timestamp")
 
     assert parsed == datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def test_readmodel_surfaces_cost_drag_when_present(tmp_path) -> None:
+    timestamp = datetime(2026, 4, 21, 14, 30, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+
+    diagnostics = read_model._build_performance_diagnostics(
+        runtime_state=_minimal_runtime_state(timestamp),
+        warmup=None,
+        validation_report={
+            "status": "fail",
+            "summary": "Gate 1 failed.",
+            "candidate_results": [
+                {
+                    "candidate_id": "trend-following-v1",
+                    "status": "fail",
+                    "criteria": [],
+                    "annualized_cost_drag_bps": "12.5",
+                },
+                {
+                    "candidate_id": "vol-target-v1",
+                    "status": "fail",
+                    "criteria": [],
+                    "annualized_cost_drag_bps": "8.0",
+                },
+            ],
+        },
+        replay_summary=None,
+    )
+
+    gate_validation = next(
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.diagnostic_id == "gate_validation"
+    )
+    assert "12.5" in gate_validation.detail
+    assert "cost drag" in gate_validation.detail.lower()
+
+
+def test_readmodel_ignores_missing_cost_drag(tmp_path) -> None:
+    timestamp = datetime(2026, 4, 21, 14, 30, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+
+    diagnostics = read_model._build_performance_diagnostics(
+        runtime_state=_minimal_runtime_state(timestamp),
+        warmup=None,
+        validation_report={
+            "status": "fail",
+            "summary": "Gate 1 failed.",
+            "candidate_results": [
+                {
+                    "candidate_id": "trend-following-v1",
+                    "status": "fail",
+                    "criteria": [],
+                },
+            ],
+        },
+        replay_summary=None,
+    )
+
+    gate_validation = next(
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.diagnostic_id == "gate_validation"
+    )
+    assert "cost drag" not in gate_validation.detail.lower()
 
 
 def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:

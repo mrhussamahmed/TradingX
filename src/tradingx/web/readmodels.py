@@ -6,7 +6,7 @@ import json
 import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Protocol
 
@@ -1981,6 +1981,7 @@ class LocalWebReadModel:
         replay_summary: ReplaySlippageSummary | None,
     ) -> tuple[PerformanceDiagnostic, ...]:
         diagnostics: list[PerformanceDiagnostic] = []
+        worst_cost_drag_bps: Decimal | None = None
         if warmup is not None and warmup.symbols_blocked:
             blocked_copy = ", ".join(
                 f"{symbol}: {reason}"
@@ -1996,23 +1997,56 @@ class LocalWebReadModel:
                     action="Refresh warmup inputs before broadening deployment.",
                 )
             )
+        if validation_report is not None:
+            for candidate_payload in self._ensure_list(
+                validation_report.get("candidate_results", [])
+            ):
+                raw_drag = candidate_payload.get("annualized_cost_drag_bps")
+                if raw_drag is None:
+                    continue
+                try:
+                    drag = Decimal(str(raw_drag))
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+                if worst_cost_drag_bps is None or drag > worst_cost_drag_bps:
+                    worst_cost_drag_bps = drag
         if validation_report is not None and str(validation_report.get("status", "")) != "pass":
+            detail = str(
+                validation_report.get(
+                    "summary",
+                    "Latest validation report is not yet passing.",
+                )
+            )
+            if worst_cost_drag_bps is not None:
+                detail = (
+                    f"{detail} Worst annualized cost drag across candidates: "
+                    f"{worst_cost_drag_bps:.1f} bps."
+                )
             diagnostics.append(
                 PerformanceDiagnostic(
                     diagnostic_id="gate_validation",
                     title="Validation benchmark stack is not yet passing.",
-                    detail=str(
-                        validation_report.get(
-                            "summary",
-                            "Latest validation report is not yet passing.",
-                        )
-                    ),
+                    detail=detail,
                     severity="critical",
                     owner="Research",
                     action=(
                         "Review hurdle clearance, opportunity-cost edge, and "
                         "operating constraints before adding capital."
                     ),
+                )
+            )
+        elif worst_cost_drag_bps is not None:
+            diagnostics.append(
+                PerformanceDiagnostic(
+                    diagnostic_id="cost_drag",
+                    title="Validation cost drag is available for review.",
+                    detail=(
+                        "Worst annualized cost drag across candidates: "
+                        f"{worst_cost_drag_bps:.1f} bps."
+                    ),
+                    severity="info",
+                    owner="Research",
+                    action="Compare cost drag against sleeve edge before promotion.",
                 )
             )
         if replay_summary is not None:
