@@ -39,7 +39,8 @@ Vol-target and mean-reversion candidate defaults stay at `garch` regardless of W
 - `src/tradingx/strategy.py` — **conditional on W4 winner**: update `trend-following-v1` `forecast_method` only
 - `tests/unit/test_features_volatility.py` (or whatever the existing test file is called) — HAR-RV coverage
 - `tests/unit/test_risk_free.py` — Treasury fetcher coverage
-- `tests/unit/test_main.py` or similar — vol-forecast script regression tests for the new realized-vol target
+- `tests/unit/test_compare_vol_forecasts.py` (new) — vol-unit MSFE/RMSE coverage for the corrected loss target
+- `tests/integration/test_compare_vol_forecasts_script.py` — update the assertion at [line 67](tests/integration/test_compare_vol_forecasts_script.py:67) that enumerates `{"realized", "ewma", "garch"}` to include `"har_rv"`, plus any field-name assertions touching `variance_rmse`/`variance_mae` that need to shift to `rmse_vol`/`mae_vol`
 
 ---
 
@@ -791,15 +792,36 @@ git commit -m "test(regime): add None-input tolerance coverage"
 
 ## W4 — Vol-estimator comparison with corrected loss + trend-family retune
 
-### Task 7: Replace variance target with forward realized-vol target
+### Task 7: Replace variance target with forward realized-vol target — preserving the method-keyed contract
 
 **Files:**
 - Modify: `scripts/compare_vol_forecasts.py`
-- Modify: `tests/unit/test_main.py` (or wherever script tests live; create a new test file `tests/unit/test_compare_vol_forecasts.py` if none exists)
+- Create: `tests/unit/test_compare_vol_forecasts.py`
 
-**Pre-work.** Read [compare_vol_forecasts.py:200-260](scripts/compare_vol_forecasts.py:200) to see the exact `_forecast_error_metrics` shape. The function at line 212 currently computes `bars_by_symbol[symbol]["close"].astype(float).pct_change().pow(2.0)` as the target — this is one-day realized variance. We replace it with forward annualized realized volatility.
+**Pre-work.** Read [compare_vol_forecasts.py:200-262](scripts/compare_vol_forecasts.py:200) to see the exact `_forecast_error_metrics` shape. The **current contract** is:
 
-- [ ] **Step 1: Write the failing test**
+- Input: `forecasts: dict[str, dict[str, pd.Series]]` — `{method: {symbol: forecast_series}}`.
+- Output: `dict[str, dict[str, object]]` — `{method: {prediction_count, pooled_variance_mae, pooled_variance_rmse, pooled_qlike, symbols: {symbol: {prediction_count, variance_mae, variance_rmse, qlike}}}}`.
+- The target is currently `pct_change().pow(2.0)` — one-day realized variance. `forecast_variance = forecast.pow(2.0)` squares the vol forecast so the comparison stays within a consistent-unit variance space, but not the unit we want for tranche 1.2.
+
+`main()` at [compare_vol_forecasts.py:403](scripts/compare_vol_forecasts.py:403) passes the full `forecasts` dict in and consumes the method-keyed output. We must **not** flatten the method dimension.
+
+**Correction plan.**
+
+1. Keep the same input/output *shape* (method-keyed at top level; per-symbol nested). Rename variance-unit fields to vol-unit fields so callers can tell which version they're reading.
+2. Replace the variance target with **forward realized volatility**, computed correctly per Codex's guidance: a `.shift(-lookback_days)` of the backward rolling std, so that at index `t` we carry the std of returns at positions `[t+1, ..., t+lookback_days]`, annualized.
+3. Compare **forecast vol** directly against **forward realized vol**, both in annualized-volatility units. No more squaring.
+
+New field names (both per-symbol and pooled):
+
+- `msfe_vol` (mean squared forecast error, vol units)
+- `rmse_vol` (root-MSFE, vol units — the interpretable headline number)
+- `mae_vol` (mean absolute error, vol units)
+- `qlike` (likelihood-style loss on variance; re-derive from the vol-unit square: `forecast_var = forecast_vol ** 2`, `actual_var = forward_realized_vol ** 2`, then compute `actual_var / forecast_var + log(forecast_var)` as before)
+
+`prediction_count` stays.
+
+- [ ] **Step 1: Write the failing tests**
 
 Create `tests/unit/test_compare_vol_forecasts.py`:
 
@@ -825,110 +847,232 @@ def _build_constant_vol_bars(target_daily_vol: float, n: int = 600) -> dict[str,
 
 
 def test_forecast_error_metric_is_volatility_not_variance():
-    """MSFE must be computed against realized VOLATILITY (annualized
-    std over forward horizon), not realized variance (pct_change**2).
-
-    Feed a constant-vol series with target annualized vol ~0.19;
-    a perfect realized-method forecast at the same horizon should
-    produce MSFE close to zero.
+    """RMSE must be computed against forward realized VOLATILITY,
+    not realized variance. A perfect vol-aligned forecast on
+    constant-vol data must produce near-zero RMSE in vol units.
     """
     target_daily_vol = 0.012
     expected_annual_vol = target_daily_vol * math.sqrt(252)  # ~0.190
     bars = _build_constant_vol_bars(target_daily_vol, n=600)
-    # A perfect forecast: a constant series equal to the expected
-    # annualized vol for every observation
-    forecasts = pd.Series(
+    forecasts_by_symbol = pd.Series(
         [expected_annual_vol] * len(bars["SPY"]),
         index=bars["SPY"].index,
     )
+    # Pass through the method-keyed shape the script uses.
     metrics = _forecast_error_metrics(
-        bars_by_symbol=bars,
-        forecast_by_symbol={"SPY": forecasts},
-        lookback_days=20,
+        bars,
+        {"perfect": {"SPY": forecasts_by_symbol}},
     )
-    msfe = metrics["SPY"]["msfe"]
-    # If the target were variance (~0.036), MSFE would be much larger
-    # than a vol-aligned target (~0). Require msfe small relative to
-    # expected_annual_vol**2 (~0.036).
-    assert msfe < (expected_annual_vol ** 2) * 0.1, (
-        f"MSFE {msfe:.6f} too large — target may still be in "
-        f"variance units rather than volatility units."
+    perfect = metrics["perfect"]
+    # Vol-unit RMSE close to zero
+    assert perfect["pooled_rmse_vol"] < 0.02, (
+        f"pooled_rmse_vol {perfect['pooled_rmse_vol']:.6f} too large "
+        "— target may still be in variance units rather than vol units."
+    )
+    # Per-symbol shape preserved
+    assert "SPY" in perfect["symbols"]
+    assert perfect["symbols"]["SPY"]["rmse_vol"] == perfect["pooled_rmse_vol"] or abs(
+        perfect["symbols"]["SPY"]["rmse_vol"] - perfect["pooled_rmse_vol"]
+    ) < 1e-9
+
+
+def test_forecast_metrics_preserve_method_keyed_top_level_shape():
+    """main() depends on a method-keyed top-level shape. Verify it."""
+    bars = _build_constant_vol_bars(0.01, n=400)
+    forecasts = {
+        "realized": {"SPY": pd.Series(
+            [0.15] * len(bars["SPY"]), index=bars["SPY"].index
+        )},
+        "ewma": {"SPY": pd.Series(
+            [0.20] * len(bars["SPY"]), index=bars["SPY"].index
+        )},
+    }
+    metrics = _forecast_error_metrics(bars, forecasts)
+    assert set(metrics.keys()) == {"realized", "ewma"}
+    for method_name in metrics:
+        assert "symbols" in metrics[method_name]
+        assert "SPY" in metrics[method_name]["symbols"]
+        assert "pooled_rmse_vol" in metrics[method_name]
+        assert "prediction_count" in metrics[method_name]
+
+
+def test_forward_realized_vol_alignment_is_not_backward_looking():
+    """The forward-vol target at index t must be std of returns
+    over [t+1, ..., t+lookback_days], not [t-lookback_days+1, ..., t].
+    """
+    # Build a two-regime returns series: low vol first half, high vol second half
+    n = 400
+    lookback = 20
+    rng = np.random.default_rng(seed=7)
+    first_half = rng.normal(scale=0.005, size=n // 2)
+    second_half = rng.normal(scale=0.030, size=n // 2)
+    returns = np.concatenate([first_half, second_half])
+    closes = 100.0 * np.cumprod(1.0 + returns)
+    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+    bars = {"SPY": pd.DataFrame({"close": closes, "volume": [1e7] * n}, index=dates)}
+
+    # A "clairvoyant" forecast that knows the forward vol
+    # at each point should score near-zero RMSE. Construct it:
+    series_returns = pd.Series(returns, index=dates)
+    clairvoyant = (
+        series_returns.rolling(lookback).std(ddof=1).shift(-lookback) * math.sqrt(252)
+    )
+    metrics = _forecast_error_metrics(
+        bars, {"clairvoyant": {"SPY": clairvoyant}}
+    )
+    assert metrics["clairvoyant"]["pooled_rmse_vol"] < 0.01, (
+        "Clairvoyant forecast should score near-zero RMSE; if it does "
+        "not, the implementation's forward-vol target is misaligned."
     )
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -v`
 
-Expected: FAIL — the current `_forecast_error_metrics` computes loss against `pct_change().pow(2.0)`, which is realized-variance-unit not realized-vol-unit.
+Expected: FAIL — current implementation uses variance target and `variance_rmse` field name.
 
 - [ ] **Step 3: Implement**
 
-In `scripts/compare_vol_forecasts.py`, replace the `_forecast_error_metrics` body (near line 200):
+In `scripts/compare_vol_forecasts.py`, replace the `_forecast_error_metrics` body (lines 200-262). Keep the outer method loop; change the target computation and the field names.
 
 ```python
 def _forecast_error_metrics(
-    *,
     bars_by_symbol: dict[str, pd.DataFrame],
-    forecast_by_symbol: dict[str, pd.Series],
-    lookback_days: int,
-) -> dict[str, dict[str, float]]:
-    """Compute per-symbol MSFE of forecast vs forward realized volatility.
+    forecasts: dict[str, dict[str, pd.Series]],
+    *,
+    lookback_days: int = 20,
+) -> dict[str, dict[str, object]]:
+    """Score method forecasts against forward realized volatility.
 
-    Target: annualized realized volatility over the forward window
-    [t+1, t+1+lookback_days], computed as std(returns) * sqrt(252).
-    This is the correct dimensional pairing for forecast_volatility,
-    which produces annualized volatility (not variance).
+    Target (at index t): annualized std of returns over the forward
+    window [t+1, ..., t+lookback_days]. Computed as a backward
+    rolling std shifted left by `lookback_days` so the value at
+    position t comes from the window that starts at t+1 and ends at
+    t+lookback_days, then scaled by sqrt(252) for annualization.
+
+    This replaces the prior variance-unit target
+    (`pct_change().pow(2.0)`); all pooled and per-symbol metrics are
+    now in annualized volatility units.
     """
-    metrics: dict[str, dict[str, float]] = {}
-    for symbol, bars in bars_by_symbol.items():
-        returns = bars["close"].astype(float).pct_change()
-        # Forward realized vol: for each t, compute std of returns
-        # over [t+1, t+1+lookback_days], annualized.
-        forward_realized_vol = (
-            returns.shift(-1)
-            .rolling(lookback_days)
-            .std(ddof=1)
-            * math.sqrt(252)
-        )
-        forecast = forecast_by_symbol.get(symbol)
-        if forecast is None:
-            continue
-        aligned_forecast, aligned_target = forecast.align(
-            forward_realized_vol, join="inner"
-        )
-        residuals = (aligned_forecast - aligned_target).dropna()
-        if residuals.empty:
-            metrics[symbol] = {"msfe": float("nan"), "n_obs": 0}
-            continue
-        metrics[symbol] = {
-            "msfe": float((residuals ** 2).mean()),
-            "n_obs": int(len(residuals)),
+    metrics: dict[str, dict[str, object]] = {}
+    for method_name, method_series in forecasts.items():
+        symbol_metrics: dict[str, dict[str, float | int]] = {}
+        pooled_abs_errors: list[float] = []
+        pooled_squared_errors: list[float] = []
+        pooled_qlike: list[float] = []
+        for symbol, forecast in method_series.items():
+            returns = bars_by_symbol[symbol]["close"].astype(float).pct_change()
+            forward_realized_vol = (
+                returns.rolling(lookback_days).std(ddof=1).shift(-lookback_days)
+                * math.sqrt(252.0)
+            )
+            valid = forecast.notna() & forward_realized_vol.notna()
+            valid_index = forecast.loc[valid].index
+            if valid_index.empty:
+                symbol_metrics[symbol] = {
+                    "prediction_count": 0,
+                    "mae_vol": float("nan"),
+                    "rmse_vol": float("nan"),
+                    "msfe_vol": float("nan"),
+                    "qlike": float("nan"),
+                }
+                continue
+            aligned_forecast = forecast.loc[valid_index]
+            aligned_target = forward_realized_vol.loc[valid_index]
+            residuals = aligned_forecast - aligned_target
+            abs_errors = residuals.abs()
+            squared_errors = residuals.pow(2.0)
+
+            # QLIKE derived from the vol-unit square so the
+            # headline loss and QLIKE share the same input space.
+            forecast_variance = aligned_forecast.pow(2.0).clip(lower=1e-12)
+            actual_variance = aligned_target.pow(2.0)
+            qlike = (actual_variance / forecast_variance) + forecast_variance.map(
+                math.log
+            )
+
+            symbol_metrics[symbol] = {
+                "prediction_count": int(len(valid_index)),
+                "mae_vol": float(abs_errors.mean()),
+                "rmse_vol": float(math.sqrt(squared_errors.mean())),
+                "msfe_vol": float(squared_errors.mean()),
+                "qlike": float(qlike.mean()),
+            }
+            pooled_abs_errors.extend(float(v) for v in abs_errors.tolist())
+            pooled_squared_errors.extend(float(v) for v in squared_errors.tolist())
+            pooled_qlike.extend(float(v) for v in qlike.tolist())
+
+        if pooled_squared_errors:
+            pooled_rmse = math.sqrt(
+                sum(pooled_squared_errors) / len(pooled_squared_errors)
+            )
+            pooled_msfe = sum(pooled_squared_errors) / len(pooled_squared_errors)
+        else:
+            pooled_rmse = float("nan")
+            pooled_msfe = float("nan")
+        metrics[method_name] = {
+            "prediction_count": len(pooled_abs_errors),
+            "pooled_mae_vol": (
+                sum(pooled_abs_errors) / len(pooled_abs_errors)
+                if pooled_abs_errors
+                else float("nan")
+            ),
+            "pooled_rmse_vol": pooled_rmse,
+            "pooled_msfe_vol": pooled_msfe,
+            "pooled_qlike": (
+                sum(pooled_qlike) / len(pooled_qlike)
+                if pooled_qlike
+                else float("nan")
+            ),
+            "symbols": symbol_metrics,
         }
     return metrics
 ```
 
-Add `import math` at the top of the script if not already imported.
+Add `import math` if not already imported.
 
-- [ ] **Step 4: Run test to verify it passes**
+**3b — Update downstream consumers.** Any caller that reads
+`metrics[method]["pooled_variance_rmse"]` or
+`metrics[method]["symbols"][symbol]["variance_rmse"]` (e.g.,
+`_material_garch_win`, the JSON summary emitted near line 403,
+`_build_markdown_report` if it exists) must be updated to read
+`pooled_rmse_vol` / `rmse_vol` respectively. Run
+`grep -n "variance_rmse\|variance_mae\|pooled_variance" scripts/compare_vol_forecasts.py`
+to enumerate every rename site and update all of them in the same
+commit. The JSON summary key rename is a breaking change to the
+persisted artifact shape — acceptable in tranche 1.2 because the
+prior target was dimensionally wrong; downstream consumers are
+limited to the test suite, which we update in the same commit.
+
+- [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -v`
 
-Expected: PASS. The MSFE of a perfect vol-aligned forecast on constant-vol data should be effectively zero.
+Expected: all 3 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/compare_vol_forecasts.py tests/unit/test_compare_vol_forecasts.py
-git commit -m "fix(compare_vol_forecasts): target forward realized vol not variance"
+git commit -m "fix(compare_vol_forecasts): target forward realized vol, rename fields to vol units"
 ```
 
-### Task 8: Add HAR-RV to the comparison harness
+### Task 8: Add HAR-RV to the comparison harness + update integration test
 
 **Files:**
 - Modify: `scripts/compare_vol_forecasts.py`
+- Modify: `tests/unit/test_compare_vol_forecasts.py`
+- Modify: `tests/integration/test_compare_vol_forecasts_script.py`
 
-- [ ] **Step 1: Write the failing test**
+**Pre-work.** Read
+[tests/integration/test_compare_vol_forecasts_script.py:65-75](tests/integration/test_compare_vol_forecasts_script.py:65)
+to see the exact assertions on `forecast_metrics` and
+`backtest_metrics` method sets. Any field-name assertions that
+touch `variance_*` from the old contract must also shift to
+`*_vol` per Task 7.
+
+- [ ] **Step 1: Write the failing tests**
 
 Append to `tests/unit/test_compare_vol_forecasts.py`:
 
@@ -937,58 +1081,190 @@ def test_method_forecasts_includes_har_rv():
     from scripts.compare_vol_forecasts import _method_forecasts
     bars = _build_constant_vol_bars(0.012, n=600)
     forecasts = _method_forecasts(
-        bars_by_symbol=bars,
-        methods=("realized", "ewma", "garch", "har_rv"),
-        lookback_days=20,
+        bars,
+        realized_window=20,
+        ewma_lambda=0.94,
+        garch_train_size=252,
     )
-    assert set(forecasts.keys()) == {"realized", "ewma", "garch", "har_rv"}
-    # Each method should produce a Series per symbol
+    assert "har_rv" in forecasts
+    # Every method should produce a Series per symbol
     assert set(forecasts["har_rv"].keys()) == {"SPY"}
+
+
+def test_forecast_metrics_cover_har_rv_method():
+    from scripts.compare_vol_forecasts import _forecast_error_metrics, _method_forecasts
+    bars = _build_constant_vol_bars(0.012, n=600)
+    forecasts = _method_forecasts(
+        bars, realized_window=20, ewma_lambda=0.94, garch_train_size=252,
+    )
+    metrics = _forecast_error_metrics(bars, forecasts)
+    assert "har_rv" in metrics
+    assert "pooled_rmse_vol" in metrics["har_rv"]
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+Update the integration test at
+`tests/integration/test_compare_vol_forecasts_script.py:67-68`:
 
-Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -k har_rv -v`
+```python
+# BEFORE:
+assert set(payload["forecast_metrics"]) == {"realized", "ewma", "garch"}
+assert set(payload["backtest_metrics"]) == {"realized", "ewma", "garch"}
 
-Expected: FAIL — HAR-RV not in the method list.
+# AFTER:
+assert set(payload["forecast_metrics"]) == {"realized", "ewma", "garch", "har_rv"}
+assert set(payload["backtest_metrics"]) == {"realized", "ewma", "garch", "har_rv"}
+```
+
+Also grep the integration test for `variance_rmse`, `variance_mae`,
+or `pooled_variance*` references. Any that remain after Task 7 must
+rename to `rmse_vol`, `mae_vol`, `pooled_rmse_vol`, etc.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py tests/integration/test_compare_vol_forecasts_script.py -v`
+
+Expected: FAIL — HAR-RV not yet in `_method_forecasts`; the integration test expects the new method set.
 
 - [ ] **Step 3: Implement**
 
-In `scripts/compare_vol_forecasts.py`, `_method_forecasts` (around line 171), add a `har_rv` branch that calls `forecast_volatility(returns, lookback_days=lookback_days, forecast_method="har_rv")`. The existing switch on method name is the extension point. Also update any CLI `choices` list or default method tuple to include `"har_rv"`.
+In `scripts/compare_vol_forecasts.py`, `_method_forecasts` (around [line 171](scripts/compare_vol_forecasts.py:171)), add a `har_rv` branch. The existing pattern loops per method; add:
 
-- [ ] **Step 4: Run test**
+```python
+# Inside _method_forecasts, after the existing realized/ewma/garch branches:
+forecasts["har_rv"] = {
+    symbol: forecast_volatility(
+        bars_by_symbol[symbol]["close"].astype(float).pct_change(),
+        lookback_days=realized_window,
+        forecast_method="har_rv",
+    )
+    for symbol in bars_by_symbol
+}
+```
 
-Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -v`
+(Match the existing surrounding code's exact shape — if the loop
+key names differ in the actual file, adapt.)
 
-Expected: PASS.
+Also update any CLI `choices=` list or default method tuple that
+enumerates the known methods to include `"har_rv"`.
+
+- [ ] **Step 4: Run tests**
+
+Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py tests/integration/test_compare_vol_forecasts_script.py -v`
+
+Expected: all PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/compare_vol_forecasts.py tests/unit/test_compare_vol_forecasts.py
-git commit -m "feat(compare_vol_forecasts): add HAR-RV to comparison harness"
+git add scripts/compare_vol_forecasts.py tests/unit/test_compare_vol_forecasts.py tests/integration/test_compare_vol_forecasts_script.py
+git commit -m "feat(compare_vol_forecasts): add HAR-RV to comparison harness; update integration assertions"
 ```
 
-### Task 9: Emit markdown report + conditional trend-family retune
+### Task 9: Aggregate winner helper + markdown report + conditional trend-family retune
 
 **Files:**
 - Modify: `scripts/compare_vol_forecasts.py`
+- Modify: `tests/unit/test_compare_vol_forecasts.py`
 - Create: `docs/research/vol_estimator_comparison_2026-04-21.md` (emitted by the script)
 - Modify: `src/tradingx/strategy.py` **only if trend-family winner ≠ garch**
 - Modify: `tests/unit/test_strategy.py` (only if strategy.py changes)
 
-- [ ] **Step 1: Run the full comparison**
+**Aggregation contract.** Task 7 changed the internal shape of
+`_forecast_error_metrics` but preserved the method-keyed top level.
+The "aggregate winner" sentence in the report is built from those
+per-method pooled metrics: **winner = method with the lowest
+`pooled_rmse_vol` across all symbols**. This task adds an explicit
+`_pick_aggregate_winner` helper so the aggregation step is testable
+and the report is not derived by ad-hoc inline logic.
 
-Run the script in its default configuration against the in-repo bars:
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/unit/test_compare_vol_forecasts.py`:
+
+```python
+def test_pick_aggregate_winner_returns_lowest_pooled_rmse_method():
+    from scripts.compare_vol_forecasts import _pick_aggregate_winner
+    metrics = {
+        "realized": {"pooled_rmse_vol": 0.08, "symbols": {}, "prediction_count": 100},
+        "ewma":     {"pooled_rmse_vol": 0.05, "symbols": {}, "prediction_count": 100},
+        "garch":    {"pooled_rmse_vol": 0.07, "symbols": {}, "prediction_count": 100},
+        "har_rv":   {"pooled_rmse_vol": 0.04, "symbols": {}, "prediction_count": 100},
+    }
+    assert _pick_aggregate_winner(metrics) == "har_rv"
+
+
+def test_pick_aggregate_winner_skips_methods_with_zero_predictions():
+    from scripts.compare_vol_forecasts import _pick_aggregate_winner
+    metrics = {
+        "realized": {"pooled_rmse_vol": 0.01, "symbols": {}, "prediction_count": 0},
+        "ewma":     {"pooled_rmse_vol": 0.05, "symbols": {}, "prediction_count": 100},
+    }
+    # realized has the lowest RMSE but zero predictions — not a valid winner
+    assert _pick_aggregate_winner(metrics) == "ewma"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -k aggregate_winner -v`
+
+Expected: FAIL on `ImportError`.
+
+- [ ] **Step 3: Implement**
+
+In `scripts/compare_vol_forecasts.py`, add:
+
+```python
+def _pick_aggregate_winner(
+    metrics: dict[str, dict[str, object]],
+) -> str | None:
+    """Return the method with the lowest pooled_rmse_vol among
+    methods that produced at least one valid prediction. Returns
+    None if no method is valid.
+    """
+    best_method: str | None = None
+    best_rmse = float("inf")
+    for method, method_metrics in metrics.items():
+        prediction_count = int(method_metrics.get("prediction_count", 0))
+        if prediction_count <= 0:
+            continue
+        rmse = float(method_metrics.get("pooled_rmse_vol", float("nan")))
+        if math.isnan(rmse) or math.isinf(rmse):
+            continue
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_method = method
+    return best_method
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `uv run pytest tests/unit/test_compare_vol_forecasts.py -v`
+
+Expected: all PASS.
+
+- [ ] **Step 5: Run the full comparison**
+
+Use the script against the in-repo bars. Exact CLI flags depend on
+the script's current argparse shape; adapt to what `build_parser`
+exposes. If the script doesn't currently emit markdown, add a
+`--report-output` flag (preserve the existing `--output-file` that
+writes the JSON payload `main()` already produces) that calls
+`_pick_aggregate_winner(forecast_metrics)` and writes a short
+markdown report listing:
+
+- Per-symbol `rmse_vol` per method (table)
+- Per-method `pooled_rmse_vol` (table)
+- Aggregate trend-sleeve winner (one-line sentence)
+- Explicit note: "This comparison is trend-sleeve-only per
+  DESIGN-0013 W4. vol-target and mean-reversion candidate defaults
+  are not retuned from this evidence."
 
 ```bash
 uv run python scripts/compare_vol_forecasts.py \
-    --methods realized ewma garch har_rv \
-    --lookback-days 20 \
-    --output docs/research/vol_estimator_comparison_2026-04-21.md
+    --artifact-dir artifacts/research \
+    --output-file artifacts/research/vol_forecast_comparison.json \
+    --report-output docs/research/vol_estimator_comparison_2026-04-21.md
 ```
-
-Exact CLI flags depend on the script's current argparse shape; adapt to what `build_parser` exposes. If the script doesn't currently emit markdown, add a `--output` flag that writes a table of per-symbol MSFE per method plus the aggregate winner.
 
 - [ ] **Step 2: Inspect the report and identify the trend-family winner**
 
