@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
-
-from collections.abc import Sequence
-
-from datetime import UTC, datetime
 
 from tradingx.benchmark_stack import (
     BenchmarkStack,

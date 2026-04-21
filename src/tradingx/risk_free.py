@@ -12,9 +12,9 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from io import StringIO
 from pathlib import Path
-from decimal import Decimal
 from typing import cast
 from urllib.request import Request, urlopen
 

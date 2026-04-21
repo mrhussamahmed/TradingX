@@ -699,7 +699,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             else config.runtime.artifact_root
             / "validation"
             / "benchmark_stacks"
-            / f"stack-{window_start_utc.date().isoformat()}-{window_end_utc.date().isoformat()}.json"
+            / (
+                "stack-"
+                f"{window_start_utc.date().isoformat()}-"
+                f"{window_end_utc.date().isoformat()}.json"
+            )
         )
         write_benchmark_stack_payload(output_file, payload)
         print(

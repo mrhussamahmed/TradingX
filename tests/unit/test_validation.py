@@ -21,8 +21,8 @@ from tradingx.validation import (
     build_gate_report,
     evaluate_gate1_benchmark_criteria,
     evaluate_hurdle_clearance,
-    evaluate_opportunity_cost_edge,
     evaluate_operating_constraint,
+    evaluate_opportunity_cost_edge,
 )
 from tradingx.validation import (
     _sharpe_ratio as validation_sharpe_ratio,

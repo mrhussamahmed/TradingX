@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd

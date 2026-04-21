@@ -8,6 +8,7 @@ import pytest
 
 from tradingx.controller import GateValidationController
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
 
 
 def _build_close_series(
@@ -39,6 +40,30 @@ def _ohlcv_frame(closes: list[float]) -> pd.DataFrame:
             "volume": 1_000_000.0,
         },
         index=index,
+    )
+
+
+def _benchmark_stack_payload(
+    *,
+    periods: int,
+    hurdle_return: Decimal = Decimal("0.0002"),
+    opportunity_cost_return: Decimal = Decimal("0.0004"),
+) -> BenchmarkStackPayload:
+    return BenchmarkStackPayload(
+        hurdle_returns=tuple(hurdle_return for _ in range(periods)),
+        opportunity_cost_returns=tuple(
+            opportunity_cost_return for _ in range(periods)
+        ),
+        opportunity_cost_weights=(
+            ("SPY", Decimal("0.6")),
+            ("AGG", Decimal("0.4")),
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal("0.15"),
+            max_drawdown_halt=Decimal("0.25"),
+            cdar_threshold=Decimal("0.12"),
+            cdar_confidence=Decimal("0.95"),
+        ),
     )
 
 
@@ -77,41 +102,35 @@ def test_gate_validation_pipeline_persists_report_and_assessment(tmp_path) -> No
 
     result = controller.generate_gate_report(
         gate_id="1",
-        benchmark_closes=tuple(
-            Decimal(str(value))
-            for value in [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0]
-        ),
+        benchmark_stack_payload=_benchmark_stack_payload(periods=8),
         window_start_utc=datetime(2023, 1, 3, tzinfo=UTC),
         window_end_utc=datetime(2023, 1, 12, tzinfo=UTC),
         universe=("SPY", "QQQ"),
-        benchmark_series_is_adjusted=True,
     )
 
     assert result.report.gate_id == "1"
     assert result.gate_assessment.gate_id == "1"
+    assert result.report.benchmark_symbol == "SPY+AGG"
     report_files = sorted((tmp_path / "validation_reports").glob("*.json"))
     assessment_files = sorted((tmp_path / "gate_assessments").glob("*.json"))
     assert len(report_files) == 1
     assert len(assessment_files) == 1
 
 
-def test_gate_validation_pipeline_rejects_mismatched_benchmark_closes(tmp_path) -> None:
+def test_gate_validation_pipeline_rejects_mismatched_benchmark_stack(tmp_path) -> None:
     controller = GateValidationController(
         artifacts=FilesystemArtifactStore(tmp_path),
         market_data=FakeHistoricalMarketDataGateway(),
     )
 
-    with pytest.raises(ValueError, match="Benchmark close artifact does not match"):
+    with pytest.raises(
+        ValueError,
+        match="benchmark_stack_payload.hurdle_returns must align",
+    ):
         controller.generate_gate_report(
             gate_id="1",
-            benchmark_closes=_build_close_series(
-                periods=8,
-                up_return=Decimal("0.0030"),
-                down_return=Decimal("-0.0015"),
-                down_every=23,
-            ),
+            benchmark_stack_payload=_benchmark_stack_payload(periods=7),
             window_start_utc=datetime(2023, 1, 3, tzinfo=UTC),
             window_end_utc=datetime(2023, 1, 12, tzinfo=UTC),
             universe=("SPY", "QQQ"),
-            benchmark_series_is_adjusted=True,
         )

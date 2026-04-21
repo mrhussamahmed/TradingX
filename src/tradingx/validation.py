@@ -511,11 +511,15 @@ def build_gate_report(
         candidate_returns = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
         if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
             raise ValueError(
-                "benchmark_stack_payload.hurdle_returns must align with candidate returns."
+                "benchmark_stack_payload.hurdle_returns must align with "
+                "candidate returns."
             )
-        if len(candidate_returns) != len(benchmark_stack_payload.opportunity_cost_returns):
+        if len(candidate_returns) != len(
+            benchmark_stack_payload.opportunity_cost_returns
+        ):
             raise ValueError(
-                "benchmark_stack_payload.opportunity_cost_returns must align with candidate returns."
+                "benchmark_stack_payload.opportunity_cost_returns must align "
+                "with candidate returns."
             )
         adversarial_context = AdversarialCheckContext(
             benchmark_bars=aligned_bars[candidate.benchmark_symbol],

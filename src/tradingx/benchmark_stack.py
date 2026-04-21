@@ -7,7 +7,11 @@ from decimal import Decimal
 from typing import Protocol
 
 from tradingx.config import TradingConfig
-from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
+from tradingx.types import (
+    BenchmarkCloseSeries,
+    BenchmarkStackPayload,
+    OperatingConstraintBudget,
+)
 
 
 class RiskFreeSeriesProtocol(Protocol):
@@ -32,7 +36,7 @@ class MarketDataGatewayProtocol(Protocol):
         end_utc: datetime,
         feed: str,
         adjustment: str,
-    ): ...
+    ) -> BenchmarkCloseSeries: ...
 
 
 @dataclass(frozen=True)
@@ -76,13 +80,20 @@ class PassiveOpportunityCost:
         current_weights = {symbol: weight for symbol, weight in self.weights}
         blended_returns: list[Decimal] = []
         has_leading_prior_close = all(
-            len(closes) == len(session_dates) + 1 for closes in closes_by_symbol.values()
+            len(closes) == len(session_dates) + 1
+            for closes in closes_by_symbol.values()
         )
-        period_count = len(session_dates) if has_leading_prior_close else len(session_dates) - 1
+        period_count = (
+            len(session_dates)
+            if has_leading_prior_close
+            else len(session_dates) - 1
+        )
 
         for index in range(period_count):
             if has_leading_prior_close:
-                previous_date = session_dates[index - 1] if index > 0 else session_dates[0]
+                previous_date = (
+                    session_dates[index - 1] if index > 0 else session_dates[0]
+                )
                 current_date = session_dates[index]
                 previous_close_index = index
                 current_close_index = index + 1
