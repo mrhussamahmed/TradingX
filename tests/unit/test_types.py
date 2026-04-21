@@ -50,6 +50,7 @@ from tradingx.types import (
     ServiceRunResult,
     ServiceSymbolResult,
     SleeveContext,
+    SleeveDailyAttributionRecord,
     SleeveTrade,
     StrategyActivationRecord,
     StrategyCandidate,
@@ -137,6 +138,23 @@ def test_sleeve_context_is_frozen_dataclass() -> None:
     assert dataclasses.is_dataclass(ctx)
     with pytest.raises(dataclasses.FrozenInstanceError):
         ctx.sleeve_budget_equity = Decimal("0")  # type: ignore[misc]
+
+
+def test_sleeve_daily_attribution_record_is_frozen() -> None:
+    record = SleeveDailyAttributionRecord(
+        attribution_id="attr-1",
+        sleeve_id="trend-following-v1",
+        trading_day="2026-04-21",
+        recorded_at_utc=datetime.now(UTC),
+        starting_equity=Decimal("100000"),
+        ending_equity=Decimal("101000"),
+        daily_return=Decimal("0.01"),
+        per_symbol_open_weight=(("SPY", Decimal("0.5")),),
+        per_symbol_close_weight=(("SPY", Decimal("0.52")),),
+    )
+    assert record.daily_return == Decimal("0.01")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        record.attribution_id = "attr-2"  # type: ignore[misc]
 
 
 def test_sleeve_failure_reason_exposes_expected_constants() -> None:

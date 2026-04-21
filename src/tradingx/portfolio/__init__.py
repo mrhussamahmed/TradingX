@@ -16,6 +16,7 @@ from tradingx.portfolio.hard_halt import (
     is_portfolio_hard_halted,
 )
 from tradingx.portfolio.sleeve_runtime import (
+    LiveDailyReturnsSourceProtocol,
     RollingWindowSource,
     SleeveRuntimeConfig,
     SleeveRuntimeController,
@@ -31,6 +32,7 @@ __all__ = (
     "CDAR_SOFT_THROTTLE_FLOOR",
     "HALT_CATEGORY",
     "HALT_REASON_PREFIX",
+    "LiveDailyReturnsSourceProtocol",
     "MDD_DESIGN_THROTTLE_FLOOR",
     "AlpacaPortfolioGateway",
     "PortfolioBlueprint",

@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.30
+version: 1.2.31
 status: active
 created: 2026-04-17
 last_amended: 2026-04-21
-supersedes: INDEX-0001@1.2.29
+supersedes: INDEX-0001@1.2.30
 superseded_by: null
 author_session: claude-opus-4.7-2026-04-21
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.30  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.31  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -255,7 +255,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| GATES-0001 | Stage 1 acceptance gates | 1.2.0 | active | `docs/validation/acceptance_gates.md` |
+| GATES-0001 | Stage 1 acceptance gates | 1.2.1 | active | `docs/validation/acceptance_gates.md` |
 
 ### Session handovers (SESS-*)
 

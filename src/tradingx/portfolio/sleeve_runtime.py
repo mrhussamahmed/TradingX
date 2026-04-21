@@ -8,7 +8,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
+from tradingx.evaluation import TRADING_DAYS_PER_YEAR
 from tradingx.sleeves.base import SleeveProtocol
+from tradingx.stats import lo_adjusted_sharpe_ratio
 from tradingx.types import SleeveContext, SleeveFailureReason, SleeveTrade, TrialRecord
 
 
@@ -37,6 +39,15 @@ class TrialsLedgerReadProtocol(Protocol):
     def records_for_candidate(self, candidate_id: str) -> tuple[TrialRecord, ...]: ...
 
 
+class LiveDailyReturnsSourceProtocol(Protocol):
+    def live_daily_returns(
+        self,
+        *,
+        sleeve_id: str,
+        window_days: int,
+    ) -> tuple[Decimal, ...]: ...
+
+
 class SleeveRuntimeController:
     def __init__(
         self,
@@ -46,12 +57,14 @@ class SleeveRuntimeController:
         drift_alarm_gateway: DriftAlarmGatewayProtocol | None,
         trials_ledger: TrialsLedgerReadProtocol | None,
         config: SleeveRuntimeConfig,
+        live_daily_returns_source: LiveDailyReturnsSourceProtocol | None = None,
     ) -> None:
         self._sleeve = wrapped_sleeve
         self._halt_store = operator_halt_store
         self._drift_gateway = drift_alarm_gateway
         self._ledger = trials_ledger
         self._config = config
+        self._live_returns_source = live_daily_returns_source
 
     @property
     def sleeve_id(self) -> str:
@@ -66,10 +79,13 @@ class SleeveRuntimeController:
         return self._sleeve.allowed_instruments
 
     def plan_for_bar(self, context: SleeveContext) -> tuple[SleeveTrade, ...]:
-        if self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS:
-            raise NotImplementedError(
-                "RollingWindowSource.LIVE_DAILY_RETURNS is a tranche-1.5 "
-                "capability; tranche 1.4 supports only TRIAL_SUMMARY."
+        if (
+            self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS
+            and self._live_returns_source is None
+        ):
+            raise ValueError(
+                "live_daily_returns_source is required when "
+                "rolling_window_source=LIVE_DAILY_RETURNS"
             )
 
         if self._halt_store.is_halted(sleeve_id=self._sleeve.sleeve_id):
@@ -95,6 +111,28 @@ class SleeveRuntimeController:
         return self._sleeve.plan_for_bar(context)
 
     def _should_trigger_sharpe_gate(self) -> bool:
+        if self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS:
+            return self._should_trigger_sharpe_gate_via_live_returns()
+        return self._should_trigger_sharpe_gate_via_trial_summary()
+
+    def _should_trigger_sharpe_gate_via_live_returns(self) -> bool:
+        assert self._live_returns_source is not None
+        returns = self._live_returns_source.live_daily_returns(
+            sleeve_id=self._sleeve.sleeve_id,
+            window_days=self._config.three_month_window_days,
+        )
+        if len(returns) < self._config.three_month_window_days:
+            return False
+        sharpe = lo_adjusted_sharpe_ratio(
+            returns=[float(value) for value in returns],
+            risk_free_daily_rates=(0.0,) * len(returns),
+            periods_per_year=TRADING_DAYS_PER_YEAR,
+        )
+        if sharpe is None:
+            return False
+        return Decimal(str(sharpe)) < self._config.three_month_sharpe_floor
+
+    def _should_trigger_sharpe_gate_via_trial_summary(self) -> bool:
         if self._ledger is None:
             return False
         records = self._ledger.records_for_candidate(self._sleeve.sleeve_id)
@@ -140,6 +178,7 @@ class SleeveRuntimeController:
 
 __all__ = (
     "DriftAlarmGatewayProtocol",
+    "LiveDailyReturnsSourceProtocol",
     "RollingWindowSource",
     "SleeveOperatorHaltStoreProtocol",
     "SleeveRuntimeConfig",

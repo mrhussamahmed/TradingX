@@ -257,22 +257,138 @@ def test_sharpe_gate_ignores_short_window_trials() -> None:
     assert out[0].rationale == "tsmom_long_vol_targeted"
 
 
-def test_live_daily_returns_source_raises_not_implemented_in_14() -> None:
-    config = SleeveRuntimeConfig(
-        three_month_sharpe_floor=Decimal("0.0"),
-        three_month_window_days=63,
-        trial_lookback=3,
-        rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+def test_live_daily_returns_above_floor_does_not_fire_gate() -> None:
+    import numpy as np
+
+    positive = np.random.default_rng(seed=1337).normal(
+        loc=0.002,
+        scale=0.005,
+        size=63,
     )
+
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            del sleeve_id, window_days
+            return tuple(Decimal(str(value)) for value in positive)
+
     controller = SleeveRuntimeController(
         wrapped_sleeve=_FakeSleeve(_sleeve_trade()),
         operator_halt_store=_FakeHaltStore(set()),
         drift_alarm_gateway=_FakeDriftGateway(set()),
         trials_ledger=_FakeTrialsLedger(()),
-        config=config,
+        config=SleeveRuntimeConfig(
+            three_month_sharpe_floor=Decimal("0.0"),
+            three_month_window_days=63,
+            trial_lookback=3,
+            rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+        ),
+        live_daily_returns_source=_Source(),
     )
 
-    with pytest.raises(NotImplementedError, match="1.5"):
+    out = controller.plan_for_bar(_context())
+
+    assert out[0].rationale == "tsmom_long_vol_targeted"
+
+
+def test_live_daily_returns_below_floor_fires_sharpe_gate() -> None:
+    import numpy as np
+
+    negative = np.random.default_rng(seed=2026).normal(
+        loc=-0.002,
+        scale=0.005,
+        size=63,
+    )
+
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            del sleeve_id, window_days
+            return tuple(Decimal(str(value)) for value in negative)
+
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=_FakeSleeve(_sleeve_trade()),
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=SleeveRuntimeConfig(
+            three_month_sharpe_floor=Decimal("0.0"),
+            three_month_window_days=63,
+            trial_lookback=3,
+            rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+        ),
+        live_daily_returns_source=_Source(),
+    )
+
+    out = controller.plan_for_bar(_context())
+
+    assert out[0].rationale == SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M
+
+
+def test_live_daily_returns_zero_variance_returns_pending() -> None:
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            del sleeve_id, window_days
+            return tuple(Decimal("0.001") for _ in range(63))
+
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=_FakeSleeve(_sleeve_trade()),
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=SleeveRuntimeConfig(
+            three_month_sharpe_floor=Decimal("0.0"),
+            three_month_window_days=63,
+            trial_lookback=3,
+            rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+        ),
+        live_daily_returns_source=_Source(),
+    )
+
+    out = controller.plan_for_bar(_context())
+
+    assert out[0].rationale == "tsmom_long_vol_targeted"
+
+
+def test_live_daily_returns_insufficient_records_skips_gate() -> None:
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            del sleeve_id, window_days
+            return tuple(Decimal("-0.1") for _ in range(10))
+
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=_FakeSleeve(_sleeve_trade()),
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=SleeveRuntimeConfig(
+            three_month_sharpe_floor=Decimal("0.0"),
+            three_month_window_days=63,
+            trial_lookback=3,
+            rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+        ),
+        live_daily_returns_source=_Source(),
+    )
+
+    out = controller.plan_for_bar(_context())
+
+    assert out[0].rationale == "tsmom_long_vol_targeted"
+
+
+def test_live_daily_returns_source_missing_raises_value_error() -> None:
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=_FakeSleeve(_sleeve_trade()),
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=SleeveRuntimeConfig(
+            three_month_sharpe_floor=Decimal("0.0"),
+            three_month_window_days=63,
+            trial_lookback=3,
+            rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+        ),
+        live_daily_returns_source=None,
+    )
+
+    with pytest.raises(ValueError, match="live_daily_returns_source"):
         controller.plan_for_bar(_context())
 
 

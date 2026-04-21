@@ -510,6 +510,19 @@ class ReplaySlippageGenerationResult:
 
 
 @dataclass(frozen=True)
+class SleeveDailyAttributionRecord:
+    attribution_id: str
+    sleeve_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    starting_equity: Decimal
+    ending_equity: Decimal
+    daily_return: Decimal
+    per_symbol_open_weight: tuple[tuple[str, Decimal], ...]
+    per_symbol_close_weight: tuple[tuple[str, Decimal], ...]
+
+
+@dataclass(frozen=True)
 class Gate3CriterionSnapshot:
     criterion_id: str
     status: str
@@ -1188,6 +1201,7 @@ __all__ = (
     "ServiceRunResult",
     "ServiceSymbolResult",
     "SleeveContext",
+    "SleeveDailyAttributionRecord",
     "SleeveFailureReason",
     "SleeveTrade",
     "StrategyActivationRecord",
