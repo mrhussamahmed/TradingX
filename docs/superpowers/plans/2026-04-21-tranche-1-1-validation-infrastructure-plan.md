@@ -1436,14 +1436,12 @@ Expected: FAIL on `TypeError: unexpected keyword argument 'trials_ledger'`.
 In `src/tradingx/evaluation.py`:
 
 ```python
-import uuid
-
 import numpy as np
 from scipy.stats import kurtosis as scipy_kurtosis, skew as scipy_skew
 
-from tradingx.stats import deflated_sharpe_ratio, lo_adjusted_sharpe_ratio
+from tradingx.stats import deflated_sharpe_ratio
 from tradingx.trials import TrialsLedger
-from tradingx.types import EvaluationEvidencePack, TrialRecord
+from tradingx.types import EvaluationEvidencePack
 
 
 def evaluate_candidate(
@@ -1457,13 +1455,17 @@ def evaluate_candidate(
     annualized_cost_drag_bps: Decimal | None = None,
     trials_ledger: TrialsLedger | None = None,
 ) -> EvaluationEvidencePack:
-    # ...existing body unchanged up to the final EvaluationEvidencePack(...) construction...
+    # ...existing body unchanged through candidate_metrics_numeric
+    # construction at evaluation.py:410 and the rest of the metric-pack
+    # assembly up to the final EvaluationEvidencePack(...) construction...
 
-    # Compute observed net-of-costs Sharpe via existing Lo-adjusted path.
-    candidate_returns_floats = [float(r) for r in candidate_returns]
-    observed_sharpe = lo_adjusted_sharpe_ratio(
-        returns=candidate_returns_floats,
-        risk_free_daily_rates=[0.0] * len(candidate_returns_floats),
+    # Use the existing candidate_metrics dict as the single source of
+    # truth for observed Sharpe. _build_metric_pack already computes
+    # sharpe_ratio net of costs (because _candidate_returns always
+    # applies costs after Task 4). No recomputation here.
+    observed_sharpe_raw = candidate_metrics_numeric.get("sharpe_ratio")
+    observed_sharpe = (
+        float(observed_sharpe_raw) if observed_sharpe_raw is not None else None
     )
 
     # North-star flag: threshold is preference-ranking signal, not pass/fail.
@@ -1477,6 +1479,7 @@ def evaluate_candidate(
     if trials_ledger is not None and observed_sharpe is not None:
         stats = trials_ledger.trial_statistics_for_family(candidate.family)
         if stats.n_trials >= 2 and stats.trial_sharpe_variance > 0.0:
+            candidate_returns_floats = [float(r) for r in candidate_returns]
             returns_array = np.asarray(candidate_returns_floats, dtype=float)
             dsr_value = deflated_sharpe_ratio(
                 observed_sharpe=observed_sharpe,
@@ -1505,14 +1508,24 @@ def evaluate_candidate(
     return evidence_pack
 ```
 
-**Note on observed_sharpe source.** The DSR input `observed_sharpe`
-uses `lo_adjusted_sharpe_ratio` on the candidate returns with a
-zero risk-free rate as a placeholder. When the gate layer writes the
-trial record (Task 12), it may use the same helper or the canonical
-`benchmark_metrics["sharpe_ratio"]` value — whichever reflects the
-net-of-costs Sharpe most faithfully given the current evidence-pack
-shape. The two must agree for the DSR → PBO pipeline to be
-internally consistent.
+**Note on `observed_sharpe` source.** The DSR input `observed_sharpe`
+reads from `candidate_metrics_numeric["sharpe_ratio"]` — the same
+dict that becomes `EvaluationEvidencePack.candidate_metrics`. This
+is the simple Sharpe from
+[_sharpe_ratio](src/tradingx/evaluation.py:48), not the Lo-adjusted
+variant. The value is already net of costs because Task 4 makes
+costs mandatory in `_candidate_returns`. Task 12 reads the **same**
+field off the evidence pack for trial-record Sharpe, so DSR input
+(Task 11) and trial history (Task 12) are always internally
+consistent.
+
+**Why not `benchmark_metrics`?** Confirmed via
+[evaluation.py:81](src/tradingx/evaluation.py:81): the current
+`_build_metric_pack` exposes only `total_return`, `sharpe_ratio`,
+`max_drawdown`, and `calmar_ratio`. `benchmark_metrics` is populated
+from benchmark returns, not candidate. Earlier drafts that used
+`benchmark_metrics["candidate_sharpe_ratio"]` or `["candidate_cagr"]`
+were pointing at keys that don't exist and would silently write `0`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1584,35 +1597,84 @@ def test_build_gate1_candidate_result_records_trial_with_real_gate_status(
     # which is derived from the four hard-pass criteria.
     gate_passed = (result.status == "pass")
     assert records[0].passed is gate_passed
+
+
+def test_build_gate1_candidate_result_populates_cost_drag_on_result(
+    tmp_path,
+    sample_gate1_inputs_fixture,
+):
+    """ValidationCandidateResult must carry annualized_cost_drag_bps
+    from the evidence pack so the report-level consumer (readmodel)
+    can read it off candidate_results."""
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    # The fixture's evidence_pack should carry a non-None drag value
+    # after Task 5 wires evaluate_candidate to populate it.
+    result = _build_gate1_candidate_result(
+        **sample_gate1_inputs_fixture,
+        trials_ledger=ledger,
+    )
+    assert result.annualized_cost_drag_bps is not None
+    # Cost drag is non-negative by construction
+    assert result.annualized_cost_drag_bps >= Decimal("0")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/unit/test_validation.py -k "trials_ledger or real_gate_status" -v`
+Run: `uv run pytest tests/unit/test_validation.py -k "trials_ledger or real_gate_status or populates_cost_drag" -v`
 
 Expected: FAIL on `TypeError: unexpected keyword argument 'trials_ledger'`.
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/validation.py`, add `trials_ledger: TrialsLedger | None = None` to `build_gate_report` and thread it through to `_build_gate1_candidate_result` and `_build_gate2_candidate_result`.
+**3a — Extend `ValidationCandidateResult` with `annualized_cost_drag_bps`.**
+The persisted report's `candidate_results` entries are
+`ValidationCandidateResult` instances (see
+[types.py:150](src/tradingx/types.py:150)). The readmodel in Task 6
+reads cost drag from these entries, so the field must exist on the
+result type too. Add to `ValidationCandidateResult` in `types.py`:
 
-Inside each of those gate builders, **after** the gate status is
-computed (after `if all(criterion.passed for criterion in criteria):`
-or the equivalent status-assignment block), record the trial:
+```python
+@dataclass(frozen=True)
+class ValidationCandidateResult:
+    # ...existing fields: candidate_id, gate_id, status, evidence_pack_id,
+    # criteria, summary...
+    annualized_cost_drag_bps: Decimal | None = None
+```
+
+**3b — Populate the new field in both gate builders.** In
+`_build_gate1_candidate_result` and `_build_gate2_candidate_result`,
+pass `annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps`
+into the `ValidationCandidateResult(...)` construction.
+
+**3c — Thread `trials_ledger` through `build_gate_report`.** Add
+`trials_ledger: TrialsLedger | None = None` to `build_gate_report`
+and pass to `_build_gate1_candidate_result` and
+`_build_gate2_candidate_result`.
+
+**3d — Record the trial at the gate layer.** Inside each gate
+builder, **after** the gate status is computed (after
+`if all(criterion.passed for criterion in criteria):` or the
+equivalent status-assignment block), record the trial:
 
 ```python
 # Inside _build_gate1_candidate_result, after `status = ...` is set:
 if trials_ledger is not None:
-    gate_passed = status == "pass"
-    observed_sharpe = evidence_pack.benchmark_metrics.get(
-        "candidate_sharpe_ratio"
-    )
-    observed_cagr = evidence_pack.benchmark_metrics.get(
-        "candidate_cagr"
-    )
-    # Compute observed MDD/CDaR from the candidate return stream.
+    from tradingx.evaluation import _cagr, _total_return
     from tradingx.stats import conditional_drawdown_at_risk, max_drawdown
+
+    gate_passed = status == "pass"
+
+    # Sharpe: read from the SAME dict that evaluate_candidate's DSR
+    # block read from in Task 11. evidence_pack.candidate_metrics
+    # carries "sharpe_ratio" net of costs via _build_metric_pack.
+    observed_sharpe_raw = evidence_pack.candidate_metrics.get("sharpe_ratio")
+
+    # CAGR: the current _build_metric_pack does not expose "cagr",
+    # so compute it directly from candidate_returns using the
+    # existing helpers in evaluation.py.
     returns_f = [float(r) for r in candidate_returns]
+    cagr_value = _cagr(_total_return(returns_f), periods=len(returns_f))
+
     observed_mdd = Decimal(str(max_drawdown(returns_f)))
     observed_cdar = Decimal(
         str(conditional_drawdown_at_risk(returns_f, confidence=0.95))
@@ -1625,15 +1687,11 @@ if trials_ledger is not None:
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
             observed_sharpe_net_of_costs=(
-                Decimal(str(observed_sharpe))
-                if observed_sharpe is not None
+                Decimal(str(observed_sharpe_raw))
+                if observed_sharpe_raw is not None
                 else Decimal("0")
             ),
-            observed_cagr_net_of_costs=(
-                Decimal(str(observed_cagr))
-                if observed_cagr is not None
-                else Decimal("0")
-            ),
+            observed_cagr_net_of_costs=Decimal(str(cagr_value)),
             observed_max_drawdown=observed_mdd,
             observed_cdar_95=observed_cdar,
             annualized_cost_drag_bps=(
@@ -1649,6 +1707,24 @@ if trials_ledger is not None:
 
 Apply the same pattern inside `_build_gate2_candidate_result` with
 `gate_passed = status == "pass"` against the Gate 2 status object.
+
+**Note on metric-source consistency.** `observed_sharpe_net_of_costs`
+here reads from `evidence_pack.candidate_metrics["sharpe_ratio"]`,
+which is the exact same dict Task 11 reads from for DSR input. This
+is why DSR-against-trial-history is internally consistent: the
+current candidate's own Sharpe is never compared against a different
+Sharpe definition for historical trials (because all trials recorded
+through this code path used the same field).
+
+If during implementation you find that `_cagr` and `_total_return` in
+`evaluation.py` are underscore-private and you'd rather not import
+them cross-module, promote them to public names in `evaluation.py`
+(remove the leading underscore, add to `__all__`) as a small
+follow-up commit. The cleaner alternative is to add `cagr` to
+`_build_metric_pack` itself so it appears on `candidate_metrics`, at
+which point Task 12 reads it directly from the evidence pack like
+Sharpe. Pick whichever is smaller; flag the choice in the commit
+message.
 
 Add helpers `_resolve_git_sha` and `_config_fingerprint` at the bottom
 of `validation.py` if they don't already exist:
