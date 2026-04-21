@@ -634,7 +634,11 @@ persisted by the validation pipeline use `candidate_results` (not
 existing iteration at
 [web/readmodels.py:2229](src/tradingx/web/readmodels.py:2229). Each
 entry in `candidate_results` is a dict with `candidate_id`, `status`,
-`criteria`, and now also `annualized_cost_drag_bps` once Task 5 ships.
+`criteria`, and — once Task 12's sub-step 3a extends
+`ValidationCandidateResult` and 3b populates it in the gate
+builders — `annualized_cost_drag_bps`. Task 5 adds the field only to
+`EvaluationEvidencePack`; the persisted `candidate_results` entry
+gains it at Task 12.
 
 **Current seam.** `_build_performance_diagnostics` at
 [web/readmodels.py:1975](src/tradingx/web/readmodels.py:1975) today
@@ -1798,15 +1802,15 @@ def build_default_gate_validation_controller(
     )
 ```
 
-**Consistency check.** The `observed_sharpe_net_of_costs` written here
-and the `observed_sharpe` used for DSR input inside `evaluate_candidate`
-(Task 11) must both reflect the same net-of-costs Sharpe source. If
-the two drift (e.g., one uses `lo_adjusted_sharpe_ratio` while the
-other uses a different helper), DSR-against-trial-history becomes
-self-inconsistent. Prefer using the evidence pack's
-`benchmark_metrics["candidate_sharpe_ratio"]` as the single source of
-truth in both places; adjust Task 11's Step 3 DSR `observed_sharpe`
-source to match if the shapes don't already agree.
+**Consistency check.** The `observed_sharpe_net_of_costs` written
+here and the `observed_sharpe` used for DSR input inside
+`evaluate_candidate` (Task 11) must both reflect the same
+net-of-costs Sharpe source. Both are pinned to
+`evidence_pack.candidate_metrics["sharpe_ratio"]` (populated by
+[_build_metric_pack](src/tradingx/evaluation.py:81) from the
+net-of-costs candidate return stream after Task 4). Do not introduce
+a second Sharpe helper in either task — that is how
+DSR-against-trial-history becomes self-inconsistent.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
