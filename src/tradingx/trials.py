@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
 
-from tradingx.types import TrialRecord
+from tradingx.types import TrialRecord, TrialStatistics
 
 
 _SCHEMA = """
@@ -97,6 +97,33 @@ class TrialsLedger:
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return tuple(_row_to_record(row) for row in rows)
+
+    def trial_statistics_for_family(self, family: str) -> TrialStatistics:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT observed_sharpe_net_of_costs FROM trials WHERE family = ?",
+                (family,),
+            ).fetchall()
+        if not rows:
+            return TrialStatistics(
+                n_trials=0,
+                trial_sharpe_mean=0.0,
+                trial_sharpe_variance=0.0,
+            )
+        sharpes = [float(Decimal(str(row[0]))) for row in rows]
+        n_trials = len(sharpes)
+        trial_sharpe_mean = sum(sharpes) / n_trials
+        if n_trials < 2:
+            trial_sharpe_variance = 0.0
+        else:
+            trial_sharpe_variance = sum(
+                (sharpe - trial_sharpe_mean) ** 2 for sharpe in sharpes
+            ) / (n_trials - 1)
+        return TrialStatistics(
+            n_trials=n_trials,
+            trial_sharpe_mean=trial_sharpe_mean,
+            trial_sharpe_variance=trial_sharpe_variance,
+        )
 
 
 def _row_to_record(row: tuple[object, ...]) -> TrialRecord:

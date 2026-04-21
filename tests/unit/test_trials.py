@@ -48,3 +48,62 @@ def test_trials_ledger_idempotent_on_trial_id(tmp_path: Path) -> None:
 
     assert len(fetched) == 1
     assert fetched[0].observed_sharpe_net_of_costs == Decimal("1.0")
+
+
+def test_trials_ledger_filters_by_window(tmp_path: Path) -> None:
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    early = _make_record("trial-early")
+    late = _make_record("trial-late")
+
+    ledger.record(early)
+    ledger.record(late)
+    recent = ledger.list_for_candidate(
+        "trend-following-v1",
+        window_start_utc=datetime(2025, 6, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 12, 31, tzinfo=UTC),
+    )
+
+    assert {record.trial_id for record in recent} == {"trial-early", "trial-late"}
+
+
+def test_trial_statistics_for_family_aggregates_across_candidates(
+    tmp_path: Path,
+) -> None:
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    for idx, sharpe in enumerate(["0.5", "0.8", "1.1", "1.3"]):
+        ledger.record(_make_record(f"trial-{idx}", sharpe))
+
+    stats = ledger.trial_statistics_for_family("trend_following")
+    expected_variance = (
+        (0.5 - 0.925) ** 2
+        + (0.8 - 0.925) ** 2
+        + (1.1 - 0.925) ** 2
+        + (1.3 - 0.925) ** 2
+    ) / 3.0
+
+    assert stats.n_trials == 4
+    assert abs(stats.trial_sharpe_mean - 0.925) < 1e-9
+    assert abs(stats.trial_sharpe_variance - expected_variance) < 1e-9
+
+
+def test_trial_statistics_for_family_handles_single_trial(tmp_path: Path) -> None:
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    ledger.record(_make_record("trial-only", "1.2"))
+    stats = ledger.trial_statistics_for_family("trend_following")
+
+    assert stats.n_trials == 1
+    assert stats.trial_sharpe_variance == 0.0
+
+
+def test_trial_statistics_for_family_returns_empty_stats_for_unknown_family(
+    tmp_path: Path,
+) -> None:
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    ledger.record(_make_record())
+    stats = ledger.trial_statistics_for_family("carry")
+
+    assert stats.n_trials == 0
+    assert stats.trial_sharpe_variance == 0.0
