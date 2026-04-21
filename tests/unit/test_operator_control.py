@@ -142,3 +142,14 @@ def test_sleeve_halt_store_persists_reason_and_timestamp(tmp_path) -> None:
     assert record["reason"] == "drift alarm"
     assert record["halted"] is True
     assert str(record["at_utc"]).endswith("Z")
+
+
+def test_recalibrate_drift_reference_records_audit_entry(tmp_path) -> None:
+    store = OperatorControlStore(tmp_path / "data" / "control")
+
+    result = store.recalibrate_drift_reference(
+        snapshot_id="ref-2026-04-21",
+        now=datetime(2026, 4, 21, 20, 0, tzinfo=UTC),
+    )
+
+    assert result.last_command == "drift_reference_recalibrated"

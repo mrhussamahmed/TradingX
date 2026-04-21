@@ -1,11 +1,11 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.2.0
+version: 1.2.1
 status: active
 created: 2026-04-17
 last_amended: 2026-04-21
-supersedes: null
+supersedes: GATES-0001@1.2.0
 superseded_by: null
 author_session: codex-gpt-5
 ---
@@ -160,6 +160,10 @@ SPY and AGG closes sourced through `AlpacaMarketDataGateway`.
 
 - Paper-trading logs and reconciliations
 - Monitoring and alert evidence
+- `ExecutionQualityDriftMonitor` evidence from `RiskControlEvent`
+  artifacts with `control_type = "portfolio_drift_alarm"` and
+  paired `OperatorAlert` artifacts with
+  `category = "portfolio_drift_alarm"`
 - Recovery drills
 - Future Gate 3 validation report
 

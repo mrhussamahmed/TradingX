@@ -37,6 +37,7 @@ from tradingx.types import (
     ReplaySlippageSummary,
     RiskControlEvent,
     ServiceCycleSnapshot,
+    SleeveDailyAttributionRecord,
     StrategyActivationRecord,
     TradeIntent,
     ValidationReport,
@@ -341,6 +342,42 @@ class FilesystemArtifactStore:
             summary,
         )
 
+    def write_backtest_reference_returns(
+        self,
+        *,
+        sleeve_id: str,
+        returns: tuple[Decimal, ...],
+    ) -> Path:
+        from tradingx.drift.backtest_reference import write_backtest_reference_returns
+
+        return write_backtest_reference_returns(
+            artifact_root=self._root_dir,
+            sleeve_id=sleeve_id,
+            returns=returns,
+        )
+
+    def load_backtest_reference_returns(
+        self,
+        *,
+        sleeve_id: str,
+    ) -> tuple[Decimal, ...]:
+        from tradingx.drift.backtest_reference import load_backtest_reference_returns
+
+        return load_backtest_reference_returns(
+            artifact_root=self._root_dir,
+            sleeve_id=sleeve_id,
+        )
+
+    def write_sleeve_daily_attribution_record(
+        self,
+        record: SleeveDailyAttributionRecord,
+    ) -> Path:
+        return self._write_json(
+            "sleeve_daily_attribution",
+            f"{record.sleeve_id}__{record.trading_day}.json",
+            record,
+        )
+
     def trade_intent_path(self, intent_id: str) -> Path:
         return self._path_for("trade_intents", f"{intent_id}.json")
 
@@ -428,6 +465,20 @@ class FilesystemArtifactStore:
             resolved=bool(payload["resolved"]),
         )
 
+    def list_sleeve_daily_attribution_records(
+        self,
+        *,
+        sleeve_id: str,
+    ) -> tuple[SleeveDailyAttributionRecord, ...]:
+        category_dir = self._root_dir / "sleeve_daily_attribution"
+        if not category_dir.exists():
+            return ()
+        records: list[SleeveDailyAttributionRecord] = []
+        for path in sorted(category_dir.glob(f"{sleeve_id}__*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(self._deserialize_sleeve_daily_attribution_record(payload))
+        return tuple(records)
+
     def _write_json(self, category: str, filename: str, payload: Any) -> Path:
         path = self._path_for(category, filename)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -458,6 +509,28 @@ class FilesystemArtifactStore:
             open_orders=tuple(str(value) for value in payload["open_orders"]),
         )
 
+    def _deserialize_sleeve_daily_attribution_record(
+        self,
+        payload: dict[str, Any],
+    ) -> SleeveDailyAttributionRecord:
+        return SleeveDailyAttributionRecord(
+            attribution_id=str(payload["attribution_id"]),
+            sleeve_id=str(payload["sleeve_id"]),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            starting_equity=Decimal(str(payload["starting_equity"])),
+            ending_equity=Decimal(str(payload["ending_equity"])),
+            daily_return=Decimal(str(payload["daily_return"])),
+            per_symbol_open_weight=tuple(
+                (str(item[0]), Decimal(str(item[1])))
+                for item in payload["per_symbol_open_weight"]
+            ),
+            per_symbol_close_weight=tuple(
+                (str(item[0]), Decimal(str(item[1])))
+                for item in payload["per_symbol_close_weight"]
+            ),
+        )
+
     def build_operator_evidence_report(self) -> dict[str, object]:
         categories = (
             "trade_intents",
@@ -486,6 +559,7 @@ class FilesystemArtifactStore:
             "gate3_packages",
             "replay_slippage_records",
             "replay_slippage_summaries",
+            "sleeve_daily_attribution",
         )
         counts: dict[str, int] = {}
         latest_artifacts: dict[str, str] = {}

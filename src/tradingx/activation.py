@@ -6,9 +6,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     StrategyActivationRecord,
+    StrategyCandidate,
 )
 from tradingx.weights import (
     ApprovedWeightSnapshotNotFoundError,
@@ -90,6 +92,17 @@ class LocalActivationGateway:
             return self._approved_snapshot_store.load_by_strategy_id(strategy_id)
         except ApprovedWeightSnapshotNotFoundError:
             return None
+
+    def get_active_candidate(self) -> StrategyCandidate | None:
+        activation = self.get_latest_activation()
+        if activation is None:
+            return None
+        for candidate in build_mandatory_candidate_registry(
+            activation.approved_symbols
+        ):
+            if candidate.candidate_id == activation.strategy_id:
+                return candidate
+        return None
 
     def _validate_strategy_id(self, strategy_id: str) -> None:
         if self._strategy_id_validator is not None and not self._strategy_id_validator(

@@ -69,6 +69,30 @@ class OperatorControlStore:
         self._remove_marker("clearance_request")
         return self._write_state(now=now, last_command="clearance_cleared")
 
+    def recalibrate_drift_reference(
+        self,
+        *,
+        snapshot_id: str,
+        now: datetime,
+    ) -> OperatorControlState:
+        state = self._write_state(
+            now=now,
+            last_command="drift_reference_recalibrated",
+        )
+        marker = self._root_dir / "drift_reference_recalibration.json"
+        marker.write_text(
+            json.dumps(
+                {
+                    "snapshot_id": snapshot_id,
+                    "at_utc": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return state
+
     def halt_sleeve(self, *, sleeve_id: str, reason: str) -> None:
         path = self._sleeve_halt_path(sleeve_id)
         path.parent.mkdir(parents=True, exist_ok=True)

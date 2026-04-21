@@ -4,16 +4,51 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
+import pandas as pd  # type: ignore[import-untyped]
+from alpaca.trading.client import TradingClient
+
+from tradingx.activation import LocalActivationGateway
 from tradingx.config import TradingConfig
+from tradingx.data import build_default_market_data_gateway
+from tradingx.drift.attribution import SleeveAttributionRecorder
+from tradingx.drift.backtest_reference import (
+    artifact_path as backtest_reference_artifact_path,
+)
+from tradingx.drift.backtest_reference import (
+    write_backtest_reference_returns,
+)
+from tradingx.drift.blueprint import DriftMonitorBlueprint
+from tradingx.drift.gateway import (
+    ArtifactBacktestReferenceReturnsReader,
+    DriftAlarmGateway,
+    MarketDataFeatureSampleReader,
+    MarketDataHistoryProtocol,
+    MarketDataSignalSampleReader,
+    StoreBackedAttributionRecordsReader,
+    StoreBackedReplayRecordsReader,
+)
+from tradingx.drift.reference import (
+    ReferenceDistributionSnapshot,
+    build_reference_distribution_snapshot,
+    load_reference_distribution_snapshot,
+    write_reference_distribution_snapshot,
+)
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.replay_slippage import generate_replay_slippage_evidence
+from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH
+from tradingx.runtime_host import PortfolioGatewayProtocol
+from tradingx.runtime_strategy_registry import build_default_runtime_registry
 from tradingx.service import PaperTradingService, build_default_paper_service
+from tradingx.sleeves.base import build_sleeve_from_candidate
+from tradingx.sleeves.evaluation import simulate_sleeve_returns
+from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     DailySessionDigest,
     Gate3PromotionPackage,
@@ -21,9 +56,15 @@ from tradingx.types import (
     MarketAutomationRunRecord,
     MarketAutomationRunResult,
     MarketSessionRecord,
+    OperatorAlert,
+    PortfolioState,
     ReplaySlippageGenerationResult,
     WebActionResult,
 )
+from tradingx.validation import _build_default_regime_snapshots
+
+REFERENCE_SNAPSHOT_FILENAME = "reference_distribution_snapshot.json"
+DEFAULT_REFERENCE_WINDOW_DAYS = 365
 
 
 class ServiceBuilderProtocol(Protocol):
@@ -53,6 +94,9 @@ class MarketDayAutomationRunner:
         validation_store: FilesystemArtifactStore,
         operator_store: FilesystemArtifactStore,
         service_builder: ServiceBuilderProtocol,
+        portfolio_gateway: PortfolioGatewayProtocol | None = None,
+        drift_alarm_gateway: DriftAlarmGateway | None = None,
+        attribution_recorder: SleeveAttributionRecorder | None = None,
         replay_generator: Callable[..., ReplaySlippageGenerationResult] = (
             generate_replay_slippage_evidence
         ),
@@ -69,11 +113,15 @@ class MarketDayAutomationRunner:
         self._validation_store = validation_store
         self._operator_store = operator_store
         self._service_builder = service_builder
+        self._portfolio_gateway = portfolio_gateway
+        self._drift_alarm_gateway = drift_alarm_gateway
+        self._attribution_recorder = attribution_recorder
         self._replay_generator = replay_generator
         self._gate3_report_builder = gate3_report_builder
         self._gate3_package_builder = gate3_package_builder
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._sleep_fn = sleep_fn or (lambda seconds: __import__("time").sleep(seconds))
+        self._session_open_portfolio_state: PortfolioState | None = None
 
     def run_preopen(self) -> WebActionResult:
         try:
@@ -250,6 +298,10 @@ class MarketDayAutomationRunner:
         )
 
     def _execute_preopen(self) -> _AutomationStepArtifacts:
+        if self._portfolio_gateway is not None:
+            self._session_open_portfolio_state = (
+                self._portfolio_gateway.get_portfolio_state()
+            )
         return self._write_checkpoint(
             session_label="session_preopen",
             service_status="idle",
@@ -303,6 +355,21 @@ class MarketDayAutomationRunner:
         )
 
     def _execute_close(self) -> _AutomationStepArtifacts:
+        if (
+            self._attribution_recorder is not None
+            and self._portfolio_gateway is not None
+            and self._session_open_portfolio_state is not None
+        ):
+            close_state = self._portfolio_gateway.get_portfolio_state()
+            trading_day = self._now_provider().date().isoformat()
+            self._attribution_recorder.record_session(
+                trading_day=trading_day,
+                open_portfolio_state=self._session_open_portfolio_state,
+                close_portfolio_state=close_state,
+            )
+            self._session_open_portfolio_state = None
+        if self._drift_alarm_gateway is not None:
+            self._drift_alarm_gateway.refresh()
         replay_result = self._replay_generator(
             paper_store=self._paper_store,
             validation_store=self._validation_store,
@@ -542,15 +609,195 @@ class MarketDayAutomationRunner:
         )
 
 
+class _ArtifactAlertGateway:
+    def __init__(self, *, store: FilesystemArtifactStore) -> None:
+        self._store = store
+
+    def publish(self, alert: OperatorAlert) -> None:
+        self._store.write_operator_alert(alert)
+
+
+def _reference_snapshot_path(*, artifact_root: Path) -> Path:
+    return artifact_root / "drift" / REFERENCE_SNAPSHOT_FILENAME
+
+
+def _load_or_build_reference_snapshot(
+    *,
+    artifact_root: Path,
+    blueprint: DriftMonitorBlueprint,
+    feature_reader: MarketDataFeatureSampleReader,
+    signal_reader: MarketDataSignalSampleReader,
+    now_provider: Callable[[], datetime],
+) -> ReferenceDistributionSnapshot:
+    path = _reference_snapshot_path(artifact_root=artifact_root)
+    if path.exists():
+        return load_reference_distribution_snapshot(path)
+
+    now_utc = now_provider()
+    feature_samples: dict[str, pd.Series] = {}
+    for feature_name in blueprint.feature_monitor_names:
+        try:
+            samples = feature_reader.live_samples(
+                feature_name,
+                window_days=DEFAULT_REFERENCE_WINDOW_DAYS,
+            )
+        except LookupError:
+            continue
+        if len(samples) > 0:
+            feature_samples[feature_name] = samples
+
+    signal_samples: dict[str, pd.Series] = {}
+    for sleeve_id in blueprint.signal_monitor_sleeve_ids:
+        try:
+            samples = signal_reader.live_samples(
+                sleeve_id,
+                window_days=DEFAULT_REFERENCE_WINDOW_DAYS,
+            )
+        except LookupError:
+            continue
+        if len(samples) > 0:
+            signal_samples[sleeve_id] = samples
+
+    snapshot = build_reference_distribution_snapshot(
+        reference_snapshot_id=f"drift-ref-{now_utc.strftime('%Y%m%d%H%M%S')}",
+        blueprint_id=blueprint.blueprint_id,
+        feature_samples_by_name=feature_samples,
+        signal_samples_by_sleeve_id=signal_samples,
+        reference_window_start_utc=now_utc
+        - timedelta(days=DEFAULT_REFERENCE_WINDOW_DAYS),
+        reference_window_end_utc=now_utc,
+        generated_at_utc=now_utc,
+    )
+    write_reference_distribution_snapshot(path, snapshot)
+    return snapshot
+
+
+def _ensure_backtest_reference_returns(
+    *,
+    config: TradingConfig,
+    market_data_gateway: MarketDataHistoryProtocol,
+    now_provider: Callable[[], datetime],
+) -> None:
+    end_utc = now_provider()
+    start_utc = end_utc - timedelta(days=400)
+    for candidate in build_mandatory_candidate_registry(config.runtime.symbol_universe):
+        if candidate.sleeve_class_path is None:
+            continue
+        if backtest_reference_artifact_path(
+            artifact_root=config.runtime.artifact_root,
+            sleeve_id=candidate.candidate_id,
+        ).exists():
+            continue
+        bars_by_symbol = {
+            symbol: market_data_gateway.get_daily_bar_history(
+                symbol,
+                start_utc=start_utc,
+                end_utc=end_utc,
+            )
+            for symbol in tuple(
+                sorted({candidate.benchmark_symbol, *candidate.universe})
+            )
+        }
+        sleeve = build_sleeve_from_candidate(candidate)
+        regimes = _build_default_regime_snapshots(
+            candidate,
+            bars_by_symbol=bars_by_symbol,
+        )
+        returns, _ = simulate_sleeve_returns(
+            sleeve,
+            bars_by_symbol=bars_by_symbol,
+            regime_snapshots_by_date=regimes,
+            sleeve_budget_equity=Decimal("1.0"),
+        )
+        write_backtest_reference_returns(
+            artifact_root=config.runtime.artifact_root,
+            sleeve_id=candidate.candidate_id,
+            returns=returns,
+        )
+
+
 def build_default_market_day_automation_runner(
     config: TradingConfig,
 ) -> MarketDayAutomationRunner:
     artifact_root = config.runtime.artifact_root
+    paper_store = FilesystemArtifactStore(artifact_root / "paper_loop")
+    validation_store = FilesystemArtifactStore(artifact_root / "validation")
+    operator_store = FilesystemArtifactStore(artifact_root / "operator_platform")
+    runtime_store = FilesystemArtifactStore(artifact_root)
+
+    def now_provider() -> datetime:
+        return datetime.now(UTC)
+
+    market_data_gateway = build_default_market_data_gateway(config)
+    runtime_registry = build_default_runtime_registry(
+        market_data_gateway=market_data_gateway
+    )
+    activation_gateway = LocalActivationGateway(
+        store=operator_store,
+        strategy_id_validator=runtime_registry.can_resolve,
+    )
+    trading_client = TradingClient(
+        config.paper_credentials.api_key,
+        config.paper_credentials.api_secret,
+        paper=True,
+    )
+    portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
+    blueprint = DriftMonitorBlueprint(blueprint_id="drift-default-v1")
+    treasury_cache_path = (
+        config.runtime.data_root / "reference" / DEFAULT_TREASURY_YIELD_CACHE_PATH.name
+    )
+    feature_reader = MarketDataFeatureSampleReader(
+        market_data_gateway=market_data_gateway,
+        treasury_cache_path=treasury_cache_path,
+        now_provider=now_provider,
+    )
+    signal_reader = MarketDataSignalSampleReader(
+        market_data_gateway=market_data_gateway,
+        now_provider=now_provider,
+    )
+    reference_snapshot = _load_or_build_reference_snapshot(
+        artifact_root=artifact_root,
+        blueprint=blueprint,
+        feature_reader=feature_reader,
+        signal_reader=signal_reader,
+        now_provider=now_provider,
+    )
+    _ensure_backtest_reference_returns(
+        config=config,
+        market_data_gateway=market_data_gateway,
+        now_provider=now_provider,
+    )
+    drift_alarm_gateway = DriftAlarmGateway(
+        blueprint=blueprint,
+        reference_snapshot=reference_snapshot,
+        feature_sample_reader=feature_reader,
+        signal_sample_reader=signal_reader,
+        replay_records_reader=StoreBackedReplayRecordsReader(
+            validation_store=validation_store,
+        ),
+        attribution_records_reader=StoreBackedAttributionRecordsReader(
+            operator_store=runtime_store,
+        ),
+        backtest_reference_returns_reader=ArtifactBacktestReferenceReturnsReader(
+            artifact_root=artifact_root,
+        ),
+        risk_control_event_sink=runtime_store,
+        alert_gateway=_ArtifactAlertGateway(store=runtime_store),
+    )
+    attribution_recorder = SleeveAttributionRecorder(
+        activation_gateway=activation_gateway,
+        attribution_store=runtime_store,
+        now_provider=now_provider,
+    )
     return MarketDayAutomationRunner(
-        paper_store=FilesystemArtifactStore(artifact_root / "paper_loop"),
-        validation_store=FilesystemArtifactStore(artifact_root / "validation"),
-        operator_store=FilesystemArtifactStore(artifact_root / "operator_platform"),
+        paper_store=paper_store,
+        validation_store=validation_store,
+        operator_store=operator_store,
         service_builder=lambda: build_default_paper_service(config),
+        portfolio_gateway=portfolio_gateway,
+        drift_alarm_gateway=drift_alarm_gateway,
+        attribution_recorder=attribution_recorder,
+        now_provider=now_provider,
     )
 
 
