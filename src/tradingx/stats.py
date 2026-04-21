@@ -64,6 +64,9 @@ def lo_adjusted_sharpe_ratio(
             "Sharpe ratio is undefined because fewer than 30 returns were supplied."
         )
         return None
+    if np.allclose(excess_returns, excess_returns[0]):
+        LOGGER.warning("Sharpe ratio is undefined because variance is zero.")
+        return None
 
     volatility = float(np.std(excess_returns, ddof=1))
     if volatility <= 0 or math.isnan(volatility):
@@ -225,7 +228,7 @@ def calmar_ratio(
     mdd = max_drawdown(returns)
     if mdd == 0.0:
         return float("inf") if annualized > 0.0 else 0.0
-    return annualized / mdd
+    return float(annualized / mdd)
 
 
 def _excess_returns(
@@ -248,6 +251,10 @@ def _lagged_autocorrelation(values: FloatArray, lag: int) -> float | None:
         return None
     leading = values[:-lag]
     lagged = values[lag:]
+    if leading.size < 2 or lagged.size < 2:
+        return None
+    if np.allclose(leading, leading[0]) or np.allclose(lagged, lagged[0]):
+        return None
     correlation_matrix = np.corrcoef(leading, lagged)
     correlation = float(correlation_matrix[0, 1])
     if math.isnan(correlation):

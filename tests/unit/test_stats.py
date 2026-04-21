@@ -32,6 +32,20 @@ def test_lo_adjusted_sharpe_ratio_returns_none_for_constant_series(caplog) -> No
     assert "variance is zero" in caplog.text
 
 
+def test_lo_adjusted_sharpe_ratio_avoids_warnings_for_constant_lag_windows(
+    recwarn,
+) -> None:
+    module = importlib.import_module("tradingx.stats")
+
+    result = module.lo_adjusted_sharpe_ratio(
+        returns=[0.0003] * 252,
+        risk_free_daily_rates=[0.0002] * 252,
+    )
+
+    assert result is None
+    assert [warning for warning in recwarn if warning.category is RuntimeWarning] == []
+
+
 def test_lo_adjusted_sharpe_ratio_penalizes_positive_autocorrelation() -> None:
     module = importlib.import_module("tradingx.stats")
     returns = (
