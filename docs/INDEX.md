@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.24
+version: 1.2.25
 status: active
 created: 2026-04-17
 last_amended: 2026-04-21
-supersedes: INDEX-0001@1.2.23
+supersedes: INDEX-0001@1.2.24
 superseded_by: null
 author_session: claude-opus-4.7-2026-04-21
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.24  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.25  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -131,7 +131,13 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| BRIEF-0002 | Tranche 1 planning brief | 1.0.0 | active | `docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md` |
+| BRIEF-0002 | Tranche 1 planning brief | 1.1.0 | active | `docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md` |
+
+### Future features ledger (FFL-NNNN)
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| FFL-0001 | Future features ledger | 1.0.0 | active | `docs/roadmap/future-features-ledger.md` |
 
 ### Specifications (SPEC-NNNN)
 
