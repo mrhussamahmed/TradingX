@@ -20,11 +20,15 @@ tranche-1 plan. Pending Hussam approval and Codex peer review.
 
 ## Purpose
 
-Fill the single remaining tranche-1 completion criterion:
+Fill the single remaining tranche-1 completion criterion as
+defined by [BRIEF-0002 v1.2.0](/docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md):
 
-> "Live drift diagnostics (PSI on features, KS on signal outputs,
-> execution-quality drift, live-vs-backtest per-sleeve P&L
-> divergence) emit alarms against calibrated thresholds."
+> "Live drift diagnostics emit alarms against calibrated
+> thresholds across PSI on features, KS on signal outputs,
+> execution-quality drift, and live-vs-backtest P&L divergence
+> for the currently-active sleeve-backed strategy. Multi-sleeve
+> P&L divergence is deferred to Gate-4-enablement work — see
+> DESIGN-0016 §Not in scope."
 
 1.5 turns the drift-alarm stub shipped in
 [DESIGN-0015 §W6](/docs/superpowers/specs/2026-04-21-tranche-1-4-portfolio-construction-and-drawdown-defense-design.md)
