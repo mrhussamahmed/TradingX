@@ -22,7 +22,7 @@ Implements DESIGN-0016 §W1–§W10 in this order:
 6. **W6** — `SleeveDailyAttributionRecord` + `SleeveAttributionRecorder` (active-sleeve only).
 7. **W7** — `compute_live_vs_backtest_pnl_divergence` + backtest-reference artifact writer.
 8. **W8** — `DriftAlarmGateway` concrete implementation + reader protocols.
-9. **W9** — `RollingWindowSource.LIVE_DAILY_RETURNS` reader replacing the 1.4 `NotImplementedError`.
+9. **W9** — `RollingWindowSource.LIVE_DAILY_RETURNS` reader + live-Sharpe gate: replaces the 1.4 `NotImplementedError`, branches `_should_trigger_sharpe_gate` on source, and computes annualized Lo-adjusted Sharpe (same definition as TRIAL_SUMMARY) on the live series to gate against `three_month_sharpe_floor`.
 10. **W10** — `recalibrate_drift_reference` operator action + automation hook + closing pass (GATES-0001 1.2.0 → 1.2.1, INDEX bump).
 
 Gate 1 pass/fail outcomes remain unchanged; drift monitoring is paper-evidence, not a gate criterion.
@@ -58,13 +58,13 @@ Gate 1 pass/fail outcomes remain unchanged; drift monitoring is paper-evidence, 
 
 - `src/tradingx/types.py` — add `SleeveDailyAttributionRecord`.
 - `src/tradingx/persistence.py` — add `write_sleeve_daily_attribution_record` + `list_sleeve_daily_attribution_records` on `FilesystemArtifactStore`; add writer/reader for the backtest-reference artifact.
-- `src/tradingx/portfolio/sleeve_runtime.py` — replace the `NotImplementedError` in the `LIVE_DAILY_RETURNS` branch with a call to an injected `LiveDailyReturnsSourceProtocol`; add the protocol definition; extend `SleeveRuntimeController.__init__` with optional `live_daily_returns_source`.
+- `src/tradingx/portfolio/sleeve_runtime.py` — replace the `NotImplementedError` in the `LIVE_DAILY_RETURNS` branch; add `LiveDailyReturnsSourceProtocol` and optional `live_daily_returns_source` constructor parameter; branch `_should_trigger_sharpe_gate` on `rolling_window_source` and add `_should_trigger_sharpe_gate_via_live_returns` that computes annualized Lo-adjusted Sharpe on the live series via `tradingx.stats.lo_adjusted_sharpe_ratio` (same definition the TRIAL_SUMMARY path consumes) and compares to `three_month_sharpe_floor`.
 - `src/tradingx/operator_control.py` — add `recalibrate_drift_reference(snapshot_id)` action.
-- `src/tradingx/automation.py` — wire `DriftAlarmGateway.refresh()` into the end-of-session checkpoint; wire `SleeveAttributionRecorder.record_session` into the session-close step.
+- `src/tradingx/automation.py` — add `portfolio_gateway`, `drift_alarm_gateway`, and `attribution_recorder` constructor parameters (all defaulting to `None`); capture `_session_open_portfolio_state` in the preopen step; invoke `SleeveAttributionRecorder.record_session` + `DriftAlarmGateway.refresh()` at the session-close step.
 - `docs/validation/acceptance_gates.md` — add note to Gate 3 primary evidence that `ExecutionQualityDriftMonitor` surfaces slippage-drift alarms on the dashboard; patch bump 1.2.0 → 1.2.1.
 - `docs/INDEX.md` — bump GATES-0001 row + INDEX version.
 - `tests/unit/test_types.py` — assertions on `SleeveDailyAttributionRecord`.
-- `tests/unit/test_sleeve_runtime_controller.py` — regression: `LIVE_DAILY_RETURNS` now delegates to the injected source (no raise).
+- `tests/unit/test_sleeve_runtime_controller.py` — regression: `LIVE_DAILY_RETURNS` path with an injected source computes annualized Lo-adjusted Sharpe and gates on the floor (above-floor → no fire; below-floor → fire with `SLEEVE_SHARPE_BELOW_THRESHOLD_6M`; zero-variance → pending; insufficient → pending; source=None → `ValueError`).
 - `tests/unit/test_operator_control.py` — `recalibrate_drift_reference` action regression.
 - `tests/unit/test_automation.py` — automation wiring regression.
 
@@ -2668,6 +2668,8 @@ Append to `tests/unit/test_sleeve_runtime_controller.py`:
 
 ```python
 def test_live_daily_returns_above_floor_does_not_fire_gate():
+    import numpy as np
+
     from tradingx.portfolio.sleeve_runtime import (
         LiveDailyReturnsSourceProtocol,
         RollingWindowSource,
@@ -2675,10 +2677,16 @@ def test_live_daily_returns_above_floor_does_not_fire_gate():
         SleeveRuntimeController,
     )
 
-    # 63 days of positive returns — Sharpe well above zero floor.
+    # 63 days of live returns with positive mean and real variance
+    # so annualized Lo-adjusted Sharpe is clearly above the zero
+    # floor (the canonical Sharpe definition used by the TRIAL_SUMMARY
+    # branch — see _should_trigger_sharpe_gate_via_live_returns).
+    rng = np.random.default_rng(seed=1337)
+    positive = rng.normal(loc=0.002, scale=0.005, size=63).tolist()
+
     class _Source:
         def live_daily_returns(self, *, sleeve_id, window_days):
-            return tuple(Decimal("0.01") for _ in range(63))
+            return tuple(Decimal(str(v)) for v in positive)
 
     sleeve = _FakeSleeve(_sleeve_delegates_trade())
     config = SleeveRuntimeConfig(
@@ -2696,11 +2704,13 @@ def test_live_daily_returns_above_floor_does_not_fire_gate():
         live_daily_returns_source=_Source(),
     )
     out = controller.plan_for_bar(_context())
-    # Sharpe above floor → gate does not fire → sleeve delegates.
+    # Sharpe > 0 (annualized) → gate does not fire → sleeve delegates.
     assert out[0].rationale == "tsmom_long_vol_targeted"
 
 
 def test_live_daily_returns_below_floor_fires_sharpe_gate():
+    import numpy as np
+
     from tradingx.portfolio.sleeve_runtime import (
         LiveDailyReturnsSourceProtocol,
         RollingWindowSource,
@@ -2708,10 +2718,14 @@ def test_live_daily_returns_below_floor_fires_sharpe_gate():
         SleeveRuntimeController,
     )
 
-    # 63 days of negative returns — Sharpe below zero floor.
+    # 63 days of returns with negative mean and real variance →
+    # annualized Lo-adjusted Sharpe below the zero floor.
+    rng = np.random.default_rng(seed=2026)
+    negative = rng.normal(loc=-0.002, scale=0.005, size=63).tolist()
+
     class _Source:
         def live_daily_returns(self, *, sleeve_id, window_days):
-            return tuple(Decimal("-0.005") for _ in range(63))
+            return tuple(Decimal(str(v)) for v in negative)
 
     sleeve = _FakeSleeve(_sleeve_delegates_trade())
     config = SleeveRuntimeConfig(
@@ -2730,6 +2744,40 @@ def test_live_daily_returns_below_floor_fires_sharpe_gate():
     )
     out = controller.plan_for_bar(_context())
     assert out[0].rationale == SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M
+
+
+def test_live_daily_returns_zero_variance_returns_pending():
+    # Constant returns → undefined Sharpe (zero variance) →
+    # lo_adjusted_sharpe_ratio returns None → gate does not fire
+    # (pending semantics). Pins the defensive branch in
+    # _should_trigger_sharpe_gate_via_live_returns.
+    from tradingx.portfolio.sleeve_runtime import (
+        RollingWindowSource,
+        SleeveRuntimeConfig,
+        SleeveRuntimeController,
+    )
+
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            return tuple(Decimal("0.001") for _ in range(63))
+
+    sleeve = _FakeSleeve(_sleeve_delegates_trade())
+    config = SleeveRuntimeConfig(
+        three_month_sharpe_floor=Decimal("0.0"),
+        three_month_window_days=63,
+        trial_lookback=3,
+        rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+    )
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=sleeve,
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=config,
+        live_daily_returns_source=_Source(),
+    )
+    out = controller.plan_for_bar(_context())
+    assert out[0].rationale == "tsmom_long_vol_targeted"
 
 
 def test_live_daily_returns_insufficient_records_skips_gate():
@@ -2924,7 +2972,24 @@ when `rolling_window_source == LIVE_DAILY_RETURNS`, the gate
 consults the live daily returns source and computes Sharpe on
 that series rather than the trials ledger.
 
+**Sharpe scale (Codex round-2 plan-review P1 fix).** Both
+branches MUST compare against the same Sharpe scale, because
+`three_month_sharpe_floor` is a single configured number. The
+`TRIAL_SUMMARY` branch consumes `TrialRecord.observed_sharpe_net_of_costs`
+which is written by `evaluate_candidate` at
+[evaluation.py:53](/src/tradingx/evaluation.py:53) via
+`lo_adjusted_sharpe_ratio(returns, risk_free_daily_rates, periods_per_year=TRADING_DAYS_PER_YEAR)`
+in [stats.py:92](/src/tradingx/stats.py:92) — **annualized
+Lo-adjusted Sharpe at 252 periods/year**. The live branch MUST
+use the same function so the floor applies consistently. Do
+not invent a new `_sample_sharpe` helper that returns a
+per-period `mean/std`; use the canonical `lo_adjusted_sharpe_ratio`.
+
 ```python
+from tradingx.stats import lo_adjusted_sharpe_ratio
+from tradingx.evaluation import TRADING_DAYS_PER_YEAR
+
+
 def _should_trigger_sharpe_gate(self) -> bool:
     if self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS:
         return self._should_trigger_sharpe_gate_via_live_returns()
@@ -2942,8 +3007,15 @@ def _should_trigger_sharpe_gate_via_live_returns(self) -> bool:
     # records → insufficient evidence → do not fire.
     if len(returns) < self._config.three_month_window_days:
         return False
-    sharpe = _sample_sharpe(returns)
-    return sharpe < self._config.three_month_sharpe_floor
+    sharpe = lo_adjusted_sharpe_ratio(
+        returns=[float(r) for r in returns],
+        risk_free_daily_rates=(0.0,) * len(returns),
+        periods_per_year=TRADING_DAYS_PER_YEAR,
+    )
+    if sharpe is None:
+        # Undefined Sharpe (e.g., zero variance) → pending, do not fire.
+        return False
+    return Decimal(str(sharpe)) < self._config.three_month_sharpe_floor
 
 
 def _should_trigger_sharpe_gate_via_trial_summary(self) -> bool:
@@ -2955,40 +3027,39 @@ def _should_trigger_sharpe_gate_via_trial_summary(self) -> bool:
     # records with window >= three_month_window_days all below floor).
 ```
 
-Add a module-level `_sample_sharpe` helper (or reuse the
-implementation from `drift/pnl_divergence.py` if Codex prefers
-sharing):
+**Why `risk_free_daily_rates=(0.0,) * len(returns)`.** The
+existing Gate 1 path in
+[validation.py:73](/src/tradingx/validation.py:73) also calls
+`lo_adjusted_sharpe_ratio` with zero daily risk-free rates
+when computing `observed_sharpe_net_of_costs`, so the
+TRIAL_SUMMARY side's floor is already calibrated against this
+assumption. The live branch follows the same convention to
+keep the floor comparable. If a future amendment introduces
+real risk-free rates for the live path, the TRIAL_SUMMARY
+side must be updated in lockstep (and the floor re-calibrated).
 
-```python
-def _sample_sharpe(returns: tuple[Decimal, ...]) -> Decimal:
-    if len(returns) < 2:
-        return Decimal("0")
-    mean = sum(returns, start=Decimal("0")) / Decimal(len(returns))
-    sq_dev = sum(
-        ((r - mean) ** 2 for r in returns),
-        start=Decimal("0"),
-    )
-    variance = sq_dev / Decimal(len(returns) - 1)
-    if variance <= Decimal("0"):
-        return Decimal("0")
-    std = Decimal(str(float(variance) ** 0.5))
-    return mean / std
-```
-
-Add `LiveDailyReturnsSourceProtocol` and (if exposing)
-`_sample_sharpe` to `__all__`.
+Add `LiveDailyReturnsSourceProtocol` to `__all__`. No new
+`_sample_sharpe` helper is added in this task — the canonical
+`lo_adjusted_sharpe_ratio` is the single source of truth and
+`drift/pnl_divergence.py` (Task 8) already carries its own
+simpler per-period Sharpe for delta comparison against the
+backtest reference series (where BOTH live and backtest go
+through the same local helper, so the delta is scale-consistent
+even if not annualized — see Task 8's contract).
 
 **Design note — LIVE_DAILY_RETURNS gate semantics (Codex
-round-1 plan-review P1 fix).** 1.5 replaces the
+round-1 + round-2 plan-review P1 fixes).** 1.5 replaces the
 `NotImplementedError` AND delivers the live-Sharpe gate logic
-the merged spec requires. The gate is source-selectable via
-`rolling_window_source`: TRIAL_SUMMARY (1.4's behavior,
-unchanged) or LIVE_DAILY_RETURNS (1.5's new behavior). Default
-remains TRIAL_SUMMARY for backwards compatibility; operators
-opt into LIVE_DAILY_RETURNS by setting `SleeveRuntimeConfig.rolling_window_source`.
-The misconfiguration guard in `plan_for_bar` raises ValueError
-if LIVE_DAILY_RETURNS is selected but no source is injected —
-this is what Task 10's
+the merged spec requires, using the same annualized Lo-adjusted
+Sharpe definition the TRIAL_SUMMARY branch consumes. The gate
+is source-selectable via `rolling_window_source`: TRIAL_SUMMARY
+(1.4's behavior, unchanged) or LIVE_DAILY_RETURNS (1.5's new
+behavior with matched Sharpe scale). Default remains
+TRIAL_SUMMARY for backwards compatibility; operators opt into
+LIVE_DAILY_RETURNS by setting
+`SleeveRuntimeConfig.rolling_window_source`. The misconfiguration
+guard in `plan_for_bar` raises `ValueError` if LIVE_DAILY_RETURNS
+is selected but no source is injected — this is what Task 10's
 `test_live_daily_returns_source_missing_raises_value_error`
 pins.
 
