@@ -106,8 +106,14 @@ must all hold before switching. Documented in
 tranche 1 complete, ≥ 200 closed paper trades per sleeve, live
 drift green for ≥ 6 months, stable per-sleeve edge, bootstrap
 Sharpe CI above zero, DSR ≥ 0.95, PBO ≤ 0.30, live-vs-backtest
-Sharpe within 30%, fractional (never full) Kelly, hard cap at
-0.5 × portfolio MDD budget.
+Sharpe within 30%, plus **two independent sizing controls that
+both apply simultaneously**: (a) a Kelly fraction multiplier
+(start at 0.25 × `f*`, progress to 0.5 × `f*` only after another
+6 months, full Kelly never adopted), AND (b) a sleeve-allocation
+capital cap at 50% of the portfolio MDD budget — currently 7.5%
+of portfolio equity per sleeve given ADR-0021's 15% design target.
+The capital cap and the Kelly multiplier are **different
+controls** and both enforce.
 
 **When triggered:** **ADR-0023** opens to formalize the switch.
 Never automatic; operator sign-off mirrors Gate 4 protocol.
@@ -163,12 +169,23 @@ critical nuance).**
 
 **Implementation consequences for tranche 1.3 and beyond:**
 
-- **Vol-managed beta:** exposure floor is 0% only in genuinely
-  extreme vol regimes. Normal-vol default is near 100% of the
-  sleeve's budget.
+- **Vol-managed beta:** exposure floor is 0% **only when the
+  regime composite classifies the current state as `stressed`**
+  (the most severe of the four states shipped in tranche 1.2 per
+  [DESIGN-0013 §W3](/docs/superpowers/specs/2026-04-21-tranche-1-2-market-state-features-design.md)
+  and [features/regime.py](/src/tradingx/features/regime.py)).
+  In the other three states (`risk_on`, `neutral`, `risk_off`),
+  the sleeve runs at or near 100% of its budget, scaled by its
+  own vol target. **The 1.3 spec MUST codify the exact
+  regime → exposure-floor mapping for each sleeve** so trend and
+  vol-managed beta apply the same mapping logic and no future
+  sleeve spec is free to reinterpret "extreme vol regime."
 - **Trend sleeve:** entries fire immediately when signal fires.
   No "flat discipline" delay, no confirmation-holding periods
-  beyond what the signal itself requires.
+  beyond what the signal itself requires. The trend sleeve is
+  also regime-aware: in `stressed` it defers new entries (it does
+  not force liquidation of existing positions, but does not open
+  new ones).
 - **No portfolio-level minimum cash buffer.** Cash is what's left
   after risk gating, not what's reserved first.
 - **Reporting surface (1.4 + 1.5):** the operator dashboard
@@ -183,10 +200,27 @@ critical nuance).**
 
 **What this means in plain terms.** We work toward a rough
 3-month deadline for first live enablement. To hit it without
-cutting corners, some tranche-2 hardening work (CPCV, PBO) runs
-in parallel with tranche 1.5 rather than strictly after. Faster
-than option B (strict sequential, open-ended), but requires
-coordination to avoid cross-tranche conflict.
+cutting corners, **the research and spec phase** of tranche-2
+hardening (CPCV, PBO) runs in parallel with tranche 1.5 rather
+than strictly after. Faster than option B (strict sequential,
+open-ended), but requires coordination to avoid cross-tranche
+conflict.
+
+**Two-stage trigger for CPCV/PBO.** Per
+[FFL-0001-06](/docs/roadmap/future-features-ledger.md) the
+tranche-2 hardening is split into two triggers so this brief and
+the ledger don't contradict each other:
+
+- **Stage 1 (now, unblocked by D5):** design + spec may start in
+  parallel with tranche 1.5. Pure design work; no runtime
+  behavior change.
+- **Stage 2 (later, requires tranche 1 complete + ≥ 6 months of
+  trials-ledger evidence):** activation as a Gate 1 hard
+  criterion. Flips PBO from reported-only to pass/fail. Requires
+  operator sign-off.
+
+"Unblocked in parallel with 1.5" refers to Stage 1 only; Stage 2
+timing is independent of the 3-month first-live target.
 
 **"Working target" qualifier.** The 3-month date is a planning
 anchor, not a promise. If validation evidence accumulates slower

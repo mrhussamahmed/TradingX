@@ -81,12 +81,22 @@ sizing.
 6. Deflated Sharpe Ratio ≥ 0.95.
 7. PBO ≤ 0.30 (requires tranche-2 CPCV infrastructure).
 8. Live vs backtest Sharpe within 30% per profile-tolerance rule.
-9. Fractional Kelly only — start at 1/4-Kelly, progress to
-   1/2-Kelly only after another 6 months of stable live
-   evidence. Full Kelly is never adopted.
-10. Hard cap on per-sleeve Kelly fraction at 0.5 × portfolio
-    MDD budget (currently 7.5% given ADR-0021's 15% design
-    target).
+9. **Kelly fraction multiplier — never full Kelly.** The Kelly
+   formula `f* = edge / variance` produces a sizing fraction.
+   Multiply that output by a conservative factor:
+   - Start at **0.25 × `f*`** (quarter-Kelly).
+   - Progress to **0.5 × `f*`** (half-Kelly) only after another
+     6 months of stable live evidence post-switch.
+   - **Full Kelly (multiplier = 1.0) is never adopted.**
+10. **Sleeve-allocation capital cap, independent of Kelly
+    output.** Regardless of what `multiplier × f*` produces, the
+    per-sleeve position allocation is capped at **50% of the
+    portfolio MDD budget**. Given ADR-0021's 15% design MDD
+    target, that cap is **7.5% of portfolio equity per sleeve**.
+    If Kelly-derived sizing calls for 20% of equity but the cap
+    is 7.5%, the actual allocation is 7.5%. This is a **capital
+    cap**, not a Kelly-multiplier adjustment, and it is
+    orthogonal to item 9 — both apply simultaneously.
 
 **When triggered:** open **ADR-0023: Switch from vol-targeted to
 fractional Kelly sizing** with the passing gate evidence attached.
@@ -237,11 +247,28 @@ needed to compute PBO (probability of backtest overfitting) at
 honest scale. Both are tranche-2 work; tranche 1 uses
 purged/embargoed k-fold CV + trials ledger only (shipped in 1.1).
 
-**Bring-back condition:** tranche 1 complete, ≥ 6 months of
-accumulated trials ledger evidence, operator approves tranche-2
-start.
+**Two-stage bring-back condition:**
 
-**When triggered:** tranche-2 hardening spec.
+1. **Stage 1 — research and spec (MAY start in parallel with
+   tranche 1.5, per BRIEF-0002 D5 resolution).** Design the CPCV
+   topology, write the tranche-2 spec, scope the PBO computation,
+   and draft implementation plans. No runtime behavior change;
+   pure design work. Explicitly unblocked to run alongside 1.5
+   implementation to hit the 3-month first-live target.
+
+2. **Stage 2 — hard-gate activation (requires tranche 1 complete
+   + evidence).** Wire CPCV into the validation pipeline and
+   activate PBO as a Gate 1 hard criterion. Requires: all six
+   tranche-1 completion criteria met per BRIEF-0002; ≥ 6 months
+   of accumulated trials ledger evidence for meaningful PBO
+   computation; operator approves the tranche-2 activation.
+
+Stage 1 is a design-only trigger; Stage 2 is an execution-plus-
+activation trigger. The dependency is strictly Stage 1 → Stage 2.
+
+**When triggered:** Stage 1 opens the tranche-2 hardening spec.
+Stage 2 ships that spec's implementation plan to main and flips
+the PBO criterion from reported-only to pass/fail.
 
 **Cross-references:**
 
