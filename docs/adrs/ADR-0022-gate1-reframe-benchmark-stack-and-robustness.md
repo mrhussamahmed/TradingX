@@ -2,7 +2,7 @@
 id: ADR-0022
 title: Reframe Gate 1 from standalone sleeve Sharpe to benchmark-stack criteria and robustness
 version: 1.0.0
-status: accepted
+status: active
 created: 2026-04-21
 last_amended: 2026-04-21
 supersedes: ADR-0020

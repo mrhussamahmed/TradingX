@@ -2,7 +2,7 @@
 id: ADR-0021
 title: Adopt three-tier benchmark stack in place of SPY-only benchmarking
 version: 1.0.0
-status: accepted
+status: active
 created: 2026-04-21
 last_amended: 2026-04-21
 supersedes: ADR-0004

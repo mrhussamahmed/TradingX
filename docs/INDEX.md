@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.21
+version: 1.2.22
 status: active
 created: 2026-04-17
-last_amended: 2026-04-20
-supersedes: INDEX-0001@1.2.20
+last_amended: 2026-04-21
+supersedes: INDEX-0001@1.2.21
 superseded_by: null
-author_session: SESS-2026-04-20-OPR
+author_session: claude-opus-4.7-2026-04-21
 ---
 
 # Artifact index
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.20  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.22  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -89,7 +89,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0001 | Use Python 3.11 as the baseline runtime | 1.0.0 | active | `docs/adrs/ADR-0001-language-python-3.11.md` |
 | ADR-0002 | Use uv as the package manager | 1.0.0 | active | `docs/adrs/ADR-0002-package-manager-uv.md` |
 | ADR-0003 | Use Alpaca for Stage 1 and Stage 2 brokerage | 1.0.0 | active | `docs/adrs/ADR-0003-broker-alpaca.md` |
-| ADR-0004 | Use SPY as the Stage 1 and Stage 2 benchmark | 1.0.0 | active | `docs/adrs/ADR-0004-benchmark-spy.md` |
+| ADR-0004 | Use SPY as the Stage 1 and Stage 2 benchmark | 1.0.1 | superseded | `docs/adrs/ADR-0004-benchmark-spy.md` |
 | ADR-0005 | Preserve sequential Stage 1 through Stage 4 progression | 1.0.0 | active | `docs/adrs/ADR-0005-stage-progression-1-through-4.md` |
 | ADR-0006 | Use SMTP email as the default emergency channel | 1.0.0 | active | `docs/adrs/ADR-0006-emergency-channel-smtp.md` |
 | ADR-0007 | Restrict Stage 1 and Stage 2 trading to regular market hours | 1.0.0 | active | `docs/adrs/ADR-0007-market-hours-regular-only.md` |
@@ -105,7 +105,9 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0017 | Use policy snapshots and an append-only SQLite journal for week-1 dry-run safety | 1.0.0 | active | `docs/adrs/ADR-0017-week1-dry-run-safety-control-plane.md` |
 | ADR-0018 | Use a local supervisor with a single-chat Telegram operator command plane | 1.0.0 | active | `docs/adrs/ADR-0018-telegram-operator-supervisor-control-plane.md` |
 | ADR-0019 | Use a minimal pandas plus empyrical-reloaded backtest engine for Gate 1 research | 1.0.1 | active | `docs/adrs/ADR-0019-minimal-pandas-backtest-engine.md` |
-| ADR-0020 | Tighten Gate 1 statistical criteria around deflated Sharpe and overfitting controls | 1.0.0 | draft | `docs/adrs/ADR-0020-gate1-statistical-criteria.md` |
+| ADR-0020 | Tighten Gate 1 statistical criteria around deflated Sharpe and overfitting controls | 1.0.1 | superseded | `docs/adrs/ADR-0020-gate1-statistical-criteria.md` |
+| ADR-0021 | Adopt three-tier benchmark stack in place of SPY-only benchmarking | 1.0.0 | active | `docs/adrs/ADR-0021-benchmark-stack.md` |
+| ADR-0022 | Reframe Gate 1 from standalone sleeve Sharpe to benchmark-stack criteria and robustness | 1.0.0 | active | `docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md` |
 
 ### Design documents
 
@@ -136,6 +138,7 @@ field (session lifecycle). This index tracks `status` only.
 | SPEC-0008 | TradingX local trading appliance specification | 1.0.0 | active | `specs/008-local-trading-appliance/spec.md` |
 | SPEC-0009 | TradingX week-1 dry-run controls specification | 1.0.0 | active | `specs/009-week1-dry-run-controls/spec.md` |
 | SPEC-0010 | TradingX operator control plane specification | 1.0.0 | active | `specs/010-operator-control-plane/spec.md` |
+| SPEC-0013 | Capital growth landscape — v1 strategic roadmap | 0.1.0 | draft | `docs/superpowers/specs/2026-04-20-capital-growth-landscape-design.md` |
 
 ### Plans (PLAN-NNNN)
 
@@ -234,7 +237,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| GATES-0001 | Stage 1 acceptance gates | 1.0.0 | active | `docs/validation/acceptance_gates.md` |
+| GATES-0001 | Stage 1 acceptance gates | 1.1.0 | active | `docs/validation/acceptance_gates.md` |
 
 ### Session handovers (SESS-*)
 
