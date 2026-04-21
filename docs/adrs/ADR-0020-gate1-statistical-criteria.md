@@ -1,12 +1,12 @@
 ---
 id: ADR-0020
 title: Tighten Gate 1 statistical criteria around deflated Sharpe and overfitting controls
-version: 1.0.0
-status: draft
+version: 1.0.1
+status: superseded
 created: 2026-04-19
-last_amended: 2026-04-19
+last_amended: 2026-04-21
 supersedes: null
-superseded_by: null
+superseded_by: ADR-0022
 author_session: SESS-2026-04-19-028
 ---
 
@@ -14,8 +14,21 @@ author_session: SESS-2026-04-19-028
 
 ## Status
 
-Draft on 2026-04-19. This ADR records the proposed Gate 1 statistical
-criteria for Hussam review before activation.
+Superseded on 2026-04-21 by
+[ADR-0022](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md).
+This ADR was never activated; the proposed criteria it contains were
+reframed before taking effect in response to the
+[2026-04-20 capital-growth landscape review](/docs/superpowers/specs/2026-04-20-capital-growth-landscape-design.md).
+Key changes in ADR-0022 relative to this draft:
+
+- Benchmarking is now three-tier (cash + 60/40 + operating constraint)
+  per [ADR-0021](/docs/adrs/ADR-0021-benchmark-stack.md).
+- The drawdown budget is reset to 15% design / 25% halt (was 10%/15%).
+- PBO and CPCV are deferred from tranche 1 to tranche 2 hardening.
+- A marginal-portfolio-contribution criterion is added for tranche 1's
+  portfolio-construction milestone.
+
+This ADR remains in the record for historical context only.
 
 ## Context
 
