@@ -139,8 +139,7 @@ class RuntimePortfolioPlanner:
             account_equity=portfolio_state.equity,
         )
         if any(
-            weight < Decimal("0")
-            for weight in runtime_weights.target_weights.values()
+            weight < Decimal("0") for weight in runtime_weights.target_weights.values()
         ):
             raise UnsupportedRuntimePortfolioPlanError(
                 "Runtime portfolio planner only supports non-negative target weights "
@@ -367,9 +366,7 @@ def _trade_intent_for_plan_item(
         candidate_id=candidate_id,
         symbol=trade.symbol,
         side=trade.side,
-        quantity=(
-            None if trade.side == "hold" else abs(trade.delta_quantity)
-        ),
+        quantity=(None if trade.side == "hold" else abs(trade.delta_quantity)),
         reason_code=trade.reason_code,
         generated_at_utc=generated_at,
     )

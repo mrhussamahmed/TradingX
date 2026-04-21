@@ -335,10 +335,11 @@ class PaperTradingLoopController:
         if self._session_start_equity is None:
             self._session_start_equity = resolved_portfolio_state.equity
         resolved_market_snapshot = market_snapshot
-        if (
-            resolved_market_snapshot is None
-            and trade_intent.side in {"buy", "sell", "reduce"}
-        ):
+        if resolved_market_snapshot is None and trade_intent.side in {
+            "buy",
+            "sell",
+            "reduce",
+        }:
             resolved_market_snapshot = self._market_data.get_market_snapshot(
                 trade_intent.symbol
             )

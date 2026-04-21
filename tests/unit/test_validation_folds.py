@@ -34,8 +34,7 @@ def test_purged_kfold_embargo_respected() -> None:
         test_end = max(test) + 1
         forbidden_train = set(range(test_end, min(100, test_end + 3)))
         assert not (set(train) & forbidden_train), (
-            f"Training set leaked into embargo zone: "
-            f"{set(train) & forbidden_train}"
+            f"Training set leaked into embargo zone: " f"{set(train) & forbidden_train}"
         )
 
 

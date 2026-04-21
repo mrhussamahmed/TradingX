@@ -70,8 +70,7 @@ def _stable_returns(periods: int = 1200) -> tuple[Decimal, ...]:
 
 def _benchmark_returns(periods: int) -> tuple[Decimal, ...]:
     return tuple(
-        Decimal("0.004") if index % 3 else Decimal("-0.001")
-        for index in range(periods)
+        Decimal("0.004") if index % 3 else Decimal("-0.001") for index in range(periods)
     )
 
 
@@ -405,9 +404,11 @@ def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
     )
 
     assert result == "cost_sensitivity_pass"
-    assert {
-        call.half_spread_multiplier for call in runner.cost_calls
-    } >= {1.0, 2.0, 4.0}
+    assert {call.half_spread_multiplier for call in runner.cost_calls} >= {
+        1.0,
+        2.0,
+        4.0,
+    }
     assert {call.impact_coefficient for call in runner.cost_calls} >= {10.0, 20.0, 40.0}
 
 

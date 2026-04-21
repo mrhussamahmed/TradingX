@@ -32,9 +32,9 @@ def test_control_center_app_wrapper_uses_repo_root_paths(tmp_path) -> None:
     fake_python = repo_root / "fake-python"
     fake_python.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$PWD\" > \"$TEST_LOG\"\n"
-        "printf '%s\\n' \"$@\" >> \"$TEST_LOG\"\n"
-        "printf '{\"status\":\"started\",\"dashboard_url\":\"http://127.0.0.1:8765\",\"reused_existing_server\":false}\\n'\n",
+        'printf \'%s\\n\' "$PWD" > "$TEST_LOG"\n'
+        'printf \'%s\\n\' "$@" >> "$TEST_LOG"\n'
+        'printf \'{"status":"started","dashboard_url":"http://127.0.0.1:8765","reused_existing_server":false}\\n\'\n',
         encoding="utf-8",
     )
     fake_python.chmod(0o755)

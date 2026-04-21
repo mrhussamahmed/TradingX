@@ -237,9 +237,7 @@ class OperatorAlertDispatcher:
                 continue
             delivery_targets.append(transport.target_name)
         if not delivery_targets and alert.severity in {"critical", "error"}:
-            raise RuntimeError(
-                f"No alert transports delivered alert {alert.alert_id}."
-            )
+            raise RuntimeError(f"No alert transports delivered alert {alert.alert_id}.")
         delivered = OperatorAlert(
             alert_id=alert.alert_id,
             severity=alert.severity,

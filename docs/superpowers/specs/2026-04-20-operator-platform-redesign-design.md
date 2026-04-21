@@ -1,3 +1,15 @@
+---
+id: DESIGN-0012
+title: TradingX operator platform redesign
+version: 1.0.0
+status: active
+created: 2026-04-20
+last_amended: 2026-04-21
+supersedes: null
+superseded_by: null
+author_session: codex-gpt-5-2026-04-21
+---
+
 # TradingX Operator Platform Redesign
 
 Date: 2026-04-20

@@ -1,3 +1,15 @@
+---
+id: DESIGN-0010
+title: TradingX runtime intelligence design
+version: 1.0.0
+status: active
+created: 2026-04-20
+last_amended: 2026-04-21
+supersedes: null
+superseded_by: null
+author_session: codex-gpt-5-2026-04-21
+---
+
 # Runtime Intelligence Design
 
 Date: 2026-04-20

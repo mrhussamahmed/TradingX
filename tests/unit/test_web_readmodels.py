@@ -636,7 +636,9 @@ def test_local_web_read_model_prefers_live_oms_journal_over_ops_rehearsal_journa
         )
     )
 
-    ops_journal = SqliteOmsJournal(tmp_path / "artifacts" / "ops" / "data" / "journal.db")
+    ops_journal = SqliteOmsJournal(
+        tmp_path / "artifacts" / "ops" / "data" / "journal.db"
+    )
     ops_journal.append_event(
         event_type="reject",
         recorded_at_utc=timestamp,
@@ -801,7 +803,9 @@ def test_local_web_read_model_labels_live_and_rehearsal_portfolio_sources(
     )
 
     snapshot = read_model.build_portfolio_workspace_snapshot()
-    equity_card = next(card for card in snapshot.metric_cards if card.metric_id == "equity")
+    equity_card = next(
+        card for card in snapshot.metric_cards if card.metric_id == "equity"
+    )
 
     assert [note.label for note in snapshot.source_notes] == [
         "Live account",
@@ -986,9 +990,7 @@ def test_local_web_read_model_builds_runtime_heartbeat_from_latest_cycle_and_sel
     assert symbol_rows["QQQ"].reason == "Score remained below the deploy threshold."
     assert symbol_rows["IWM"].status == "Blocked"
     assert symbol_rows["IWM"].warmup_state == "Blocked"
-    assert (
-        symbol_rows["IWM"].reason == "Insufficient daily bars for warmup coverage."
-    )
+    assert symbol_rows["IWM"].reason == "Insufficient daily bars for warmup coverage."
 
     assert [row.symbol for row in heartbeat.decision_ladder] == ["SPY", "QQQ", "IWM"]
     assert heartbeat.decision_ladder[0].primary_driver == "Volatility penalty"

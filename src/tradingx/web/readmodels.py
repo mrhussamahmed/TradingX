@@ -234,7 +234,12 @@ class LocalWebReadModel:
         session_mode = (
             "intraday"
             if runtime_heartbeat.heartbeat_state
-            in {"Running", "Waiting for next evaluation", "Active position", "Evaluating"}
+            in {
+                "Running",
+                "Waiting for next evaluation",
+                "Active position",
+                "Evaluating",
+            }
             else "standby"
         )
         return CommandCenterSnapshot(
@@ -345,7 +350,9 @@ class LocalWebReadModel:
             default=equity,
         )
         oms_events = self._load_oms_events(limit=25)
-        reject_events = [event for event in oms_events if event["event_type"] == "reject"]
+        reject_events = [
+            event for event in oms_events if event["event_type"] == "reject"
+        ]
         submit_attempts = [
             event for event in oms_events if event["event_type"] == "submit_attempt"
         ]
@@ -364,17 +371,22 @@ class LocalWebReadModel:
             else "No journal events"
         )
         warmup_ready = (
-            len(warmup.symbols_ready) if warmup is not None else len(runtime_state.active_symbols)
+            len(warmup.symbols_ready)
+            if warmup is not None
+            else len(runtime_state.active_symbols)
         )
-        warmup_total = len(warmup.symbols) if warmup is not None else max(
-            len(runtime_state.active_symbols), 1
+        warmup_total = (
+            len(warmup.symbols)
+            if warmup is not None
+            else max(len(runtime_state.active_symbols), 1)
         )
         total_return_pct = self._safe_percent_change(
             current_value=equity,
             reference_value=starting_equity or equity or Decimal("1"),
         )
         reject_rate = (
-            (Decimal(len(reject_events)) / Decimal(len(submit_attempts))) * Decimal("100")
+            (Decimal(len(reject_events)) / Decimal(len(submit_attempts)))
+            * Decimal("100")
             if submit_attempts
             else Decimal("0")
         )
@@ -455,12 +467,16 @@ class LocalWebReadModel:
                 detail=(
                     "This is the current proof window for portfolio analytics. The more real completed cycles TradingX records, the more of the dashboard can move from readiness to verified performance."
                 ),
-                sparkline=tuple(str(index + 1) for index, _payload in enumerate(service_cycles[-6:])),
+                sparkline=tuple(
+                    str(index + 1) for index, _payload in enumerate(service_cycles[-6:])
+                ),
             ),
             PortfolioMetricCard(
                 metric_id="daily_pnl",
                 label="Daily P&L",
-                value=f"${self._format_signed_money(daily_pnl)}".replace("$+", "+$").replace("$-", "-$"),
+                value=f"${self._format_signed_money(daily_pnl)}".replace(
+                    "$+", "+$"
+                ).replace("$-", "-$"),
                 delta=(
                     self._format_percent(
                         self._safe_percent_change(
@@ -473,9 +489,7 @@ class LocalWebReadModel:
                     else "n/a"
                 ),
                 health=(
-                    "good"
-                    if daily_pnl > 0
-                    else ("bad" if daily_pnl < 0 else "neutral")
+                    "good" if daily_pnl > 0 else ("bad" if daily_pnl < 0 else "neutral")
                 ),
                 summary=(
                     "This is good when positive and explainable, bad when losses repeat, and neutral today because no supervised cycle has completed."
@@ -577,11 +591,7 @@ class LocalWebReadModel:
                     "This rate turns execution quality into a direct reliability measure. A sustained non-zero reject rate usually means sizing, constraints, or account-state synchronization needs attention."
                 ),
                 sparkline=tuple(
-                    str(
-                        100
-                        if event["event_type"] == "reject"
-                        else 0
-                    )
+                    str(100 if event["event_type"] == "reject" else 0)
                     for event in reversed(oms_events[:6])
                 ),
                 provenance=live_journal_note,
@@ -597,7 +607,8 @@ class LocalWebReadModel:
                 ),
                 health=(
                     "bad"
-                    if latest_event is None and runtime_state.status in {"running", "bootstrapping"}
+                    if latest_event is None
+                    and runtime_state.status in {"running", "bootstrapping"}
                     else "neutral"
                 ),
                 summary=(
@@ -770,13 +781,23 @@ class LocalWebReadModel:
             else None
         )
         cadence_seconds = self._config.runtime.service_interval_seconds
-        cadence_label = f"Every {cadence_seconds // 60}m" if cadence_seconds % 60 == 0 else f"Every {cadence_seconds}s"
+        cadence_label = (
+            f"Every {cadence_seconds // 60}m"
+            if cadence_seconds % 60 == 0
+            else f"Every {cadence_seconds}s"
+        )
         last_evaluation_at_utc = latest_cycle_completed_at or (
-            selection.generated_at_utc if selection is not None else runtime_state.updated_at_utc
+            selection.generated_at_utc
+            if selection is not None
+            else runtime_state.updated_at_utc
         )
         next_evaluation_at_utc = None
         if runtime_state.status not in {"idle", "halted", "stopping", "error"}:
-            anchor = last_evaluation_at_utc or runtime_state.started_at_utc or runtime_state.updated_at_utc
+            anchor = (
+                last_evaluation_at_utc
+                or runtime_state.started_at_utc
+                or runtime_state.updated_at_utc
+            )
             next_evaluation_at_utc = anchor + timedelta(seconds=cadence_seconds)
 
         current_open_symbols = tuple(
@@ -786,15 +807,23 @@ class LocalWebReadModel:
         )
         pending_orders_count = self._count_pending_orders()
         positions_count = len(current_open_symbols)
-        current_exposure = "Flat" if positions_count == 0 else f"{positions_count} open position(s)"
+        current_exposure = (
+            "Flat" if positions_count == 0 else f"{positions_count} open position(s)"
+        )
         current_exposure_detail = (
             "No open position is currently held in the paper account."
             if positions_count == 0
             else ", ".join(current_open_symbols)
         )
 
-        top_score = selection.ranked_opportunities[0] if selection and selection.ranked_opportunities else None
-        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        top_score = (
+            selection.ranked_opportunities[0]
+            if selection and selection.ranked_opportunities
+            else None
+        )
+        threshold = (
+            activation.deploy_threshold if activation is not None else Decimal("0")
+        )
         if selection is None:
             last_decision = "No decision yet"
             decision_reason = "TradingX has not recorded an opportunity selection yet."
@@ -829,9 +858,7 @@ class LocalWebReadModel:
         elif runtime_state.status == "idle":
             heartbeat_state = "Idle"
             heartbeat_tone = "neutral"
-            heartbeat_summary = (
-                "The runtime host is not currently active. Start the bot to resume the evaluation cadence."
-            )
+            heartbeat_summary = "The runtime host is not currently active. Start the bot to resume the evaluation cadence."
         elif positions_count > 0:
             heartbeat_state = "Active position"
             heartbeat_tone = "good"
@@ -840,14 +867,22 @@ class LocalWebReadModel:
             heartbeat_state = "Waiting for next evaluation"
             heartbeat_tone = "info"
             heartbeat_summary = "TradingX evaluated the configured universe, found no deployable trade, and is waiting for the next cadence tick."
-        elif runtime_state.status in {"bootstrapping", "historical_warmup", "broker_sync", "feature_ready", "strategy_ready"}:
+        elif runtime_state.status in {
+            "bootstrapping",
+            "historical_warmup",
+            "broker_sync",
+            "feature_ready",
+            "strategy_ready",
+        }:
             heartbeat_state = "Evaluating"
             heartbeat_tone = "watch"
             heartbeat_summary = "TradingX is still progressing through its runtime boot and evaluation sequence."
         else:
             heartbeat_state = "Running"
             heartbeat_tone = "good"
-            heartbeat_summary = "TradingX is active and waiting for the next evaluation window."
+            heartbeat_summary = (
+                "TradingX is active and waiting for the next evaluation window."
+            )
 
         runtime_truth = self._build_runtime_truth_items(
             heartbeat_state=heartbeat_state,
@@ -893,7 +928,15 @@ class LocalWebReadModel:
             score_explanation=score_explanation,
             current_exposure=current_exposure,
             current_exposure_detail=current_exposure_detail,
-            active_symbol=(top_score.symbol if top_score is not None else (runtime_state.active_symbols[0] if runtime_state.active_symbols else "")),
+            active_symbol=(
+                top_score.symbol
+                if top_score is not None
+                else (
+                    runtime_state.active_symbols[0]
+                    if runtime_state.active_symbols
+                    else ""
+                )
+            ),
             selected_symbol=selected_symbol,
             decision=(selection.decision if selection is not None else ""),
             runtime_truth=runtime_truth,
@@ -1047,7 +1090,9 @@ class LocalWebReadModel:
                 PortfolioBenchmarkRow(
                     benchmark_id="sp500",
                     label="S&P 500",
-                    portfolio_return=self._format_percent(portfolio_return, signed=True),
+                    portfolio_return=self._format_percent(
+                        portfolio_return, signed=True
+                    ),
                     benchmark_return="n/a",
                     excess_return="n/a",
                     detail="Prepare or refresh benchmark data to unlock a trustworthy comparison.",
@@ -1077,9 +1122,9 @@ class LocalWebReadModel:
             strategies=(
                 PortfolioStrategyRow(
                     strategy_id=runtime_state.active_strategy_id or "unknown",
-                    label=(runtime_state.active_strategy_id or "Runtime strategy").replace(
-                        "-", " "
-                    ).title(),
+                    label=(runtime_state.active_strategy_id or "Runtime strategy")
+                    .replace("-", " ")
+                    .title(),
                     status=runtime_state.status,
                     pnl="n/a",
                     trade_count=str(len(closed_trades)),
@@ -1105,7 +1150,9 @@ class LocalWebReadModel:
                 recent_events=(),
                 provenance=provenance,
             )
-        reject_events = [event for event in oms_events if event["event_type"] == "reject"]
+        reject_events = [
+            event for event in oms_events if event["event_type"] == "reject"
+        ]
         latest_reason = (
             reject_events[0]["reason"].replace("_", " ")
             if reject_events
@@ -1265,9 +1312,7 @@ class LocalWebReadModel:
         journal_path = self._data_root_path() / "journal.db"
         if not journal_path.exists():
             return 0
-        query = (
-            "select row_id, client_order_id, event_type from oms_journal order by row_id desc"
-        )
+        query = "select row_id, client_order_id, event_type from oms_journal order by row_id desc"
         active_event_types = {"submit_attempt", "ack", "order_recovered"}
         terminal_event_types = {
             "fill",
@@ -1313,13 +1358,28 @@ class LocalWebReadModel:
             "Active position",
             "Evaluating",
         }:
-            session_posture = ("Intraday monitor", "TradingX is actively supervising the market session.", "info")
+            session_posture = (
+                "Intraday monitor",
+                "TradingX is actively supervising the market session.",
+                "info",
+            )
         else:
-            session_posture = ("Standby monitor", "TradingX is loaded, but it is not actively cycling the market right now.", "neutral")
+            session_posture = (
+                "Standby monitor",
+                "TradingX is loaded, but it is not actively cycling the market right now.",
+                "neutral",
+            )
         if runtime_state.status in {"idle", "halted", "stopping", "error"}:
-            runtime_engine_value = "Idle" if runtime_state.status == "idle" else "Blocked"
-            runtime_engine_detail = runtime_state.status_reason or "Runtime activity is paused until the operator intervenes."
-            runtime_engine_tone = "watch" if runtime_state.status != "idle" else "neutral"
+            runtime_engine_value = (
+                "Idle" if runtime_state.status == "idle" else "Blocked"
+            )
+            runtime_engine_detail = (
+                runtime_state.status_reason
+                or "Runtime activity is paused until the operator intervenes."
+            )
+            runtime_engine_tone = (
+                "watch" if runtime_state.status != "idle" else "neutral"
+            )
         else:
             runtime_engine_value = "Active"
             runtime_engine_detail = "The runtime host is active and capable of evaluating the configured universe."
@@ -1329,7 +1389,9 @@ class LocalWebReadModel:
             if last_evaluation_at_utc is not None
             else "No evaluation yet"
         )
-        paper_only_mode = bool(self._config.live_disable_report().get("paper_only_mode"))
+        paper_only_mode = bool(
+            self._config.live_disable_report().get("paper_only_mode")
+        )
         return (
             RuntimeTruthItem(
                 label="Session posture",
@@ -1394,9 +1456,14 @@ class LocalWebReadModel:
         activation: StrategyActivationRecord | None,
         current_open_symbols: tuple[str, ...],
     ) -> tuple[RuntimeSymbolHeartbeatRow, ...]:
-        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        threshold = (
+            activation.deploy_threshold if activation is not None else Decimal("0")
+        )
         score_by_symbol = {
-            score.symbol: score for score in (selection.ranked_opportunities if selection is not None else ())
+            score.symbol: score
+            for score in (
+                selection.ranked_opportunities if selection is not None else ()
+            )
         }
         rows: list[RuntimeSymbolHeartbeatRow] = []
         for symbol in configured_symbols:
@@ -1410,7 +1477,11 @@ class LocalWebReadModel:
                 status = "In position"
                 reason = "TradingX is already carrying this symbol in the current account exposure."
                 tone = "good"
-            elif selection is not None and selection.selected_symbol == symbol and selection.decision == "selected":
+            elif (
+                selection is not None
+                and selection.selected_symbol == symbol
+                and selection.decision == "selected"
+            ):
                 status = "Selected"
                 reason = "This symbol cleared the deploy threshold and won the current ranking pass."
                 tone = "good"
@@ -1418,7 +1489,9 @@ class LocalWebReadModel:
                 status = "Blocked"
                 reason = blocked_reason
                 tone = "watch"
-            elif score is not None and score.final_score >= threshold and score.eligible:
+            elif (
+                score is not None and score.final_score >= threshold and score.eligible
+            ):
                 status = "Ready"
                 reason = "This symbol cleared the deploy threshold and is eligible for deployment."
                 tone = "good"
@@ -1453,9 +1526,15 @@ class LocalWebReadModel:
                     warmup_state=(
                         "Blocked"
                         if blocked_reason
-                        else ("Ready" if warmup is not None and symbol in warmup.symbols_ready else "Pending")
+                        else (
+                            "Ready"
+                            if warmup is not None and symbol in warmup.symbols_ready
+                            else "Pending"
+                        )
                     ),
-                    exposure_state=("Held" if symbol in current_open_symbols else "Flat"),
+                    exposure_state=(
+                        "Held" if symbol in current_open_symbols else "Flat"
+                    ),
                     tone=tone,
                 )
             )
@@ -1470,7 +1549,9 @@ class LocalWebReadModel:
         activation: StrategyActivationRecord | None,
         current_open_symbols: tuple[str, ...],
     ) -> tuple[RuntimeDecisionLadderRow, ...]:
-        threshold = activation.deploy_threshold if activation is not None else Decimal("0")
+        threshold = (
+            activation.deploy_threshold if activation is not None else Decimal("0")
+        )
         rows: list[RuntimeDecisionLadderRow] = []
         ranked_symbols: set[str] = set()
         for rank, score in enumerate(
@@ -1480,7 +1561,11 @@ class LocalWebReadModel:
             ranked_symbols.add(score.symbol)
             if score.symbol in current_open_symbols:
                 disposition = "In position"
-            elif selection is not None and selection.selected_symbol == score.symbol and selection.decision == "selected":
+            elif (
+                selection is not None
+                and selection.selected_symbol == score.symbol
+                and selection.decision == "selected"
+            ):
                 disposition = "Selected"
             elif score.final_score >= threshold and score.eligible:
                 disposition = "Ready"
@@ -1490,7 +1575,9 @@ class LocalWebReadModel:
                 RuntimeDecisionLadderRow(
                     rank=rank,
                     symbol=score.symbol,
-                    final_score=self._format_plain_decimal(score.final_score, decimals=4),
+                    final_score=self._format_plain_decimal(
+                        score.final_score, decimals=4
+                    ),
                     threshold=self._format_plain_decimal(threshold),
                     threshold_gap=self._format_signed_decimal(
                         score.final_score - threshold,
@@ -1515,7 +1602,9 @@ class LocalWebReadModel:
                     final_score="n/a",
                     threshold=self._format_plain_decimal(threshold),
                     threshold_gap="n/a",
-                    primary_driver=("Warmup blocked" if blocked_reason else "No score yet"),
+                    primary_driver=(
+                        "Warmup blocked" if blocked_reason else "No score yet"
+                    ),
                     disposition=("Blocked" if blocked_reason else "Pending"),
                 )
             )
@@ -1570,11 +1659,7 @@ class LocalWebReadModel:
             )
         if heartbeat_state == "Waiting for next evaluation" and selection is not None:
             closest_row = next(
-                (
-                    row
-                    for row in decision_ladder
-                    if row.threshold_gap != "n/a"
-                ),
+                (row for row in decision_ladder if row.threshold_gap != "n/a"),
                 None,
             )
             if closest_row is not None:
@@ -1719,7 +1804,9 @@ class LocalWebReadModel:
         period_bars: list[PerformancePeriodBar] = []
         for index, point_label in enumerate(labels):
             progress = Decimal(index) / Decimal(max(len(labels) - 1, 1))
-            eased = (progress * Decimal("0.65")) + (progress * progress * Decimal("0.35"))
+            eased = (progress * Decimal("0.65")) + (
+                progress * progress * Decimal("0.35")
+            )
             portfolio_value = Decimal("100") + (targets["portfolio"] * eased)
             sp500_value = Decimal("100") + (targets["sp500"] * eased)
             nasdaq_value = Decimal("100") + (targets["nasdaq100"] * eased)
@@ -1830,8 +1917,12 @@ class LocalWebReadModel:
                     else (runtime_state.active_strategy_id or "baseline-long-only-v1")
                 ),
                 "label": "Baseline Long Only",
-                "pnl_value": (equity * max(total_return_pct, Decimal("0.34")) / Decimal("100")),
-                "total_return": self._format_percent(max(total_return_pct, Decimal("0.34"))),
+                "pnl_value": (
+                    equity * max(total_return_pct, Decimal("0.34")) / Decimal("100")
+                ),
+                "total_return": self._format_percent(
+                    max(total_return_pct, Decimal("0.34"))
+                ),
                 "sharpe_ratio": self._format_plain_decimal(Decimal("0.62")),
                 "max_drawdown": self._format_drawdown(Decimal("0.019")),
                 "win_rate": "58%",
@@ -1908,14 +1999,18 @@ class LocalWebReadModel:
                     "regime_fit": (
                         "defensive"
                         if max_drawdown <= Decimal("0.06")
-                        else ("risk_on" if metrics["candidate_cagr"] >= Decimal("0.03") else "mixed")
+                        else (
+                            "risk_on"
+                            if metrics["candidate_cagr"] >= Decimal("0.03")
+                            else "mixed"
+                        )
                     ),
                     "status": str(candidate.get("status", "review")),
                 }
             )
-        total_abs_pnl = sum(abs(Decimal(str(row["pnl_value"]))) for row in raw_rows) or Decimal(
-            "1"
-        )
+        total_abs_pnl = sum(
+            abs(Decimal(str(row["pnl_value"]))) for row in raw_rows
+        ) or Decimal("1")
         rows = tuple(
             StrategyAttributionRow(
                 strategy_id=str(row["strategy_id"]),
@@ -1927,7 +2022,8 @@ class LocalWebReadModel:
                 win_rate=str(row["win_rate"]),
                 profit_factor=str(row["profit_factor"]),
                 contribution_pct=self._format_percent(
-                    (abs(Decimal(str(row["pnl_value"]))) / total_abs_pnl) * Decimal("100")
+                    (abs(Decimal(str(row["pnl_value"]))) / total_abs_pnl)
+                    * Decimal("100")
                 ),
                 stability_score=str(row["stability_score"]),
                 recent_trend=str(row["recent_trend"]),
@@ -1957,7 +2053,9 @@ class LocalWebReadModel:
                     adjustment = Decimal("0.10")
                 if regime == "High Vol" and row.status in {"fail", "degraded"}:
                     adjustment = Decimal("-0.08")
-                value = max(Decimal("0.10"), min(Decimal("0.95"), base_score + adjustment))
+                value = max(
+                    Decimal("0.10"), min(Decimal("0.95"), base_score + adjustment)
+                )
                 cells.append(
                     StrategyHeatmapCell(
                         strategy_id=row.strategy_id,
@@ -2010,7 +2108,10 @@ class LocalWebReadModel:
                     continue
                 if worst_cost_drag_bps is None or drag > worst_cost_drag_bps:
                     worst_cost_drag_bps = drag
-        if validation_report is not None and str(validation_report.get("status", "")) != "pass":
+        if (
+            validation_report is not None
+            and str(validation_report.get("status", "")) != "pass"
+        ):
             detail = str(
                 validation_report.get(
                     "summary",
@@ -2099,13 +2200,10 @@ class LocalWebReadModel:
                 "",
             )
         )
-        benchmark_edge_details = (
-            opportunity_cost_details
-            or str(
-                self._ensure_mapping(criteria.get("benchmark_edge", {})).get(
-                    "details",
-                    "",
-                )
+        benchmark_edge_details = opportunity_cost_details or str(
+            self._ensure_mapping(criteria.get("benchmark_edge", {})).get(
+                "details",
+                "",
             )
         )
         operating_constraint_details = str(
@@ -2114,13 +2212,10 @@ class LocalWebReadModel:
                 "",
             )
         )
-        max_drawdown_details = (
-            operating_constraint_details
-            or str(
-                self._ensure_mapping(criteria.get("max_drawdown_target", {})).get(
-                    "details",
-                    "",
-                )
+        max_drawdown_details = operating_constraint_details or str(
+            self._ensure_mapping(criteria.get("max_drawdown_target", {})).get(
+                "details",
+                "",
             )
         )
         return {

@@ -141,7 +141,9 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         gate_id="1",
         bars_by_symbol=bars_by_symbol,
         candidates=candidates,
-        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
     )
@@ -408,7 +410,10 @@ def test_adversarial_backtest_runner_still_returns_plain_tuple(monkeypatch) -> N
             assumptions=(),
         )
 
-    monkeypatch.setattr("tradingx.validation.evaluate_candidate", fake_evaluate_candidate)
+    monkeypatch.setattr(
+        "tradingx.validation.evaluate_candidate",
+        fake_evaluate_candidate,
+    )
 
     report = build_gate_report(
         gate_id="2",
@@ -540,7 +545,9 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
         gate_id="2",
         bars_by_symbol=bars_by_symbol,
         candidates=(candidate,),
-        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
     )
@@ -653,12 +660,7 @@ def test_load_benchmark_close_series_warns_on_legacy_json_list(
 
 
 def test_validation_sharpe_ratio_matches_evaluation_sharpe_definition() -> None:
-    returns = (
-        [0.012] * 40
-        + [-0.004] * 10
-        + [0.010] * 40
-        + [-0.003] * 10
-    )
+    returns = [0.012] * 40 + [-0.004] * 10 + [0.010] * 40 + [-0.003] * 10
 
     assert validation_sharpe_ratio(returns) == evaluation_sharpe_ratio(
         returns=returns,

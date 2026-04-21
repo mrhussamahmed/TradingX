@@ -32,6 +32,7 @@ from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkCloseSeries,
     BenchmarkStackPayload,
+    EvaluationEvidencePack,
     OperatingConstraintBudget,
     ScalarValue,
     StrategyCandidate,
@@ -630,7 +631,7 @@ def _record_validation_trial(
     trials_ledger: TrialsLedger | None,
     candidate: StrategyCandidate,
     candidate_returns: tuple[Decimal, ...],
-    evidence_pack,
+    evidence_pack: EvaluationEvidencePack,
     status: str,
     window_start_utc: datetime,
     window_end_utc: datetime,

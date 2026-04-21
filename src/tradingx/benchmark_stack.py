@@ -84,9 +84,7 @@ class PassiveOpportunityCost:
             for closes in closes_by_symbol.values()
         )
         period_count = (
-            len(session_dates)
-            if has_leading_prior_close
-            else len(session_dates) - 1
+            len(session_dates) if has_leading_prior_close else len(session_dates) - 1
         )
 
         for index in range(period_count):

@@ -11,7 +11,8 @@ from decimal import Decimal
 
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
-from scipy.stats import kurtosis as scipy_kurtosis, skew as scipy_skew  # type: ignore[import-untyped]
+from scipy.stats import kurtosis as scipy_kurtosis  # type: ignore[import-untyped]
+from scipy.stats import skew as scipy_skew
 
 from tradingx.costs import CostModelConfig
 from tradingx.stats import deflated_sharpe_ratio, lo_adjusted_sharpe_ratio
@@ -428,9 +429,7 @@ def evaluate_candidate(
     candidate_metrics: dict[str, ScalarValue] = dict(candidate_metrics_numeric)
     candidate_metrics["excess_return"] = excess_return
     observed_sharpe = float(candidate_metrics_numeric["sharpe_ratio"])
-    north_star_sharpe_met: bool | None = Decimal(str(observed_sharpe)) >= Decimal(
-        "1.3"
-    )
+    north_star_sharpe_met: bool | None = Decimal(str(observed_sharpe)) >= Decimal("1.3")
     deflated_sharpe: Decimal | None = None
     if (
         trials_ledger is not None
@@ -442,7 +441,10 @@ def evaluate_candidate(
     ):
         stats = trials_ledger.trial_statistics_for_family(candidate.family)
         if stats.n_trials >= 2 and stats.trial_sharpe_variance > 0.0:
-            returns_array = np.asarray(_to_float_sequence(candidate_returns), dtype=float)
+            returns_array = np.asarray(
+                _to_float_sequence(candidate_returns),
+                dtype=float,
+            )
             skewness = float(scipy_skew(returns_array, bias=False))
             kurtosis = float(scipy_kurtosis(returns_array, fisher=True, bias=False))
             if math.isfinite(skewness) and math.isfinite(kurtosis):

@@ -105,8 +105,7 @@ def test_daily_bar_backtest_exit_realizes_overnight_gap_before_flattening() -> N
     assert result.applied_weights.iloc[2]["SPY"] == pytest.approx(0.0)
 
 
-def test_daily_bar_backtest_applies_same_day_open_weight_when_signal_is_actionable(
-    ) -> None:
+def test_daily_bar_backtest_applies_open_weight_same_day_when_actionable() -> None:
     module = importlib.import_module("tradingx.backtest")
     bars = _ohlcv_frame(
         opens=[100.0, 110.0, 121.0],
@@ -128,8 +127,7 @@ def test_daily_bar_backtest_applies_same_day_open_weight_when_signal_is_actionab
     assert result.applied_weights["SPY"].tolist() == pytest.approx([0.0, 1.0, 1.0])
 
 
-def test_daily_bar_backtest_full_exposure_toy_path_compounds_to_twenty_one_percent(
-    ) -> None:
+def test_daily_bar_backtest_toy_path_compounds_to_twenty_one_percent() -> None:
     module = importlib.import_module("tradingx.backtest")
     bars = _ohlcv_frame(
         opens=[100.0, 110.0, 121.0],
@@ -230,8 +228,7 @@ def test_daily_bar_backtest_rebalances_drifted_weights_before_costing() -> None:
 
     assert without_costs.portfolio_returns.iloc[1] == pytest.approx(0.05)
     assert (
-        with_costs.portfolio_returns.iloc[1]
-        < without_costs.portfolio_returns.iloc[1]
+        with_costs.portfolio_returns.iloc[1] < without_costs.portfolio_returns.iloc[1]
     )
 
 

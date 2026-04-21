@@ -876,7 +876,10 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert portfolio.json()["benchmark_panel"]["status"] == "unavailable"
     assert performance.status_code == 200
     assert performance.json()["data_state"] == "partial"
-    assert performance.json()["execution_panel"]["headline"] == "Execution journal is available"
+    assert (
+        performance.json()["execution_panel"]["headline"]
+        == "Execution journal is available"
+    )
     assert runtime_state.status_code == 200
     assert runtime_state.json()["status"] == "trading_ready"
     assert runtime_heartbeat.status_code == 200

@@ -67,9 +67,7 @@ def run_daily_bar_backtest(
                 previous_close = float(symbol_bars.iloc[bar_offset - 1]["close"])
                 current_open = float(symbol_bars.iloc[bar_offset]["open"])
                 symbol_growth = (
-                    (current_open / previous_close)
-                    if previous_close > 0.0
-                    else 1.0
+                    (current_open / previous_close) if previous_close > 0.0 else 1.0
                 )
                 overnight_gross_by_symbol[symbol] = (
                     current_weights[symbol] * symbol_growth

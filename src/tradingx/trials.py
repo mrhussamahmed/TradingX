@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterator
 
 from tradingx.types import TrialRecord, TrialStatistics
-
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trials (

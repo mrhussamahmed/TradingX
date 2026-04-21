@@ -121,9 +121,10 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0006 | TradingX local trading appliance design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-local-trading-appliance-design.md` |
 | DESIGN-0007 | TradingX week-1 dry-run controls design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-week1-dry-run-controls-design.md` |
 | DESIGN-0008 | TradingX operator control plane design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-operator-control-plane-design.md` |
-| DESIGN-0009 | TradingX operator platform redesign | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-operator-platform-redesign-design.md` |
+| DESIGN-0009 | TradingX control center launcher design | 1.0.0 | active | `docs/superpowers/specs/2026-04-19-control-center-launcher-design.md` |
 | DESIGN-0010 | TradingX runtime intelligence design | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-runtime-intelligence-design.md` |
 | DESIGN-0011 | Tranche 1.1 validation infrastructure design | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-1-validation-infrastructure-design.md` |
+| DESIGN-0012 | TradingX operator platform redesign | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-operator-platform-redesign-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 

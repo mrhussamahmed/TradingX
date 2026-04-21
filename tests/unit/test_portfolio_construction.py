@@ -137,12 +137,7 @@ def test_build_target_weights_limits_positions_and_rescales_gross() -> None:
     timestamp = pd.Timestamp("2026-04-17T00:00:00+00:00")
     sleeve_signals = {
         "trend_following": pd.DataFrame(
-            [
-                {
-                    f"S{index:02d}": 0.20
-                    for index in range(11)
-                }
-            ],
+            [{f"S{index:02d}": 0.20 for index in range(11)}],
             index=[timestamp],
             dtype=float,
         )
@@ -165,8 +160,9 @@ def test_build_target_weights_limits_positions_and_rescales_gross() -> None:
     ) == pytest.approx(1.0)
 
 
-def test_build_target_weights_flattens_positions_when_all_sleeves_are_inactive(
-) -> None:
+def test_build_target_weights_flattens_positions_when_all_sleeves_are_inactive() -> (
+    None
+):
     module = importlib.import_module("tradingx.portfolio_construction")
     config = module.PortfolioConstructionConfig(min_trade_notional=Decimal("50"))
     timestamp = pd.Timestamp("2026-04-17T00:00:00+00:00")
@@ -222,8 +218,7 @@ def test_build_target_weight_history_scales_long_equity_sleeves_in_crash_overlay
     assert history.iloc[-1]["EEM"] == pytest.approx(-0.10)
 
 
-def test_target_weight_history_keeps_budget_stable_when_sleeves_toggle(
-) -> None:
+def test_target_weight_history_keeps_budget_stable_when_sleeves_toggle() -> None:
     module = importlib.import_module("tradingx.portfolio_construction")
     history = module.build_target_weight_history(
         sleeve_signals={

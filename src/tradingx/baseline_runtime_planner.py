@@ -186,9 +186,7 @@ def _planned_trade_for_intent(
     market_snapshot: MarketSnapshot,
 ) -> RuntimePortfolioTrade:
     position = _position_for_symbol(portfolio_state, intent.symbol)
-    current_quantity = (
-        Decimal("0") if position is None else position.quantity
-    )
+    current_quantity = Decimal("0") if position is None else position.quantity
     current_weight = (
         Decimal("0")
         if position is None or portfolio_state.equity <= Decimal("0")

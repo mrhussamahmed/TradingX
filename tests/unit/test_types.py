@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+
 import tradingx.types as types_module
 from tradingx.types import (
     AlertDrillRecord,
@@ -17,9 +18,9 @@ from tradingx.types import (
     DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    EvaluationEvidencePack,
     ExecutionLifecycleRecord,
     ExplorerRecord,
-    EvaluationEvidencePack,
     Gate3CriterionSnapshot,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
@@ -48,9 +49,9 @@ from tradingx.types import (
     ServiceSymbolResult,
     StrategyActivationRecord,
     StrategyCandidate,
+    TradeIntent,
     TrialRecord,
     TrialStatistics,
-    TradeIntent,
     ValidationCandidateResult,
     ValidationCriterionResult,
     ValidationReport,
