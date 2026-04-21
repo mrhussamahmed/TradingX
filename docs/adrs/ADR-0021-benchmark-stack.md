@@ -69,16 +69,22 @@ using the constant `GATE1_MIN_CAGR_EDGE = 0.02` at
 Rolling maximum drawdown and Conditional Drawdown-at-Risk (CDaR),
 per Chekhlov-Uryasev-Zabarankin (2005):
 
-- Design target: MDD ≤ 15%.
-- Hard halt threshold: MDD ≤ 25%. Breach forces a stop-trading +
-  operator-clearance cycle.
-- CDaR threshold: ≤ 8% at 95% confidence.
+- Design target: MDD ≤ 15%. Enforced as a pass/fail criterion at
+  validation time by `evaluate_operating_constraint` at
+  [src/tradingx/validation.py:189](/src/tradingx/validation.py:189).
+- CDaR threshold: ≤ 8% at 95% confidence. Also enforced as a pass/fail
+  criterion at validation time.
+- Hard halt threshold: MDD ≤ 25% is recorded as the design intent and
+  carried as metadata in `OperatingConstraintBudget.max_drawdown_halt`,
+  surfaced in the `operating_constraint` criterion details. **It is
+  not yet enforced by a runtime halt trigger.** Runtime enforcement
+  ships with tranche 1's drawdown-defense subsystem (SPEC-0013 §4.D).
+  Until then, the 25% threshold is a documented design target, not an
+  active live-halt control.
 
 Implemented by `OperatingConstraintBudget` in
-[src/tradingx/types.py](/src/tradingx/types.py) and evaluated by
-`evaluate_operating_constraint` at
-[src/tradingx/validation.py:189](/src/tradingx/validation.py:189)
-using `max_drawdown` and `conditional_drawdown_at_risk` at
+[src/tradingx/types.py](/src/tradingx/types.py) using `max_drawdown`
+and `conditional_drawdown_at_risk` at
 [src/tradingx/stats.py:174](/src/tradingx/stats.py:174) onward.
 
 ### Composition

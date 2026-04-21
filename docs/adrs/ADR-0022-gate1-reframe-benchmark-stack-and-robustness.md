@@ -62,13 +62,21 @@ the surrounding candidate-evaluation pipeline:
    MaxDD. Constant `GATE1_MIN_OUT_OF_SAMPLE_DAYS = 756` at
    [src/tradingx/validation.py:44](/src/tradingx/validation.py:44).
 
-### Computed and reported today, but not a hard gate
+### Deferred to tranche 1 hardening (evidence-model additions)
 
-- **Deflated Sharpe Ratio** — computed and recorded on every
-  candidate evidence pack for trend tracking.
-- **North-star Sharpe threshold** — a point Sharpe ≥ 1.3 is recorded
-  as preference-ranking data when choosing among surviving
-  candidates. It is not pass/fail.
+- **Deflated Sharpe Ratio** — the primitive exists at
+  [src/tradingx/stats.py:148](/src/tradingx/stats.py:148) but is not
+  yet invoked by `evaluate_candidate` at
+  [src/tradingx/evaluation.py:409](/src/tradingx/evaluation.py:409),
+  and the `EvaluationEvidencePack` at
+  [src/tradingx/types.py:68](/src/tradingx/types.py:68) has no DSR
+  field. Wiring DSR into `evaluate_candidate` and adding it to the
+  evidence pack ship with tranche-1 hardening. DSR remains reported
+  rather than pass/fail once wired.
+- **North-star Sharpe threshold (≥ 1.3)** — not currently recorded on
+  evidence packs. Scheduled to ship alongside the DSR wiring. Its
+  role remains preference-ranking when choosing among surviving
+  candidates, not pass/fail.
 
 ### Deferred to tranche 2 hardening
 

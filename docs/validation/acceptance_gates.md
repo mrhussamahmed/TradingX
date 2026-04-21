@@ -74,29 +74,32 @@ reframed gate logic in
   `GATE1_MIN_CAGR_EDGE = 0.02`). The 60/40 blend is rebalanced
   monthly.
 - `operating_constraint`: maximum drawdown <= 15% design target AND
-  CDaR@95% confidence <= 8% threshold. Hard halt threshold is 25%
-  maximum drawdown; breach forces a stop-trading and operator-
-  clearance cycle.
+  CDaR@95% confidence <= 8% threshold. Both are enforced as pass/fail
+  criteria by `evaluate_operating_constraint` at validation time. The
+  25% maximum-drawdown hard-halt threshold is recorded as design
+  intent and carried in the `OperatingConstraintBudget` payload but
+  is not yet enforced by a runtime halt trigger; runtime enforcement
+  ships with tranche 1's drawdown-defense subsystem.
 - `out_of_sample_profile`: at least 756 trading days (three years)
   of out-of-sample data with metrics remaining within 30% of the
   in-sample profile on Sharpe, CAGR, and MaxDD
   (`|metric_OOS - metric_IS| / max(|metric_IS|, 0.3) <= 0.30`).
 
-**Computed and reported, but not hard-pass**
-
-- Deflated Sharpe Ratio is computed and recorded on every candidate
-  evidence pack for trend tracking; it does not gate pass/fail in
-  tranche 1.
-- A point Sharpe >= 1.3 is recorded as preference-ranking data for
-  promotion among surviving candidates; it is not pass/fail.
-
-**Deferred to tranche 1 hardening (portfolio construction)**
+**Deferred to tranche 1 hardening**
 
 - Marginal portfolio contribution: a surviving sleeve must also
   improve the portfolio's Sharpe, Calmar, and CDaR when added to
   the existing book with cost and correlation accounted for. This
   criterion ships when tranche 1's multi-sleeve portfolio
   construction lands.
+- Deflated Sharpe Ratio: the primitive exists in `stats.py` but is
+  not yet invoked by `evaluate_candidate` and the evidence pack has
+  no DSR field. Wiring DSR into the candidate evaluation pipeline
+  and adding it to the evidence pack ship with tranche-1 hardening.
+  When wired, DSR remains reported rather than pass/fail.
+- North-star Sharpe (>= 1.3): not currently recorded on evidence
+  packs. Scheduled to ship alongside the DSR wiring as
+  preference-ranking data among surviving candidates. Not pass/fail.
 
 **Deferred to tranche 2 hardening**
 
