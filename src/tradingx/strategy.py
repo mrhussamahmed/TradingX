@@ -59,6 +59,7 @@ def build_mandatory_candidate_registry(
                 "forecast_method": "ewma",
             },
             status="under_evaluation",
+            sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
         ),
         StrategyCandidate(
             candidate_id="vol-target-v1",
@@ -73,6 +74,7 @@ def build_mandatory_candidate_registry(
                 "forecast_method": "garch",
             },
             status="under_evaluation",
+            sleeve_class_path="tradingx.sleeves.vol_managed_beta.VolManagedBetaSleeve",
         ),
         StrategyCandidate(
             candidate_id="mean-reversion-v1",

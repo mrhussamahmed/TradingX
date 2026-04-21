@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TypeAlias
+from typing import Final, TypeAlias
+
+import pandas as pd  # type: ignore[import-untyped]
 
 ScalarValue: TypeAlias = str | int | float | bool | Decimal
 
@@ -62,6 +64,7 @@ class StrategyCandidate:
     parameter_set: dict[str, ScalarValue]
     status: str
     evidence_pack_id: str | None = None
+    sleeve_class_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +268,35 @@ class RegimeSnapshot:
     spy_sma_200: Decimal
     vix_close: Decimal | None
     yield_curve_spread_bps: Decimal | None
+
+
+class SleeveFailureReason:
+    """String constants for sleeve-level failure diagnostics."""
+
+    HALT_BY_OPERATOR: Final[str] = "halt_by_operator"
+    DRIFT_ALARM_LIVE: Final[str] = "drift_alarm_live"
+    SLEEVE_SHARPE_BELOW_THRESHOLD_6M: Final[str] = "sleeve_sharpe_below_threshold_6m"
+    REGIME_STRESSED: Final[str] = "regime_stressed"
+    INSUFFICIENT_HISTORY: Final[str] = "insufficient_history"
+
+
+@dataclass(frozen=True)
+class SleeveTrade:
+    sleeve_id: str
+    symbol: str
+    side: str
+    target_weight_of_sleeve_budget: Decimal
+    rationale: str
+    regime: str
+
+
+@dataclass(frozen=True)
+class SleeveContext:
+    observation_date: date
+    bars_by_symbol: dict[str, pd.DataFrame]
+    regime: RegimeSnapshot
+    current_weights_by_symbol: dict[str, Decimal]
+    sleeve_budget_equity: Decimal
 
 
 @dataclass(frozen=True)
@@ -1149,6 +1181,9 @@ __all__ = (
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",
+    "SleeveContext",
+    "SleeveFailureReason",
+    "SleeveTrade",
     "StrategyActivationRecord",
     "StrategyAttributionRow",
     "StrategyCandidate",

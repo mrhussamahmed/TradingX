@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from datetime import date
 from decimal import Decimal
 
 import pandas as pd
@@ -15,6 +16,7 @@ from tradingx.types import (
     BenchmarkStackPayload,
     EvaluationEvidencePack,
     OperatingConstraintBudget,
+    RegimeSnapshot,
     StrategyCandidate,
 )
 from tradingx.validation import (
@@ -94,6 +96,21 @@ def _benchmark_stack_payload_for_periods(return_periods: int) -> BenchmarkStackP
             cdar_threshold=Decimal("0.08"),
             cdar_confidence=Decimal("0.95"),
         ),
+    )
+
+
+def _risk_on_snapshot(observation_date: date) -> RegimeSnapshot:
+    return RegimeSnapshot(
+        observation_date=observation_date,
+        regime="risk_on",
+        above_sma_200=True,
+        vix_elevated=False,
+        vix_stressed=False,
+        yield_curve_inverted=False,
+        spy_close=Decimal("500"),
+        spy_sma_200=Decimal("480"),
+        vix_close=Decimal("15"),
+        yield_curve_spread_bps=Decimal("35"),
     )
 
 
@@ -358,6 +375,105 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
     assert explicit_default_returns == base_vol_returns
     assert explicit_default_drag == base_vol_drag
     assert base_vol_drag >= Decimal("0")
+
+
+def test_candidate_returns_routes_through_sleeve_when_path_present() -> None:
+    bars = _quote_enriched_ohlcv_frame(
+        [
+            100.0 + (0.4 * float(index)) + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
+            for index in range(300)
+        ]
+    )
+    regimes = {
+        timestamp.date(): _risk_on_snapshot(timestamp.date())
+        for timestamp in bars.index
+    }
+    candidate = StrategyCandidate(
+        candidate_id="trend-test-v1",
+        family="trend_following",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={
+            "lookback_days": 100,
+            "sma_window_days": 50,
+            "forecast_method": "ewma",
+        },
+        status="under_evaluation",
+        sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
+    )
+
+    returns, drag = _candidate_returns(
+        candidate,
+        bars_by_symbol={"SPY": bars},
+        regime_snapshots_by_date=regimes,
+        sleeve_budget_equity=Decimal("100000"),
+    )
+
+    assert isinstance(returns, tuple)
+    assert returns
+    assert isinstance(drag, Decimal)
+
+
+def test_candidate_returns_applies_parameter_overrides_on_sleeve_path() -> None:
+    bars = _quote_enriched_ohlcv_frame(
+        [100.0] * 10
+        + [
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            95.0,
+            96.0,
+            97.0,
+            98.0,
+            99.0,
+            100.0,
+            101.0,
+            102.0,
+            103.0,
+            104.0,
+        ]
+    )
+    regimes = {
+        timestamp.date(): _risk_on_snapshot(timestamp.date())
+        for timestamp in bars.index
+    }
+    candidate = StrategyCandidate(
+        candidate_id="trend-test-v1",
+        family="trend_following",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={
+            "lookback_days": 8,
+            "sma_window_days": 5,
+            "skip_recent_days": 1,
+            "forecast_method": "ewma",
+        },
+        status="under_evaluation",
+        sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
+    )
+
+    baseline_returns, _ = _candidate_returns(
+        candidate,
+        bars_by_symbol={"SPY": bars},
+        regime_snapshots_by_date=regimes,
+        sleeve_budget_equity=Decimal("100000"),
+    )
+    overridden_returns, _ = _candidate_returns(
+        candidate,
+        bars_by_symbol={"SPY": bars},
+        parameter_overrides={"lookback_days": 4, "sma_window_days": 3},
+        regime_snapshots_by_date=regimes,
+        sleeve_budget_equity=Decimal("100000"),
+    )
+
+    assert overridden_returns != baseline_returns
 
 
 def test_adversarial_backtest_runner_still_returns_plain_tuple(monkeypatch) -> None:
