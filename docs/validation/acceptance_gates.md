@@ -1,13 +1,13 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.0.1
+version: 1.1.0
 status: active
 created: 2026-04-17
-last_amended: 2026-04-19
+last_amended: 2026-04-21
 supersedes: null
 superseded_by: null
-author_session: SESS-2026-04-17-004
+author_session: claude-opus-4.7-2026-04-21
 ---
 
 # Stage 1 acceptance gates
@@ -59,16 +59,59 @@ reference that later validation reports can cite.
 
 ## Gate 1 — Backtest acceptability
 
-**Pass criteria**
+Pass criteria are evaluated against the three-tier benchmark stack
+defined in [ADR-0021](/docs/adrs/ADR-0021-benchmark-stack.md) and the
+reframed gate logic in
+[ADR-0022](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md).
 
-- Net CAGR > SPY CAGR + 2% absolute OR Sharpe >= 1.0 and >= 1.3x SPY
-  Sharpe over the same window.
-- Max drawdown <= 15%.
-- Calmar >= 0.5.
-- At least 3 years of out-of-sample data with metrics within 30% of the
-  in-sample profile.
-- Benchmark comparison uses dividend-adjusted SPY returns over the
-  identical window with identical cost assumptions.
+**Pass criteria (hard-pass, all required)**
+
+- `hurdle_clearance`: candidate cumulative return exceeds the cash
+  hurdle cumulative return (T-bill yield via DGS3MO) over the
+  validation window.
+- `opportunity_cost_edge`: candidate CAGR exceeds the 60% SPY + 40%
+  AGG passive blend CAGR by at least 2% absolute (constant
+  `GATE1_MIN_CAGR_EDGE = 0.02`). The 60/40 blend is rebalanced
+  monthly.
+- `operating_constraint`: maximum drawdown <= 15% design target AND
+  CDaR@95% confidence <= 8% threshold. Hard halt threshold is 25%
+  maximum drawdown; breach forces a stop-trading and operator-
+  clearance cycle.
+- `out_of_sample_profile`: at least 756 trading days (three years)
+  of out-of-sample data with metrics remaining within 30% of the
+  in-sample profile on Sharpe, CAGR, and MaxDD
+  (`|metric_OOS - metric_IS| / max(|metric_IS|, 0.3) <= 0.30`).
+
+**Computed and reported, but not hard-pass**
+
+- Deflated Sharpe Ratio is computed and recorded on every candidate
+  evidence pack for trend tracking; it does not gate pass/fail in
+  tranche 1.
+- A point Sharpe >= 1.3 is recorded as preference-ranking data for
+  promotion among surviving candidates; it is not pass/fail.
+
+**Deferred to tranche 1 hardening (portfolio construction)**
+
+- Marginal portfolio contribution: a surviving sleeve must also
+  improve the portfolio's Sharpe, Calmar, and CDaR when added to
+  the existing book with cost and correlation accounted for. This
+  criterion ships when tranche 1's multi-sleeve portfolio
+  construction lands.
+
+**Deferred to tranche 2 hardening**
+
+- Combinatorial Purged Cross-Validation (CPCV) replacing
+  purged/embargoed k-fold as the validation topology.
+- Probability of Backtest Overfitting (PBO) as a hard gate.
+
+**Benchmark comparison**
+
+All benchmarking uses the three-tier benchmark stack materialized by
+`BenchmarkStack.materialize(...)` in
+[src/tradingx/benchmark_stack.py](/src/tradingx/benchmark_stack.py)
+over the identical window as the candidate series with identical cost
+assumptions. The 60/40 opportunity-cost tier uses dividend-adjusted
+SPY and AGG closes sourced through `AlpacaMarketDataGateway`.
 
 **Primary evidence**
 
@@ -137,3 +180,10 @@ reference that later validation reports can cite.
 
 - `.specify/memory/constitution.md` (CONST-0001 v3.0.1)
 - `docs/archive/implementation_constraints.md` (CONSTRAINTS-0001 v1.0.0)
+- [ADR-0021](/docs/adrs/ADR-0021-benchmark-stack.md) — three-tier
+  benchmark stack (supersedes ADR-0004)
+- [ADR-0022](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md)
+  — Gate 1 reframe with benchmark-stack criteria and robustness
+  (supersedes ADR-0020)
+- [SPEC-0013](/docs/superpowers/specs/2026-04-20-capital-growth-landscape-design.md)
+  — Capital growth landscape
