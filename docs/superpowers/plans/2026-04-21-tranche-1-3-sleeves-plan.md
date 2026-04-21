@@ -29,7 +29,7 @@ Gate 1 pass/fail outcomes must remain unchanged on existing fixtures (no sleeve 
 ### New files
 
 - `src/tradingx/sleeves/__init__.py`
-- `src/tradingx/sleeves/base.py` — `SleeveProtocol`, `SleeveFailureReason`, `build_sleeve_from_candidate`
+- `src/tradingx/sleeves/base.py` — `SleeveProtocol` and `build_sleeve_from_candidate`
 - `src/tradingx/sleeves/regime_gate.py` — `apply_regime_exposure_floor`
 - `src/tradingx/sleeves/trend.py` — `TrendSleeve`
 - `src/tradingx/sleeves/vol_managed_beta.py` — `VolManagedBetaSleeve`
@@ -44,7 +44,7 @@ Gate 1 pass/fail outcomes must remain unchanged on existing fixtures (no sleeve 
 
 ### Modified files
 
-- `src/tradingx/types.py` — add `SleeveContext`, `SleeveTrade`
+- `src/tradingx/types.py` — add `SleeveContext`, `SleeveTrade`, `SleeveFailureReason`
 - `src/tradingx/strategy.py` — add `sleeve_class_path` field; wire into registry
 - `src/tradingx/validation.py` — route sleeve-path candidates through the new bridge in `_candidate_returns`
 - `tests/unit/test_types.py` — assertions on new types
@@ -108,7 +108,7 @@ def test_sleeve_context_is_frozen_dataclass():
         observation_date=date(2026, 4, 21),
         bars_by_symbol={"SPY": pd.DataFrame()},
         regime=regime_snapshot,
-        current_positions={"SPY": Decimal("10")},
+        current_weights_by_symbol={"SPY": Decimal("0.5")},
         sleeve_budget_equity=Decimal("100000"),
     )
     assert dataclasses.is_dataclass(ctx)
@@ -173,11 +173,38 @@ class SleeveContext:
     observation_date: date
     bars_by_symbol: dict[str, pd.DataFrame]
     regime: RegimeSnapshot
-    current_positions: dict[str, Decimal]
+    current_weights_by_symbol: dict[str, Decimal]
+    """Per-symbol current holding expressed as target_weight_of_
+    sleeve_budget (0.0 to 1.0). The caller converts from whatever
+    source is authoritative for its context — in live runtime,
+    broker qty × last price / equity; in simulation, the sleeve's
+    own previously-emitted target weight. The sleeve NEVER
+    reconstructs current weight from quantity + same-bar close —
+    that would drift from the backtest engine's next-open
+    execution model."""
     sleeve_budget_equity: Decimal
 ```
 
 Add `import pandas as pd` to the imports if not present. Add all three to `__all__`.
+
+**Design note — weight-space current state.** Earlier drafts of
+this plan carried `current_positions: dict[str, Decimal]` in
+**quantity** space, and sleeves reconstructed current weight as
+`qty × last_close / budget`. Codex's review flagged this as a
+real behavioral mismatch: the backtest engine at
+[backtest.py:62](/src/tradingx/backtest.py:62) carries prior
+weights through the overnight move and rebalances at next open,
+while reconstructing from same-bar close means the sleeve sees a
+different "current holding" than the engine that ultimately
+executes it. Because `current_weight` drives regime suppression
+(e.g., the `risk_off` new-entry gate) and `sell`/`reduce`
+classification, the mismatch would cause divergent behavior in
+the simulation path vs the live execution path.
+
+Fix: track sleeve state in **target-weight space** throughout.
+`SleeveContext.current_weights_by_symbol` is the authoritative
+input; sleeves read it directly; the simulation helper passes
+previously-emitted target weights as-is.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -557,7 +584,7 @@ def test_trend_sleeve_emits_long_on_uptrend_in_risk_on():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=_risk_on_regime(bars.index[-1].date()),
-        current_positions={"SPY": Decimal("0")},
+        current_weights_by_symbol={"SPY": Decimal("0")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -578,7 +605,7 @@ def test_trend_sleeve_emits_hold_with_insufficient_history_rationale_on_short_ba
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=_risk_on_regime(bars.index[-1].date()),
-        current_positions={"SPY": Decimal("0")},
+        current_weights_by_symbol={"SPY": Decimal("0")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -607,7 +634,9 @@ def test_trend_sleeve_liquidates_in_stressed_regime():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=stressed_regime,
-        current_positions={"SPY": Decimal("100")},  # holding
+        # Holding 50% of sleeve budget — the regime gate should
+        # liquidate us regardless of the current weight.
+        current_weights_by_symbol={"SPY": Decimal("0.5")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -636,7 +665,7 @@ def test_trend_sleeve_suppresses_new_entry_in_risk_off():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=risk_off,
-        current_positions={"SPY": Decimal("0")},  # not holding
+        current_weights_by_symbol={"SPY": Decimal("0")},  # not holding
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -688,15 +717,11 @@ class TrendSleeve:
         trades: list[SleeveTrade] = []
         for symbol in self.allowed_instruments:
             bars = context.bars_by_symbol.get(symbol)
+            current_weight = context.current_weights_by_symbol.get(
+                symbol, Decimal("0")
+            )
+
             if bars is None or len(bars) < self.lookback_days:
-                current_qty = context.current_positions.get(
-                    symbol, Decimal("0")
-                )
-                current_weight = _compute_current_weight(
-                    current_qty=current_qty,
-                    bars=bars,
-                    sleeve_budget_equity=context.sleeve_budget_equity,
-                )
                 trades.append(
                     SleeveTrade(
                         sleeve_id=self.sleeve_id,
@@ -725,14 +750,6 @@ class TrendSleeve:
             )
             vol_forecast = float(vol_forecast_series.iloc[-1])
             if pd.isna(vol_forecast) or vol_forecast <= 0:
-                current_qty = context.current_positions.get(
-                    symbol, Decimal("0")
-                )
-                current_weight = _compute_current_weight(
-                    current_qty=current_qty,
-                    bars=bars,
-                    sleeve_budget_equity=context.sleeve_budget_equity,
-                )
                 trades.append(
                     SleeveTrade(
                         sleeve_id=self.sleeve_id,
@@ -749,13 +766,6 @@ class TrendSleeve:
             if signal_value > 0:
                 leverage = float(self.target_sleeve_vol) / vol_forecast
                 raw_weight = Decimal(str(min(leverage, 1.0)))
-
-            current_qty = context.current_positions.get(symbol, Decimal("0"))
-            current_weight = _compute_current_weight(
-                current_qty=current_qty,
-                bars=bars,
-                sleeve_budget_equity=context.sleeve_budget_equity,
-            )
 
             adjusted_weight, regime_rationale = apply_regime_exposure_floor(
                 sleeve_id=self.sleeve_id,
@@ -780,23 +790,6 @@ class TrendSleeve:
                 )
             )
         return tuple(trades)
-
-
-def _compute_current_weight(
-    *,
-    current_qty: Decimal,
-    bars: pd.DataFrame | None,
-    sleeve_budget_equity: Decimal,
-) -> Decimal:
-    if (
-        current_qty == Decimal("0")
-        or bars is None
-        or len(bars) == 0
-        or sleeve_budget_equity <= Decimal("0")
-    ):
-        return Decimal("0")
-    last_close = Decimal(str(bars["close"].iloc[-1]))
-    return (current_qty * last_close) / sleeve_budget_equity
 
 
 def _derive_side(current: Decimal, target: Decimal) -> str:
@@ -899,7 +892,7 @@ def test_vol_managed_beta_only_emits_for_spy():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars, "QQQ": bars},
         regime=_regime("risk_on", bars.index[-1].date()),
-        current_positions={"SPY": Decimal("0"), "QQQ": Decimal("0")},
+        current_weights_by_symbol={"SPY": Decimal("0"), "QQQ": Decimal("0")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -914,7 +907,7 @@ def test_vol_managed_beta_emits_non_zero_weight_in_calm_regime():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=_regime("risk_on", bars.index[-1].date()),
-        current_positions={"SPY": Decimal("0")},
+        current_weights_by_symbol={"SPY": Decimal("0")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -928,7 +921,7 @@ def test_vol_managed_beta_emits_hold_with_insufficient_history():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=_regime("risk_on", bars.index[-1].date()),
-        current_positions={"SPY": Decimal("0")},
+        current_weights_by_symbol={"SPY": Decimal("0")},
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -944,7 +937,7 @@ def test_vol_managed_beta_liquidates_in_stressed():
         observation_date=bars.index[-1].date(),
         bars_by_symbol={"SPY": bars},
         regime=_regime("stressed", bars.index[-1].date()),
-        current_positions={"SPY": Decimal("100")},
+        current_weights_by_symbol={"SPY": Decimal("0.5")},  # holding 50%
         sleeve_budget_equity=Decimal("100000"),
     )
     trades = sleeve.plan_for_bar(ctx)
@@ -975,10 +968,7 @@ import pandas as pd
 
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
 from tradingx.sleeves.regime_gate import apply_regime_exposure_floor
-from tradingx.sleeves.trend import (  # reuse helpers
-    _compute_current_weight,
-    _derive_side,
-)
+from tradingx.sleeves.trend import _derive_side  # reuse helper
 from tradingx.types import SleeveContext, SleeveTrade
 
 
@@ -995,14 +985,11 @@ class VolManagedBetaSleeve:
     def plan_for_bar(self, context: SleeveContext) -> tuple[SleeveTrade, ...]:
         spy_bars = context.bars_by_symbol.get("SPY")
         min_required = self.realized_vol_window_days + 20
+        current_weight = context.current_weights_by_symbol.get(
+            "SPY", Decimal("0")
+        )
 
         if spy_bars is None or len(spy_bars) < min_required:
-            current_qty = context.current_positions.get("SPY", Decimal("0"))
-            current_weight = _compute_current_weight(
-                current_qty=current_qty,
-                bars=spy_bars,
-                sleeve_budget_equity=context.sleeve_budget_equity,
-            )
             return (
                 SleeveTrade(
                     sleeve_id=self.sleeve_id,
@@ -1023,12 +1010,6 @@ class VolManagedBetaSleeve:
         )
         raw_scalar = signal_series.iloc[-1]
         if pd.isna(raw_scalar):
-            current_qty = context.current_positions.get("SPY", Decimal("0"))
-            current_weight = _compute_current_weight(
-                current_qty=current_qty,
-                bars=spy_bars,
-                sleeve_budget_equity=context.sleeve_budget_equity,
-            )
             return (
                 SleeveTrade(
                     sleeve_id=self.sleeve_id,
@@ -1041,13 +1022,6 @@ class VolManagedBetaSleeve:
             )
 
         raw_weight = Decimal(str(float(raw_scalar)))
-
-        current_qty = context.current_positions.get("SPY", Decimal("0"))
-        current_weight = _compute_current_weight(
-            current_qty=current_qty,
-            bars=spy_bars,
-            sleeve_budget_equity=context.sleeve_budget_equity,
-        )
 
         adjusted_weight, regime_rationale = apply_regime_exposure_floor(
             sleeve_id=self.sleeve_id,
@@ -1241,20 +1215,22 @@ def build_sleeve_target_weight_history(
     bar_index = bars_by_symbol[index_symbol].index
 
     allowed = tuple(sleeve.allowed_instruments)
-    # Initial row: zero weight across all allowed symbols
-    running_weights: dict[str, float] = {symbol: 0.0 for symbol in allowed}
-
-    rows: list[dict[str, float]] = []
-    current_positions: dict[str, Decimal] = {
-        symbol: Decimal("0") for symbol in bars_by_symbol
+    # Running target weights — the sleeve's authoritative state in
+    # weight space. Per Codex's P1 fix: we track state as
+    # previously-emitted target weights, never reconstruct from
+    # same-bar closes, because same-bar reconstruction drifts from
+    # the backtest engine's next-open execution model.
+    running_weights: dict[str, Decimal] = {
+        symbol: Decimal("0") for symbol in allowed
     }
+    rows: list[dict[str, float]] = []
 
     for position, ts in enumerate(bar_index):
         obs_date = ts.date()
         regime = regime_snapshots_by_date.get(obs_date)
         if regime is None:
             # No regime snapshot this day → hold previous weights
-            rows.append(dict(running_weights))
+            rows.append({s: float(w) for s, w in running_weights.items()})
             continue
 
         sliced = {
@@ -1265,37 +1241,26 @@ def build_sleeve_target_weight_history(
             observation_date=obs_date,
             bars_by_symbol=sliced,
             regime=regime,
-            current_positions=dict(current_positions),
+            # Pass previously-emitted target weights directly. This
+            # matches what the backtest engine will hold at next-open
+            # after it executes whatever weight we last emitted.
+            current_weights_by_symbol=dict(running_weights),
             sleeve_budget_equity=sleeve_budget_equity,
         )
         trades = sleeve.plan_for_bar(context)
 
-        # Update running weights from emitted trades
+        # Update running target weights from emitted trades.
         for trade in trades:
             if trade.symbol not in allowed:
                 # Out-of-universe trade — sleeve should not emit
                 # this, but guard anyway.
                 continue
-            running_weights[trade.symbol] = float(
-                trade.target_weight_of_sleeve_budget
-            )
-            # Track simulated current_positions for next-bar context
-            close_price = float(
-                bars_by_symbol[trade.symbol]["close"].iloc[position]
-            )
-            if close_price > 0:
-                current_positions[trade.symbol] = (
-                    trade.target_weight_of_sleeve_budget
-                    * sleeve_budget_equity
-                    / Decimal(str(close_price))
-                )
-            else:
-                current_positions[trade.symbol] = Decimal("0")
+            running_weights[trade.symbol] = trade.target_weight_of_sleeve_budget
 
         # Append the full running-weights snapshot for this bar
         # (including carry-forward for symbols the sleeve didn't
         # touch today).
-        rows.append(dict(running_weights))
+        rows.append({s: float(w) for s, w in running_weights.items()})
 
     # Build the frame with index == bar_index exactly.
     frame = pd.DataFrame(rows, index=bar_index, columns=list(allowed))
@@ -2037,12 +2002,12 @@ No TBD / TODO / "implement later". Every code block is concrete.
 - `SleeveFailureReason` constants defined in Task 1 used consistently in Tasks 4, 5, 6.
 - `SleeveContext` / `SleeveTrade` shape defined in Task 1 used consistently in Tasks 2–6.
 - `apply_regime_exposure_floor` return shape `(Decimal, str)` from Task 3 consumed by Tasks 4, 5.
-- `_compute_current_weight` and `_derive_side` helpers defined in Task 4's `trend.py` imported by Task 5's `vol_managed_beta.py` — same module scope preserved.
+- `_derive_side` helper defined in Task 4's `trend.py` imported by Task 5's `vol_managed_beta.py` — same module scope preserved. (The earlier `_compute_current_weight` helper was removed when `SleeveContext` switched to carrying `current_weights_by_symbol` directly per Codex's P1 fix.)
 - `simulate_sleeve_returns` return `(tuple[Decimal, ...], Decimal)` from Task 7 matches `_candidate_returns()` contract consumed by Task 10.
 
 ### Open judgment calls left to the implementer
 
-1. **`_compute_current_weight` / `_derive_side` duplication.** Currently defined in `trend.py` and imported by `vol_managed_beta.py` as a pragmatic shortcut. If this import shape feels wrong, Codex may move the helpers to `sleeves/base.py`. Tests would still pass.
+1. **`_derive_side` helper location.** Currently defined in `trend.py` and imported by `vol_managed_beta.py` as a pragmatic shortcut. If this cross-module import feels wrong, Codex may move it to `sleeves/base.py`. Tests still pass.
 2. **Regime snapshot source for `_candidate_returns` callers.** Task 10 assumes callers build `regime_snapshots_by_date` via `AlpacaRegularHoursCalendar.session_dates_between` + `classify_regime`. If the call sites in `validation.py` expose a different entry point, adapt the construction without rewriting the contract.
 3. **Fixture names** — tests use placeholders like `sample_bars_by_symbol_fixture`. Match whatever already exists in each target test file.
 
