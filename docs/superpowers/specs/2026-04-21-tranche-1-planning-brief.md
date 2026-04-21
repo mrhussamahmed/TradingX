@@ -1,11 +1,11 @@
 ---
 id: BRIEF-0002
 title: Tranche 1 planning brief
-version: 1.1.1
+version: 1.1.2
 status: active
 created: 2026-04-21
 last_amended: 2026-04-21
-supersedes: BRIEF-0002@1.1.0
+supersedes: BRIEF-0002@1.1.1
 superseded_by: null
 author_session: claude-opus-4.7-2026-04-21
 ---
@@ -60,8 +60,8 @@ discussion.
 | 1.1 | Validation infrastructure | Purged/embargoed k-fold CV; trials ledger; DSR wiring into `evaluate_candidate` + evidence pack; sleeve-level cost model integration via existing `costs.py` primitives | None — can start immediately on top of `main` at `c6fbcec` | Sleeves (1.3), portfolio construction (1.4); any honest candidate evaluation | **SHIPPED** — merged to `main` |
 | 1.2 | Market-state features | HAR-RV volatility estimator; rule-based regime composite (200d SMA / VIX level / yield-curve shape); empirical comparison of vol estimators with candidate-default tune if HAR-RV or EWMA beats `garch` | 1.1 scope stable (can start research in parallel; governance merges sequentially) | Sleeves (1.3) consume feature inputs | **SHIPPED** — merged to `main` |
 | 1.3 | Sleeves | Trend sleeve (TSMOM per Moskowitz-Ooi-Pedersen 2012) productionized from existing `signals/trend.py`; vol-managed beta sleeve (Moreira-Muir 2017) productionized from existing `signals/vol_target_spy.py` | 1.1 merged; 1.2 merged; **Hussam decisions on D1–D4 resolved** | Portfolio construction (1.4) needs sleeve outputs | **SHIPPED** — merged to `main` at `e953b7e` |
-| 1.4 | Portfolio construction + drawdown defense | Per-sleeve risk budgets; correlation caps; MDD throttle at 15% design (proportional exposure reduction); CDaR soft-throttle; **25% MDD runtime hard halt wired to the existing operator-clearance flow**; sleeve termination rules; marginal-portfolio-contribution criterion wired into Gate 1 | 1.3 merged (needs at least one sleeve live) | Live monitoring (1.5) observes portfolio state | **NEXT** — spec drafted as [DESIGN-0015](/docs/superpowers/specs/2026-04-21-tranche-1-4-portfolio-construction-and-drawdown-defense-design.md) on `docs/tranche-1-4-planning` |
-| 1.5 | Live drift monitoring | PSI on feature distributions; KS tests on signal outputs; execution-quality drift (realized slippage vs modeled); live-vs-backtest per-sleeve P&L divergence alarms | 1.4 merged (needs runtime state) | Gate 4 readiness discussion | Pending (blocked on 1.4) |
+| 1.4 | Portfolio construction + drawdown defense | Per-sleeve risk budgets; correlation caps; MDD throttle at 15% design (proportional exposure reduction); CDaR soft-throttle; **25% MDD runtime hard halt wired to the existing operator-clearance flow**; sleeve termination rules; marginal-portfolio-contribution criterion wired into Gate 1 | 1.3 merged (needs at least one sleeve live) | Live monitoring (1.5) observes portfolio state | **SHIPPED** — merged to `main` at `02a3c97` |
+| 1.5 | Live drift monitoring | PSI on feature distributions; KS tests on signal outputs; execution-quality drift (realized slippage vs modeled); live-vs-backtest per-sleeve P&L divergence alarms | 1.4 merged (needs runtime state) | Gate 4 readiness discussion | **NEXT** — spec drafted as [DESIGN-0016](/docs/superpowers/specs/2026-04-21-tranche-1-5-live-drift-monitoring-design.md) on `docs/tranche-1-5-planning` |
 
 ## Research vs governance lanes
 
