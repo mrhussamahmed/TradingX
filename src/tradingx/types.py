@@ -182,6 +182,7 @@ class ValidationCandidateResult:
     evidence_pack_id: str
     criteria: tuple[ValidationCriterionResult, ...]
     summary: str
+    annualized_cost_drag_bps: Decimal | None = None
 
 
 @dataclass(frozen=True)

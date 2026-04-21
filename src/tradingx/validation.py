@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import subprocess
+import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -25,12 +28,14 @@ from tradingx.stats import (
     lo_adjusted_sharpe_ratio,
     max_drawdown,
 )
+from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkCloseSeries,
     BenchmarkStackPayload,
     OperatingConstraintBudget,
     ScalarValue,
     StrategyCandidate,
+    TrialRecord,
     ValidationCandidateResult,
     ValidationCriterionResult,
     ValidationReport,
@@ -251,6 +256,7 @@ def _build_gate1_candidate_result(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext,
+    trials_ledger: TrialsLedger | None = None,
 ) -> ValidationCandidateResult:
     evidence_pack = evaluate_candidate(
         candidate,
@@ -260,6 +266,7 @@ def _build_gate1_candidate_result(
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
         annualized_cost_drag_bps=annualized_cost_drag_bps,
+        trials_ledger=trials_ledger,
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
 
@@ -300,6 +307,15 @@ def _build_gate1_candidate_result(
         status = "pass"
     else:
         status = "fail"
+    _record_validation_trial(
+        trials_ledger=trials_ledger,
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        evidence_pack=evidence_pack,
+        status=status,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+    )
     return ValidationCandidateResult(
         candidate_id=candidate.candidate_id,
         gate_id="1",
@@ -315,6 +331,7 @@ def _build_gate1_candidate_result(
                 else "Gate 1 criteria failed."
             )
         ),
+        annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps,
     )
 
 
@@ -327,6 +344,7 @@ def _build_gate2_candidate_result(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext,
+    trials_ledger: TrialsLedger | None = None,
 ) -> ValidationCandidateResult:
     evidence_pack = evaluate_candidate(
         candidate,
@@ -336,6 +354,7 @@ def _build_gate2_candidate_result(
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
         annualized_cost_drag_bps=annualized_cost_drag_bps,
+        trials_ledger=trials_ledger,
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
     cost_stress_passed = "cost_sensitivity_pass" in adversarial_statuses
@@ -410,6 +429,15 @@ def _build_gate2_candidate_result(
         status = "pass"
     else:
         status = "fail"
+    _record_validation_trial(
+        trials_ledger=trials_ledger,
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        evidence_pack=evidence_pack,
+        status=status,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+    )
     return ValidationCandidateResult(
         candidate_id=candidate.candidate_id,
         gate_id="2",
@@ -425,6 +453,7 @@ def _build_gate2_candidate_result(
                 else "Gate 2 criteria failed."
             )
         ),
+        annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps,
     )
 
 
@@ -493,6 +522,7 @@ def build_gate_report(
     benchmark_stack_payload: BenchmarkStackPayload,
     window_start_utc: datetime,
     window_end_utc: datetime,
+    trials_ledger: TrialsLedger | None = None,
 ) -> ValidationReport:
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
     benchmark_returns = benchmark_stack_payload.opportunity_cost_returns
@@ -544,6 +574,7 @@ def build_gate_report(
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
+                trials_ledger=trials_ledger,
             )
         elif gate_id == "2":
             result = _build_gate2_candidate_result(
@@ -554,6 +585,7 @@ def build_gate_report(
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
+                trials_ledger=trials_ledger,
             )
         else:
             raise ValueError(f"Unsupported gate_id: {gate_id}")
@@ -590,6 +622,46 @@ def build_gate_report(
             "portfolio weights are normalized to max gross exposure 1.0 before replay",
         ),
         evidence_refs=tuple(result.evidence_pack_id for result in candidate_results),
+    )
+
+
+def _record_validation_trial(
+    *,
+    trials_ledger: TrialsLedger | None,
+    candidate: StrategyCandidate,
+    candidate_returns: tuple[Decimal, ...],
+    evidence_pack,
+    status: str,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+) -> None:
+    if trials_ledger is None:
+        return
+    float_returns = _to_float_sequence(candidate_returns)
+    trials_ledger.record(
+        TrialRecord(
+            trial_id=str(uuid.uuid4()),
+            candidate_id=candidate.candidate_id,
+            family=candidate.family,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            observed_sharpe_net_of_costs=Decimal(
+                str(evidence_pack.candidate_metrics["sharpe_ratio"])
+            ),
+            observed_cagr_net_of_costs=Decimal(
+                str(_cagr(_total_return(float_returns), len(float_returns)))
+            ),
+            observed_max_drawdown=Decimal(str(max_drawdown(float_returns))),
+            observed_cdar_95=Decimal(
+                str(conditional_drawdown_at_risk(float_returns, confidence=0.95))
+            ),
+            annualized_cost_drag_bps=evidence_pack.annualized_cost_drag_bps
+            or Decimal("0"),
+            passed=status == "pass",
+            recorded_at_utc=datetime.now(UTC),
+            git_sha=_resolve_git_sha(),
+            config_fingerprint=_config_fingerprint(candidate),
+        )
     )
 
 
@@ -777,6 +849,33 @@ def write_benchmark_stack_payload(
     }
     path.write_text(json.dumps(serialized, indent=2, sort_keys=True), encoding="utf-8")
     return path
+
+
+def _resolve_git_sha() -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "unknown"
+    return completed.stdout.strip() or "unknown"
+
+
+def _config_fingerprint(candidate: StrategyCandidate) -> str:
+    payload = json.dumps(
+        {
+            "candidate_id": candidate.candidate_id,
+            "family": candidate.family,
+            "parameter_set": {
+                key: str(value) for key, value in candidate.parameter_set.items()
+            },
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 __all__ = (
