@@ -707,14 +707,22 @@ a double-start (which the service manager would reject as
 ```python
 # src/tradingx/runtime_host.py (addition)
 
+SERVICE_STOP_SUCCESS_STATUSES: Final[frozenset[str]] = frozenset(
+    {"accepted", "completed"}
+)
+
+
 def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
     """Halt the runtime because a hard risk limit was breached.
 
     Three steps, in this order (ordering is load-bearing):
 
-    1. Stop the service via self._service_manager.stop(). This
-       is what actually prevents new entries; flipping status
-       alone does not.
+    1. Stop the service via self._service_manager.stop() and
+       verify stop_result.status is in
+       SERVICE_STOP_SUCCESS_STATUSES. This is what actually
+       prevents new entries; flipping status alone does not,
+       and a non-success WebActionResult means the service
+       did NOT stop (e.g., `blocked`, `error`).
     2. Set host state to recovery_required with reason stored
        on last_error. This lights up the operator dashboard
        and enables request_clearance() to engage.
@@ -730,15 +738,27 @@ def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
     would force the clearance path to hit service.start() on an
     already-running service and come back with `blocked`.
 
+    Failure modes:
+    - service_manager.stop() raises → transition to `halted`
+      (terminal error state) with last_error carrying both the
+      halt reason and the exception; return status=`error`.
+    - service_manager.stop() returns a WebActionResult with a
+      status NOT in SERVICE_STOP_SUCCESS_STATUSES → same
+      handling as the exception path: transition to `halted`,
+      last_error carries the halt reason and the stop result's
+      message/status, return status=`error`. An unstoppable or
+      blocked service is a worse failure mode than a halted
+      one and needs operator attention; we do NOT leave state
+      unchanged, and we do NOT claim `accepted`.
+
     Idempotent: calling when status is already
     recovery_required is a no-op and does not re-stop the
     service.
 
-    Returns WebActionResult(status=accepted) on transition;
-    status=noop on idempotent call; status=error if the service
-    stop fails (in which case state remains unchanged — an
-    unstoppable service is a worse failure mode than a halted
-    one and needs operator attention).
+    Returns WebActionResult(status=accepted) only when the
+    service stop actually succeeded AND state transitioned to
+    recovery_required; status=noop on idempotent call;
+    status=error on any stop failure.
     """
     with self._lock:
         if self._state.status == "recovery_required":
@@ -765,7 +785,29 @@ def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
                 message=f"Hard halt service stop raised: {exc}",
                 evidence_refs=(),
             )
-        # Step 2: record the halt for the operator surface.
+        if stop_result.status not in SERVICE_STOP_SUCCESS_STATUSES:
+            self._set_state(
+                status="halted",
+                status_reason=(
+                    "Hard halt requested; service stop returned "
+                    f"{stop_result.status!r}."
+                ),
+                last_error=(
+                    f"{reason}; service stop returned "
+                    f"{stop_result.status}: {stop_result.message}"
+                ),
+            )
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_host_hard_halt",
+                status="error",
+                message=(
+                    f"Hard halt service stop did not succeed "
+                    f"({stop_result.status}): {stop_result.message}"
+                ),
+                evidence_refs=stop_result.evidence_refs,
+            )
+        # Step 2: service is confirmed stopped; record the halt.
         self._set_state(
             status="recovery_required",
             status_reason=(
@@ -889,24 +931,36 @@ drawdown and the blueprint.
 
 - Equity curve with trailing MDD < 25% → no halt, returns None.
 - Equity curve with trailing MDD == 25% → halt triggers exactly
-  once; `service_manager.stop()` is called; runtime host
-  transitions to `recovery_required`; alert gateway publishes a
-  `critical` alert.
+  once; `service_manager.stop()` is called; its
+  `WebActionResult` is checked against
+  `SERVICE_STOP_SUCCESS_STATUSES`; runtime host transitions to
+  `recovery_required`; alert gateway publishes a `critical`
+  alert.
 - Service-stop call happens **before** the state transition
   (ordering regression test using a mock service manager that
   records call order).
-- `trigger_hard_halt` raising during service stop → state
-  transitions to `halted` (terminal error); `last_error`
-  records both the halt reason and the stop exception.
+- `service_manager.stop()` raises → state transitions to
+  `halted` (terminal error); `last_error` records both the
+  halt reason and the stop exception; return status=`error`.
+- `service_manager.stop()` returns a `WebActionResult` with
+  status ∉ `SERVICE_STOP_SUCCESS_STATUSES` (e.g., `blocked`
+  or `error`) → state transitions to `halted`; `last_error`
+  records the halt reason and the stop result's
+  status + message; return status=`error`; state does NOT
+  flip to `recovery_required` and the controller does NOT
+  claim `accepted`. This is the explicit Codex-round-2
+  regression: any non-success stop outcome is a halt failure,
+  not a successful halt.
 - Second call with same breach → no-op (latched); service
   manager's stop is NOT called again.
 - Controller `reset()` + new check below 25% → no halt.
-- Runtime host state after halt: `status == "recovery_required"`,
-  `last_error` contains the halt reason text.
+- Runtime host state after successful halt:
+  `status == "recovery_required"`, `last_error` contains the
+  halt reason text.
 - `is_portfolio_hard_halted(operator_store_root)` returns True
-  when state file reports recovery_required AND the halt-reason
-  prefix is present; returns False for reconciliation-driven
-  `recovery_required` (so reconciliation halts don't
+  when state file reports `recovery_required` AND the halt-
+  reason prefix is present; returns False for reconciliation-
+  driven `recovery_required` (so reconciliation halts don't
   accidentally gate unrelated entry paths).
 - Integration with `request_clearance()`: after a halt-driven
   stop, `_pending_start_request` is intact; a subsequent
@@ -914,10 +968,19 @@ drawdown and the blueprint.
   `_run_clearance_reconciliation`, which successfully restarts
   the service via `service_manager.start(_pending_start_request)`
   and lands the host at `nominal`.
-- Entry-gate regression: `opportunity.plan(...)` returns an
-  empty selection with `decision_reason='hard_halt_active'`
-  when `is_portfolio_hard_halted` returns True, without
-  touching the warmup or portfolio gateways.
+- Entry-gate regression (in-loop case): when the service loop
+  calls `opportunity.plan(...)` after halt, the planner
+  returns an `OpportunitySelectionRecord` with an empty
+  `ranked_opportunities` tuple, `selected_symbol=""`, and
+  `decision_reason='hard_halt_active'`. The gate is at the
+  planner's entry; upstream reads performed by
+  `_bootstrap_and_start` (warmup, portfolio gateway) are NOT
+  re-run during the gated call — those inputs are passed in
+  by the caller and the planner short-circuits before using
+  them. The gate's guarantee is "no non-empty selection is
+  emitted while halted," not "no upstream work happens" (which
+  is the caller's responsibility, ultimately enforced by the
+  fact that the service loop itself is stopped).
 
 **Why this wiring closes the P1 gap.** Today
 `max_drawdown_halt = 0.25` lives on `OperatingConstraintBudget`
