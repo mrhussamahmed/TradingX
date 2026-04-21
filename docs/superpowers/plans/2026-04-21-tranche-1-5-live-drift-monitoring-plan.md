@@ -2667,10 +2667,7 @@ def test_reader_returns_empty_when_no_records():
 Append to `tests/unit/test_sleeve_runtime_controller.py`:
 
 ```python
-def test_live_daily_returns_source_replaces_not_implemented_error():
-    # Previously LIVE_DAILY_RETURNS raised NotImplementedError. 1.5 wires
-    # a real reader; with the reader present + enough live records,
-    # the controller should delegate Sharpe computation to those returns.
+def test_live_daily_returns_above_floor_does_not_fire_gate():
     from tradingx.portfolio.sleeve_runtime import (
         LiveDailyReturnsSourceProtocol,
         RollingWindowSource,
@@ -2678,9 +2675,10 @@ def test_live_daily_returns_source_replaces_not_implemented_error():
         SleeveRuntimeController,
     )
 
+    # 63 days of positive returns — Sharpe well above zero floor.
     class _Source:
         def live_daily_returns(self, *, sleeve_id, window_days):
-            return tuple(Decimal("0.01") for _ in range(window_days))
+            return tuple(Decimal("0.01") for _ in range(63))
 
     sleeve = _FakeSleeve(_sleeve_delegates_trade())
     config = SleeveRuntimeConfig(
@@ -2697,9 +2695,72 @@ def test_live_daily_returns_source_replaces_not_implemented_error():
         config=config,
         live_daily_returns_source=_Source(),
     )
-    # No NotImplementedError is raised; the sleeve delegates as normal
-    # because Sharpe on constant positive returns is not below floor.
     out = controller.plan_for_bar(_context())
+    # Sharpe above floor → gate does not fire → sleeve delegates.
+    assert out[0].rationale == "tsmom_long_vol_targeted"
+
+
+def test_live_daily_returns_below_floor_fires_sharpe_gate():
+    from tradingx.portfolio.sleeve_runtime import (
+        LiveDailyReturnsSourceProtocol,
+        RollingWindowSource,
+        SleeveRuntimeConfig,
+        SleeveRuntimeController,
+    )
+
+    # 63 days of negative returns — Sharpe below zero floor.
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            return tuple(Decimal("-0.005") for _ in range(63))
+
+    sleeve = _FakeSleeve(_sleeve_delegates_trade())
+    config = SleeveRuntimeConfig(
+        three_month_sharpe_floor=Decimal("0.0"),
+        three_month_window_days=63,
+        trial_lookback=3,
+        rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+    )
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=sleeve,
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=config,
+        live_daily_returns_source=_Source(),
+    )
+    out = controller.plan_for_bar(_context())
+    assert out[0].rationale == SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M
+
+
+def test_live_daily_returns_insufficient_records_skips_gate():
+    from tradingx.portfolio.sleeve_runtime import (
+        RollingWindowSource,
+        SleeveRuntimeConfig,
+        SleeveRuntimeController,
+    )
+
+    # Fewer than three_month_window_days of returns → skip gate (pending).
+    class _Source:
+        def live_daily_returns(self, *, sleeve_id, window_days):
+            return tuple(Decimal("-0.1") for _ in range(10))
+
+    sleeve = _FakeSleeve(_sleeve_delegates_trade())
+    config = SleeveRuntimeConfig(
+        three_month_sharpe_floor=Decimal("0.0"),
+        three_month_window_days=63,
+        trial_lookback=3,
+        rolling_window_source=RollingWindowSource.LIVE_DAILY_RETURNS,
+    )
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=sleeve,
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(()),
+        config=config,
+        live_daily_returns_source=_Source(),
+    )
+    out = controller.plan_for_bar(_context())
+    # Insufficient live history → pending semantics → sleeve delegates.
     assert out[0].rationale == "tsmom_long_vol_targeted"
 
 
@@ -2790,7 +2851,7 @@ __all__ = (
 In `src/tradingx/portfolio/sleeve_runtime.py`, make the following changes:
 
 ```python
-# Add to existing imports:
+# Add to existing imports (top of file):
 from collections.abc import Callable
 
 
@@ -2817,34 +2878,119 @@ class SleeveRuntimeController:
         self._ledger = trials_ledger
         self._config = config
         self._live_returns_source = live_daily_returns_source
-
-    # plan_for_bar: replace the LIVE_DAILY_RETURNS NotImplementedError branch with:
-    # if self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS:
-    #     if self._live_returns_source is None:
-    #         raise ValueError(
-    #             "live_daily_returns_source is required when rolling_window_source=LIVE_DAILY_RETURNS"
-    #         )
-    #     # (The gate logic will consult self._live_returns_source inside
-    #     #  _should_trigger_sharpe_gate when LIVE_DAILY_RETURNS is set.
-    #     #  Until that gate logic is wired, the LIVE_DAILY_RETURNS branch
-    #     #  delegates to the sleeve because we do not yet have a live-Sharpe
-    #     #  gate — Sharpe gating for LIVE_DAILY_RETURNS ships when accumulated
-    #     #  live evidence makes a rolling Sharpe meaningful.)
 ```
 
-Add the protocol to `__all__`.
+**`plan_for_bar` changes.** Remove the
+`NotImplementedError` in the
+`rolling_window_source == LIVE_DAILY_RETURNS` branch. Replace
+it with a misconfiguration guard + fall-through (the gate check
+happens in `_should_trigger_sharpe_gate`, not in `plan_for_bar`):
 
-**Design note — LIVE_DAILY_RETURNS gate semantics.** 1.5 replaces
-the `NotImplementedError` so the enum value becomes usable. A
-full rolling-Sharpe gate over live returns can ship later once
-enough live history exists; for 1.5, the controller calling
-convention accepts the enum and the source without raising, but
-the Sharpe-gate check in `_should_trigger_sharpe_gate()` remains
-on `TRIAL_SUMMARY` semantics. Operators can opt into
-`LIVE_DAILY_RETURNS` per the blueprint config; the behavior
-difference is that the `NotImplementedError` guardrail is gone
-and a future amendment can add the live-Sharpe computation without
-touching the protocol surface.
+```python
+def plan_for_bar(self, context: SleeveContext) -> tuple[SleeveTrade, ...]:
+    if (
+        self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS
+        and self._live_returns_source is None
+    ):
+        raise ValueError(
+            "live_daily_returns_source is required when "
+            "rolling_window_source=LIVE_DAILY_RETURNS"
+        )
+
+    if self._halt_store.is_halted(sleeve_id=self._sleeve.sleeve_id):
+        return self._emit_termination(
+            context, rationale=SleeveFailureReason.HALT_BY_OPERATOR,
+        )
+
+    if self._drift_gateway is not None and self._drift_gateway.has_alarm(
+        sleeve_id=self._sleeve.sleeve_id,
+    ):
+        return self._emit_termination(
+            context, rationale=SleeveFailureReason.DRIFT_ALARM_LIVE,
+        )
+
+    if self._should_trigger_sharpe_gate():
+        return self._emit_termination(
+            context,
+            rationale=SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M,
+        )
+
+    return self._sleeve.plan_for_bar(context)
+```
+
+**`_should_trigger_sharpe_gate` now branches on source.** This
+is the load-bearing change that delivers the spec's contract:
+when `rolling_window_source == LIVE_DAILY_RETURNS`, the gate
+consults the live daily returns source and computes Sharpe on
+that series rather than the trials ledger.
+
+```python
+def _should_trigger_sharpe_gate(self) -> bool:
+    if self._config.rolling_window_source == RollingWindowSource.LIVE_DAILY_RETURNS:
+        return self._should_trigger_sharpe_gate_via_live_returns()
+    return self._should_trigger_sharpe_gate_via_trial_summary()
+
+
+def _should_trigger_sharpe_gate_via_live_returns(self) -> bool:
+    # Guarded in plan_for_bar; reaching here means source is non-None.
+    assert self._live_returns_source is not None
+    returns = self._live_returns_source.live_daily_returns(
+        sleeve_id=self._sleeve.sleeve_id,
+        window_days=self._config.three_month_window_days,
+    )
+    # Pending semantics: fewer than `three_month_window_days` of live
+    # records → insufficient evidence → do not fire.
+    if len(returns) < self._config.three_month_window_days:
+        return False
+    sharpe = _sample_sharpe(returns)
+    return sharpe < self._config.three_month_sharpe_floor
+
+
+def _should_trigger_sharpe_gate_via_trial_summary(self) -> bool:
+    # Existing TRIAL_SUMMARY logic from tranche 1.4, unchanged.
+    if self._ledger is None:
+        return False
+    records = self._ledger.records_for_candidate(self._sleeve.sleeve_id)
+    # ...same as the 1.4 implementation (trial_lookback consecutive
+    # records with window >= three_month_window_days all below floor).
+```
+
+Add a module-level `_sample_sharpe` helper (or reuse the
+implementation from `drift/pnl_divergence.py` if Codex prefers
+sharing):
+
+```python
+def _sample_sharpe(returns: tuple[Decimal, ...]) -> Decimal:
+    if len(returns) < 2:
+        return Decimal("0")
+    mean = sum(returns, start=Decimal("0")) / Decimal(len(returns))
+    sq_dev = sum(
+        ((r - mean) ** 2 for r in returns),
+        start=Decimal("0"),
+    )
+    variance = sq_dev / Decimal(len(returns) - 1)
+    if variance <= Decimal("0"):
+        return Decimal("0")
+    std = Decimal(str(float(variance) ** 0.5))
+    return mean / std
+```
+
+Add `LiveDailyReturnsSourceProtocol` and (if exposing)
+`_sample_sharpe` to `__all__`.
+
+**Design note — LIVE_DAILY_RETURNS gate semantics (Codex
+round-1 plan-review P1 fix).** 1.5 replaces the
+`NotImplementedError` AND delivers the live-Sharpe gate logic
+the merged spec requires. The gate is source-selectable via
+`rolling_window_source`: TRIAL_SUMMARY (1.4's behavior,
+unchanged) or LIVE_DAILY_RETURNS (1.5's new behavior). Default
+remains TRIAL_SUMMARY for backwards compatibility; operators
+opt into LIVE_DAILY_RETURNS by setting `SleeveRuntimeConfig.rolling_window_source`.
+The misconfiguration guard in `plan_for_bar` raises ValueError
+if LIVE_DAILY_RETURNS is selected but no source is injected —
+this is what Task 10's
+`test_live_daily_returns_source_missing_raises_value_error`
+pins.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -2984,24 +3130,106 @@ Expected: FAIL on the runner not calling the gateway.
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/automation.py`:
+**Current state (Codex round-1 plan-review P1 note).** The
+existing `MarketDayAutomationRunner.__init__` at
+[automation.py:48](/src/tradingx/automation.py:48) does NOT
+take a portfolio gateway — it coordinates time and writes
+checkpoint artifacts via injected stores and builders, not
+broker / portfolio state. The preopen and close steps at
+[automation.py:252](/src/tradingx/automation.py:252) and
+[automation.py:305](/src/tradingx/automation.py:305) are pure
+checkpoint writers. Adding attribution + drift refresh
+therefore requires threading a portfolio-state source through
+the runner explicitly — this plan amends Task 12 to call that
+work out as first-class scope rather than assume a pre-existing
+seam.
 
-- Extend `MarketDayAutomationRunner.__init__` with two new optional parameters: `drift_alarm_gateway: DriftAlarmGateway | None = None` and `attribution_recorder: SleeveAttributionRecorder | None = None`.
-- In the session-close step (the existing close/reporting checkpoint), add:
+**Additions to `MarketDayAutomationRunner`:**
+
+1. **New constructor parameter**
+   `portfolio_gateway: PortfolioGatewayProtocol | None = None`.
+   Defaults to `None` so existing call sites (tests + `__main__`)
+   keep working without changes; the runner no-ops the
+   attribution + drift-refresh hook when the gateway is absent.
+2. **New constructor parameters**
+   `drift_alarm_gateway: DriftAlarmGateway | None = None` and
+   `attribution_recorder: SleeveAttributionRecorder | None = None`.
+   Same default-None pattern.
+3. **New private field**
+   `self._session_open_portfolio_state: PortfolioState | None = None`
+   populated in the preopen step.
 
 ```python
-if self._attribution_recorder is not None:
+from tradingx.runtime_host import PortfolioGatewayProtocol  # already defined in 1.4 runtime_host.py
+
+
+class MarketDayAutomationRunner:
+    def __init__(
+        self,
+        *,
+        # ...existing parameters unchanged...
+        portfolio_gateway: PortfolioGatewayProtocol | None = None,
+        drift_alarm_gateway: DriftAlarmGateway | None = None,
+        attribution_recorder: SleeveAttributionRecorder | None = None,
+    ) -> None:
+        # ...existing assignments unchanged...
+        self._portfolio_gateway = portfolio_gateway
+        self._drift_alarm_gateway = drift_alarm_gateway
+        self._attribution_recorder = attribution_recorder
+        self._session_open_portfolio_state: PortfolioState | None = None
+```
+
+**Preopen hook addition (capture the open-time snapshot):**
+
+```python
+# Inside the existing preopen step at automation.py:252:
+if self._portfolio_gateway is not None:
+    self._session_open_portfolio_state = (
+        self._portfolio_gateway.get_portfolio_state()
+    )
+```
+
+**Close hook addition (record attribution + refresh drift):**
+
+```python
+# Inside the existing close step at automation.py:305:
+if (
+    self._attribution_recorder is not None
+    and self._portfolio_gateway is not None
+    and self._session_open_portfolio_state is not None
+):
+    close_state = self._portfolio_gateway.get_portfolio_state()
     self._attribution_recorder.record_session(
         trading_day=trading_day,
-        open_portfolio_state=session_open_portfolio_state,
-        close_portfolio_state=session_close_portfolio_state,
+        open_portfolio_state=self._session_open_portfolio_state,
+        close_portfolio_state=close_state,
     )
+    self._session_open_portfolio_state = None  # reset for next session
 
 if self._drift_alarm_gateway is not None:
     self._drift_alarm_gateway.refresh()
 ```
 
-Obtaining `session_open_portfolio_state` and `session_close_portfolio_state`: the runner already has access to the portfolio gateway; take a snapshot at the session-open hook and another at the session-close hook. If the runner doesn't currently capture the open-time snapshot, add a small field `self._session_open_portfolio_state` and populate it in the pre-open step. Keep the addition minimal — one field, one assignment, one read.
+**Wiring at `__main__.py`.** When the runner is constructed by
+`build_default_market_day_automation_runner` at
+[automation.py:545](/src/tradingx/automation.py:545) (or by
+`__main__` if that is where composition happens), pass the
+portfolio gateway (already constructed for the runtime host in
+1.4) as the new parameter, along with a `DriftAlarmGateway`
+instance wired from the drift package and a `SleeveAttributionRecorder`
+wired to the activation gateway + `FilesystemArtifactStore`.
+Follow the same composition conventions the 1.4 integration
+work used for `PortfolioHardHaltController`.
+
+**Fixture update.** The existing test harness at
+[test_automation.py:20](/tests/unit/test_automation.py:20) does
+not construct a portfolio gateway. For the new test, inject a
+minimal `_PortfolioGatewayStub` that returns a canned
+`PortfolioState` from both `get_portfolio_state()` calls and a
+spy `DriftAlarmGateway` and `SleeveAttributionRecorder` that
+record their call counts. Keep the existing non-drift tests
+green by leaving `portfolio_gateway=None` (default) on their
+constructor calls.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -3171,9 +3399,26 @@ git commit -m "test(drift): add end-to-end integration for DriftAlarmGateway"
 
 Front-matter: bump `version: 1.2.0` → `version: 1.2.1`; set `supersedes: GATES-0001@1.2.0`. No criterion changes.
 
-In Gate 3 "Primary evidence" block, add a bullet:
+In Gate 3 "Primary evidence" block, add a bullet (Codex
+round-1 plan-review P2 fix: the text now matches the actual
+`RiskControlEvent` + `OperatorAlert` schemas; the earlier
+"monitor metadata in details" wording referenced a field that
+does not exist on `RiskControlEvent`):
 
-> - `ExecutionQualityDriftMonitor` alarms (runtime tree: `{artifact_root}/risk_events/` with `control_type = "portfolio_drift_alarm"` and the monitor metadata in `details`). Operator dashboard surfaces the rolling mean divergence ratio; alarms at 1.5× warning / 2.0× critical reinforce the Gate 3 "realized slippage ≤ 1.5× backtest assumption" evidence.
+> - `ExecutionQualityDriftMonitor` alarms. Evidence is carried by
+>   two artifacts that the `DriftAlarmGateway` emits at each
+>   `refresh()`: (a) a `RiskControlEvent` with
+>   `control_type = "portfolio_drift_alarm"` and `severity`
+>   matching the verdict (persisted at `{artifact_root}/risk_events/`);
+>   (b) for warning/critical verdicts, a matching `OperatorAlert`
+>   with `category = "portfolio_drift_alarm"` whose `summary`
+>   field carries the monitor id + severity + observed
+>   divergence ratio (persisted at `{artifact_root}/operator_alerts/`).
+>   Both artifacts together reinforce the Gate 3 "realized
+>   slippage ≤ 1.5× backtest assumption" evidence; alarms fire
+>   at 1.5× warning / 2.0× critical on the rolling mean
+>   `|divergence_ratio|` of `ReplaySlippageRecord` over the
+>   configured window.
 
 - [ ] **Step 2: Update INDEX**
 
