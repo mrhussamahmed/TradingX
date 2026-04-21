@@ -13,6 +13,7 @@ implicitly assuming close-to-close fills.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd  # type: ignore[import-untyped]
@@ -31,6 +32,7 @@ class DailyBarBacktestResult:
     equity_curve: pd.Series
     applied_weights: pd.DataFrame
     scheduled_weights: pd.DataFrame
+    annualized_cost_drag_bps: Decimal
 
 
 def run_daily_bar_backtest(
@@ -52,6 +54,7 @@ def run_daily_bar_backtest(
     applied_rows: list[dict[str, float]] = []
     equity_values: list[float] = []
     equity = 1.0
+    total_cost = 0.0
 
     for bar_offset, _timestamp in enumerate(target_weights.index):
         daily_growth = 1.0
@@ -85,7 +88,7 @@ def run_daily_bar_backtest(
             symbol: float(target_weights.iloc[bar_offset][symbol]) for symbol in symbols
         }
         if cost_model_config is not None:
-            trade_cost_fraction = _trade_cost_fraction(
+            trade_cost_fraction, trade_cost_total = _trade_cost_fraction(
                 bars_by_symbol=bars_by_symbol,
                 current_weights=drifted_weights,
                 target_weights=scheduled_open_weights,
@@ -94,6 +97,7 @@ def run_daily_bar_backtest(
                 cost_model_config=cost_model_config,
             )
             daily_growth *= 1.0 - trade_cost_fraction
+            total_cost += trade_cost_total
         current_weights = scheduled_open_weights
 
         applied_rows.append(current_weights.copy())
@@ -112,6 +116,11 @@ def run_daily_bar_backtest(
         equity_values.append(equity)
 
     index = target_weights.index
+    annualized_cost_drag_bps = _annualized_cost_drag_bps(
+        total_cost=total_cost,
+        equity_values=equity_values,
+        trading_days=len(index),
+    )
     return DailyBarBacktestResult(
         portfolio_returns=pd.Series(returns, index=index, dtype=float, name="returns"),
         equity_curve=pd.Series(
@@ -122,6 +131,7 @@ def run_daily_bar_backtest(
         ),
         applied_weights=pd.DataFrame(applied_rows, index=index, dtype=float),
         scheduled_weights=target_weights.astype(float).copy(),
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
     )
 
 
@@ -250,9 +260,9 @@ def _trade_cost_fraction(
     bar_offset: int,
     equity: float,
     cost_model_config: CostModelConfig,
-) -> float:
+) -> tuple[float, float]:
     if equity <= 0.0:
-        return 0.0
+        return 0.0, 0.0
 
     total_cost = 0.0
     for symbol, current_weight in current_weights.items():
@@ -281,7 +291,26 @@ def _trade_cost_fraction(
             config=cost_model_config,
         )
         total_cost += trade_costs.total
-    return total_cost / equity
+    return total_cost / equity, total_cost
+
+
+def _annualized_cost_drag_bps(
+    *,
+    total_cost: float,
+    equity_values: list[float],
+    trading_days: int,
+) -> Decimal:
+    if total_cost <= 0.0 or trading_days <= 0 or not equity_values:
+        return Decimal("0")
+
+    average_equity = sum(equity_values) / len(equity_values)
+    if average_equity <= 0.0:
+        return Decimal("0")
+
+    annualized_fraction = (total_cost / average_equity) * (
+        TRADING_DAYS_PER_YEAR / trading_days
+    )
+    return Decimal(str(annualized_fraction * 10_000.0))
 
 
 def _drifted_weights(
