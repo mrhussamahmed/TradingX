@@ -439,6 +439,64 @@ returns, cost_drag_bps = _candidate_returns(...)
 
 Propagate `cost_drag_bps` downstream where it's needed (into `evaluate_candidate`; wiring continues in Task 6).
 
+**Adversarial-callback contract preservation.** The `BacktestRunner`
+type alias in [evaluation.py:27](src/tradingx/evaluation.py:27) is
+consumed by `_parameter_sensitivity_check` at
+[evaluation.py:162](src/tradingx/evaluation.py:162) and
+`_cost_sensitivity_check` at
+[evaluation.py:284](src/tradingx/evaluation.py:284), both of which
+expect a plain return tuple (not the new 2-tuple). Do **not** change
+the `BacktestRunner` type or the adversarial call sites in this
+tranche. Instead, find the closure in
+[validation.py:496](src/tradingx/validation.py:496) that currently
+forwards `_candidate_returns` into `AdversarialCheckContext.backtest_runner`,
+and wrap it so the callback still returns only the returns tuple:
+
+```python
+# Old (inside build_gate_report or similar):
+backtest_runner=_candidate_returns,
+
+# New:
+def _returns_only_runner(
+    candidate_arg: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    parameter_overrides: dict[str, ScalarValue] | None = None,
+    cost_model_config: CostModelConfig | None = None,
+) -> tuple[Decimal, ...]:
+    returns, _drag = _candidate_returns(
+        candidate_arg,
+        bars_by_symbol=bars_by_symbol,
+        parameter_overrides=parameter_overrides,
+        cost_model_config=cost_model_config,
+    )
+    return returns
+
+# ...
+backtest_runner=_returns_only_runner,
+```
+
+Cost drag is consumed only by the primary-evaluation path in Task 5;
+the adversarial path keeps its existing contract.
+
+**Add a regression test** to `tests/unit/test_validation.py`:
+
+```python
+def test_adversarial_backtest_runner_still_returns_plain_tuple(
+    sample_gate_report_inputs_fixture,
+):
+    """The adversarial-check callback must keep its returns-only shape
+    even after _candidate_returns starts producing cost drag."""
+    # Build the gate report and inspect what flows into the
+    # adversarial context. The closure must return tuple[Decimal, ...],
+    # not tuple[tuple[Decimal, ...], Decimal].
+    # Use the same fixture other tests in this file use.
+    report = build_gate_report(**sample_gate_report_inputs_fixture)
+    # If the closure returned the wrong shape, the adversarial checks
+    # inside build_gate_report would have raised before returning.
+    assert report is not None
+```
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_validation.py -v`
@@ -568,6 +626,25 @@ git commit -m "feat(evaluation): thread annualized_cost_drag_bps into evidence p
 - Modify: `src/tradingx/web/readmodels.py`
 - Modify: `tests/unit/test_web_readmodels.py`
 
+**Shape of the persisted validation report (corrected).** Reports
+persisted by the validation pipeline use `candidate_results` (not
+`candidates`). Confirmed via
+[reporting.py:107](src/tradingx/reporting.py:107),
+[web/readmodels.py:1854](src/tradingx/web/readmodels.py:1854), and the
+existing iteration at
+[web/readmodels.py:2229](src/tradingx/web/readmodels.py:2229). Each
+entry in `candidate_results` is a dict with `candidate_id`, `status`,
+`criteria`, and now also `annualized_cost_drag_bps` once Task 5 ships.
+
+**Current seam.** `_build_performance_diagnostics` at
+[web/readmodels.py:1975](src/tradingx/web/readmodels.py:1975) today
+uses only the report-level `summary` string. It does not inspect
+per-candidate payloads. This task extends it to pull the worst-case
+cost drag across candidate results and append it to the existing
+"Validation benchmark stack is not yet passing" diagnostic (or a new
+info-severity diagnostic when the report is passing but drag is
+informative).
+
 - [ ] **Step 1: Write the failing test**
 
 Append to `tests/unit/test_web_readmodels.py`:
@@ -576,25 +653,63 @@ Append to `tests/unit/test_web_readmodels.py`:
 def test_readmodel_surfaces_cost_drag_when_present(
     sample_validation_report_fixture,
 ):
-    # Ensure the fixture's top candidate carries annualized_cost_drag_bps.
-    # Mutate a copy if needed:
+    """_build_performance_diagnostics must read per-candidate
+    annualized_cost_drag_bps from report['candidate_results']."""
     report = dict(sample_validation_report_fixture)
-    report.setdefault("candidates", [{}])[0]["annualized_cost_drag_bps"] = "12.5"
+    report["candidate_results"] = [
+        {
+            "candidate_id": "trend-following-v1",
+            "status": "fail",
+            "criteria": [],
+            "annualized_cost_drag_bps": "12.5",
+        },
+    ]
+    report.setdefault("status", "fail")
 
-    model = LocalWebReadModel(...)  # use existing construction from this test file
+    model = _build_local_web_read_model_for_test()  # existing helper or inline construction
     diagnostics = model._build_performance_diagnostics(
-        runtime_state=...,
+        runtime_state=_sample_runtime_state(),
         warmup=None,
         validation_report=report,
         replay_summary=None,
     )
     messages = " | ".join(d.detail for d in diagnostics)
     assert "12.5" in messages or "cost drag" in messages.lower()
+
+
+def test_readmodel_ignores_missing_cost_drag(
+    sample_validation_report_fixture,
+):
+    """When candidate_results rows omit annualized_cost_drag_bps, the
+    diagnostic must not crash and must not mention cost drag."""
+    report = dict(sample_validation_report_fixture)
+    report["candidate_results"] = [
+        {
+            "candidate_id": "trend-following-v1",
+            "status": "fail",
+            "criteria": [],
+            # No annualized_cost_drag_bps key
+        },
+    ]
+    report.setdefault("status", "fail")
+
+    model = _build_local_web_read_model_for_test()
+    diagnostics = model._build_performance_diagnostics(
+        runtime_state=_sample_runtime_state(),
+        warmup=None,
+        validation_report=report,
+        replay_summary=None,
+    )
+    messages = " | ".join(d.detail for d in diagnostics)
+    assert "cost drag" not in messages.lower()
 ```
 
-Adapt the fixture plumbing to what already exists in `test_web_readmodels.py`.
+Reuse whatever construction helpers already exist in
+`tests/unit/test_web_readmodels.py` — the tests at
+[test_web_readmodels.py:317](tests/unit/test_web_readmodels.py:317)
+already exercise `candidate_results` and will show the pattern.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/unit/test_web_readmodels.py -k cost_drag -v`
 
@@ -602,30 +717,90 @@ Expected: FAIL — detail string doesn't yet include cost-drag info.
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/web/readmodels.py`, within `_build_performance_diagnostics` (the same method that produced the earlier "Validation benchmark stack is not yet passing" diagnostic), add cost-drag context when present.
-
-Locate the block that reads validation summaries (around [web/readmodels.py:1999](src/tradingx/web/readmodels.py:1999) per the recent benchmark-stack merge). Extract the top candidate's `annualized_cost_drag_bps` if the payload includes it, and append a sentence like:
+In `src/tradingx/web/readmodels.py`, inside
+`_build_performance_diagnostics`, extend the existing validation-report
+branch (the one that emits the "Validation benchmark stack is not yet
+passing" diagnostic at approximately
+[web/readmodels.py:1999](src/tradingx/web/readmodels.py:1999)) to
+also inspect per-candidate cost drag:
 
 ```python
-cost_drag_bps_raw = candidate_payload.get("annualized_cost_drag_bps")
-if cost_drag_bps_raw is not None:
-    detail_text = (
-        f"{detail_text} Annualized cost drag: "
-        f"{Decimal(str(cost_drag_bps_raw)):.1f} bps."
+if validation_report is not None:
+    candidate_results = self._ensure_list(
+        validation_report.get("candidate_results", [])
     )
+    worst_cost_drag_bps: Decimal | None = None
+    for candidate_payload in candidate_results:
+        if not isinstance(candidate_payload, dict):
+            continue
+        raw_drag = candidate_payload.get("annualized_cost_drag_bps")
+        if raw_drag is None:
+            continue
+        try:
+            drag = Decimal(str(raw_drag))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if worst_cost_drag_bps is None or drag > worst_cost_drag_bps:
+            worst_cost_drag_bps = drag
+
+    report_status = str(validation_report.get("status", ""))
+    if report_status != "pass":
+        detail = str(
+            validation_report.get(
+                "summary",
+                "Latest validation report is not yet passing.",
+            )
+        )
+        if worst_cost_drag_bps is not None:
+            detail = (
+                f"{detail} Worst annualized cost drag across "
+                f"candidates: {worst_cost_drag_bps:.1f} bps."
+            )
+        diagnostics.append(
+            PerformanceDiagnostic(
+                diagnostic_id="gate_validation",
+                title="Validation benchmark stack is not yet passing.",
+                detail=detail,
+                severity="critical",
+                owner="Research",
+                action=(
+                    "Review hurdle clearance, opportunity-cost edge, "
+                    "and operating constraints before adding capital."
+                ),
+            )
+        )
+    elif worst_cost_drag_bps is not None:
+        # Informative diagnostic when the report passed but cost drag
+        # is worth surfacing for diagnostics.
+        diagnostics.append(
+            PerformanceDiagnostic(
+                diagnostic_id="cost_drag",
+                title="Cost drag recorded on passing validation.",
+                detail=(
+                    f"Worst annualized cost drag across candidates: "
+                    f"{worst_cost_drag_bps:.1f} bps."
+                ),
+                severity="info",
+                owner="Research",
+                action="Monitor cost trend as paper evidence accumulates.",
+            )
+        )
 ```
+
+Import `InvalidOperation` from `decimal` at the top of the file if not
+already imported.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_web_readmodels.py -v`
 
-Expected: new test PASSES; no regression.
+Expected: new tests PASS; no regression on existing tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/tradingx/web/readmodels.py tests/unit/test_web_readmodels.py
-git commit -m "feat(readmodels): surface annualized cost drag in validation diagnostic"
+git commit -m "feat(readmodels): surface worst annualized cost drag from candidate_results"
 ```
 
 ---
@@ -1225,13 +1400,16 @@ def test_evaluate_candidate_north_star_flag_set_when_sharpe_gte_1_3(
     assert isinstance(pack.north_star_sharpe_met, bool)
 
 
-def test_evaluate_candidate_records_trial_after_evidence_pack_built(
+def test_evaluate_candidate_does_not_record_trial(
     tmp_path,
     sample_candidate_fixture,
     sample_benchmark_returns_fixture,
     sample_window_fixture,
     sample_adversarial_context_fixture,
 ):
+    """Trial recording is the gate layer's responsibility, not
+    evaluate_candidate's. evaluate_candidate only READS the ledger
+    for DSR input; it never WRITES."""
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     _ = evaluate_candidate(
         sample_candidate_fixture,
@@ -1244,8 +1422,7 @@ def test_evaluate_candidate_records_trial_after_evidence_pack_built(
         trials_ledger=ledger,
     )
     records = ledger.list_for_candidate(sample_candidate_fixture.candidate_id)
-    assert len(records) == 1
-    assert records[0].family == sample_candidate_fixture.family
+    assert records == ()  # empty — gate layer has not run yet
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1312,7 +1489,12 @@ def evaluate_candidate(
             )
             deflated_sharpe = Decimal(str(dsr_value))
 
-    # Build the evidence pack with the new fields.
+    # Build the evidence pack with the new fields. Trial recording is
+    # NOT done here — evaluate_candidate does not know gate pass/fail
+    # (the EvaluationEvidencePack.recommendation values are
+    # "keep"/"research_further"/"reject", not Gate 1 pass/fail).
+    # Recording moves to the gate layer in Task 12, where the real
+    # gate status is known.
     evidence_pack = EvaluationEvidencePack(
         # ...existing keyword args...
         annualized_cost_drag_bps=annualized_cost_drag_bps,
@@ -1320,36 +1502,17 @@ def evaluate_candidate(
         north_star_sharpe_met=north_star_sharpe_met,
     )
 
-    # Record this trial AFTER the evidence pack is built, so this
-    # trial's Sharpe doesn't contribute to its own DSR denominator.
-    if trials_ledger is not None and observed_sharpe is not None:
-        # Derive the other TrialRecord fields from the evidence pack
-        # and window; use placeholders where evidence isn't yet computed.
-        trials_ledger.record(
-            TrialRecord(
-                trial_id=str(uuid.uuid4()),
-                candidate_id=candidate.candidate_id,
-                family=candidate.family,
-                window_start_utc=window_start_utc,
-                window_end_utc=window_end_utc,
-                observed_sharpe_net_of_costs=Decimal(str(observed_sharpe)),
-                observed_cagr_net_of_costs=_extract_cagr_from_pack(evidence_pack),
-                observed_max_drawdown=_extract_mdd_from_pack(evidence_pack),
-                observed_cdar_95=_extract_cdar_from_pack(evidence_pack),
-                annualized_cost_drag_bps=annualized_cost_drag_bps or Decimal("0"),
-                passed=bool(getattr(evidence_pack, "recommendation", "") == "pass"),
-                recorded_at_utc=datetime.now(UTC),
-                git_sha=_resolve_git_sha(),
-                config_fingerprint=_config_fingerprint(candidate),
-            )
-        )
-
     return evidence_pack
 ```
 
-Add helper functions for `_extract_cagr_from_pack`, `_extract_mdd_from_pack`, `_extract_cdar_from_pack`, `_resolve_git_sha`, `_config_fingerprint` — use the existing `_resolve_git_sha` helper from `controller.py` if importable, else copy its pattern. `_config_fingerprint` should be SHA-256 of `{candidate.candidate_id, candidate.family, str(candidate.parameter_set)}` — keep it simple for tranche 1.
-
-If any of the extract helpers reveal that the evidence pack doesn't carry a field directly, compute it from the returns inline using existing stats primitives (`max_drawdown`, `conditional_drawdown_at_risk`, `_cagr`).
+**Note on observed_sharpe source.** The DSR input `observed_sharpe`
+uses `lo_adjusted_sharpe_ratio` on the candidate returns with a
+zero risk-free rate as a placeholder. When the gate layer writes the
+trial record (Task 12), it may use the same helper or the canonical
+`benchmark_metrics["sharpe_ratio"]` value — whichever reflects the
+net-of-costs Sharpe most faithfully given the current evidence-pack
+shape. The two must agree for the DSR → PBO pipeline to be
+internally consistent.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1364,43 +1527,165 @@ git add src/tradingx/evaluation.py tests/unit/test_evaluation.py
 git commit -m "feat(evaluation): wire DSR + north-star + trial recording into evaluate_candidate"
 ```
 
-### Task 12: Wire trials_ledger + cost_drag through validation callers
+### Task 12: Record trials at the gate layer (with real gate status) + wire ledger through callers
 
 **Files:**
 - Modify: `src/tradingx/validation.py`
 - Modify: `src/tradingx/controller.py` (builder)
 - Modify: `tests/unit/test_validation.py`, `tests/unit/test_controller.py`
 
-- [ ] **Step 1: Write the failing test**
+**Why this task owns trial recording instead of `evaluate_candidate`.**
+`evaluate_candidate` does not know gate pass/fail. Its `recommendation`
+values are `keep`, `research_further`, and `reject` (see
+[evaluation.py:431](src/tradingx/evaluation.py:431)) — none of which
+are synonymous with Gate 1 or Gate 2 pass/fail. Actual pass/fail is
+decided in
+[_build_gate1_candidate_result](src/tradingx/validation.py:245) and
+[_build_gate2_candidate_result](src/tradingx/validation.py:319) after
+all criteria are applied. Recording trials there — with the real
+`passed` value — keeps `TrialRecord.passed` honest.
+
+- [ ] **Step 1: Write the failing tests**
 
 Append to `tests/unit/test_validation.py`:
 
 ```python
-def test_build_gate_report_threads_trials_ledger_to_evidence_packs(
+def test_build_gate_report_threads_trials_ledger_to_gate_layer(
     tmp_path,
-    sample_gate_report_inputs_fixture,  # construct via existing test helpers
+    sample_gate_report_inputs_fixture,
 ):
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     report = build_gate_report(
-        # ...existing kwargs from the fixture...
+        **sample_gate_report_inputs_fixture,
         trials_ledger=ledger,
     )
     # Every candidate result that ran should have produced a trial row
-    assert all(
-        ledger.list_for_candidate(candidate.candidate_id)
-        for candidate in sample_gate_report_inputs_fixture.candidates
+    for candidate in sample_gate_report_inputs_fixture["candidates"]:
+        records = ledger.list_for_candidate(candidate.candidate_id)
+        assert records, f"No trial recorded for {candidate.candidate_id}"
+
+
+def test_build_gate1_candidate_result_records_trial_with_real_gate_status(
+    tmp_path,
+    sample_gate1_inputs_fixture,
+):
+    """TrialRecord.passed reflects the Gate 1 verdict, not
+    EvaluationEvidencePack.recommendation."""
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    result = _build_gate1_candidate_result(
+        **sample_gate1_inputs_fixture,
+        trials_ledger=ledger,
     )
+    records = ledger.list_for_candidate(
+        sample_gate1_inputs_fixture["candidate"].candidate_id,
+    )
+    assert len(records) == 1
+    # The recorded passed value matches the gate decision,
+    # which is derived from the four hard-pass criteria.
+    gate_passed = (result.status == "pass")
+    assert records[0].passed is gate_passed
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/unit/test_validation.py -k trials_ledger -v`
+Run: `uv run pytest tests/unit/test_validation.py -k "trials_ledger or real_gate_status" -v`
 
 Expected: FAIL on `TypeError: unexpected keyword argument 'trials_ledger'`.
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/validation.py`, add `trials_ledger: TrialsLedger | None = None` to `build_gate_report` and thread into every `evaluate_candidate` call downstream.
+In `src/tradingx/validation.py`, add `trials_ledger: TrialsLedger | None = None` to `build_gate_report` and thread it through to `_build_gate1_candidate_result` and `_build_gate2_candidate_result`.
+
+Inside each of those gate builders, **after** the gate status is
+computed (after `if all(criterion.passed for criterion in criteria):`
+or the equivalent status-assignment block), record the trial:
+
+```python
+# Inside _build_gate1_candidate_result, after `status = ...` is set:
+if trials_ledger is not None:
+    gate_passed = status == "pass"
+    observed_sharpe = evidence_pack.benchmark_metrics.get(
+        "candidate_sharpe_ratio"
+    )
+    observed_cagr = evidence_pack.benchmark_metrics.get(
+        "candidate_cagr"
+    )
+    # Compute observed MDD/CDaR from the candidate return stream.
+    from tradingx.stats import conditional_drawdown_at_risk, max_drawdown
+    returns_f = [float(r) for r in candidate_returns]
+    observed_mdd = Decimal(str(max_drawdown(returns_f)))
+    observed_cdar = Decimal(
+        str(conditional_drawdown_at_risk(returns_f, confidence=0.95))
+    )
+    trials_ledger.record(
+        TrialRecord(
+            trial_id=str(uuid.uuid4()),
+            candidate_id=candidate.candidate_id,
+            family=candidate.family,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            observed_sharpe_net_of_costs=(
+                Decimal(str(observed_sharpe))
+                if observed_sharpe is not None
+                else Decimal("0")
+            ),
+            observed_cagr_net_of_costs=(
+                Decimal(str(observed_cagr))
+                if observed_cagr is not None
+                else Decimal("0")
+            ),
+            observed_max_drawdown=observed_mdd,
+            observed_cdar_95=observed_cdar,
+            annualized_cost_drag_bps=(
+                evidence_pack.annualized_cost_drag_bps or Decimal("0")
+            ),
+            passed=gate_passed,
+            recorded_at_utc=datetime.now(UTC),
+            git_sha=_resolve_git_sha(),
+            config_fingerprint=_config_fingerprint(candidate),
+        )
+    )
+```
+
+Apply the same pattern inside `_build_gate2_candidate_result` with
+`gate_passed = status == "pass"` against the Gate 2 status object.
+
+Add helpers `_resolve_git_sha` and `_config_fingerprint` at the bottom
+of `validation.py` if they don't already exist:
+
+```python
+def _resolve_git_sha() -> str:
+    # Reuse the same helper pattern that exists in controller.py. If
+    # controller.py already exposes a public version, import it
+    # instead of duplicating.
+    import subprocess
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "unknown"
+    return completed.stdout.strip() or "unknown"
+
+
+def _config_fingerprint(candidate: StrategyCandidate) -> str:
+    import hashlib
+    import json
+    payload = json.dumps(
+        {
+            "candidate_id": candidate.candidate_id,
+            "family": candidate.family,
+            "parameter_set": {
+                k: str(v) for k, v in candidate.parameter_set.items()
+            },
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+```
 
 In `src/tradingx/controller.py`, update `GateValidationController.__init__` to accept/construct a `TrialsLedger`:
 
@@ -1437,6 +1722,16 @@ def build_default_gate_validation_controller(
     )
 ```
 
+**Consistency check.** The `observed_sharpe_net_of_costs` written here
+and the `observed_sharpe` used for DSR input inside `evaluate_candidate`
+(Task 11) must both reflect the same net-of-costs Sharpe source. If
+the two drift (e.g., one uses `lo_adjusted_sharpe_ratio` while the
+other uses a different helper), DSR-against-trial-history becomes
+self-inconsistent. Prefer using the evidence pack's
+`benchmark_metrics["candidate_sharpe_ratio"]` as the single source of
+truth in both places; adjust Task 11's Step 3 DSR `observed_sharpe`
+source to match if the shapes don't already agree.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/unit/test_validation.py tests/unit/test_controller.py -v`
@@ -1447,7 +1742,7 @@ Expected: all PASS.
 
 ```bash
 git add src/tradingx/validation.py src/tradingx/controller.py tests/unit/test_validation.py tests/unit/test_controller.py
-git commit -m "feat(validation): wire TrialsLedger through build_gate_report default path"
+git commit -m "feat(validation): record trials at gate layer with real gate status"
 ```
 
 ---
