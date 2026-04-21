@@ -79,11 +79,14 @@ Scope:
    snapshot captured once at deployment time that both PSI and
    KS compare against. Single-file JSON; versioned; replacement
    requires explicit operator action.
-8. **Operator surface.** A new `drift_alarm` operator-alert
-   category, a new `RiskControlEvent.control_type =
-   "portfolio_drift_alarm"` emission, and a dashboard
-   diagnostic row per drift monitor. Consumes the same operator
-   dashboard plumbing shipped by SPEC-0010.
+8. **Operator surface.** A new `portfolio_drift_alarm`
+   operator-alert category and matching
+   `RiskControlEvent.control_type = "portfolio_drift_alarm"`
+   emission, plus a dashboard diagnostic row per drift monitor.
+   The alert category mirrors the `control_type` string and
+   the hard-halt pattern (`portfolio_hard_halt`) so dashboards
+   and alert routing can key off one canonical value. Consumes
+   the same operator dashboard plumbing shipped by SPEC-0010.
 9. **`RollingWindowSource.LIVE_DAILY_RETURNS` implementation.**
    The `NotImplementedError` guardrail shipped in 1.4 is
    replaced with a reader that consumes
@@ -1015,13 +1018,25 @@ class FeatureSampleReaderProtocol(Protocol):
 class SignalSampleReaderProtocol(Protocol):
     """Recomputes live signal samples by evaluating the sleeve's
     signal logic on persisted bars. There is NO persisted
-    live signal-observation stream (Codex round-1 P1 fix). The
-    concrete implementation in §Architecture overview's
-    `drift/gateway.py` loads the sleeve via
-    `build_sleeve_from_candidate(active_candidate)` and runs
-    its signal path on the bar window — the same code path the
-    backtest uses, producing an apples-to-apples comparison
-    against the backtest reference series.
+    live signal-observation stream (Codex round-1 P1 fix).
+
+    KS runs per SHIPPED sleeve (both `trend-following-v1` and
+    `vol-target-v1`), not only the currently-active one. The
+    concrete implementation in `drift/gateway.py` resolves each
+    `sleeve_id` to its `StrategyCandidate` by looking it up in
+    `build_mandatory_candidate_registry()` by `candidate_id`
+    (=== `sleeve_id`), then calls
+    `build_sleeve_from_candidate(candidate)` and runs the
+    sleeve's signal path on the bar window — the same code
+    path the backtest uses, producing an apples-to-apples
+    comparison against the backtest reference series. This
+    works whether the sleeve is the currently-active strategy
+    or not.
+
+    If a sleeve_id is not present in the mandatory registry or
+    its candidate has `sleeve_class_path=None`, the reader
+    raises `LookupError` and the gateway records a pending
+    verdict for that sleeve's KS monitor per §P3.
 
     Pure function over bars + sleeve logic.
     """
@@ -1284,7 +1299,10 @@ Sub-tranche 1.5 is complete when:
 
 ## Tranche-1 completion
 
-With 1.5 merged, all six BRIEF-0002 completion criteria are met:
+With 1.5 merged and [BRIEF-0002 v1.2.0](/docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md)'s
+narrowing of criterion 5 to "P&L divergence for the currently-
+active sleeve-backed strategy," all six tranche-1 completion
+criteria are satisfied at the scope BRIEF-0002 now defines:
 
 1. Trend sleeve and vol-managed beta sleeve running in paper
    against the three-tier benchmark stack. ✅ (1.3 + 1.4)
@@ -1293,20 +1311,32 @@ With 1.5 merged, all six BRIEF-0002 completion criteria are met:
 3. Sleeve-level cost-aware evaluation. ✅ (1.1)
 4. Validation stack with purged/embargoed k-fold CV + trials
    ledger; DSR wired into `evaluate_candidate`. ✅ (1.1)
-5. Live drift diagnostics emit alarms against calibrated
-   thresholds. ✅ (1.5 — this tranche)
+5. Live drift diagnostics emit alarms across PSI, KS,
+   execution-quality, and (active-sleeve) P&L divergence.
+   ✅ (1.5 — this tranche, at the scope BRIEF-0002 v1.2.0
+   narrows criterion 5 to).
 6. Marginal-portfolio-contribution criterion wired into Gate 1.
    ✅ (1.4)
 
+**What is NOT closed by 1.5.** Multi-sleeve P&L divergence
+alarms require the live multi-sleeve runtime wiring deferred in
+§Not in scope — sleeve-aware `RuntimePortfolioPlan`, per-sleeve
+target-weight persistence during service cycles, and a multi-
+strategy activation gateway. BRIEF-0002 v1.2.0 relocates that
+expansion out of tranche-1's acceptance bar and into Gate-4-
+enablement work. Tranche-1 closure in this spec reflects the
+narrowed BRIEF-0002 scope, not the original 1.1.1 wording.
+
 **Next**: the Gate 4 readiness discussion becomes a live option,
-subject to the BRIEF-0002 completion clause:
+subject to the BRIEF-0002 v1.2.0 completion clause:
 
 > "When all six are shipped and green in paper for at least
 > one full session, tranche 1 closes and we can open the
 > Gate 4 readiness discussion."
 
 Tranche-1 closure is an operator decision, not a spec action.
-1.5's scope ends at shipping the sixth criterion.
+1.5's scope ends at shipping the sixth criterion at the
+narrowed scope BRIEF-0002 v1.2.0 defines.
 
 ## Decisions resolved (no open items)
 
