@@ -210,10 +210,9 @@ def _forecast_error_metrics(
         pooled_qlike: list[float] = []
         for symbol, forecast in method_series.items():
             returns = bars_by_symbol[symbol]["close"].astype(float).pct_change()
-            forward_realized_vol = (
-                returns.rolling(lookback_days).std(ddof=1).shift(-lookback_days)
-                * math.sqrt(252.0)
-            )
+            forward_realized_vol = returns.rolling(lookback_days).std(ddof=1).shift(
+                -lookback_days
+            ) * math.sqrt(252.0)
             valid = forecast.notna() & forward_realized_vol.notna()
             valid_index = forecast.loc[valid].index
             if valid_index.empty:
@@ -386,7 +385,9 @@ def _material_garch_win(
         else 0.0
     )
     other_sharpes = [
-        metrics["sharpe_ratio"] for method, metrics in backtest_metrics.items() if method != "garch"
+        metrics["sharpe_ratio"]
+        for method, metrics in backtest_metrics.items()
+        if method != "garch"
     ]
     sharpe_improvement = backtest_metrics["garch"]["sharpe_ratio"] - max(other_sharpes)
     return rmse_improvement >= 0.10 or sharpe_improvement >= 0.10
@@ -407,7 +408,10 @@ def _build_markdown_report(
         {
             symbol
             for method_metrics in forecast_metrics.values()
-            for symbol in cast(dict[str, dict[str, float | int]], method_metrics["symbols"])
+            for symbol in cast(
+                dict[str, dict[str, float | int]],
+                method_metrics["symbols"],
+            )
         }
     )
     lines = [
@@ -415,7 +419,11 @@ def _build_markdown_report(
         "",
         f"Aggregate trend-sleeve winner: `{aggregate_winner or 'none'}`",
         "",
-        "This comparison is trend-sleeve-only per DESIGN-0013 W4. vol-target and mean-reversion candidate defaults are not retuned from this evidence.",
+        (
+            "This comparison is trend-sleeve-only per DESIGN-0013 W4. "
+            "vol-target and mean-reversion candidate defaults are not "
+            "retuned from this evidence."
+        ),
         "",
         "## Per-symbol RMSE (annualized vol units)",
         "",
@@ -430,7 +438,9 @@ def _build_markdown_report(
                 forecast_metrics[method]["symbols"],
             )
             value = symbol_metrics.get(symbol, {}).get("rmse_vol", float("nan"))
-            row.append("nan" if not math.isfinite(float(value)) else f"{float(value):.6f}")
+            row.append(
+                "nan" if not math.isfinite(float(value)) else f"{float(value):.6f}"
+            )
         lines.append("| " + " | ".join(row) + " |")
     lines.extend(
         [

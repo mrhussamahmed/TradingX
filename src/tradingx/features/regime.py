@@ -34,9 +34,7 @@ def classify_regime(
         else None
     )
 
-    if bool(vix_stressed) or (
-        bool(yield_curve_inverted) and not bool(above_sma_200)
-    ):
+    if bool(vix_stressed) or (bool(yield_curve_inverted) and not bool(above_sma_200)):
         regime = "stressed"
     elif not bool(above_sma_200) or bool(vix_elevated):
         regime = "risk_off"

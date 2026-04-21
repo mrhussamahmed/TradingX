@@ -209,7 +209,8 @@ def yield_curve_spread_for_date(cache_path: Path, *, as_of_date: date) -> Decima
     available = keyed.loc[keyed.index <= target]
     if available.empty:
         raise ValueError(
-            f"No cached Treasury spread is available on or before {as_of_date.isoformat()}."
+            "No cached Treasury spread is available on or before "
+            f"{as_of_date.isoformat()}."
         )
     return Decimal(str(float(available.iloc[-1])))
 

@@ -54,9 +54,9 @@ def test_forecast_error_metric_is_volatility_not_variance() -> None:
 
     assert perfect["pooled_rmse_vol"] < 0.02
     assert "SPY" in perfect["symbols"]
-    assert abs(
-        perfect["symbols"]["SPY"]["rmse_vol"] - perfect["pooled_rmse_vol"]
-    ) < 1e-9
+    assert (
+        abs(perfect["symbols"]["SPY"]["rmse_vol"] - perfect["pooled_rmse_vol"]) < 1e-9
+    )
 
 
 def test_forecast_metrics_preserve_method_keyed_top_level_shape() -> None:
@@ -92,10 +92,9 @@ def test_forward_realized_vol_alignment_is_not_backward_looking() -> None:
     bars = {"SPY": pd.DataFrame({"close": closes, "volume": [1e7] * n}, index=dates)}
 
     series_returns = pd.Series(returns, index=dates)
-    clairvoyant = (
-        series_returns.rolling(lookback).std(ddof=1).shift(-lookback)
-        * math.sqrt(252)
-    )
+    clairvoyant = series_returns.rolling(lookback).std(ddof=1).shift(
+        -lookback
+    ) * math.sqrt(252)
 
     metrics = module._forecast_error_metrics(
         bars,

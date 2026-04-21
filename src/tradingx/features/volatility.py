@@ -119,9 +119,7 @@ def _har_rv_vol(
         except np.linalg.LinAlgError:
             continue
         next_row = design.iloc[position][["rv_sq_d", "rv_sq_w", "rv_sq_m"]].to_numpy()
-        predicted_variance = float(
-            coefficients[0] + np.dot(coefficients[1:], next_row)
-        )
+        predicted_variance = float(coefficients[0] + np.dot(coefficients[1:], next_row))
         if predicted_variance <= 0.0:
             continue
         forecasts.loc[design.index[position]] = math.sqrt(predicted_variance)
