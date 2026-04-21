@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import argparse
@@ -49,7 +51,9 @@ def _serialize(value: Any) -> Any:
 def _parse_symbols(value: str | None) -> tuple[str, ...]:
     if not value:
         return CANONICAL_STAGE1_UNIVERSE
-    return tuple(symbol.strip().upper() for symbol in value.split(",") if symbol.strip())
+    return tuple(
+        symbol.strip().upper() for symbol in value.split(",") if symbol.strip()
+    )
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -118,7 +122,11 @@ def _load_bars_from_alpaca(
 def _align_bars(bars_by_symbol: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     common_index = None
     for frame in bars_by_symbol.values():
-        common_index = frame.index if common_index is None else common_index.intersection(frame.index)
+        common_index = (
+            frame.index
+            if common_index is None
+            else common_index.intersection(frame.index)
+        )
     if common_index is None or common_index.empty:
         raise ValueError("vol forecast comparison requires aligned daily bars.")
     return {
@@ -230,12 +238,16 @@ def _forecast_error_metrics(
                 "qlike": float(qlike.mean()) if not qlike.empty else float("nan"),
             }
             pooled_errors.extend(float(value) for value in errors.tolist())
-            pooled_squared_errors.extend(float(value) for value in squared_errors.tolist())
+            pooled_squared_errors.extend(
+                float(value) for value in squared_errors.tolist()
+            )
             pooled_qlike.extend(float(value) for value in qlike.tolist())
         metrics[method_name] = {
             "prediction_count": len(pooled_errors),
             "pooled_variance_mae": (
-                sum(pooled_errors) / len(pooled_errors) if pooled_errors else float("nan")
+                (sum(pooled_errors) / len(pooled_errors))
+                if pooled_errors
+                else float("nan")
             ),
             "pooled_variance_rmse": (
                 math.sqrt(sum(pooled_squared_errors) / len(pooled_squared_errors))
@@ -412,9 +424,19 @@ def main(argv: list[str] | None = None) -> int:
             backtest_metrics=backtest_metrics,
         ),
         "assumptions": [
-            "Forecast errors use variance loss (MAE/RMSE on squared returns) plus QLIKE instead of comparing volatility directly to absolute returns.",
-            "Backtest sizing uses the existing long-only trend sleeve and the same portfolio construction path used by research backtests.",
-            "Net-of-cost backtests disable half-spread costs because daily bars do not include bid/ask quotes.",
+            (
+                "Forecast errors use variance loss (MAE/RMSE on squared returns) "
+                "plus QLIKE instead of comparing volatility directly to absolute "
+                "returns."
+            ),
+            (
+                "Backtest sizing uses the existing long-only trend sleeve and the "
+                "same portfolio construction path used by research backtests."
+            ),
+            (
+                "Net-of-cost backtests disable half-spread costs because daily "
+                "bars do not include bid/ask quotes."
+            ),
         ],
         "artifact_path": output_path,
     }

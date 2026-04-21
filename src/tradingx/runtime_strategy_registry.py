@@ -6,10 +6,13 @@ from typing import Protocol
 from tradingx.activation import LocalActivationGateway
 from tradingx.baseline_runtime_planner import (
     BaselineLongOnlyPlanner,
-    MarketDataGatewayProtocol,
     OpportunitySelectorProtocol,
 )
-from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioPlanner
+from tradingx.runtime_portfolio import (
+    MarketDataGatewayProtocol,
+    RuntimePortfolioPlan,
+    RuntimePortfolioPlanner,
+)
 from tradingx.types import PortfolioState
 
 

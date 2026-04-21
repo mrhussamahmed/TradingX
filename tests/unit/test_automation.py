@@ -190,7 +190,9 @@ def test_market_day_automation_runner_stops_before_next_heartbeat_when_requested
     assert result.run_record.heartbeat_count == 0
 
 
-def test_market_day_automation_runner_records_exception_context_in_summary(tmp_path) -> None:
+def test_market_day_automation_runner_records_exception_context_in_summary(
+    tmp_path,
+) -> None:
     validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")
     paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
     operator_store = FilesystemArtifactStore(

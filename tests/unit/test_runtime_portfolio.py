@@ -64,7 +64,8 @@ class FakeMarketData:
         )
 
 
-def test_weight_based_runtime_portfolio_planner_returns_none_for_baseline_strategy() -> None:
+def test_weight_based_runtime_portfolio_planner_returns_none_for_baseline_strategy(
+) -> None:
     planner = RuntimePortfolioPlanner(
         market_data=FakeMarketData(),
         activation_gateway=FakeActivationGateway(strategy_id="baseline-long-only-v1"),
@@ -84,7 +85,8 @@ def test_weight_based_runtime_portfolio_planner_returns_none_for_baseline_strate
         default_quantity=Decimal("0"),
     )
 
-    # Baseline execution is handled by ActivatedRuntimePlanner + BaselineLongOnlyPlanner.
+    # Baseline execution is handled by ActivatedRuntimePlanner and the
+    # BaselineLongOnlyPlanner.
     assert plan is None
 
 

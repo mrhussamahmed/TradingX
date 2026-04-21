@@ -127,7 +127,8 @@ def test_launch_control_center_starts_server_until_ready() -> None:
     assert browser_urls == ["http://127.0.0.1:8765"]
 
 
-def test_launch_control_center_restarts_when_existing_server_is_missing_required_routes() -> None:
+def test_launch_control_center_restarts_when_existing_server_is_missing_required_routes(
+) -> None:
     config = TradingConfig.from_mapping(
         {
             "TRADINGX_WEB_HOST": "127.0.0.1",

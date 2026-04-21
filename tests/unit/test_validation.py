@@ -7,14 +7,25 @@ from decimal import Decimal
 import pandas as pd
 
 from tradingx.costs import CostModelConfig
-from tradingx.evaluation import AdversarialCheckContext, _sharpe_ratio as evaluation_sharpe_ratio
+from tradingx.evaluation import AdversarialCheckContext
+from tradingx.evaluation import _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
-from tradingx.types import StrategyCandidate
+from tradingx.types import (
+    BenchmarkStackPayload,
+    OperatingConstraintBudget,
+    StrategyCandidate,
+)
 from tradingx.validation import (
     _build_gate1_candidate_result,
     _candidate_returns,
-    _sharpe_ratio as validation_sharpe_ratio,
     build_gate_report,
+    evaluate_gate1_benchmark_criteria,
+    evaluate_hurdle_clearance,
+    evaluate_operating_constraint,
+    evaluate_opportunity_cost_edge,
+)
+from tradingx.validation import (
+    _sharpe_ratio as validation_sharpe_ratio,
 )
 
 
@@ -67,6 +78,23 @@ def _compound_total_return(returns: tuple[Decimal, ...]) -> Decimal:
     return equity - Decimal("1")
 
 
+def _benchmark_stack_payload_for_periods(return_periods: int) -> BenchmarkStackPayload:
+    return BenchmarkStackPayload(
+        hurdle_returns=tuple([Decimal("0.0001")] * return_periods),
+        opportunity_cost_returns=tuple([Decimal("0.0002")] * return_periods),
+        opportunity_cost_weights=(
+            ("SPY", Decimal("0.6")),
+            ("AGG", Decimal("0.4")),
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal("0.15"),
+            max_drawdown_halt=Decimal("0.25"),
+            cdar_threshold=Decimal("0.08"),
+            cdar_confidence=Decimal("0.95"),
+        ),
+    )
+
+
 def test_validation_module_shell_is_importable() -> None:
     module = importlib.import_module("tradingx.validation")
 
@@ -111,14 +139,13 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         gate_id="1",
         bars_by_symbol=bars_by_symbol,
         candidates=candidates,
-        benchmark_symbol="SPY",
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
-        benchmark_series_is_adjusted=True,
     )
 
     assert report.gate_id == "1"
-    assert report.benchmark_symbol == "SPY"
+    assert report.benchmark_symbol == "SPY+AGG"
     assert len(report.candidate_results) == 3
     assert {result.candidate_id for result in report.candidate_results} == {
         "trend-following-v1",
@@ -126,6 +153,126 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         "mean-reversion-v1",
     }
     assert all(result.evidence_pack_id for result in report.candidate_results)
+
+
+def test_hurdle_clearance_passes_when_candidate_beats_cash() -> None:
+    candidate_returns = tuple([Decimal("0.0003")] * 252)
+    hurdle_returns = tuple([Decimal("0.0002")] * 252)
+
+    result = evaluate_hurdle_clearance(
+        candidate_returns=candidate_returns,
+        hurdle_returns=hurdle_returns,
+    )
+
+    assert result.passed is True
+    assert result.criterion_id == "hurdle_clearance"
+
+
+def test_hurdle_clearance_fails_when_candidate_underperforms_cash() -> None:
+    candidate_returns = tuple([Decimal("0.0001")] * 252)
+    hurdle_returns = tuple([Decimal("0.0002")] * 252)
+
+    result = evaluate_hurdle_clearance(
+        candidate_returns=candidate_returns,
+        hurdle_returns=hurdle_returns,
+    )
+
+    assert result.passed is False
+
+
+def test_opportunity_cost_edge_passes_when_candidate_beats_60_40() -> None:
+    candidate_returns = tuple([Decimal("0.0005")] * 252)
+    opportunity_cost_returns = tuple([Decimal("0.0003")] * 252)
+
+    result = evaluate_opportunity_cost_edge(
+        candidate_returns=candidate_returns,
+        opportunity_cost_returns=opportunity_cost_returns,
+        opportunity_cost_weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    assert result.passed is True
+    assert result.criterion_id == "opportunity_cost_edge"
+    assert "SPY:0.6" in result.details
+    assert "AGG:0.4" in result.details
+
+
+def test_opportunity_cost_edge_fails_when_candidate_underperforms_60_40() -> None:
+    candidate_returns = tuple([Decimal("0.0001")] * 252)
+    opportunity_cost_returns = tuple([Decimal("0.0004")] * 252)
+
+    result = evaluate_opportunity_cost_edge(
+        candidate_returns=candidate_returns,
+        opportunity_cost_returns=opportunity_cost_returns,
+        opportunity_cost_weights=(("SPY", Decimal("0.6")), ("AGG", Decimal("0.4"))),
+    )
+
+    assert result.passed is False
+
+
+def test_operating_constraint_passes_within_budget() -> None:
+    returns = tuple([Decimal("0.01")] * 10 + [Decimal("-0.005")] * 5)
+    constraint = OperatingConstraintBudget(
+        max_drawdown_design=Decimal("0.15"),
+        max_drawdown_halt=Decimal("0.25"),
+        cdar_threshold=Decimal("0.08"),
+        cdar_confidence=Decimal("0.95"),
+    )
+
+    result = evaluate_operating_constraint(
+        candidate_returns=returns,
+        constraint=constraint,
+    )
+
+    assert result.criterion_id == "operating_constraint"
+    assert result.passed is True
+
+
+def test_operating_constraint_fails_when_mdd_exceeds_design() -> None:
+    returns = tuple([Decimal("0.01")] * 20 + [Decimal("-0.03")] * 12)
+    constraint = OperatingConstraintBudget(
+        max_drawdown_design=Decimal("0.15"),
+        max_drawdown_halt=Decimal("0.25"),
+        cdar_threshold=Decimal("0.08"),
+        cdar_confidence=Decimal("0.95"),
+    )
+
+    result = evaluate_operating_constraint(
+        candidate_returns=returns,
+        constraint=constraint,
+    )
+
+    assert result.passed is False
+    assert "max_drawdown" in result.details
+
+
+def test_gate1_benchmark_criteria_use_benchmark_stack_payload() -> None:
+    payload = BenchmarkStackPayload(
+        hurdle_returns=tuple([Decimal("0.0002")] * 252),
+        opportunity_cost_returns=tuple([Decimal("0.0003")] * 252),
+        opportunity_cost_weights=(
+            ("SPY", Decimal("0.6")),
+            ("AGG", Decimal("0.4")),
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal("0.15"),
+            max_drawdown_halt=Decimal("0.25"),
+            cdar_threshold=Decimal("0.08"),
+            cdar_confidence=Decimal("0.95"),
+        ),
+    )
+
+    criteria = evaluate_gate1_benchmark_criteria(
+        candidate_returns=tuple([Decimal("0.0005")] * 252),
+        benchmark_stack_payload=payload,
+    )
+
+    criterion_ids = {criterion.criterion_id for criterion in criteria}
+
+    assert criterion_ids == {
+        "hurdle_clearance",
+        "opportunity_cost_edge",
+        "operating_constraint",
+    }
 
 
 def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> None:
@@ -230,10 +377,9 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
         gate_id="2",
         bars_by_symbol=bars_by_symbol,
         candidates=(candidate,),
-        benchmark_symbol="SPY",
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
-        benchmark_series_is_adjusted=True,
     )
 
     criteria_by_id = {
@@ -256,16 +402,27 @@ def test_gate1_drawdown_reports_design_target_separately_from_hard_limit() -> No
         Decimal("0.00"),
         Decimal("0.00"),
     )
-    benchmark_returns = tuple(Decimal("0.00") for _ in candidate_returns)
     benchmark_bars = _ohlcv_frame([100.0, 101.0, 102.0, 103.0])
 
     result = _build_gate1_candidate_result(
         candidate=candidate,
         candidate_returns=candidate_returns,
-        benchmark_returns=benchmark_returns,
+        benchmark_stack_payload=BenchmarkStackPayload(
+            hurdle_returns=tuple(Decimal("0.00") for _ in candidate_returns),
+            opportunity_cost_returns=tuple(Decimal("0.00") for _ in candidate_returns),
+            opportunity_cost_weights=(
+                ("SPY", Decimal("0.6")),
+                ("AGG", Decimal("0.4")),
+            ),
+            operating_constraint=OperatingConstraintBudget(
+                max_drawdown_design=Decimal("0.15"),
+                max_drawdown_halt=Decimal("0.25"),
+                cdar_threshold=Decimal("0.08"),
+                cdar_confidence=Decimal("0.95"),
+            ),
+        ),
         window_start_utc=benchmark_bars.index[0].to_pydatetime(),
         window_end_utc=benchmark_bars.index[-1].to_pydatetime(),
-        benchmark_series_is_adjusted=True,
         adversarial_context=AdversarialCheckContext(
             benchmark_bars=benchmark_bars,
             backtest_runner=lambda *_args, **_kwargs: candidate_returns,
@@ -277,8 +434,8 @@ def test_gate1_drawdown_reports_design_target_separately_from_hard_limit() -> No
         criterion.criterion_id: criterion for criterion in result.criteria
     }
 
-    assert criteria_by_id["max_drawdown_target"].passed is False
-    assert criteria_by_id["max_drawdown_hard_limit"].passed is True
+    assert criteria_by_id["operating_constraint"].passed is False
+    assert "halt=0.250" in criteria_by_id["operating_constraint"].details
 
 
 def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> None:
@@ -313,7 +470,10 @@ def test_load_benchmark_close_series_reads_metadata_rich_artifact(tmp_path) -> N
     )
 
 
-def test_load_benchmark_close_series_warns_on_legacy_json_list(tmp_path, caplog) -> None:
+def test_load_benchmark_close_series_warns_on_legacy_json_list(
+    tmp_path,
+    caplog,
+) -> None:
     module = importlib.import_module("tradingx.validation")
     artifact_file = tmp_path / "legacy-benchmark.json"
     artifact_file.write_text(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
@@ -37,7 +38,7 @@ class BaselineLongOnlyPlanner:
         strategy: DeterministicBaselineStrategy | None = None,
         selector: OpportunitySelectorProtocol | None = None,
         benchmark_symbol: str = "SPY",
-        now_provider=None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._market_data = market_data
         self._strategy = strategy or DeterministicBaselineStrategy()

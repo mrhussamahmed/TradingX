@@ -712,6 +712,7 @@ describe('App', () => {
     render(<App />)
 
     await screen.findByText('TradingX Operator Platform')
+    await screen.findAllByText('QQQ')
 
     expect(screen.getByRole('button', { name: 'Start Bot' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Start Bot' }))

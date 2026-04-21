@@ -133,7 +133,10 @@ def test_web_config_overrides_are_parsed_from_mapping() -> None:
     assert config.web.refresh_interval_seconds == 5
 
 
-def test_from_env_file_prefers_os_environment_over_dotenv(monkeypatch, tmp_path) -> None:
+def test_from_env_file_prefers_os_environment_over_dotenv(
+    monkeypatch,
+    tmp_path,
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(

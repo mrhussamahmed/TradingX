@@ -3,10 +3,10 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import types
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-import types
 
 from tradingx.snapshots import (
     CandidateIntentSnapshot,
@@ -83,7 +83,10 @@ def test_decision_snapshot_id_changes_when_dry_run_changes(tmp_path: Path) -> No
     assert dry_run_path != live_path
 
 
-def test_decision_snapshot_store_uses_atomic_replace(tmp_path: Path, monkeypatch) -> None:
+def test_decision_snapshot_store_uses_atomic_replace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     module = importlib.import_module("tradingx.snapshots")
     replace_calls: list[tuple[str, str]] = []
 

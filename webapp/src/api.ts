@@ -251,7 +251,6 @@ export function postRecover(payload: { symbol: string }) {
 }
 
 export function postPrepareBenchmark(payload: {
-  symbol: string
   window_start: string
   window_end: string
 }) {
@@ -263,7 +262,7 @@ export function postPrepareBenchmark(payload: {
 
 export function postGateReport(payload: {
   gate: string
-  benchmark_closes_file: string
+  benchmark_stack_file: string
   window_start: string
   window_end: string
   universe: string[]

@@ -15,13 +15,14 @@ from alpaca.trading.client import TradingClient
 from tradingx.activation import LocalActivationGateway
 from tradingx.alerts import build_gate_decision_alert
 from tradingx.automation import build_default_market_day_automation_runner
+from tradingx.benchmark_stack import build_default_benchmark_stack
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_controller,
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
-from tradingx.data import build_default_market_data_gateway
+from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
 from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
@@ -35,6 +36,7 @@ from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.risk_free import (
     DEFAULT_RISK_FREE_CACHE_PATH,
+    build_default_risk_free_series,
     needs_risk_free_refresh,
     refresh_risk_free_cache,
 )
@@ -51,8 +53,8 @@ from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.supervisor import build_default_operator_supervisor
 from tradingx.types import BotRuntimeState
 from tradingx.validation import (
-    load_benchmark_close_series,
-    write_benchmark_close_series,
+    load_benchmark_stack_payload,
+    write_benchmark_stack_payload,
 )
 from tradingx.web.app import run_web_app
 from tradingx.week1_drills import run_week1_rehearsal
@@ -188,7 +190,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="artifacts/paper_loop",
     )
 
-    benchmark_prep_parser = subparsers.add_parser("prepare-benchmark-closes")
+    benchmark_prep_parser = subparsers.add_parser(
+        "prepare-benchmark-closes",
+        aliases=["prepare-benchmark-stack"],
+    )
     benchmark_prep_parser.add_argument("--env-file", default=".env")
     benchmark_prep_parser.add_argument("--symbol", default="SPY")
     benchmark_prep_parser.add_argument("--window-start", required=True)
@@ -218,7 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser = subparsers.add_parser("gate-report")
     gate_parser.add_argument("--env-file", default=".env")
     gate_parser.add_argument("--gate", choices=("1", "2"), required=True)
-    gate_parser.add_argument("--benchmark-closes-file", required=True)
+    gate_parser.add_argument(
+        "--benchmark-stack-file",
+        "--benchmark-closes-file",
+        dest="benchmark_stack_file",
+        required=True,
+    )
     gate_parser.add_argument("--window-start", required=True)
     gate_parser.add_argument("--window-end", required=True)
     gate_parser.add_argument("--artifact-root", default="artifacts/validation")
@@ -667,38 +677,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    if args.command == "prepare-benchmark-closes":
+    if args.command in {"prepare-benchmark-closes", "prepare-benchmark-stack"}:
         config = TradingConfig.from_env_file(Path(args.env_file))
         market_data_gateway = build_default_market_data_gateway(config)
+        risk_free_series = build_default_risk_free_series(config)
+        benchmark_stack = build_default_benchmark_stack(
+            config,
+            market_data_gateway=market_data_gateway,
+            risk_free_series=risk_free_series,
+        )
         window_start_utc = datetime.fromisoformat(args.window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(args.window_end).replace(tzinfo=UTC)
-        series = market_data_gateway.get_daily_close_series(
-            args.symbol,
-            start_utc=window_start_utc,
-            end_utc=window_end_utc,
-            feed=args.feed,
-            adjustment=args.adjustment,
+        session_dates = AlpacaRegularHoursCalendar().session_dates_between(
+            window_start_utc,
+            window_end_utc,
         )
+        payload = benchmark_stack.materialize(session_dates=session_dates)
         output_file = (
             Path(args.output_file)
             if args.output_file is not None
             else config.runtime.artifact_root
             / "validation"
-            / "benchmarks"
+            / "benchmark_stacks"
             / (
-                f"{args.symbol.lower()}-"
+                "stack-"
                 f"{window_start_utc.date().isoformat()}-"
-                f"{window_end_utc.date().isoformat()}-"
-                f"{args.adjustment}.json"
+                f"{window_end_utc.date().isoformat()}.json"
             )
         )
-        write_benchmark_close_series(output_file, series)
+        write_benchmark_stack_payload(output_file, payload)
         print(
             json.dumps(
                 _serialize(
                     {
                         "output_file": output_file,
-                        "series": series,
+                        "benchmark_stack": payload,
                     }
                 ),
                 sort_keys=True,
@@ -714,23 +727,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         window_start_utc = datetime.fromisoformat(args.window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(args.window_end).replace(tzinfo=UTC)
-        benchmark_series = load_benchmark_close_series(Path(args.benchmark_closes_file))
-        if (
-            benchmark_series.window_start_utc is not None
-            and benchmark_series.window_start_utc != window_start_utc
-        ):
-            raise ValueError(
-                "Benchmark closes artifact window start does not match "
-                "the requested gate-report window."
-            )
-        if (
-            benchmark_series.window_end_utc is not None
-            and benchmark_series.window_end_utc != window_end_utc
-        ):
-            raise ValueError(
-                "Benchmark closes artifact window end does not match "
-                "the requested gate-report window."
-            )
+        benchmark_stack_payload = load_benchmark_stack_payload(
+            Path(args.benchmark_stack_file)
+        )
         universe = (
             tuple(
                 item.strip().upper()
@@ -742,13 +741,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         gate_result = controller.generate_gate_report(
             gate_id=args.gate,
-            benchmark_closes=benchmark_series.closes,
+            benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
             universe=universe,
-            benchmark_series_is_adjusted=(
-                args.benchmark_adjusted or benchmark_series.series_is_adjusted
-            ),
         )
         print(json.dumps(_serialize(gate_result), sort_keys=True))
         return 0

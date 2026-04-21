@@ -37,8 +37,10 @@ from tradingx.types import (
     StrategyActivationRecord,
     WebActionResult,
 )
-from tradingx.weights import ApprovedWeightSnapshotStore
-from tradingx.weights import default_approved_weight_snapshot_root
+from tradingx.weights import (
+    ApprovedWeightSnapshotStore,
+    default_approved_weight_snapshot_root,
+)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> Path:

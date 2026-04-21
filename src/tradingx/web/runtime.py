@@ -9,7 +9,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
-from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.trading.client import TradingClient
 
 from tradingx.activation import LocalActivationGateway
@@ -23,12 +22,13 @@ from tradingx.automation import (
     MarketDayAutomationRunner,
     build_default_market_day_automation_runner,
 )
+from tradingx.benchmark_stack import build_default_benchmark_stack
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
-from tradingx.data import build_default_market_data_gateway
+from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.opportunity import RuntimeOpportunityPlanner
@@ -36,6 +36,7 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
+from tradingx.risk_free import build_default_risk_free_series
 from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.scheduler import MarketDayScheduler, build_default_market_day_scheduler
 from tradingx.service import (
@@ -55,8 +56,8 @@ from tradingx.types import (
     WebServiceState,
 )
 from tradingx.validation import (
-    load_benchmark_close_series,
-    write_benchmark_close_series,
+    load_benchmark_stack_payload,
+    write_benchmark_stack_payload,
 )
 from tradingx.web.readmodels import LocalWebReadModel
 
@@ -475,39 +476,42 @@ class LocalWebActionRunner:
     def prepare_benchmark(
         self,
         *,
-        symbol: str,
         window_start: str,
         window_end: str,
-        feed: str = "iex",
-        adjustment: str = "dividend",
     ) -> WebActionResult:
         market_data_gateway = build_default_market_data_gateway(self._config)
+        risk_free_series = build_default_risk_free_series(self._config)
+        stack = build_default_benchmark_stack(
+            self._config,
+            market_data_gateway=market_data_gateway,
+            risk_free_series=risk_free_series,
+        )
         window_start_utc = datetime.fromisoformat(window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(window_end).replace(tzinfo=UTC)
-        series = market_data_gateway.get_daily_close_series(
-            symbol,
-            start_utc=window_start_utc,
-            end_utc=window_end_utc,
-            feed=DataFeed(feed.lower()),
-            adjustment=Adjustment(adjustment.lower()),
+        session_dates = AlpacaRegularHoursCalendar().session_dates_between(
+            window_start_utc,
+            window_end_utc,
         )
+        payload = stack.materialize(session_dates=session_dates)
         output_file = (
             self._config.runtime.artifact_root
             / "validation"
-            / "benchmarks"
+            / "benchmark_stacks"
             / (
-                f"{symbol.lower()}-"
+                "stack-"
                 f"{window_start_utc.date().isoformat()}-"
-                f"{window_end_utc.date().isoformat()}-"
-                f"{adjustment}.json"
+                f"{window_end_utc.date().isoformat()}.json"
             )
         )
-        write_benchmark_close_series(output_file, series)
+        write_benchmark_stack_payload(output_file, payload)
         return WebActionResult(
             action_id=f"action-{uuid.uuid4()}",
             action_type="prepare_benchmark",
             status="completed",
-            message=f"Prepared benchmark closes for {symbol}.",
+            message=(
+                "Prepared benchmark stack "
+                "(cash hurdle + 60/40 + operating constraint)."
+            ),
             evidence_refs=(str(output_file),),
         )
 
@@ -515,26 +519,25 @@ class LocalWebActionRunner:
         self,
         *,
         gate: str,
-        benchmark_closes_file: str,
+        benchmark_stack_file: str,
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
     ) -> WebActionResult:
-        benchmark_path = self._resolve_artifact_path(Path(benchmark_closes_file))
+        benchmark_path = self._resolve_artifact_path(Path(benchmark_stack_file))
         controller = build_default_gate_validation_controller(
             self._config,
             artifact_root=self._config.runtime.artifact_root / "validation",
         )
         window_start_utc = datetime.fromisoformat(window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(window_end).replace(tzinfo=UTC)
-        benchmark_series = load_benchmark_close_series(benchmark_path)
+        benchmark_stack_payload = load_benchmark_stack_payload(benchmark_path)
         result = controller.generate_gate_report(
             gate_id=gate,
-            benchmark_closes=benchmark_series.closes,
+            benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
             universe=universe or self._config.runtime.symbol_universe,
-            benchmark_series_is_adjusted=benchmark_series.series_is_adjusted,
         )
         return WebActionResult(
             action_id=f"action-{uuid.uuid4()}",

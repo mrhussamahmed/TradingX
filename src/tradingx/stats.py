@@ -64,6 +64,9 @@ def lo_adjusted_sharpe_ratio(
             "Sharpe ratio is undefined because fewer than 30 returns were supplied."
         )
         return None
+    if np.allclose(excess_returns, excess_returns[0]):
+        LOGGER.warning("Sharpe ratio is undefined because variance is zero.")
+        return None
 
     volatility = float(np.std(excess_returns, ddof=1))
     if volatility <= 0 or math.isnan(volatility):
@@ -168,6 +171,66 @@ def deflated_sharpe_ratio(
     )
 
 
+def max_drawdown(returns: Sequence[float]) -> float:
+    if not returns:
+        return 0.0
+
+    cumulative = 1.0
+    peak = 1.0
+    worst = 0.0
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = (peak - cumulative) / peak
+        if drawdown > worst:
+            worst = drawdown
+    return worst
+
+
+def conditional_drawdown_at_risk(
+    returns: Sequence[float],
+    *,
+    confidence: float = 0.95,
+) -> float:
+    if not returns:
+        return 0.0
+    if confidence <= 0.0 or confidence >= 1.0:
+        raise ValueError("confidence must be in (0, 1).")
+
+    cumulative = 1.0
+    peak = 1.0
+    drawdowns: list[float] = []
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+        if cumulative > peak:
+            peak = cumulative
+        drawdowns.append((peak - cumulative) / peak)
+
+    drawdowns.sort(reverse=True)
+    tail_size = max(1, math.ceil((1.0 - confidence) * len(drawdowns)))
+    worst_tail = drawdowns[:tail_size]
+    return sum(worst_tail) / len(worst_tail)
+
+
+def calmar_ratio(
+    returns: Sequence[float],
+    *,
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+) -> float:
+    if not returns:
+        return 0.0
+
+    cumulative = 1.0
+    for value in returns:
+        cumulative *= 1.0 + float(value)
+    annualized = cumulative ** (periods_per_year / len(returns)) - 1.0
+    mdd = max_drawdown(returns)
+    if mdd == 0.0:
+        return float("inf") if annualized > 0.0 else 0.0
+    return float(annualized / mdd)
+
+
 def _excess_returns(
     *,
     returns: Sequence[float],
@@ -188,6 +251,10 @@ def _lagged_autocorrelation(values: FloatArray, lag: int) -> float | None:
         return None
     leading = values[:-lag]
     lagged = values[lag:]
+    if leading.size < 2 or lagged.size < 2:
+        return None
+    if np.allclose(leading, leading[0]) or np.allclose(lagged, lagged[0]):
+        return None
     correlation_matrix = np.corrcoef(leading, lagged)
     correlation = float(correlation_matrix[0, 1])
     if math.isnan(correlation):
@@ -199,9 +266,12 @@ __all__ = (
     "DEFAULT_AUTOCORRELATION_LAGS",
     "DEFAULT_PERIODS_PER_YEAR",
     "PAPER_PERIODS_PER_YEAR",
+    "calmar_ratio",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "conditional_drawdown_at_risk",
     "lo_adjusted_sharpe_ratio",
+    "max_drawdown",
     "naive_annualized_sharpe_ratio",
     "probabilistic_sharpe_ratio",
 )

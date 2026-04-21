@@ -192,7 +192,8 @@ def test_baseline_long_only_planner_uses_selector_for_entry_symbol() -> None:
     assert [intent.side for intent in plan.trade_intents] == ["hold", "buy"]
 
 
-def test_activated_runtime_planner_resolves_activation_strategy_and_passes_default_quantity() -> None:
+def test_activated_runtime_planner_passes_activation_quantity(
+) -> None:
     resolver = CapturingResolver()
     registry = RuntimeStrategyRegistry()
     registry.register("baseline-long-only-v1", resolver)

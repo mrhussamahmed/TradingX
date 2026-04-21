@@ -17,6 +17,7 @@ from tradingx.snapshots import (
 from tradingx.types import (
     AccountSnapshot,
     ApprovedWeightSnapshot,
+    BenchmarkStackPayload,
     ExecutionLifecycleRecord,
     GateDecisionBrief,
     GateDecisionCandidateSummary,
@@ -26,6 +27,7 @@ from tradingx.types import (
     MarketAutomationRunResult,
     MarketDaySchedulerRunResult,
     MarketSnapshot,
+    OperatingConstraintBudget,
     OpportunityScore,
     OpportunitySelectionRecord,
     OrderRecord,
@@ -246,19 +248,17 @@ class FakeGateValidationController:
         self,
         *,
         gate_id: str,
-        benchmark_closes: tuple[Decimal, ...],
+        benchmark_stack_payload: BenchmarkStackPayload,
         window_start_utc: datetime,
         window_end_utc: datetime,
         universe: tuple[str, ...],
-        benchmark_series_is_adjusted: bool,
     ):
         self.called_with = {
             "gate_id": gate_id,
-            "benchmark_closes": benchmark_closes,
+            "benchmark_stack_payload": benchmark_stack_payload,
             "window_start_utc": window_start_utc,
             "window_end_utc": window_end_utc,
             "universe": universe,
-            "benchmark_series_is_adjusted": benchmark_series_is_adjusted,
         }
         return {
             "report": {
@@ -341,6 +341,15 @@ class FakeBenchmarkGateway:
             adjustment=adjustment,
             series_is_adjusted=adjustment in {"dividend", "all"},
         )
+
+
+@dataclass(frozen=True)
+class FakeBenchmarkStack:
+    payload: BenchmarkStackPayload
+
+    def materialize(self, *, session_dates) -> BenchmarkStackPayload:
+        del session_dates
+        return self.payload
 
 
 class FakeWebRunner:
@@ -1063,18 +1072,22 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
         "TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ\n",
         encoding="utf-8",
     )
-    benchmark_closes_file = tmp_path / "benchmark-closes.json"
-    benchmark_closes_file.write_text(
+    benchmark_stack_file = tmp_path / "benchmark-stack.json"
+    benchmark_stack_file.write_text(
         json.dumps(
             {
-                "symbol": "SPY",
-                "window_start_utc": "2026-04-01T00:00:00+00:00",
-                "window_end_utc": "2026-04-17T00:00:00+00:00",
-                "generated_at_utc": "2026-04-17T21:15:00+00:00",
-                "feed": "iex",
-                "adjustment": "dividend",
-                "series_is_adjusted": True,
-                "closes": ["100", "101", "102"],
+                "hurdle_returns": ["0.0001", "0.0001", "0.0001"],
+                "opportunity_cost_returns": ["0.0002", "0.0002", "0.0002"],
+                "opportunity_cost_weights": [
+                    {"symbol": "SPY", "weight": "0.6"},
+                    {"symbol": "AGG", "weight": "0.4"},
+                ],
+                "operating_constraint": {
+                    "max_drawdown_design": "0.15",
+                    "max_drawdown_halt": "0.25",
+                    "cdar_threshold": "0.08",
+                    "cdar_confidence": "0.95",
+                },
             }
         ),
         encoding="utf-8",
@@ -1093,8 +1106,8 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
             str(env_file),
             "--gate",
             "1",
-            "--benchmark-closes-file",
-            str(benchmark_closes_file),
+            "--benchmark-stack-file",
+            str(benchmark_stack_file),
             "--window-start",
             "2026-04-01",
             "--window-end",
@@ -1108,11 +1121,27 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert fake_controller.called_with == {
         "gate_id": "1",
-        "benchmark_closes": (Decimal("100"), Decimal("101"), Decimal("102")),
+        "benchmark_stack_payload": BenchmarkStackPayload(
+            hurdle_returns=(Decimal("0.0001"), Decimal("0.0001"), Decimal("0.0001")),
+            opportunity_cost_returns=(
+                Decimal("0.0002"),
+                Decimal("0.0002"),
+                Decimal("0.0002"),
+            ),
+            opportunity_cost_weights=(
+                ("SPY", Decimal("0.6")),
+                ("AGG", Decimal("0.4")),
+            ),
+            operating_constraint=OperatingConstraintBudget(
+                max_drawdown_design=Decimal("0.15"),
+                max_drawdown_halt=Decimal("0.25"),
+                cdar_threshold=Decimal("0.08"),
+                cdar_confidence=Decimal("0.95"),
+            ),
+        ),
         "window_start_utc": datetime(2026, 4, 1, tzinfo=UTC),
         "window_end_utc": datetime(2026, 4, 17, tzinfo=UTC),
         "universe": ("SPY", "QQQ"),
-        "benchmark_series_is_adjusted": True,
     }
     assert payload["gate_assessment"]["status"] == "pass"
 
@@ -1125,11 +1154,47 @@ def test_main_prepares_benchmark_closes_artifact(monkeypatch, tmp_path, capsys) 
     )
     output_file = tmp_path / "benchmarks" / "spy-dividend.json"
     fake_gateway = FakeBenchmarkGateway()
+    fake_payload = BenchmarkStackPayload(
+        hurdle_returns=(Decimal("0.0001"), Decimal("0.0001")),
+        opportunity_cost_returns=(Decimal("0.0002"), Decimal("0.0002")),
+        opportunity_cost_weights=(
+            ("SPY", Decimal("0.6")),
+            ("AGG", Decimal("0.4")),
+        ),
+        operating_constraint=OperatingConstraintBudget(
+            max_drawdown_design=Decimal("0.15"),
+            max_drawdown_halt=Decimal("0.25"),
+            cdar_threshold=Decimal("0.08"),
+            cdar_confidence=Decimal("0.95"),
+        ),
+    )
     monkeypatch.setattr(
         cli,
         "build_default_market_data_gateway",
         lambda config: fake_gateway,
         raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_default_risk_free_series",
+        lambda config: object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_default_benchmark_stack",
+        lambda config, market_data_gateway, risk_free_series: FakeBenchmarkStack(
+            fake_payload
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli.AlpacaRegularHoursCalendar,
+        "session_dates_between",
+        lambda self, start_utc, end_utc: (
+            start_utc.date(),
+            end_utc.date(),
+        ),
     )
 
     exit_code = cli.main(
@@ -1148,17 +1213,10 @@ def test_main_prepares_benchmark_closes_artifact(monkeypatch, tmp_path, capsys) 
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert fake_gateway.called_with == {
-        "symbol": "SPY",
-        "start_utc": datetime(2026, 4, 1, tzinfo=UTC),
-        "end_utc": datetime(2026, 4, 17, tzinfo=UTC),
-        "feed": "iex",
-        "adjustment": "dividend",
-    }
     assert payload["output_file"] == str(output_file)
     artifact = json.loads(output_file.read_text(encoding="utf-8"))
-    assert artifact["series_is_adjusted"] is True
-    assert artifact["closes"] == ["100", "101", "102"]
+    assert artifact["hurdle_returns"] == ["0.0001", "0.0001"]
+    assert artifact["opportunity_cost_returns"] == ["0.0002", "0.0002"]
 
 
 def test_main_prints_operator_evidence_report(tmp_path, capsys) -> None:

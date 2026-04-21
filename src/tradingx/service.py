@@ -18,11 +18,11 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
-from tradingx.runtime_portfolio import RuntimePortfolioPlan
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
 )
+from tradingx.runtime_portfolio import RuntimePortfolioPlan
 from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     build_default_runtime_registry,
@@ -204,7 +204,11 @@ class PaperTradingService:
                     portfolio_plan = None
                 if portfolio_plan is not None:
                     self._artifacts.write_runtime_portfolio_plan(portfolio_plan)
-                    executor = getattr(self._loop_controller, "execute_trade_intent", None)
+                    executor = getattr(
+                        self._loop_controller,
+                        "execute_trade_intent",
+                        None,
+                    )
                     if not callable(executor):
                         raise AttributeError(
                             "Loop controller must implement execute_trade_intent "
@@ -339,12 +343,11 @@ class PaperTradingService:
         )
 
     def _get_portfolio_state_guarded(self) -> tuple[str | None, PortfolioState]:
-        last_error: Exception | None = None
         for _ in range(self._broker_failure_threshold):
             try:
                 portfolio_state = self._portfolio.get_portfolio_state()
             except Exception as error:
-                last_error = error
+                del error
                 continue
             self._last_successful_broker_call_at = self._now_provider()
             self._last_known_portfolio_state = portfolio_state

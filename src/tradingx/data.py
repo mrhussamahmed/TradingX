@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import exchange_calendars as xcals  # type: ignore[import-untyped]
@@ -287,6 +287,19 @@ class AlpacaRegularHoursCalendar:
                 close_at_utc=session_close,
             )
         return None
+
+    def session_dates_between(
+        self,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> tuple[date, ...]:
+        if end_utc < start_utc:
+            raise ValueError("end_utc must be on or after start_utc.")
+        sessions = self._calendar.sessions_in_range(
+            start_utc.date(),
+            end_utc.date(),
+        )
+        return tuple(session_label.date() for session_label in sessions)
 
 
 def build_default_market_data_gateway(config: TradingConfig) -> AlpacaMarketDataGateway:

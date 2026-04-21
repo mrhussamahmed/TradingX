@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -47,34 +48,42 @@ def launch_control_center(
     readiness_timeout_seconds: float = 30.0,
     poll_interval_seconds: float = 0.5,
 ) -> ControlCenterLaunchResult:
-    healthcheck = healthcheck or _default_healthcheck
-    spawn_process = spawn_process or _spawn_web_process
-    open_browser = open_browser or (lambda url: webbrowser.open(url, new=1))
-    sleep_fn = sleep_fn or __import__("time").sleep
-    monotonic_fn = monotonic_fn or __import__("time").monotonic
+    resolved_healthcheck: HealthcheckProtocol = (
+        _default_healthcheck if healthcheck is None else healthcheck
+    )
+    resolved_spawn_process = (
+        _spawn_web_process if spawn_process is None else spawn_process
+    )
+    resolved_open_browser: BrowserOpenerProtocol = (
+        _open_browser if open_browser is None else open_browser
+    )
+    resolved_sleep_fn: SleepProtocol = time.sleep if sleep_fn is None else sleep_fn
+    resolved_monotonic_fn: MonotonicProtocol = (
+        time.monotonic if monotonic_fn is None else monotonic_fn
+    )
 
     dashboard_url = _dashboard_url(config)
     health_urls = _healthcheck_urls(dashboard_url)
 
-    if _all_healthchecks_ready(health_urls, healthcheck=healthcheck):
-        open_browser(dashboard_url)
+    if _all_healthchecks_ready(health_urls, healthcheck=resolved_healthcheck):
+        resolved_open_browser(dashboard_url)
         return ControlCenterLaunchResult(
             status="connected",
             dashboard_url=dashboard_url,
             reused_existing_server=True,
         )
 
-    process = spawn_process(
+    process = resolved_spawn_process(
         repo_root=repo_root,
         env_file=env_file,
         host=config.web.host,
         port=config.web.port,
     )
-    deadline = monotonic_fn() + readiness_timeout_seconds
+    deadline = resolved_monotonic_fn() + readiness_timeout_seconds
 
-    while monotonic_fn() < deadline:
-        if _all_healthchecks_ready(health_urls, healthcheck=healthcheck):
-            open_browser(dashboard_url)
+    while resolved_monotonic_fn() < deadline:
+        if _all_healthchecks_ready(health_urls, healthcheck=resolved_healthcheck):
+            resolved_open_browser(dashboard_url)
             return ControlCenterLaunchResult(
                 status="started",
                 dashboard_url=dashboard_url,
@@ -88,10 +97,10 @@ def launch_control_center(
                 f"(exit code {exit_code})."
             )
 
-        sleep_fn(poll_interval_seconds)
+        resolved_sleep_fn(poll_interval_seconds)
 
-    if _all_healthchecks_ready(health_urls, healthcheck=healthcheck):
-        open_browser(dashboard_url)
+    if _all_healthchecks_ready(health_urls, healthcheck=resolved_healthcheck):
+        resolved_open_browser(dashboard_url)
         return ControlCenterLaunchResult(
             status="started",
             dashboard_url=dashboard_url,
@@ -127,9 +136,14 @@ def _all_healthchecks_ready(
 def _default_healthcheck(url: str) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=1) as response:
-            return 200 <= response.status < 300
+            status_code = int(response.status)
+            return 200 <= status_code < 300
     except (OSError, urllib.error.URLError):
         return False
+
+
+def _open_browser(url: str) -> None:
+    webbrowser.open(url, new=1)
 
 
 def _spawn_web_process(

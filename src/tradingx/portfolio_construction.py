@@ -157,7 +157,10 @@ def build_candidate_runtime_weights(
         crash_overlay_active=bool(crash_overlay_mask.loc[latest_timestamp]),
     )
     latest_rows = {
-        sleeve_name: frame.reindex(common_index).fillna(0.0).astype(float).loc[latest_timestamp]
+        sleeve_name: frame.reindex(common_index)
+        .fillna(0.0)
+        .astype(float)
+        .loc[latest_timestamp]
         for sleeve_name, frame in sleeve_signals.items()
     }
     raw_weights = _build_raw_target_weights_from_rows(
@@ -318,7 +321,11 @@ def _common_index(
 ) -> pd.Index:
     common_index = None
     for frame in sleeve_signals.values():
-        common_index = frame.index if common_index is None else common_index.intersection(frame.index)
+        common_index = (
+            frame.index
+            if common_index is None
+            else common_index.intersection(frame.index)
+        )
     if benchmark_bars is not None:
         common_index = (
             benchmark_bars.index
@@ -326,7 +333,9 @@ def _common_index(
             else common_index.intersection(benchmark_bars.index)
         )
     if common_index is None or common_index.empty:
-        raise ValueError("portfolio construction requires at least one shared timestamp.")
+        raise ValueError(
+            "portfolio construction requires at least one shared timestamp."
+        )
     return common_index
 
 
@@ -464,7 +473,9 @@ def _wide_ohlcv_frame(
     reference_index = next(iter(bars_by_symbol.values())).index
     for symbol, bars in bars_by_symbol.items():
         for field in ("open", "high", "low", "close", "volume"):
-            payload[(symbol, field)] = bars[field].astype(float).reindex(reference_index)
+            payload[(symbol, field)] = bars[field].astype(float).reindex(
+                reference_index
+            )
     return pd.DataFrame(payload, index=reference_index)
 
 

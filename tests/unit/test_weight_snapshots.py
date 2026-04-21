@@ -62,7 +62,9 @@ def test_approved_weight_snapshot_store_rejects_missing_committed_yaml(
         store.load_by_strategy_id("baseline-long-only-v1")
 
 
-def test_approved_weight_snapshot_store_rejects_naive_generated_at_utc(tmp_path) -> None:
+def test_approved_weight_snapshot_store_rejects_naive_generated_at_utc(
+    tmp_path,
+) -> None:
     weights_root = tmp_path / "config" / "strategy" / "weights"
     weights_root.mkdir(parents=True)
     (weights_root / "baseline-long-only-v1.yaml").write_text(
