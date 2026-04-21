@@ -30,8 +30,11 @@ Scope:
    VIX level (when available), and Treasury yield-curve shape.
 3. Empirical vol-estimator comparison across `realized`, `ewma`,
    `garch`, and `har_rv` on in-repo bars, with the winner recorded.
-4. Candidate-default retune in `strategy.py` if the empirical
-   comparison justifies changing the default `forecast_method`.
+4. **Trend-family** candidate-default retune in `strategy.py` if
+   the trend-sleeve empirical comparison justifies changing the
+   trend-family default `forecast_method`. Vol-target and
+   mean-reversion defaults stay put pending per-family comparison
+   (deferred).
 
 No sleeve logic, no portfolio construction, no runtime wiring — the
 features are produced; consumption is 1.3's job.
@@ -276,38 +279,86 @@ produce same output. Handles missing VIX and missing yield-curve
 gracefully (None-valued inputs don't crash; snapshot still emits a
 regime based on the remaining sub-indicators).
 
-### W4 — Empirical vol-estimator comparison + candidate-default retune
+### W4 — Empirical vol-estimator comparison + trend-family candidate retune
 
 **Context.** `scripts/compare_vol_forecasts.py` already exists (see
 the checkpoint commit `92375a8` from the benchmark-stack branch) and
-compares forecast methods. This task extends it to include HAR-RV
-and formalizes the winner selection.
+compares forecast methods under a **trend-sleeve** configuration. The
+`forecast_method` field is consumed by each sleeve family
+differently inside
+[portfolio_construction.py:395](/src/tradingx/portfolio_construction.py:395):
+trend and vol-target use the forecast for position sizing; mean
+reversion uses it for z-score normalization. Evidence gathered under
+the trend harness is not representative of how the vol-target or
+mean-reversion sleeves consume the forecast.
+
+**Scope correction — per-family retune limited to the family actually
+evaluated.** This tranche runs the comparison under the existing
+trend-sleeve harness only. The automatic default-retune action is
+therefore **limited to the `trend-following-v1` candidate**. The
+`vol-target-v1` and `mean-reversion-v1` defaults stay at their
+current values regardless of the trend-sleeve winner. Running a
+per-family comparison (reshaping the harness to a vol-target payoff
+and a mean-reversion payoff) is out of scope for 1.2 and belongs to
+tranche-2 hardening or a dedicated research lane.
+
+**Metric correction — realized volatility, not realized variance.**
+The existing script at
+[compare_vol_forecasts.py:200](/scripts/compare_vol_forecasts.py:200)
+scores forecasts against one-day realized variance (`pct_change()
+** 2`). That target is dimensionally wrong: `forecast_volatility`
+produces annualized *volatility* (σ × √252), not variance. The
+script must replace its variance target with a realized-vol target
+aligned to the forecast horizon:
+
+- **Forecast:** `forecast_volatility(...)[t]` — annualized vol at time `t`.
+- **Target:** annualized realized vol over the forward window
+  `returns[t + 1 : t + 1 + lookback_days]`, computed as
+  `std(returns) * sqrt(252)`.
+- **Loss:** `(forecast[t] - realized_vol_forward[t]) ** 2`,
+  averaged across valid `t` per symbol.
+
+This is one-step-ahead MSFE in annualized volatility units.
 
 **Behavior change:**
 
-1. Extend `compare_vol_forecasts.py` to evaluate all four methods:
-   `realized`, `ewma`, `garch`, `har_rv`.
-2. Use mean-squared-forecast-error (MSFE) against realized vol as
-   the primary accuracy metric. Compute per-symbol, aggregate across
-   the canonical 8-ETF universe.
-3. Emit a short markdown report at
+1. **Replace the loss target** in
+   [compare_vol_forecasts.py:200](/scripts/compare_vol_forecasts.py:200)
+   with the one-step-ahead realized-vol target described above.
+2. Extend the script to evaluate all four methods: `realized`,
+   `ewma`, `garch`, `har_rv`.
+3. Compute MSFE per-symbol across the canonical 8-ETF universe;
+   aggregate by mean across symbols.
+4. Emit a short markdown report at
    `docs/research/vol_estimator_comparison_2026-04-21.md` with:
-   - Per-symbol MSFE per method
-   - Aggregate winner across symbols
-   - Recommended candidate-default `forecast_method`
-4. If the winner differs from the current default (`garch`), update
-   the three candidate entries in
-   [strategy.py:34](/src/tradingx/strategy.py:34) to use the winning
-   `forecast_method`. Document the change in the commit message.
+   - Per-symbol MSFE per method (in annualized-vol units)
+   - Aggregate winner across symbols under the trend-sleeve harness
+   - Recommended `forecast_method` **for the trend family only**
+   - Explicit note that vol-target and mean-reversion defaults are
+     unchanged pending per-family evaluation
+5. If the aggregate winner differs from the current trend-family
+   default (`garch`), update **only** the `trend-following-v1`
+   candidate entry in
+   [strategy.py:34](/src/tradingx/strategy.py:34) to use the
+   winning `forecast_method`. Document the trend-family-only scope
+   explicitly in the commit message.
+6. **Regression test for the target fix.** Add a test asserting
+   that the script's loss function rejects variance-unit targets
+   and accepts volatility-unit targets — e.g., feeding a known
+   constant-vol series produces a near-zero MSFE for the `realized`
+   method at its own lookback, and feeding the legacy variance
+   target produces a detectably different (larger) MSFE value than
+   the corrected volatility target.
 
 **Report location** is under `docs/research/` (not
 `docs/superpowers/`) because it's an empirical research artifact,
 not a governed design document.
 
-**Acceptance.** The script runs clean on in-repo bars. A markdown
-report is produced and committed. If the winner changed, candidate
-defaults in `strategy.py` are updated in the same commit as the
-report.
+**Acceptance.** The script runs clean on in-repo bars with the
+corrected realized-vol target. A markdown report is produced and
+committed. If the trend-family winner changed, `trend-following-v1`
+is updated in the same commit; `vol-target-v1` and
+`mean-reversion-v1` stay at `garch`.
 
 ## Testing approach
 
@@ -336,9 +387,10 @@ Sub-tranche 1.2 is complete when:
 4. The empirical comparison report is committed at
    `docs/research/vol_estimator_comparison_2026-04-21.md`, with a
    clearly stated winner per the MSFE criterion.
-5. If the winner differs from `garch`, the three candidate entries
-   in `strategy.py` are updated, and all registry tests pass under
-   the new defaults.
+5. If the trend-sleeve winner differs from `garch`, **only the
+   `trend-following-v1` candidate entry** in `strategy.py` is
+   updated. `vol-target-v1` and `mean-reversion-v1` entries remain
+   unchanged. All registry tests pass under the new defaults.
 6. `uv run pytest -q`, `uv run mypy src/tradingx`, `uv run ruff check`,
    and `python3 scripts/check_index.py` all pass.
 
@@ -364,9 +416,9 @@ Two implementation-level judgment calls for Codex:
 ## Governance impact
 
 - Update `docs/INDEX.md` to register `DESIGN-0013`.
-- If W4's empirical comparison changes candidate defaults, that's
-  a minor strategy-layer change, not an architectural one — no ADR
-  needed because
+- If W4's empirical comparison changes the `trend-following-v1`
+  candidate default, that's a minor strategy-layer change, not an
+  architectural one — no ADR needed because
   [ADR-0022](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md)
   already covers the reframed gate criterion; the choice of vol
   estimator is an implementation detail inside it.
