@@ -247,8 +247,35 @@ class SleeveTrade:
 - `"regime_stressed"`
 - `"insufficient_history"`
 
+**Failure-rule emission contract — failures are observable, not
+silent.** Per BRIEF-0002's sleeve definition, failure rules are a
+first-class sleeve responsibility. Silent skipping makes them
+invisible to the trial-ledger, the evidence pack, and the operator
+dashboard. Rule:
+
+- **When a sleeve cannot produce a meaningful trade for an
+  instrument it would otherwise consider,** it MUST emit an
+  explicit `SleeveTrade` with `side="hold"`,
+  `target_weight_of_sleeve_budget=Decimal("0")` (if no current
+  position) or the unchanged current weight (if there is one),
+  and `rationale` set to the `SleeveFailureReason` string.
+- **When a sleeve liquidates due to a failure rule** (regime
+  `stressed`, operator halt, drift alarm), it emits a trade with
+  `side="sell"` and `rationale` set to the reason.
+- **When a sleeve's `allowed_instruments` does not include a
+  symbol at all,** silent skip IS acceptable — the sleeve
+  legitimately has no opinion on that symbol, which is distinct
+  from a failure.
+
+In short: **absence of a trade for an in-universe symbol is a
+silent bug; absence of a trade for an out-of-universe symbol is
+correct behavior.**
+
 Tests cover: protocol conformance, frozen dataclass shape,
-round-trip serialization.
+round-trip serialization, and the emission contract (an
+in-universe symbol with insufficient history produces a `hold`
+trade with `rationale="insufficient_history"`, NOT an empty
+tuple).
 
 ### W2 — Regime gate helper
 
@@ -345,7 +372,34 @@ class TrendSleeve:
         for symbol in self.allowed_instruments:
             bars = context.bars_by_symbol.get(symbol)
             if bars is None or len(bars) < self.lookback_days:
-                continue  # insufficient_history — silently skip
+                # Failure-rule emission contract (W1): emit an
+                # explicit hold trade so insufficient_history is
+                # observable in the evidence pack and trial ledger.
+                current_qty = context.current_positions.get(symbol, Decimal("0"))
+                # If we already hold the symbol, preserve the current
+                # weight (we can't recompute; defer to the next bar
+                # when history may be sufficient). If we don't hold
+                # it, the weight is zero.
+                current_weight = Decimal("0")
+                if current_qty != Decimal("0") and context.sleeve_budget_equity > Decimal("0"):
+                    # Best-effort weight; use last observable close
+                    # if any bar exists, else zero.
+                    if bars is not None and len(bars) > 0:
+                        last_close = Decimal(str(bars["close"].iloc[-1]))
+                        current_weight = (
+                            current_qty * last_close / context.sleeve_budget_equity
+                        )
+                trades.append(
+                    SleeveTrade(
+                        sleeve_id=self.sleeve_id,
+                        symbol=symbol,
+                        side="hold",
+                        target_weight_of_sleeve_budget=current_weight,
+                        rationale="insufficient_history",
+                        regime=context.regime.regime,
+                    )
+                )
+                continue
 
             signal = generate_trend_signal(
                 bars,
@@ -476,7 +530,31 @@ class VolManagedBetaSleeve:
     def plan_for_bar(self, context: SleeveContext) -> tuple[SleeveTrade, ...]:
         spy_bars = context.bars_by_symbol.get("SPY")
         if spy_bars is None or len(spy_bars) < self.realized_vol_window_days + 20:
-            return ()  # insufficient_history
+            # Failure-rule emission contract (W1): SPY is in
+            # allowed_instruments, so emit an explicit hold trade
+            # rather than an empty tuple.
+            current_qty = context.current_positions.get("SPY", Decimal("0"))
+            current_weight = Decimal("0")
+            if (
+                current_qty != Decimal("0")
+                and spy_bars is not None
+                and len(spy_bars) > 0
+                and context.sleeve_budget_equity > Decimal("0")
+            ):
+                last_close = Decimal(str(spy_bars["close"].iloc[-1]))
+                current_weight = (
+                    current_qty * last_close / context.sleeve_budget_equity
+                )
+            return (
+                SleeveTrade(
+                    sleeve_id=self.sleeve_id,
+                    symbol="SPY",
+                    side="hold",
+                    target_weight_of_sleeve_budget=current_weight,
+                    rationale="insufficient_history",
+                    regime=context.regime.regime,
+                ),
+            )
 
         signal_series = generate_vol_target_spy_signal(
             spy_bars,
@@ -487,7 +565,25 @@ class VolManagedBetaSleeve:
         )
         raw_weight = Decimal(str(signal_series.iloc[-1]))
         if pd.isna(raw_weight):
-            return ()
+            # Signal computed but produced NaN — treat as
+            # insufficient_history in the emission contract.
+            current_qty = context.current_positions.get("SPY", Decimal("0"))
+            last_close = Decimal(str(spy_bars["close"].iloc[-1]))
+            current_weight = (
+                current_qty * last_close / context.sleeve_budget_equity
+                if context.sleeve_budget_equity > Decimal("0")
+                else Decimal("0")
+            )
+            return (
+                SleeveTrade(
+                    sleeve_id=self.sleeve_id,
+                    symbol="SPY",
+                    side="hold",
+                    target_weight_of_sleeve_budget=current_weight,
+                    rationale="insufficient_history",
+                    regime=context.regime.regime,
+                ),
+            )
 
         current_qty = context.current_positions.get("SPY", Decimal("0"))
         last_close = Decimal(str(spy_bars["close"].iloc[-1]))
@@ -550,8 +646,10 @@ Tests cover:
 **Purpose:** Each sleeve must be evaluable against the three-tier
 benchmark stack so Gate 1 criteria apply to it. This work item
 provides a helper that converts a sleeve's historical trade stream
-into a `candidate_returns` series suitable for
-`evaluate_candidate`.
+into the `(candidate_returns, annualized_cost_drag_bps)` tuple
+shape that matches `_candidate_returns()` in tranche 1.1, so the
+sleeve evaluation path flows through `evaluate_candidate` without
+silently forking the Gate 1 contract.
 
 **Contract:**
 
@@ -572,47 +670,154 @@ def simulate_sleeve_returns(
     bars_by_symbol: dict[str, pd.DataFrame],
     regime_snapshots_by_date: dict,  # date -> RegimeSnapshot
     sleeve_budget_equity: Decimal,
-) -> tuple[Decimal, ...]:
+    cost_model_config: "CostModelConfig | None" = None,
+) -> tuple[tuple[Decimal, ...], Decimal]:
     """Walk the sleeve bar-by-bar, accumulate daily portfolio
-    returns from its SleeveTrade outputs, and return them as a
-    Decimal tuple suitable for _candidate_returns replacement.
+    returns from its SleeveTrade outputs, apply the same cost model
+    as _candidate_returns(), and return both the return series and
+    annualized cost drag in bps.
+
+    Return shape intentionally matches _candidate_returns() at
+    [validation.py:480](/src/tradingx/validation.py:480) so the
+    sleeve evaluation path plugs into evaluate_candidate() without
+    forking the Gate 1 contract established in tranche 1.1.
 
     This is not a full backtest — it does not simulate fills,
-    slippage, or rebalance cadence. It assumes the target weights
-    produced by plan_for_bar are achieved at the next bar's open.
-    Costs are layered on via the existing cost model in 1.1.
+    slippage beyond the cost-model half-spread, or rebalance
+    cadence. It assumes the target weights produced by
+    plan_for_bar are achieved at the next bar's open. Costs are
+    applied via `tradingx.costs.estimate_trade_costs` over each
+    bar's trade delta, aggregated and annualized the same way
+    backtest.py computes `annualized_cost_drag_bps` (tranche 1.1
+    W3 contract).
     """
 ```
 
-Tests cover:
-- Deterministic output for a fixed input
-- Costs (from 1.1's cost-drag accounting) are applied
-- Regime snapshots threaded correctly per date
-- Insufficient-history bars produce zero return for that day
+**Caller threading.** When a candidate has a non-null
+`sleeve_class_path` (see W6), `_candidate_returns` calls
+`simulate_sleeve_returns` instead of running the full
+`run_daily_bar_backtest`. Both paths produce the same 2-tuple
+shape, so `evaluate_candidate(..., annualized_cost_drag_bps=...)`
+is populated uniformly and `ValidationCandidateResult
+.annualized_cost_drag_bps` flows to the validation report and
+read model per the tranche-1.1 contract.
 
-### W6 — Strategy-registry integration + regression
+Tests cover:
+- Return shape is `(tuple[Decimal, ...], Decimal)` — not a bare
+  return tuple.
+- Deterministic output for a fixed input.
+- `annualized_cost_drag_bps > 0` for any sleeve that turns over.
+- Cost drag matches what an equivalent `run_daily_bar_backtest`
+  call on the same trade stream would produce (within rounding).
+- Regime snapshots threaded correctly per date.
+- Insufficient-history bars produce a zero-return day and **an
+  explicit `hold` trade** per W1's failure-rule emission rule
+  (see W1 amendment for `SleeveFailureReason.INSUFFICIENT_HISTORY`).
+
+### W6 — Strategy-registry integration + sleeve loader contract
 
 **Files:**
 - Modify: `src/tradingx/strategy.py`
+- Modify: `src/tradingx/sleeves/base.py` (add `build_sleeve_from_candidate`)
+- Modify: `src/tradingx/validation.py` (route candidates with
+  `sleeve_class_path` through the sleeve path in `_candidate_returns`)
 - Modify: `tests/unit/test_strategy.py`
+- Create: `tests/unit/test_sleeve_loader.py`
 
 **Behavior change:**
 
-1. `StrategyCandidate` gets an optional
-   `sleeve_class_path: str | None = None` field. When populated,
-   this dotted path points at a sleeve class (e.g.
+1. **Add `sleeve_class_path` field to `StrategyCandidate`** — an
+   optional `str | None = None`. When populated, dotted-path
+   points at a sleeve class (e.g.
    `"tradingx.sleeves.trend.TrendSleeve"`).
-2. Update `build_mandatory_candidate_registry` entries for
-   `trend-following-v1` and `vol-target-v1` to set the new field.
-   Mean-reversion entry leaves it `None` (FFL-0001-03 defers the
-   sleeve).
-3. The legacy `BaselineLongOnlyPlanner` still handles
-   `baseline-long-only-v1` unchanged.
 
-Tests cover:
-- `StrategyCandidate` construction with and without
-  `sleeve_class_path`
-- Registry contains the expected sleeve paths
+2. **Define the candidate → sleeve loader contract.** Add a new
+   function in `sleeves/base.py`:
+
+   ```python
+   def build_sleeve_from_candidate(
+       candidate: StrategyCandidate,
+   ) -> SleeveProtocol:
+       """Import the class at candidate.sleeve_class_path and
+       instantiate it with candidate.parameter_set filtered to the
+       sleeve's constructor signature, plus
+       allowed_instruments=candidate.universe.
+
+       Raises ValueError if sleeve_class_path is None or the import
+       fails. This is the ONLY blessed construction path for
+       sleeves from the candidate registry.
+       """
+   ```
+
+   **Instantiation rules (single source of truth):**
+   - `allowed_instruments` on the sleeve ← `candidate.universe`
+     (always; the sleeve class's default is ignored).
+   - Sleeve dataclass fields that also appear in
+     `candidate.parameter_set` as keys ← the parameter_set value
+     (parameter_set overrides sleeve class defaults).
+   - Sleeve dataclass fields NOT in parameter_set ← the sleeve
+     class's own default.
+   - `sleeve_id` ← `candidate.candidate_id` (always; the sleeve
+     class's default is ignored).
+   - Any `parameter_set` key that is NOT a sleeve dataclass field
+     is passed through silently (so candidates may carry extra
+     metadata without breaking the loader — e.g., `signal`,
+     `skip_recent_days`).
+
+   This rule makes the `StrategyCandidate.parameter_set` the
+   single source of truth for sleeve configuration, eliminating
+   drift between the registry and the sleeve class defaults. The
+   sleeve class's own defaults exist only as fallbacks for
+   fields the registry doesn't specify.
+
+3. **Update the candidate registry.** In
+   `build_mandatory_candidate_registry`:
+   - `trend-following-v1`: set
+     `sleeve_class_path="tradingx.sleeves.trend.TrendSleeve"`.
+   - `vol-target-v1`: set
+     `sleeve_class_path="tradingx.sleeves.vol_managed_beta.VolManagedBetaSleeve"`.
+   - `mean-reversion-v1`: leave `sleeve_class_path=None`
+     (FFL-0001-03 defers the sleeve).
+
+4. **Wire the loader into the validation path.** In
+   `_candidate_returns`:
+
+   ```python
+   if candidate.sleeve_class_path is not None:
+       from tradingx.sleeves.base import build_sleeve_from_candidate
+       from tradingx.sleeves.evaluation import simulate_sleeve_returns
+       sleeve = build_sleeve_from_candidate(candidate)
+       # Resolve regime snapshots and sleeve budget upstream...
+       returns, drag = simulate_sleeve_returns(
+           sleeve,
+           bars_by_symbol=bars_by_symbol,
+           regime_snapshots_by_date=regime_snapshots_by_date,
+           sleeve_budget_equity=sleeve_budget_equity,
+           cost_model_config=cost_model_config,
+       )
+       return returns, drag
+   # Legacy path (baseline) continues as before.
+   ```
+
+5. **The legacy `BaselineLongOnlyPlanner` still handles
+   `baseline-long-only-v1` unchanged.** The `sleeve_class_path`
+   field stays `None` on the baseline registry entry; the legacy
+   path triggers when `sleeve_class_path is None`.
+
+**Tests (TDD):**
+
+- `test_strategy_candidate_accepts_sleeve_class_path`
+- `test_build_sleeve_from_candidate_imports_class`
+- `test_build_sleeve_from_candidate_overrides_defaults_from_parameter_set`
+- `test_build_sleeve_from_candidate_uses_candidate_universe_for_allowed_instruments`
+- `test_build_sleeve_from_candidate_uses_candidate_id_for_sleeve_id`
+- `test_build_sleeve_from_candidate_silently_passes_extra_parameter_set_keys`
+- `test_build_sleeve_from_candidate_raises_on_null_path`
+- `test_build_sleeve_from_candidate_raises_on_bad_import`
+- `test_candidate_returns_routes_through_sleeve_when_path_present`
+- `test_candidate_returns_routes_through_legacy_backtest_when_path_null`
+- Registry-content assertions (sleeve paths on trend and vol-target
+  entries; None on mean-reversion and baseline).
 
 ### W7 — Full regression + lint + typecheck + index + validate
 
