@@ -1224,26 +1224,39 @@ def build_sleeve_target_weight_history(
 ) -> pd.DataFrame:
     """Walk the sleeve bar-by-bar; collect target weights per symbol.
 
-    Returns DataFrame indexed by the observation dates for which the
-    sleeve produced at least one trade, with columns = union of
-    symbols the sleeve ever touched. Cells are floats in [0, 1]
-    representing target_weight_of_sleeve_budget.
+    Returns a DataFrame whose index **exactly equals** the bars'
+    DatetimeIndex (per `run_daily_bar_backtest._validate_inputs()`
+    at [backtest.py:238](/src/tradingx/backtest.py:238)) and whose
+    columns are the set of symbols the sleeve is allowed to touch.
+    Cells are floats in [0, 1] representing
+    `target_weight_of_sleeve_budget`.
+
+    Construction rule: for each bar, if the sleeve emitted a trade
+    for a symbol, record that target weight; otherwise carry
+    forward the previous emitted weight for that symbol (or 0.0
+    before the first emission). This produces a **dense** frame
+    that `run_daily_bar_backtest` accepts.
     """
     index_symbol = next(iter(bars_by_symbol))
-    observation_dates = [ts.date() for ts in bars_by_symbol[index_symbol].index]
+    bar_index = bars_by_symbol[index_symbol].index
 
-    rows: dict[date, dict[str, float]] = {}
-    touched_symbols: set[str] = set()
+    allowed = tuple(sleeve.allowed_instruments)
+    # Initial row: zero weight across all allowed symbols
+    running_weights: dict[str, float] = {symbol: 0.0 for symbol in allowed}
 
+    rows: list[dict[str, float]] = []
     current_positions: dict[str, Decimal] = {
         symbol: Decimal("0") for symbol in bars_by_symbol
     }
 
-    for position, obs_date in enumerate(observation_dates):
+    for position, ts in enumerate(bar_index):
+        obs_date = ts.date()
         regime = regime_snapshots_by_date.get(obs_date)
         if regime is None:
+            # No regime snapshot this day → hold previous weights
+            rows.append(dict(running_weights))
             continue
-        # Slice bars up to and including obs_date
+
         sliced = {
             symbol: bars.iloc[: position + 1]
             for symbol, bars in bars_by_symbol.items()
@@ -1256,39 +1269,39 @@ def build_sleeve_target_weight_history(
             sleeve_budget_equity=sleeve_budget_equity,
         )
         trades = sleeve.plan_for_bar(context)
-        if not trades:
-            continue
-        row = rows.setdefault(obs_date, {})
+
+        # Update running weights from emitted trades
         for trade in trades:
-            touched_symbols.add(trade.symbol)
-            row[trade.symbol] = float(trade.target_weight_of_sleeve_budget)
-            # Track simulated current_positions by proxy:
-            # one-day-lag — at next bar, "current" is what we just
-            # emitted here.
-            current_positions[trade.symbol] = (
+            if trade.symbol not in allowed:
+                # Out-of-universe trade — sleeve should not emit
+                # this, but guard anyway.
+                continue
+            running_weights[trade.symbol] = float(
                 trade.target_weight_of_sleeve_budget
-                * sleeve_budget_equity
-                / Decimal(str(bars_by_symbol[trade.symbol]["close"].iloc[position]))
-                if bars_by_symbol[trade.symbol]["close"].iloc[position] > 0
-                else Decimal("0")
             )
+            # Track simulated current_positions for next-bar context
+            close_price = float(
+                bars_by_symbol[trade.symbol]["close"].iloc[position]
+            )
+            if close_price > 0:
+                current_positions[trade.symbol] = (
+                    trade.target_weight_of_sleeve_budget
+                    * sleeve_budget_equity
+                    / Decimal(str(close_price))
+                )
+            else:
+                current_positions[trade.symbol] = Decimal("0")
 
-    if not rows:
-        return pd.DataFrame(columns=sorted(touched_symbols))
+        # Append the full running-weights snapshot for this bar
+        # (including carry-forward for symbols the sleeve didn't
+        # touch today).
+        rows.append(dict(running_weights))
 
-    sorted_dates = sorted(rows.keys())
-    sorted_symbols = sorted(touched_symbols)
-    data = {
-        symbol: [rows[d].get(symbol, 0.0) for d in sorted_dates]
-        for symbol in sorted_symbols
-    }
-    frame = pd.DataFrame(
-        data,
-        index=pd.DatetimeIndex(
-            [pd.Timestamp(d, tz="UTC") for d in sorted_dates]
-        ),
-    )
-    return frame
+    # Build the frame with index == bar_index exactly.
+    frame = pd.DataFrame(rows, index=bar_index, columns=list(allowed))
+    # Ensure float dtype so the backtest engine's numeric assertions
+    # don't complain.
+    return frame.astype(float)
 
 
 __all__ = ("build_sleeve_target_weight_history",)
@@ -1323,21 +1336,33 @@ from tradingx.sleeves.evaluation import simulate_sleeve_returns
 
 
 def test_simulate_sleeve_returns_matches_direct_backtest_on_same_weights():
+    from tradingx.costs import CostModelConfig
+
     bars = _bars()
     sleeve = TrendSleeve(allowed_instruments=("SPY",))
     regimes = {d.date(): _risk_on(d.date()) for d in bars.index}
+
+    # simulate_sleeve_returns resolves cost_model_config=None to
+    # CostModelConfig() internally (Task 7 Step 3). The parity
+    # assertion must pass the SAME resolved config to the direct
+    # run_daily_bar_backtest call — otherwise the direct call sees
+    # None and applies zero costs, producing a different output.
+    resolved_cost_config = CostModelConfig()
+
     sleeve_returns, sleeve_drag = simulate_sleeve_returns(
         sleeve,
         bars_by_symbol={"SPY": bars},
         regime_snapshots_by_date=regimes,
         sleeve_budget_equity=Decimal("100000"),
+        cost_model_config=resolved_cost_config,
     )
     # Must match the 2-tuple shape of _candidate_returns()
     assert isinstance(sleeve_returns, tuple)
     assert isinstance(sleeve_drag, Decimal)
 
-    # Re-run run_daily_bar_backtest on the same weight history;
-    # costs and returns must match exactly.
+    # Re-run run_daily_bar_backtest on the same weight history and
+    # the same resolved cost config; costs and returns must match
+    # exactly.
     target_weights = build_sleeve_target_weight_history(
         sleeve,
         bars_by_symbol={"SPY": bars},
@@ -1347,7 +1372,7 @@ def test_simulate_sleeve_returns_matches_direct_backtest_on_same_weights():
     direct_result = run_daily_bar_backtest(
         {"SPY": bars},
         target_weights=target_weights,
-        cost_model_config=None,  # default
+        cost_model_config=resolved_cost_config,
     )
     direct_returns = tuple(
         Decimal(str(v)) for v in direct_result.portfolio_returns.tolist()
@@ -1739,19 +1764,32 @@ def _candidate_returns(
     regime_snapshots_by_date: dict[date, RegimeSnapshot] | None = None,
     sleeve_budget_equity: Decimal | None = None,
 ) -> tuple[tuple[Decimal, ...], Decimal]:
-    # NEW: sleeve-path routing
-    if candidate.sleeve_class_path is not None:
+    # Parameter overrides are applied BEFORE any routing decision
+    # so the adversarial check path (parameter sensitivity + cost
+    # stress in _parameter_sensitivity_check / _cost_sensitivity_check
+    # at validation.py:532) sees the same overridden candidate
+    # regardless of whether the candidate is sleeve-path or legacy.
+    configured_candidate = _candidate_with_parameter_overrides(
+        candidate,
+        parameter_overrides=parameter_overrides,
+    )
+
+    # NEW: sleeve-path routing. Happens AFTER overrides are applied,
+    # so the sleeve is built from the configured candidate (with
+    # overrides merged into its parameter_set).
+    if configured_candidate.sleeve_class_path is not None:
         from tradingx.sleeves.base import build_sleeve_from_candidate
         from tradingx.sleeves.evaluation import simulate_sleeve_returns
 
         if regime_snapshots_by_date is None:
             raise ValueError(
                 "regime_snapshots_by_date is required for sleeve-path "
-                f"candidates; got None for {candidate.candidate_id!r}"
+                f"candidates; got None for "
+                f"{configured_candidate.candidate_id!r}"
             )
         if sleeve_budget_equity is None:
             sleeve_budget_equity = Decimal("100000")  # sensible default
-        sleeve = build_sleeve_from_candidate(candidate)
+        sleeve = build_sleeve_from_candidate(configured_candidate)
         return simulate_sleeve_returns(
             sleeve,
             bars_by_symbol=bars_by_symbol,
@@ -1760,16 +1798,55 @@ def _candidate_returns(
             cost_model_config=cost_model_config,
         )
 
-    # Existing legacy path (baseline candidates via mandatory
-    # registry with sleeve_class_path=None)
-    configured_candidate = _candidate_with_parameter_overrides(
-        candidate,
-        parameter_overrides=parameter_overrides,
-    )
-    # ...rest of existing implementation unchanged...
+    # Existing legacy path continues here with configured_candidate.
+    # ...rest of existing implementation unchanged, but operating on
+    # configured_candidate, not the raw candidate argument...
 ```
 
-Update callers of `_candidate_returns` in `validation.py` to pass `regime_snapshots_by_date` when the candidate is sleeve-path. Use `AlpacaRegularHoursCalendar.session_dates_between` + `classify_regime` per-session to build the dict.
+**Adversarial-parity test.** Add a regression test to
+`tests/unit/test_validation.py` that exercises the override path
+for a sleeve-path candidate:
+
+```python
+def test_candidate_returns_applies_parameter_overrides_on_sleeve_path(
+    sample_bars_by_symbol_fixture,
+    sample_regime_snapshots_by_date_fixture,
+):
+    """Parameter sensitivity in adversarial checks must flow through
+    sleeve-path candidates identically to legacy candidates.
+    Equivalent to the guarantee _parameter_sensitivity_check relies
+    on via the backtest_runner at validation.py:532."""
+    from tradingx.types import StrategyCandidate
+    candidate = StrategyCandidate(
+        candidate_id="trend-test-v1",
+        family="trend_following",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={"lookback_days": 252, "forecast_method": "ewma"},
+        status="under_evaluation",
+        sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
+    )
+    baseline_returns, _ = _candidate_returns(
+        candidate,
+        bars_by_symbol=sample_bars_by_symbol_fixture,
+        regime_snapshots_by_date=sample_regime_snapshots_by_date_fixture,
+        sleeve_budget_equity=Decimal("100000"),
+    )
+    perturbed_returns, _ = _candidate_returns(
+        candidate,
+        bars_by_symbol=sample_bars_by_symbol_fixture,
+        parameter_overrides={"lookback_days": 120},
+        regime_snapshots_by_date=sample_regime_snapshots_by_date_fixture,
+        sleeve_budget_equity=Decimal("100000"),
+    )
+    # Different lookback => different trend signal => different returns
+    assert perturbed_returns != baseline_returns
+```
+
+Update callers of `_candidate_returns` in `validation.py` to pass
+`regime_snapshots_by_date` when the candidate is sleeve-path. Use
+`AlpacaRegularHoursCalendar.session_dates_between` + `classify_regime`
+per-session to build the dict.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
