@@ -1,5 +1,5 @@
 ---
-id: BRIEF-0001
+id: BRIEF-0002
 title: Tranche 1 planning brief
 version: 1.0.0
 status: active
@@ -10,7 +10,7 @@ superseded_by: null
 author_session: claude-opus-4.7-2026-04-21
 ---
 
-# BRIEF-0001: Tranche 1 planning brief
+# BRIEF-0002: Tranche 1 planning brief
 
 ## Purpose
 
@@ -26,7 +26,7 @@ sub-tranche gets its own spec when its turn comes.
 3. [ADR-0021 Three-tier benchmark stack](/docs/adrs/ADR-0021-benchmark-stack.md)
 4. [ADR-0022 Gate 1 reframe](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md)
 5. [GATES-0001 Stage 1 acceptance gates](/docs/validation/acceptance_gates.md) v1.1.0
-6. This brief (BRIEF-0001)
+6. This brief (BRIEF-0002)
 7. Sub-tranche specs (pending)
 
 ## Tranche 1 completion criteria

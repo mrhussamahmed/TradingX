@@ -129,7 +129,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| BRIEF-0001 | Tranche 1 planning brief | 1.0.0 | active | `docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md` |
+| BRIEF-0002 | Tranche 1 planning brief | 1.0.0 | active | `docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md` |
 
 ### Specifications (SPEC-NNNN)
 
