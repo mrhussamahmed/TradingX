@@ -399,9 +399,7 @@ class OperatorSupervisor:
             else:
                 self._child_exit_observed_at_utc = None
                 if exitcode not in {None, 0, -15}:
-                    self._last_error = (
-                        f"child exited unexpectedly with code {exitcode}"
-                    )
+                    self._last_error = f"child exited unexpectedly with code {exitcode}"
                     blocked_restart = True
                     self._log_event(
                         event_type="child_exit_unexpected",
@@ -412,9 +410,7 @@ class OperatorSupervisor:
         restart_cooldown_active = (
             self._child is None
             and self._child_exit_observed_at_utc is not None
-            and (
-                now - self._child_exit_observed_at_utc
-            ).total_seconds()
+            and (now - self._child_exit_observed_at_utc).total_seconds()
             < self._restart_cooldown_seconds
         )
         if (

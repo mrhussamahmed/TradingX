@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -104,8 +105,7 @@ def test_daily_bar_backtest_exit_realizes_overnight_gap_before_flattening() -> N
     assert result.applied_weights.iloc[2]["SPY"] == pytest.approx(0.0)
 
 
-def test_daily_bar_backtest_applies_same_day_open_weight_when_signal_is_actionable(
-    ) -> None:
+def test_daily_bar_backtest_applies_open_weight_same_day_when_actionable() -> None:
     module = importlib.import_module("tradingx.backtest")
     bars = _ohlcv_frame(
         opens=[100.0, 110.0, 121.0],
@@ -127,8 +127,7 @@ def test_daily_bar_backtest_applies_same_day_open_weight_when_signal_is_actionab
     assert result.applied_weights["SPY"].tolist() == pytest.approx([0.0, 1.0, 1.0])
 
 
-def test_daily_bar_backtest_full_exposure_toy_path_compounds_to_twenty_one_percent(
-    ) -> None:
+def test_daily_bar_backtest_toy_path_compounds_to_twenty_one_percent() -> None:
     module = importlib.import_module("tradingx.backtest")
     bars = _ohlcv_frame(
         opens=[100.0, 110.0, 121.0],
@@ -229,6 +228,57 @@ def test_daily_bar_backtest_rebalances_drifted_weights_before_costing() -> None:
 
     assert without_costs.portfolio_returns.iloc[1] == pytest.approx(0.05)
     assert (
-        with_costs.portfolio_returns.iloc[1]
-        < without_costs.portfolio_returns.iloc[1]
+        with_costs.portfolio_returns.iloc[1] < without_costs.portfolio_returns.iloc[1]
     )
+
+
+def test_backtest_result_carries_annualized_cost_drag_bps() -> None:
+    module = importlib.import_module("tradingx.backtest")
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            opens=[100.0, 100.0, 100.0],
+            closes=[101.0, 99.0, 100.0],
+        ),
+        "QQQ": _quote_enriched_ohlcv_frame(
+            opens=[100.0, 100.0, 100.0],
+            closes=[99.5, 100.5, 100.0],
+        ),
+    }
+    target_weights = pd.DataFrame(
+        {"SPY": [1.0, 0.4, 0.6], "QQQ": [0.0, 0.6, 0.4]},
+        index=bars_by_symbol["SPY"].index,
+        dtype=float,
+    )
+
+    result = module.run_daily_bar_backtest(
+        bars_by_symbol,
+        target_weights=target_weights,
+        cost_model_config=module.CostModelConfig(),
+    )
+
+    assert isinstance(result.annualized_cost_drag_bps, Decimal)
+    assert result.annualized_cost_drag_bps >= Decimal("0")
+
+
+def test_backtest_cost_drag_is_zero_for_zero_turnover_path() -> None:
+    module = importlib.import_module("tradingx.backtest")
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            opens=[100.0, 100.0, 100.0],
+            closes=[100.0, 100.0, 100.0],
+        ),
+    }
+    target_weights = pd.DataFrame(
+        {"SPY": [1.0, 1.0, 1.0]},
+        index=bars_by_symbol["SPY"].index,
+        dtype=float,
+    )
+
+    result = module.run_daily_bar_backtest(
+        bars_by_symbol,
+        target_weights=target_weights,
+        initial_weights={"SPY": 1.0},
+        cost_model_config=module.CostModelConfig(),
+    )
+
+    assert result.annualized_cost_drag_bps == Decimal("0")

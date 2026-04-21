@@ -54,6 +54,7 @@ from tradingx.strategy import (
     DeterministicBaselineStrategy,
     build_mandatory_candidate_registry,
 )
+from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkStackPayload,
     ClosedTradeRecord,
@@ -334,10 +335,11 @@ class PaperTradingLoopController:
         if self._session_start_equity is None:
             self._session_start_equity = resolved_portfolio_state.equity
         resolved_market_snapshot = market_snapshot
-        if (
-            resolved_market_snapshot is None
-            and trade_intent.side in {"buy", "sell", "reduce"}
-        ):
+        if resolved_market_snapshot is None and trade_intent.side in {
+            "buy",
+            "sell",
+            "reduce",
+        }:
             resolved_market_snapshot = self._market_data.get_market_snapshot(
                 trade_intent.symbol
             )
@@ -1446,10 +1448,12 @@ class GateValidationController:
         artifacts: FilesystemArtifactStore,
         market_data: Any,
         metrics: StageMetrics | None = None,
+        trials_ledger: TrialsLedger | None = None,
     ) -> None:
         self._artifacts = artifacts
         self._market_data = market_data
         self._metrics = metrics or StageMetrics()
+        self._trials_ledger = trials_ledger
 
     def generate_gate_report(
         self,
@@ -1479,6 +1483,7 @@ class GateValidationController:
             benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
+            trials_ledger=self._trials_ledger,
         )
         report_path = self._artifacts.write_validation_report(report)
         self._metrics.record_evidence_artifact("validation_report")
@@ -1568,6 +1573,9 @@ def build_default_gate_validation_controller(
         artifacts=FilesystemArtifactStore(artifact_root),
         market_data=build_default_market_data_gateway(config),
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
+        trials_ledger=TrialsLedger(
+            database_path=config.runtime.data_root / "validation" / "trials.db"
+        ),
     )
 
 

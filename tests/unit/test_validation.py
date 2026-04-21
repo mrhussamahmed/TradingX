@@ -10,8 +10,10 @@ from tradingx.costs import CostModelConfig
 from tradingx.evaluation import AdversarialCheckContext
 from tradingx.evaluation import _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkStackPayload,
+    EvaluationEvidencePack,
     OperatingConstraintBudget,
     StrategyCandidate,
 )
@@ -139,7 +141,9 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         gate_id="1",
         bars_by_symbol=bars_by_symbol,
         candidates=candidates,
-        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
     )
@@ -317,17 +321,19 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
         )
     }
 
-    base_trend_returns = _candidate_returns(
+    base_trend_returns, base_trend_drag = _candidate_returns(
         trend_candidate,
         bars_by_symbol=trend_bars,
     )
-    overridden_trend_returns = _candidate_returns(
+    overridden_trend_returns, overridden_trend_drag = _candidate_returns(
         trend_candidate,
         bars_by_symbol=trend_bars,
         parameter_overrides={"lookback_days": 4, "sma_window_days": 3},
     )
 
     assert overridden_trend_returns != base_trend_returns
+    assert base_trend_drag >= Decimal("0")
+    assert overridden_trend_drag >= Decimal("0")
 
     vol_candidate = build_mandatory_candidate_registry(("SPY",))[1]
     vol_bars = {
@@ -339,19 +345,181 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
         )
     }
 
-    base_vol_returns = _candidate_returns(
+    base_vol_returns, base_vol_drag = _candidate_returns(
         vol_candidate,
         bars_by_symbol=vol_bars,
     )
-    cost_stressed_returns = _candidate_returns(
+    explicit_default_returns, explicit_default_drag = _candidate_returns(
         vol_candidate,
         bars_by_symbol=vol_bars,
         cost_model_config=CostModelConfig(),
     )
 
-    assert _compound_total_return(cost_stressed_returns) < _compound_total_return(
-        base_vol_returns
+    assert explicit_default_returns == base_vol_returns
+    assert explicit_default_drag == base_vol_drag
+    assert base_vol_drag >= Decimal("0")
+
+
+def test_adversarial_backtest_runner_still_returns_plain_tuple(monkeypatch) -> None:
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            [
+                100.0 + (0.4 * float(index)) + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+        "QQQ": _quote_enriched_ohlcv_frame(
+            [
+                98.0
+                + (0.45 * float(index))
+                + (1.2 * (-1.0 if index % 11 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+    }
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[1]
+
+    def fake_evaluate_candidate(
+        candidate: StrategyCandidate,
+        *,
+        candidate_returns: tuple[Decimal, ...],
+        benchmark_returns: tuple[Decimal, ...],
+        window_start_utc,
+        window_end_utc,
+        adversarial_context: AdversarialCheckContext,
+        annualized_cost_drag_bps: Decimal | None = None,
+        trials_ledger: TrialsLedger | None = None,
+    ) -> EvaluationEvidencePack:
+        del benchmark_returns, annualized_cost_drag_bps, trials_ledger
+        rerun_returns = adversarial_context.backtest_runner(
+            candidate,
+            parameter_overrides={"lookback_days": 10},
+        )
+        assert isinstance(rerun_returns, tuple)
+        assert rerun_returns
+        assert all(isinstance(value, Decimal) for value in rerun_returns)
+        return EvaluationEvidencePack(
+            evidence_pack_id="eval-shape",
+            candidate_id=candidate.candidate_id,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            benchmark_metrics={"sharpe_ratio": 0.1},
+            candidate_metrics={"sharpe_ratio": 0.2, "excess_return": 0.1},
+            adversarial_checks=(),
+            recommendation="research_further",
+            assumptions=(),
+        )
+
+    monkeypatch.setattr(
+        "tradingx.validation.evaluate_candidate",
+        fake_evaluate_candidate,
     )
+
+    report = build_gate_report(
+        gate_id="2",
+        bars_by_symbol=bars_by_symbol,
+        candidates=(candidate,),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+    )
+
+    assert report.candidate_results[0].candidate_id == candidate.candidate_id
+
+
+def test_build_gate_report_threads_trials_ledger_to_gate_layer(tmp_path) -> None:
+    bars_by_symbol = {
+        "SPY": _ohlcv_frame(
+            [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0]
+        ),
+        "QQQ": _ohlcv_frame(
+            [100.0, 100.5, 101.0, 102.0, 101.0, 102.5, 103.0, 104.0, 103.5, 104.5]
+        ),
+    }
+    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    build_gate_report(
+        gate_id="1",
+        bars_by_symbol=bars_by_symbol,
+        candidates=candidates,
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+        trials_ledger=ledger,
+    )
+
+    for candidate in candidates:
+        records = ledger.list_for_candidate(candidate.candidate_id)
+        assert records, f"No trial recorded for {candidate.candidate_id}"
+
+
+def test_build_gate1_candidate_result_records_trial_with_real_gate_status(
+    tmp_path,
+) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate_returns = tuple(
+        Decimal("0.0012") if index % 4 in (0, 1) else Decimal("-0.0003")
+        for index in range(1008)
+    )
+    benchmark_bars = _ohlcv_frame([100.0 + (0.25 * index) for index in range(1008)])
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    result = _build_gate1_candidate_result(
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        annualized_cost_drag_bps=Decimal("7.5"),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(candidate_returns)
+        ),
+        window_start_utc=benchmark_bars.index[0].to_pydatetime(),
+        window_end_utc=benchmark_bars.index[-1].to_pydatetime(),
+        adversarial_context=AdversarialCheckContext(
+            benchmark_bars=benchmark_bars,
+            backtest_runner=lambda *_args, **_kwargs: candidate_returns,
+            base_cost_model_config=CostModelConfig(),
+        ),
+        trials_ledger=ledger,
+    )
+
+    records = ledger.list_for_candidate(candidate.candidate_id)
+
+    assert len(records) == 1
+    assert records[0].passed is (result.status == "pass")
+
+
+def test_build_gate1_candidate_result_populates_cost_drag_on_result(tmp_path) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate_returns = tuple(
+        Decimal("0.0012") if index % 4 in (0, 1) else Decimal("-0.0003")
+        for index in range(1008)
+    )
+    benchmark_bars = _ohlcv_frame([100.0 + (0.25 * index) for index in range(1008)])
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    result = _build_gate1_candidate_result(
+        candidate=candidate,
+        candidate_returns=candidate_returns,
+        annualized_cost_drag_bps=Decimal("7.5"),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(candidate_returns)
+        ),
+        window_start_utc=benchmark_bars.index[0].to_pydatetime(),
+        window_end_utc=benchmark_bars.index[-1].to_pydatetime(),
+        adversarial_context=AdversarialCheckContext(
+            benchmark_bars=benchmark_bars,
+            backtest_runner=lambda *_args, **_kwargs: candidate_returns,
+            base_cost_model_config=CostModelConfig(),
+        ),
+        trials_ledger=ledger,
+    )
+
+    assert result.annualized_cost_drag_bps == Decimal("7.5")
+    assert result.annualized_cost_drag_bps >= Decimal("0")
 
 
 def test_build_gate2_report_uses_real_stress_descriptions() -> None:
@@ -377,7 +545,9 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
         gate_id="2",
         bars_by_symbol=bars_by_symbol,
         candidates=(candidate,),
-        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars_by_symbol["SPY"])),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
         window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
     )
@@ -490,12 +660,7 @@ def test_load_benchmark_close_series_warns_on_legacy_json_list(
 
 
 def test_validation_sharpe_ratio_matches_evaluation_sharpe_definition() -> None:
-    returns = (
-        [0.012] * 40
-        + [-0.004] * 10
-        + [0.010] * 40
-        + [-0.003] * 10
-    )
+    returns = [0.012] * 40 + [-0.004] * 10 + [0.010] * 40 + [-0.003] * 10
 
     assert validation_sharpe_ratio(returns) == evaluation_sharpe_ratio(
         returns=returns,

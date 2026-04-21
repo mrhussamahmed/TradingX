@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -19,7 +21,8 @@ from tradingx.evaluation import (
     evaluate_candidate,
 )
 from tradingx.strategy import build_mandatory_candidate_registry
-from tradingx.types import ScalarValue
+from tradingx.trials import TrialsLedger
+from tradingx.types import ScalarValue, TrialRecord
 
 
 def test_evaluation_module_shell_is_importable() -> None:
@@ -65,6 +68,19 @@ def _stable_returns(periods: int = 1200) -> tuple[Decimal, ...]:
     return tuple(pattern[index % len(pattern)] for index in range(periods))
 
 
+def _benchmark_returns(periods: int) -> tuple[Decimal, ...]:
+    return tuple(
+        Decimal("0.004") if index % 3 else Decimal("-0.001") for index in range(periods)
+    )
+
+
+def _moderate_positive_returns(periods: int = 1200) -> tuple[Decimal, ...]:
+    return tuple(
+        Decimal(str(0.0001 + 0.001 * math.sin(index * 0.17)))
+        for index in range(periods)
+    )
+
+
 class FakeBacktestRunner:
     def __init__(
         self,
@@ -101,6 +117,28 @@ class FakeBacktestRunner:
         return self.base_returns
 
 
+def _seed_family_trials(ledger: TrialsLedger, family: str, sharpes: list[str]) -> None:
+    for index, sharpe in enumerate(sharpes):
+        ledger.record(
+            TrialRecord(
+                trial_id=str(uuid.uuid4()),
+                candidate_id=f"{family}-v{index}",
+                family=family,
+                window_start_utc=datetime(2025, 1, 1, tzinfo=UTC),
+                window_end_utc=datetime(2025, 12, 31, tzinfo=UTC),
+                observed_sharpe_net_of_costs=Decimal(sharpe),
+                observed_cagr_net_of_costs=Decimal("0.10"),
+                observed_max_drawdown=Decimal("0.08"),
+                observed_cdar_95=Decimal("0.05"),
+                annualized_cost_drag_bps=Decimal("6"),
+                passed=True,
+                recorded_at_utc=datetime(2025, 12, 31, tzinfo=UTC),
+                git_sha="seed",
+                config_fingerprint="seed",
+            )
+        )
+
+
 def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
     candidate = build_mandatory_candidate_registry(("SPY",))[0]
     base_returns = _stable_returns()
@@ -113,10 +151,7 @@ def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
     evidence = evaluate_candidate(
         candidate,
         candidate_returns=base_returns,
-        benchmark_returns=tuple(
-            Decimal("0.004") if index % 3 else Decimal("-0.001")
-            for index in range(len(base_returns))
-        ),
+        benchmark_returns=_benchmark_returns(len(base_returns)),
         window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
         window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
         adversarial_context=context,
@@ -131,6 +166,155 @@ def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
         "parameter_sensitivity_pass",
         "regime_behavior_pass",
     }
+
+
+def test_evaluate_candidate_threads_cost_drag_to_evidence_pack() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("12.5"),
+    )
+
+    assert evidence.annualized_cost_drag_bps == Decimal("12.5")
+
+
+def test_evaluate_candidate_cost_drag_is_none_when_not_supplied() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+    )
+
+    assert evidence.annualized_cost_drag_bps is None
+
+
+def test_evaluate_candidate_populates_dsr_when_trials_sufficient(
+    tmp_path,
+) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _moderate_positive_returns()
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    _seed_family_trials(
+        ledger,
+        family="trend_following",
+        sharpes=["0.5", "0.8", "1.1", "1.3"],
+    )
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("7.0"),
+        trials_ledger=ledger,
+    )
+
+    assert evidence.deflated_sharpe_ratio is not None
+    assert isinstance(evidence.deflated_sharpe_ratio, Decimal)
+
+
+def test_evaluate_candidate_dsr_is_none_when_trials_insufficient(tmp_path) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("7.0"),
+        trials_ledger=ledger,
+    )
+
+    assert evidence.deflated_sharpe_ratio is None
+
+
+def test_evaluate_candidate_sets_north_star_flag_when_sharpe_present(tmp_path) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("5.0"),
+        trials_ledger=ledger,
+    )
+
+    assert evidence.north_star_sharpe_met is True
+
+
+def test_evaluate_candidate_does_not_record_trial(tmp_path) -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    _ = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("7.0"),
+        trials_ledger=ledger,
+    )
+
+    records = ledger.list_for_candidate(candidate.candidate_id)
+
+    assert records == ()
 
 
 def test_oos_check_uses_settled_thirty_percent_tolerance_rule() -> None:
@@ -220,9 +404,11 @@ def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
     )
 
     assert result == "cost_sensitivity_pass"
-    assert {
-        call.half_spread_multiplier for call in runner.cost_calls
-    } >= {1.0, 2.0, 4.0}
+    assert {call.half_spread_multiplier for call in runner.cost_calls} >= {
+        1.0,
+        2.0,
+        4.0,
+    }
     assert {call.impact_coefficient for call in runner.cost_calls} >= {10.0, 20.0, 40.0}
 
 

@@ -211,9 +211,7 @@ def _build_raw_target_weights_from_rows(
     }
     if not active_sleeves:
         tracked_symbols = sorted(
-            symbol
-            for row in sleeve_rows.values()
-            for symbol in row.index
+            symbol for row in sleeve_rows.values() for symbol in row.index
         )
         return {symbol: Decimal("0") for symbol in tracked_symbols}
 
@@ -231,8 +229,7 @@ def _build_raw_target_weights_from_rows(
     combined = _cap_gross_exposure(combined, config=config)
 
     combined_weights = {
-        symbol: _to_decimal_weight(value)
-        for symbol, value in combined.items()
+        symbol: _to_decimal_weight(value) for symbol, value in combined.items()
     }
     return combined_weights
 
@@ -354,10 +351,14 @@ def _crash_overlay_mask(
         benchmark_returns,
         lookback_days=config.crash_overlay_vol_window_days,
     )
-    threshold = trailing_vol.shift(1).rolling(
-        config.crash_overlay_lookback_days,
-        min_periods=config.crash_overlay_lookback_days,
-    ).quantile(config.crash_overlay_quantile)
+    threshold = (
+        trailing_vol.shift(1)
+        .rolling(
+            config.crash_overlay_lookback_days,
+            min_periods=config.crash_overlay_lookback_days,
+        )
+        .quantile(config.crash_overlay_quantile)
+    )
     overlay_active = (trailing_vol > threshold).reindex(reference_index).fillna(False)
     return overlay_active.astype(bool)
 
@@ -427,7 +428,9 @@ def _vol_target_sleeve_frame(
     signal = generate_vol_target_spy_signal(
         bars,
         target_volatility=float(candidate.parameter_set["target_volatility"]),
-        realized_vol_window_days=int(candidate.parameter_set["realized_vol_window_days"]),
+        realized_vol_window_days=int(
+            candidate.parameter_set["realized_vol_window_days"]
+        ),
         max_gross_leverage=float(candidate.parameter_set["max_gross_leverage"]),
         forecast_method=str(candidate.parameter_set.get("forecast_method", "realized")),
     )
@@ -473,8 +476,8 @@ def _wide_ohlcv_frame(
     reference_index = next(iter(bars_by_symbol.values())).index
     for symbol, bars in bars_by_symbol.items():
         for field in ("open", "high", "low", "close", "volume"):
-            payload[(symbol, field)] = bars[field].astype(float).reindex(
-                reference_index
+            payload[(symbol, field)] = (
+                bars[field].astype(float).reindex(reference_index)
             )
     return pd.DataFrame(payload, index=reference_index)
 

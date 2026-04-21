@@ -44,10 +44,16 @@ def forecast_volatility(
 
 
 def _ewma_vol(returns: pd.Series, *, ewma_lambda: float) -> pd.Series:
-    variance = returns.astype(float).pow(2.0).shift(1).ewm(
-        alpha=1.0 - ewma_lambda,
-        adjust=False,
-    ).mean()
+    variance = (
+        returns.astype(float)
+        .pow(2.0)
+        .shift(1)
+        .ewm(
+            alpha=1.0 - ewma_lambda,
+            adjust=False,
+        )
+        .mean()
+    )
     return variance.pow(0.5) * math.sqrt(TRADING_DAYS_PER_YEAR)
 
 

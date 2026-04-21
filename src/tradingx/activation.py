@@ -92,9 +92,8 @@ class LocalActivationGateway:
             return None
 
     def _validate_strategy_id(self, strategy_id: str) -> None:
-        if (
-            self._strategy_id_validator is not None
-            and not self._strategy_id_validator(strategy_id)
+        if self._strategy_id_validator is not None and not self._strategy_id_validator(
+            strategy_id
         ):
             raise ValueError(
                 "Strategy activation "

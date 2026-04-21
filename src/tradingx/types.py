@@ -75,6 +75,34 @@ class EvaluationEvidencePack:
     adversarial_checks: tuple[str, ...]
     recommendation: str
     assumptions: tuple[str, ...]
+    annualized_cost_drag_bps: Decimal | None = None
+    deflated_sharpe_ratio: Decimal | None = None
+    north_star_sharpe_met: bool | None = None
+
+
+@dataclass(frozen=True)
+class TrialRecord:
+    trial_id: str
+    candidate_id: str
+    family: str
+    window_start_utc: datetime
+    window_end_utc: datetime
+    observed_sharpe_net_of_costs: Decimal
+    observed_cagr_net_of_costs: Decimal
+    observed_max_drawdown: Decimal
+    observed_cdar_95: Decimal
+    annualized_cost_drag_bps: Decimal
+    passed: bool
+    recorded_at_utc: datetime
+    git_sha: str
+    config_fingerprint: str
+
+
+@dataclass(frozen=True)
+class TrialStatistics:
+    n_trials: int
+    trial_sharpe_mean: float
+    trial_sharpe_variance: float
 
 
 @dataclass(frozen=True)
@@ -154,6 +182,7 @@ class ValidationCandidateResult:
     evidence_pack_id: str
     criteria: tuple[ValidationCriterionResult, ...]
     summary: str
+    annualized_cost_drag_bps: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -1109,6 +1138,8 @@ __all__ = (
     "StrategyAttributionRow",
     "StrategyCandidate",
     "StrategyHeatmapCell",
+    "TrialRecord",
+    "TrialStatistics",
     "TradeIntent",
     "TradingLoopResult",
     "ValidationCandidateResult",

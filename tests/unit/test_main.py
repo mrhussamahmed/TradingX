@@ -1500,8 +1500,7 @@ def test_main_reports_launch_control_center_errors(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\n"
-        "ALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n" "ALPACA_PAPER_API_SECRET=sk-paper\n",
         encoding="utf-8",
     )
 

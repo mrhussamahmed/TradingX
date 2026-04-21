@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
+from scipy.stats import kurtosis as scipy_kurtosis  # type: ignore[import-untyped]
+from scipy.stats import skew as scipy_skew
 
 from tradingx.costs import CostModelConfig
-from tradingx.stats import lo_adjusted_sharpe_ratio
+from tradingx.stats import deflated_sharpe_ratio, lo_adjusted_sharpe_ratio
+from tradingx.trials import TrialsLedger
 from tradingx.types import EvaluationEvidencePack, ScalarValue, StrategyCandidate
 
 LOGGER = logging.getLogger(__name__)
@@ -406,6 +411,8 @@ def evaluate_candidate(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext | None = None,
+    annualized_cost_drag_bps: Decimal | None = None,
+    trials_ledger: TrialsLedger | None = None,
 ) -> EvaluationEvidencePack:
     candidate_metrics_numeric = _build_metric_pack(candidate_returns)
     benchmark_metrics_numeric = _build_metric_pack(benchmark_returns)
@@ -421,6 +428,40 @@ def evaluate_candidate(
     benchmark_metrics: dict[str, ScalarValue] = dict(benchmark_metrics_numeric)
     candidate_metrics: dict[str, ScalarValue] = dict(candidate_metrics_numeric)
     candidate_metrics["excess_return"] = excess_return
+    observed_sharpe = float(candidate_metrics_numeric["sharpe_ratio"])
+    north_star_sharpe_met: bool | None = Decimal(str(observed_sharpe)) >= Decimal("1.3")
+    deflated_sharpe: Decimal | None = None
+    if (
+        trials_ledger is not None
+        and len(candidate_returns) >= 4
+        and not np.allclose(
+            np.asarray(_to_float_sequence(candidate_returns), dtype=float),
+            float(candidate_returns[0]),
+        )
+    ):
+        stats = trials_ledger.trial_statistics_for_family(candidate.family)
+        if stats.n_trials >= 2 and stats.trial_sharpe_variance > 0.0:
+            returns_array = np.asarray(
+                _to_float_sequence(candidate_returns),
+                dtype=float,
+            )
+            skewness = float(scipy_skew(returns_array, bias=False))
+            kurtosis = float(scipy_kurtosis(returns_array, fisher=True, bias=False))
+            if math.isfinite(skewness) and math.isfinite(kurtosis):
+                try:
+                    dsr_value = deflated_sharpe_ratio(
+                        observed_sharpe=observed_sharpe,
+                        sample_size=float(len(candidate_returns)),
+                        skewness=skewness,
+                        kurtosis=kurtosis,
+                        n_trials=stats.n_trials,
+                        trial_sharpe_variance=stats.trial_sharpe_variance,
+                        mean_trial_sharpe=stats.trial_sharpe_mean,
+                    )
+                except ValueError:
+                    dsr_value = None
+                if dsr_value is not None and math.isfinite(dsr_value):
+                    deflated_sharpe = Decimal(str(dsr_value))
 
     if (
         all(check.endswith("_pass") for check in adversarial_checks)
@@ -450,6 +491,9 @@ def evaluate_candidate(
             "adversarial checks rerun the strategy through the supplied "
             "backtest context",
         ),
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
+        deflated_sharpe_ratio=deflated_sharpe,
+        north_star_sharpe_met=north_star_sharpe_met,
     )
 
 

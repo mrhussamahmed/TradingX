@@ -355,9 +355,7 @@ def _material_garch_win(
     if not math.isfinite(garch_qlike) or not math.isfinite(realized_qlike):
         return False
     qlike_improvement = (
-        (realized_qlike - garch_qlike) / realized_qlike
-        if realized_qlike > 0.0
-        else 0.0
+        (realized_qlike - garch_qlike) / realized_qlike if realized_qlike > 0.0 else 0.0
     )
     sharpe_improvement = (
         backtest_metrics["garch"]["sharpe_ratio"]
@@ -410,8 +408,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     artifact_dir = Path(args.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    output_path = Path(args.output_file) if args.output_file else _default_output_path(
-        artifact_dir
+    output_path = (
+        Path(args.output_file)
+        if args.output_file
+        else _default_output_path(artifact_dir)
     )
     summary = {
         "symbols": list(symbols),

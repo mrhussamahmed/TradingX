@@ -51,9 +51,7 @@ def _benchmark_stack_payload(
 ) -> BenchmarkStackPayload:
     return BenchmarkStackPayload(
         hurdle_returns=tuple(hurdle_return for _ in range(periods)),
-        opportunity_cost_returns=tuple(
-            opportunity_cost_return for _ in range(periods)
-        ),
+        opportunity_cost_returns=tuple(opportunity_cost_return for _ in range(periods)),
         opportunity_cost_weights=(
             ("SPY", Decimal("0.6")),
             ("AGG", Decimal("0.4")),
