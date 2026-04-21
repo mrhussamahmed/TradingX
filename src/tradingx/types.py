@@ -75,6 +75,7 @@ class EvaluationEvidencePack:
     adversarial_checks: tuple[str, ...]
     recommendation: str
     assumptions: tuple[str, ...]
+    annualized_cost_drag_bps: Decimal | None = None
 
 
 @dataclass(frozen=True)

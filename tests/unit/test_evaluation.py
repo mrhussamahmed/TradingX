@@ -133,6 +133,55 @@ def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
     }
 
 
+def test_evaluate_candidate_threads_cost_drag_to_evidence_pack() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=tuple(
+            Decimal("0.004") if index % 3 else Decimal("-0.001")
+            for index in range(len(base_returns))
+        ),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+        annualized_cost_drag_bps=Decimal("12.5"),
+    )
+
+    assert evidence.annualized_cost_drag_bps == Decimal("12.5")
+
+
+def test_evaluate_candidate_cost_drag_is_none_when_not_supplied() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _stable_returns()
+    context = AdversarialCheckContext(
+        benchmark_bars=_benchmark_bars(),
+        backtest_runner=FakeBacktestRunner(base_returns=base_returns),
+        base_cost_model_config=CostModelConfig(),
+    )
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=tuple(
+            Decimal("0.004") if index % 3 else Decimal("-0.001")
+            for index in range(len(base_returns))
+        ),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        adversarial_context=context,
+    )
+
+    assert evidence.annualized_cost_drag_bps is None
+
+
 def test_oos_check_uses_settled_thirty_percent_tolerance_rule() -> None:
     base_returns = tuple([Decimal("0.010")] * 252 + [Decimal("-0.010")] * 756)
 

@@ -246,6 +246,7 @@ def _build_gate1_candidate_result(
     *,
     candidate: StrategyCandidate,
     candidate_returns: tuple[Decimal, ...],
+    annualized_cost_drag_bps: Decimal | None = None,
     benchmark_stack_payload: BenchmarkStackPayload,
     window_start_utc: datetime,
     window_end_utc: datetime,
@@ -258,6 +259,7 @@ def _build_gate1_candidate_result(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
 
@@ -320,6 +322,7 @@ def _build_gate2_candidate_result(
     *,
     candidate: StrategyCandidate,
     candidate_returns: tuple[Decimal, ...],
+    annualized_cost_drag_bps: Decimal | None = None,
     benchmark_returns: tuple[Decimal, ...],
     window_start_utc: datetime,
     window_end_utc: datetime,
@@ -332,6 +335,7 @@ def _build_gate2_candidate_result(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
     )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
     cost_stress_passed = "cost_sensitivity_pass" in adversarial_statuses
@@ -510,7 +514,10 @@ def build_gate_report(
 
     candidate_results = []
     for candidate in candidates:
-        candidate_returns, _ = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
+        candidate_returns, candidate_cost_drag_bps = _candidate_returns(
+            candidate,
+            bars_by_symbol=aligned_bars,
+        )
         if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
             raise ValueError(
                 "benchmark_stack_payload.hurdle_returns must align with "
@@ -532,6 +539,7 @@ def build_gate_report(
             result = _build_gate1_candidate_result(
                 candidate=candidate,
                 candidate_returns=candidate_returns,
+                annualized_cost_drag_bps=candidate_cost_drag_bps,
                 benchmark_stack_payload=benchmark_stack_payload,
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
@@ -541,6 +549,7 @@ def build_gate_report(
             result = _build_gate2_candidate_result(
                 candidate=candidate,
                 candidate_returns=candidate_returns,
+                annualized_cost_drag_bps=candidate_cost_drag_bps,
                 benchmark_returns=benchmark_returns,
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,

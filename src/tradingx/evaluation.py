@@ -406,6 +406,7 @@ def evaluate_candidate(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext | None = None,
+    annualized_cost_drag_bps: Decimal | None = None,
 ) -> EvaluationEvidencePack:
     candidate_metrics_numeric = _build_metric_pack(candidate_returns)
     benchmark_metrics_numeric = _build_metric_pack(benchmark_returns)
@@ -450,6 +451,7 @@ def evaluate_candidate(
             "adversarial checks rerun the strategy through the supplied "
             "backtest context",
         ),
+        annualized_cost_drag_bps=annualized_cost_drag_bps,
     )
 
 
