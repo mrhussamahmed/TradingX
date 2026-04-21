@@ -12,6 +12,7 @@ from tradingx.evaluation import _sharpe_ratio as evaluation_sharpe_ratio
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     BenchmarkStackPayload,
+    EvaluationEvidencePack,
     OperatingConstraintBudget,
     StrategyCandidate,
 )
@@ -317,17 +318,19 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
         )
     }
 
-    base_trend_returns = _candidate_returns(
+    base_trend_returns, base_trend_drag = _candidate_returns(
         trend_candidate,
         bars_by_symbol=trend_bars,
     )
-    overridden_trend_returns = _candidate_returns(
+    overridden_trend_returns, overridden_trend_drag = _candidate_returns(
         trend_candidate,
         bars_by_symbol=trend_bars,
         parameter_overrides={"lookback_days": 4, "sma_window_days": 3},
     )
 
     assert overridden_trend_returns != base_trend_returns
+    assert base_trend_drag >= Decimal("0")
+    assert overridden_trend_drag >= Decimal("0")
 
     vol_candidate = build_mandatory_candidate_registry(("SPY",))[1]
     vol_bars = {
@@ -339,19 +342,84 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
         )
     }
 
-    base_vol_returns = _candidate_returns(
+    base_vol_returns, base_vol_drag = _candidate_returns(
         vol_candidate,
         bars_by_symbol=vol_bars,
     )
-    cost_stressed_returns = _candidate_returns(
+    explicit_default_returns, explicit_default_drag = _candidate_returns(
         vol_candidate,
         bars_by_symbol=vol_bars,
         cost_model_config=CostModelConfig(),
     )
 
-    assert _compound_total_return(cost_stressed_returns) < _compound_total_return(
-        base_vol_returns
+    assert explicit_default_returns == base_vol_returns
+    assert explicit_default_drag == base_vol_drag
+    assert base_vol_drag >= Decimal("0")
+
+
+def test_adversarial_backtest_runner_still_returns_plain_tuple(monkeypatch) -> None:
+    bars_by_symbol = {
+        "SPY": _quote_enriched_ohlcv_frame(
+            [
+                100.0 + (0.4 * float(index)) + (1.5 * (-1.0 if index % 9 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+        "QQQ": _quote_enriched_ohlcv_frame(
+            [
+                98.0
+                + (0.45 * float(index))
+                + (1.2 * (-1.0 if index % 11 == 0 else 1.0))
+                for index in range(300)
+            ]
+        ),
+    }
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[1]
+
+    def fake_evaluate_candidate(
+        candidate: StrategyCandidate,
+        *,
+        candidate_returns: tuple[Decimal, ...],
+        benchmark_returns: tuple[Decimal, ...],
+        window_start_utc,
+        window_end_utc,
+        adversarial_context: AdversarialCheckContext,
+        annualized_cost_drag_bps: Decimal | None = None,
+    ) -> EvaluationEvidencePack:
+        del benchmark_returns, annualized_cost_drag_bps
+        rerun_returns = adversarial_context.backtest_runner(
+            candidate,
+            parameter_overrides={"lookback_days": 10},
+        )
+        assert isinstance(rerun_returns, tuple)
+        assert rerun_returns
+        assert all(isinstance(value, Decimal) for value in rerun_returns)
+        return EvaluationEvidencePack(
+            evidence_pack_id="eval-shape",
+            candidate_id=candidate.candidate_id,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            benchmark_metrics={"sharpe_ratio": 0.1},
+            candidate_metrics={"sharpe_ratio": 0.2, "excess_return": 0.1},
+            adversarial_checks=(),
+            recommendation="research_further",
+            assumptions=(),
+        )
+
+    monkeypatch.setattr("tradingx.validation.evaluate_candidate", fake_evaluate_candidate)
+
+    report = build_gate_report(
+        gate_id="2",
+        bars_by_symbol=bars_by_symbol,
+        candidates=(candidate,),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
     )
+
+    assert report.candidate_results[0].candidate_id == candidate.candidate_id
 
 
 def test_build_gate2_report_uses_real_stress_descriptions() -> None:

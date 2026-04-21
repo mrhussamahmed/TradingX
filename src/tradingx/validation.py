@@ -449,7 +449,7 @@ def _candidate_returns(
     bars_by_symbol: dict[str, pd.DataFrame],
     parameter_overrides: dict[str, ScalarValue] | None = None,
     cost_model_config: CostModelConfig | None = None,
-) -> tuple[Decimal, ...]:
+) -> tuple[tuple[Decimal, ...], Decimal]:
     configured_candidate = _candidate_with_parameter_overrides(
         candidate,
         parameter_overrides=parameter_overrides,
@@ -463,9 +463,10 @@ def _candidate_returns(
     result = run_daily_bar_backtest(
         {symbol: bars_by_symbol[symbol] for symbol in traded_symbols},
         target_weights=target_weights,
-        cost_model_config=cost_model_config,
+        cost_model_config=cost_model_config or CostModelConfig(),
     )
-    return tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
+    returns = tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
+    return returns, result.annualized_cost_drag_bps
 
 
 def _candidate_with_parameter_overrides(
@@ -499,16 +500,17 @@ def build_gate_report(
         parameter_overrides: dict[str, ScalarValue] | None = None,
         cost_model_config: CostModelConfig | None = None,
     ) -> tuple[Decimal, ...]:
-        return _candidate_returns(
+        returns, _ = _candidate_returns(
             rerun_candidate,
             bars_by_symbol=aligned_bars,
             parameter_overrides=parameter_overrides,
             cost_model_config=cost_model_config,
         )
+        return returns
 
     candidate_results = []
     for candidate in candidates:
-        candidate_returns = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
+        candidate_returns, _ = _candidate_returns(candidate, bars_by_symbol=aligned_bars)
         if len(candidate_returns) != len(benchmark_stack_payload.hurdle_returns):
             raise ValueError(
                 "benchmark_stack_payload.hurdle_returns must align with "
