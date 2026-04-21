@@ -56,7 +56,7 @@ def build_mandatory_candidate_registry(
                 "sma_window_days": 200,
                 "skip_recent_days": 1,
                 "signal": "long_only",
-                "forecast_method": "garch",
+                "forecast_method": "ewma",
             },
             status="under_evaluation",
         ),

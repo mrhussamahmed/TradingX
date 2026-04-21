@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TypeAlias
@@ -251,6 +251,20 @@ class BenchmarkStackPayload:
     opportunity_cost_returns: tuple[Decimal, ...]
     opportunity_cost_weights: tuple[tuple[str, Decimal], ...]
     operating_constraint: OperatingConstraintBudget
+
+
+@dataclass(frozen=True)
+class RegimeSnapshot:
+    observation_date: date
+    regime: str
+    above_sma_200: bool | None
+    vix_elevated: bool | None
+    vix_stressed: bool | None
+    yield_curve_inverted: bool | None
+    spy_close: Decimal
+    spy_sma_200: Decimal
+    vix_close: Decimal | None
+    yield_curve_spread_bps: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -1127,6 +1141,7 @@ __all__ = (
     "ReplaySlippageSummary",
     "ReconciliationSnapshot",
     "RecoveryDrillRecord",
+    "RegimeSnapshot",
     "RiskControlEvent",
     "RoundTripResult",
     "RuntimeHeartbeatSnapshot",

@@ -11,7 +11,7 @@ import warnings
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from arch import arch_model
@@ -25,7 +25,11 @@ from tradingx.backtest import load_ohlcv_csv, run_daily_bar_backtest
 from tradingx.config import TradingConfig
 from tradingx.costs import CostModelConfig
 from tradingx.data import build_default_market_data_gateway
-from tradingx.features.volatility import TRADING_DAYS_PER_YEAR, volatility_scale
+from tradingx.features.volatility import (
+    TRADING_DAYS_PER_YEAR,
+    forecast_volatility,
+    volatility_scale,
+)
 from tradingx.portfolio_construction import (
     PortfolioConstructionConfig,
     build_target_weight_history,
@@ -34,6 +38,8 @@ from tradingx.signals.trend import generate_trend_signal
 from tradingx.sizing import KELLY_FRACTION, MAX_GROSS_LEVERAGE, TARGET_VOLATILITY
 from tradingx.stats import lo_adjusted_sharpe_ratio
 from tradingx.strategy import CANONICAL_STAGE1_UNIVERSE
+
+METHOD_NAMES = ("realized", "ewma", "garch", "har_rv")
 
 
 def _serialize(value: Any) -> Any:
@@ -67,7 +73,7 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare realized, EWMA, and GARCH volatility forecasts."
+        description="Compare realized, EWMA, GARCH, and HAR-RV volatility forecasts."
     )
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--ohlcv-dir", default=None)
@@ -76,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-end", default=None)
     parser.add_argument("--artifact-dir", default="artifacts/research")
     parser.add_argument("--output-file", default=None)
+    parser.add_argument("--report-output", default=None)
     parser.add_argument("--realized-window", type=int, default=20)
     parser.add_argument("--ewma-lambda", type=float, default=0.94)
     parser.add_argument("--garch-train-size", type=int, default=252)
@@ -175,91 +182,109 @@ def _method_forecasts(
     ewma_lambda: float,
     garch_train_size: int,
 ) -> dict[str, dict[str, pd.Series]]:
-    forecasts: dict[str, dict[str, pd.Series]] = {
-        "realized": {},
-        "ewma": {},
-        "garch": {},
-    }
+    forecasts: dict[str, dict[str, pd.Series]] = {method: {} for method in METHOD_NAMES}
     for symbol, bars in bars_by_symbol.items():
         returns = bars["close"].astype(float).pct_change()
-        forecasts["realized"][symbol] = _realized_daily_vol(
-            returns,
-            window=realized_window,
-        )
-        forecasts["ewma"][symbol] = _ewma_daily_vol(
-            returns,
-            ewma_lambda=ewma_lambda,
-        )
-        forecasts["garch"][symbol] = _garch_daily_vol(
-            returns,
-            train_size=garch_train_size,
-        )
+        for method in METHOD_NAMES:
+            forecasts[method][symbol] = forecast_volatility(
+                returns,
+                lookback_days=realized_window,
+                forecast_method=method,
+                ewma_lambda=ewma_lambda,
+                garch_train_size=garch_train_size,
+            )
     return forecasts
 
 
 def _forecast_error_metrics(
     bars_by_symbol: dict[str, pd.DataFrame],
     forecasts: dict[str, dict[str, pd.Series]],
+    *,
+    lookback_days: int = 20,
 ) -> dict[str, dict[str, object]]:
     metrics: dict[str, dict[str, object]] = {}
     for method_name, method_series in forecasts.items():
         symbol_metrics: dict[str, dict[str, float | int]] = {}
-        pooled_errors: list[float] = []
+        pooled_abs_errors: list[float] = []
         pooled_squared_errors: list[float] = []
         pooled_qlike: list[float] = []
         for symbol, forecast in method_series.items():
-            actual_variance = (
-                bars_by_symbol[symbol]["close"].astype(float).pct_change().pow(2.0)
+            returns = bars_by_symbol[symbol]["close"].astype(float).pct_change()
+            forward_realized_vol = returns.rolling(lookback_days).std(ddof=1).shift(
+                -lookback_days
+            ) * math.sqrt(252.0)
+            valid = forecast.notna() & forward_realized_vol.notna()
+            valid_index = forecast.loc[valid].index
+            if valid_index.empty:
+                symbol_metrics[symbol] = {
+                    "prediction_count": 0,
+                    "mae_vol": float("nan"),
+                    "rmse_vol": float("nan"),
+                    "msfe_vol": float("nan"),
+                    "qlike": float("nan"),
+                }
+                continue
+            aligned_forecast = forecast.loc[valid_index]
+            aligned_target = forward_realized_vol.loc[valid_index]
+            residuals = aligned_forecast - aligned_target
+            abs_errors = residuals.abs()
+            squared_errors = residuals.pow(2.0)
+            forecast_variance = aligned_forecast.pow(2.0).clip(lower=1e-12)
+            actual_variance = aligned_target.pow(2.0)
+            qlike = (actual_variance / forecast_variance) + forecast_variance.map(
+                math.log
             )
-            forecast_variance = forecast.pow(2.0)
-            valid = actual_variance.notna() & forecast_variance.notna()
-            valid_index = actual_variance.loc[valid].index
-            variance_error = (
-                forecast_variance.loc[valid_index] - actual_variance.loc[valid_index]
-            )
-            errors = variance_error.abs()
-            squared_errors = variance_error.pow(2.0)
-            clipped_forecast_variance = forecast_variance.loc[valid_index].clip(
-                lower=1e-12
-            )
-            qlike = (
-                actual_variance.loc[valid_index] / clipped_forecast_variance
-            ) + clipped_forecast_variance.map(math.log)
             symbol_metrics[symbol] = {
-                "prediction_count": int(valid.sum()),
-                "variance_mae": (
-                    float(errors.mean()) if not errors.empty else float("nan")
-                ),
-                "variance_rmse": (
-                    float(math.sqrt(squared_errors.mean()))
-                    if not squared_errors.empty
-                    else float("nan")
-                ),
-                "qlike": float(qlike.mean()) if not qlike.empty else float("nan"),
+                "prediction_count": int(len(valid_index)),
+                "mae_vol": float(abs_errors.mean()),
+                "rmse_vol": float(math.sqrt(squared_errors.mean())),
+                "msfe_vol": float(squared_errors.mean()),
+                "qlike": float(qlike.mean()),
             }
-            pooled_errors.extend(float(value) for value in errors.tolist())
+            pooled_abs_errors.extend(float(value) for value in abs_errors.tolist())
             pooled_squared_errors.extend(
                 float(value) for value in squared_errors.tolist()
             )
             pooled_qlike.extend(float(value) for value in qlike.tolist())
+        if pooled_squared_errors:
+            pooled_rmse = math.sqrt(
+                sum(pooled_squared_errors) / len(pooled_squared_errors)
+            )
+            pooled_msfe = sum(pooled_squared_errors) / len(pooled_squared_errors)
+        else:
+            pooled_rmse = float("nan")
+            pooled_msfe = float("nan")
         metrics[method_name] = {
-            "prediction_count": len(pooled_errors),
-            "pooled_variance_mae": (
-                (sum(pooled_errors) / len(pooled_errors))
-                if pooled_errors
+            "prediction_count": len(pooled_abs_errors),
+            "pooled_mae_vol": (
+                (sum(pooled_abs_errors) / len(pooled_abs_errors))
+                if pooled_abs_errors
                 else float("nan")
             ),
-            "pooled_variance_rmse": (
-                math.sqrt(sum(pooled_squared_errors) / len(pooled_squared_errors))
-                if pooled_squared_errors
-                else float("nan")
-            ),
+            "pooled_rmse_vol": pooled_rmse,
+            "pooled_msfe_vol": pooled_msfe,
             "pooled_qlike": (
                 sum(pooled_qlike) / len(pooled_qlike) if pooled_qlike else float("nan")
             ),
             "symbols": symbol_metrics,
         }
     return metrics
+
+
+def _pick_aggregate_winner(metrics: dict[str, dict[str, object]]) -> str | None:
+    best_method: str | None = None
+    best_rmse = float("inf")
+    for method, method_metrics in metrics.items():
+        prediction_count = int(method_metrics.get("prediction_count", 0))
+        if prediction_count <= 0:
+            continue
+        rmse = float(method_metrics.get("pooled_rmse_vol", float("nan")))
+        if math.isnan(rmse) or math.isinf(rmse):
+            continue
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_method = method
+    return best_method
 
 
 def _backtest_metrics_for_method(
@@ -327,20 +352,13 @@ def _backtest_metrics(
     *,
     garch_train_size: int,
 ) -> dict[str, dict[str, float]]:
-    annualized_forecasts = {
-        method_name: {
-            symbol: forecast * math.sqrt(TRADING_DAYS_PER_YEAR)
-            for symbol, forecast in method_series.items()
-        }
-        for method_name, method_series in forecasts.items()
-    }
     return {
         method_name: _backtest_metrics_for_method(
             bars_by_symbol=bars_by_symbol,
             annualized_forecasts=forecast_by_symbol,
             garch_train_size=garch_train_size,
         )
-        for method_name, forecast_by_symbol in annualized_forecasts.items()
+        for method_name, forecast_by_symbol in forecasts.items()
     }
 
 
@@ -349,26 +367,99 @@ def _material_garch_win(
     forecast_metrics: dict[str, dict[str, object]],
     backtest_metrics: dict[str, dict[str, float]],
 ) -> bool:
-    garch_qlike = float(forecast_metrics["garch"]["pooled_qlike"])
-    realized_qlike = float(forecast_metrics["realized"]["pooled_qlike"])
-    ewma_qlike = float(forecast_metrics["ewma"]["pooled_qlike"])
-    if not math.isfinite(garch_qlike) or not math.isfinite(realized_qlike):
+    if _pick_aggregate_winner(forecast_metrics) != "garch":
         return False
-    qlike_improvement = (
-        (realized_qlike - garch_qlike) / realized_qlike if realized_qlike > 0.0 else 0.0
+    garch_rmse = float(forecast_metrics["garch"]["pooled_rmse_vol"])
+    other_rmses = [
+        float(metrics["pooled_rmse_vol"])
+        for method, metrics in forecast_metrics.items()
+        if method != "garch"
+        and int(metrics.get("prediction_count", 0)) > 0
+        and math.isfinite(float(metrics.get("pooled_rmse_vol", float("nan"))))
+    ]
+    if not other_rmses or not math.isfinite(garch_rmse):
+        return False
+    rmse_improvement = (
+        (min(other_rmses) - garch_rmse) / min(other_rmses)
+        if min(other_rmses) > 0.0
+        else 0.0
     )
-    sharpe_improvement = (
-        backtest_metrics["garch"]["sharpe_ratio"]
-        - backtest_metrics["realized"]["sharpe_ratio"]
-    )
-    return garch_qlike < min(realized_qlike, ewma_qlike) and (
-        qlike_improvement >= 0.10 or sharpe_improvement >= 0.10
-    )
+    other_sharpes = [
+        metrics["sharpe_ratio"]
+        for method, metrics in backtest_metrics.items()
+        if method != "garch"
+    ]
+    sharpe_improvement = backtest_metrics["garch"]["sharpe_ratio"] - max(other_sharpes)
+    return rmse_improvement >= 0.10 or sharpe_improvement >= 0.10
 
 
 def _default_output_path(artifact_dir: Path) -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return artifact_dir / f"vol-forecast-comparison-{timestamp}.json"
+
+
+def _build_markdown_report(
+    *,
+    forecast_metrics: dict[str, dict[str, object]],
+    aggregate_winner: str | None,
+) -> str:
+    methods = list(forecast_metrics.keys())
+    symbols = sorted(
+        {
+            symbol
+            for method_metrics in forecast_metrics.values()
+            for symbol in cast(
+                dict[str, dict[str, float | int]],
+                method_metrics["symbols"],
+            )
+        }
+    )
+    lines = [
+        "# Volatility Estimator Comparison",
+        "",
+        f"Aggregate trend-sleeve winner: `{aggregate_winner or 'none'}`",
+        "",
+        (
+            "This comparison is trend-sleeve-only per DESIGN-0013 W4. "
+            "vol-target and mean-reversion candidate defaults are not "
+            "retuned from this evidence."
+        ),
+        "",
+        "## Per-symbol RMSE (annualized vol units)",
+        "",
+        "| Symbol | " + " | ".join(methods) + " |",
+        "| --- | " + " | ".join("---" for _ in methods) + " |",
+    ]
+    for symbol in symbols:
+        row = [symbol]
+        for method in methods:
+            symbol_metrics = cast(
+                dict[str, dict[str, float | int]],
+                forecast_metrics[method]["symbols"],
+            )
+            value = symbol_metrics.get(symbol, {}).get("rmse_vol", float("nan"))
+            row.append(
+                "nan" if not math.isfinite(float(value)) else f"{float(value):.6f}"
+            )
+        lines.append("| " + " | ".join(row) + " |")
+    lines.extend(
+        [
+            "",
+            "## Pooled RMSE (annualized vol units)",
+            "",
+            "| Method | pooled_rmse_vol | prediction_count |",
+            "| --- | --- | --- |",
+        ]
+    )
+    for method in methods:
+        metrics = forecast_metrics[method]
+        rmse = float(metrics.get("pooled_rmse_vol", float("nan")))
+        rmse_text = "nan" if not math.isfinite(rmse) else f"{rmse:.6f}"
+        lines.append(
+            f"| {method} | {rmse_text} | {int(metrics.get('prediction_count', 0))} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -400,12 +491,17 @@ def main(argv: list[str] | None = None) -> int:
         ewma_lambda=float(args.ewma_lambda),
         garch_train_size=int(args.garch_train_size),
     )
-    forecast_metrics = _forecast_error_metrics(aligned_bars, forecasts)
+    forecast_metrics = _forecast_error_metrics(
+        aligned_bars,
+        forecasts,
+        lookback_days=int(args.realized_window),
+    )
     backtest_metrics = _backtest_metrics(
         aligned_bars,
         forecasts,
         garch_train_size=int(args.garch_train_size),
     )
+    aggregate_winner = _pick_aggregate_winner(forecast_metrics)
     artifact_dir = Path(args.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     output_path = (
@@ -413,21 +509,32 @@ def main(argv: list[str] | None = None) -> int:
         if args.output_file
         else _default_output_path(artifact_dir)
     )
+    report_output_path = Path(args.report_output) if args.report_output else None
+    if report_output_path is not None:
+        report_output_path.parent.mkdir(parents=True, exist_ok=True)
+        report_output_path.write_text(
+            _build_markdown_report(
+                forecast_metrics=forecast_metrics,
+                aggregate_winner=aggregate_winner,
+            ),
+            encoding="utf-8",
+        )
     summary = {
         "symbols": list(symbols),
         "window_start_utc": next(iter(aligned_bars.values())).index[0].to_pydatetime(),
         "window_end_utc": next(iter(aligned_bars.values())).index[-1].to_pydatetime(),
         "forecast_metrics": forecast_metrics,
         "backtest_metrics": backtest_metrics,
+        "aggregate_winner": aggregate_winner,
         "garch_material_win": _material_garch_win(
             forecast_metrics=forecast_metrics,
             backtest_metrics=backtest_metrics,
         ),
         "assumptions": [
             (
-                "Forecast errors use variance loss (MAE/RMSE on squared returns) "
-                "plus QLIKE instead of comparing volatility directly to absolute "
-                "returns."
+                "Forecast errors use forward realized-volatility MAE/RMSE/MSFE "
+                "in annualized vol units, plus QLIKE derived from the squared "
+                "forecast and target."
             ),
             (
                 "Backtest sizing uses the existing long-only trend sleeve and the "
@@ -439,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
         ],
         "artifact_path": output_path,
+        "report_artifact_path": report_output_path,
     }
     output_path.write_text(
         json.dumps(_serialize(summary), indent=2, sort_keys=True),

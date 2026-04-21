@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -152,3 +153,62 @@ def test_build_default_risk_free_series_uses_runtime_data_root(tmp_path: Path) -
     assert float(series.get_daily_rate(date(2026, 4, 5))) == pytest.approx(
         (1.0462 ** (1.0 / 252.0)) - 1.0
     )
+
+
+def _fake_treasury_fetcher(
+    symbol: str,
+    source: str,
+    start: date,
+    end: date,
+) -> pd.DataFrame:
+    assert source == "fred"
+    dates = pd.date_range(start, end, freq="B", tz="UTC")
+    values = {"DGS2": 4.50, "DGS10": 4.25}.get(symbol, 4.00)
+    return pd.DataFrame({symbol: [values] * len(dates)}, index=dates)
+
+
+def test_refresh_treasury_yield_cache_writes_single_csv_with_both_series(
+    tmp_path: Path,
+) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "treasury_yields.csv"
+
+    module.refresh_treasury_yield_cache(
+        cache_path,
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 1, 10),
+        now_utc=datetime(2025, 1, 10, tzinfo=UTC),
+        fetcher=_fake_treasury_fetcher,
+    )
+
+    assert cache_path.exists()
+    frame = module.load_treasury_yield_cache(cache_path)
+    assert set(frame.columns) == {"date", "dgs2", "dgs10", "spread_2s10s_bps"}
+    assert all(abs(frame["spread_2s10s_bps"] - (-25.0)) < 1e-6)
+
+
+def test_yield_curve_spread_for_date_returns_decimal_bps(tmp_path: Path) -> None:
+    module = importlib.import_module("tradingx.risk_free")
+    cache_path = tmp_path / "treasury_yields.csv"
+
+    module.refresh_treasury_yield_cache(
+        cache_path,
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 1, 10),
+        now_utc=datetime(2025, 1, 10, tzinfo=UTC),
+        fetcher=_fake_treasury_fetcher,
+    )
+
+    spread = module.yield_curve_spread_for_date(
+        cache_path,
+        as_of_date=date(2025, 1, 8),
+    )
+
+    assert isinstance(spread, Decimal)
+    assert abs(float(spread) - (-25.0)) < 1e-6
+
+
+def test_treasury_series_codes_exposed() -> None:
+    module = importlib.import_module("tradingx.risk_free")
+
+    assert module.TREASURY_SERIES_CODES == ("DGS2", "DGS10")

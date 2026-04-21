@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -40,6 +40,7 @@ from tradingx.types import (
     PortfolioState,
     ReconciliationSnapshot,
     RecoveryDrillRecord,
+    RegimeSnapshot,
     ReplaySession,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
@@ -58,6 +59,25 @@ from tradingx.types import (
     WebActionResult,
     WebServiceState,
 )
+
+
+def test_regime_snapshot_is_frozen_dataclass() -> None:
+    snapshot = RegimeSnapshot(
+        observation_date=date(2026, 4, 21),
+        regime="risk_on",
+        above_sma_200=True,
+        vix_elevated=False,
+        vix_stressed=False,
+        yield_curve_inverted=False,
+        spy_close=Decimal("500.12"),
+        spy_sma_200=Decimal("480.00"),
+        vix_close=Decimal("15.2"),
+        yield_curve_spread_bps=Decimal("35"),
+    )
+
+    assert dataclasses.is_dataclass(snapshot)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        snapshot.regime = "risk_off"  # type: ignore[misc]
 
 
 def test_strategy_candidate_defaults_to_no_evidence_pack() -> None:
