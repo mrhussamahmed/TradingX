@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 import tradingx.types as types_module
 from tradingx.types import (
     AlertDrillRecord,
@@ -45,6 +47,8 @@ from tradingx.types import (
     ServiceSymbolResult,
     StrategyActivationRecord,
     StrategyCandidate,
+    TrialRecord,
+    TrialStatistics,
     TradeIntent,
     ValidationCandidateResult,
     ValidationCriterionResult,
@@ -66,6 +70,42 @@ def test_strategy_candidate_defaults_to_no_evidence_pack() -> None:
 
     assert candidate.evidence_pack_id is None
     assert candidate.universe == ("SPY", "QQQ")
+
+
+def test_trial_record_is_frozen_dataclass() -> None:
+    record = TrialRecord(
+        trial_id="trial-1",
+        candidate_id="trend-following-v1",
+        family="trend_following",
+        window_start_utc=datetime(2026, 1, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 12, 31, tzinfo=UTC),
+        observed_sharpe_net_of_costs=Decimal("1.05"),
+        observed_cagr_net_of_costs=Decimal("0.12"),
+        observed_max_drawdown=Decimal("0.09"),
+        observed_cdar_95=Decimal("0.06"),
+        annualized_cost_drag_bps=Decimal("8.4"),
+        passed=True,
+        recorded_at_utc=datetime(2026, 12, 31, 23, tzinfo=UTC),
+        git_sha="abc1234",
+        config_fingerprint="deadbeef",
+    )
+
+    assert dataclasses.is_dataclass(record)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        record.passed = False  # type: ignore[misc]
+
+
+def test_trial_statistics_shape() -> None:
+    stats = TrialStatistics(
+        n_trials=5,
+        trial_sharpe_mean=0.8,
+        trial_sharpe_variance=0.04,
+    )
+
+    assert stats.n_trials == 5
+    assert stats.trial_sharpe_mean == 0.8
+    assert stats.trial_sharpe_variance == 0.04
 
 
 def test_trade_intent_and_risk_control_event_capture_stage_one_fields() -> None:
