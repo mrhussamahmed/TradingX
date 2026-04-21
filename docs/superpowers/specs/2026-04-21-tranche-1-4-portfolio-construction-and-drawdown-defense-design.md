@@ -52,9 +52,14 @@ Scope:
 5. **Sleeve termination rules (runtime-observable).** Promote the
    `SleeveFailureReason` constants shipped in 1.3 from "available
    strings" to "observable runtime events": operator halt, drift
-   alarm (stub wired for 1.5 to fill), and 3-month rolling Sharpe
-   below threshold. Every termination emits an explicit sleeve
-   trade with the reason code — no silent skips.
+   alarm (stub wired for 1.5 to fill), and a trial-summary
+   Sharpe gate that fires when the sleeve has produced N
+   consecutive ≥ 3-month-window trials below the floor. Every
+   termination emits an explicit sleeve trade with the reason
+   code — no silent skips. (The original "3-month rolling
+   Sharpe" framing was narrowed in the round-1 review because
+   the trials ledger carries per-trial summaries rather than
+   daily returns; see W6.)
 6. **Marginal-portfolio-contribution Gate 1 criterion.** Wire the
    criterion deferred to tranche 1 by
    [ADR-0022 §"Deferred to tranche 1 hardening"](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md)
@@ -656,8 +661,46 @@ the composed scale is bounded below by `0`.
 - Create: `src/tradingx/portfolio/hard_halt.py`
 - Modify: `src/tradingx/runtime_host.py` (add
   `trigger_hard_halt`)
+- Modify: `src/tradingx/opportunity.py` (entry-gate check before
+  emitting a selection)
 - Create: `tests/unit/test_portfolio_hard_halt.py`
 - Modify: `tests/unit/test_runtime_host.py`
+- Modify: `tests/unit/test_opportunity.py`
+
+**Corrected model of the existing clearance flow.** Codex's
+round-1 review flagged an overclaim in the first draft: the
+current `LocalRuntimeHostManager` only **records** state. It does
+not halt an already-running service loop. New entries continue
+to flow from the service manager until the service is actually
+stopped. The correct wiring therefore has **three** pieces, all
+of which must land together for the 25% halt to be meaningful at
+runtime:
+
+1. A **service stop**. `trigger_hard_halt` MUST call
+   `self._service_manager.stop()` so the live trading loop
+   actually exits. Setting `recovery_required` without stopping
+   the service stops nothing.
+2. A **state transition** into `recovery_required` with the
+   halt reason in `last_error`. This lights up the operator
+   surface and enables `request_clearance()` to engage.
+3. An **entry gate** (defense in depth) that any intent-
+   producing layer consults before emitting new trades, so that
+   a race between `stop()` returning and the service loop
+   draining its last tick cannot slip an entry through.
+
+The existing `_pending_start_request` carries the original
+`start()` parameters; it is never cleared by `stop()` or by
+state transitions, so `request_clearance()` can drive
+`_run_clearance_reconciliation`, which already restarts the
+service via `service_manager.start(_pending_start_request)`
+after successful reconciliation
+([runtime_host.py:316](/src/tradingx/runtime_host.py:316)). The
+"reuse the existing clearance flow" claim in this spec is
+grounded on that restart path — it is load-bearing that the
+service is stopped FIRST by `trigger_hard_halt` so the restart
+is a valid service-manager operation (stop → start) rather than
+a double-start (which the service manager would reject as
+`blocked`).
 
 **Runtime-host change:**
 
@@ -665,23 +708,37 @@ the composed scale is bounded below by `0`.
 # src/tradingx/runtime_host.py (addition)
 
 def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
-    """Transition the runtime into recovery_required state
-    because a hard risk limit was breached.
+    """Halt the runtime because a hard risk limit was breached.
 
-    This reuses the existing reconciliation-divergence path:
-    setting status to recovery_required blocks new entries
-    until request_clearance() + successful reconciliation.
+    Three steps, in this order (ordering is load-bearing):
 
-    The operator sees:
-    - runtime state becomes `recovery_required`
-    - `last_error` carries the halt reason
-    - an OperatorAlert with severity `critical` is emitted
-    - the operator must manually call request_clearance() to
-      resume trading (same protocol as reconciliation halts).
+    1. Stop the service via self._service_manager.stop(). This
+       is what actually prevents new entries; flipping status
+       alone does not.
+    2. Set host state to recovery_required with reason stored
+       on last_error. This lights up the operator dashboard
+       and enables request_clearance() to engage.
+    3. Emit an OperatorAlert(severity=critical,
+       category=portfolio_hard_halt) via the alert gateway.
 
-    Returns WebActionResult with status `accepted` on success.
-    Idempotent: calling when already in recovery_required is a
-    no-op.
+    _pending_start_request is preserved from the original
+    start() call, so a subsequent successful request_clearance
+    will re-invoke service_manager.start(...) from the stored
+    parameters (see _run_clearance_reconciliation in this same
+    module). The stop-then-start sequence is a valid service-
+    manager operation; a naive recovery_required-without-stop
+    would force the clearance path to hit service.start() on an
+    already-running service and come back with `blocked`.
+
+    Idempotent: calling when status is already
+    recovery_required is a no-op and does not re-stop the
+    service.
+
+    Returns WebActionResult(status=accepted) on transition;
+    status=noop on idempotent call; status=error if the service
+    stop fails (in which case state remains unchanged — an
+    unstoppable service is a worse failure mode than a halted
+    one and needs operator attention).
     """
     with self._lock:
         if self._state.status == "recovery_required":
@@ -692,12 +749,29 @@ def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
                 message="Runtime host already in recovery_required.",
                 evidence_refs=(),
             )
+        # Step 1: actually stop the service loop.
+        try:
+            stop_result = self._service_manager.stop()
+        except Exception as exc:
+            self._set_state(
+                status="halted",
+                status_reason="Hard halt requested; service stop raised.",
+                last_error=f"{reason}; service stop error: {exc}",
+            )
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_host_hard_halt",
+                status="error",
+                message=f"Hard halt service stop raised: {exc}",
+                evidence_refs=(),
+            )
+        # Step 2: record the halt for the operator surface.
         self._set_state(
             status="recovery_required",
             status_reason=(
                 "Hard halt triggered: "
                 + reason
-                + ". New entries blocked until operator clearance."
+                + ". Service stopped; operator clearance required."
             ),
             last_error=reason,
         )
@@ -706,14 +780,50 @@ def trigger_hard_halt(self, *, reason: str) -> WebActionResult:
         action_type="runtime_host_hard_halt",
         status="accepted",
         message=f"Hard halt: {reason}",
-        evidence_refs=(),
+        evidence_refs=stop_result.evidence_refs,
     )
 ```
+
+**Entry-gate helper (defense-in-depth):**
+
+```python
+# src/tradingx/portfolio/hard_halt.py (partial)
+
+from pathlib import Path
+
+from tradingx.persistence import FilesystemArtifactStore
+
+
+def is_portfolio_hard_halted(operator_store_root: Path) -> bool:
+    """Read the runtime host state artifact and return True if
+    status == recovery_required AND last_error begins with the
+    portfolio_hard_halt reason prefix (so reconciliation-driven
+    recovery_required is distinguished from halt-driven).
+
+    The opportunity planner (and any future intent producer)
+    MUST call this before emitting a non-empty selection. If it
+    returns True, the producer returns an empty selection with
+    `decision_reason = 'hard_halt_active'` and emits a
+    RiskControlEvent with control_type='mdd_hard_halt',
+    blocked=True for the operator dashboard.
+
+    The check is a file-read, not an in-process call, so it
+    works regardless of whether the intent producer lives in
+    the same process as the runtime host. It is cheap and
+    idempotent.
+    """
+```
+
+The `opportunity.py` producer change is a 1–2 line insertion at
+the top of `plan(...)` that returns an empty
+`OpportunitySelectionRecord` when `is_portfolio_hard_halted` is
+True. No other intent producers exist in tranche-1 scope; future
+producers inherit the gate by calling the same helper.
 
 **Controller contract:**
 
 ```python
-# src/tradingx/portfolio/hard_halt.py
+# src/tradingx/portfolio/hard_halt.py (continued)
 
 from decimal import Decimal
 from typing import Protocol
@@ -756,11 +866,18 @@ class PortfolioHardHaltController:
         equity_curve: pd.Series,
     ) -> WebActionResult | None:
         """Compute trailing drawdown; if it meets or exceeds
-        blueprint.mdd_hard_halt, trigger the halt (once). The
-        halt is latched — once triggered, subsequent checks are
-        no-ops until the operator clears and the controller is
-        reset externally (e.g., after operator clearance lands
-        the runtime back in `nominal`).
+        blueprint.mdd_hard_halt, trigger the halt (once) via
+        runtime_host.trigger_hard_halt and publish an
+        OperatorAlert. The halt is latched — once triggered,
+        subsequent checks are no-ops until the operator clears
+        (state transitions back to `nominal`) and the
+        controller is reset externally via reset().
+        """
+
+    def reset(self) -> None:
+        """Clear the latch. Intended to be called by the
+        operator-clearance reconciliation path once state has
+        returned to `nominal`; not by the controller itself.
         """
 ```
 
@@ -772,25 +889,50 @@ drawdown and the blueprint.
 
 - Equity curve with trailing MDD < 25% → no halt, returns None.
 - Equity curve with trailing MDD == 25% → halt triggers exactly
-  once, runtime host transitions to `recovery_required`, alert
-  gateway publishes a `critical` alert.
-- Second call with same breach → no-op (latched).
-- Controller reset (external) + new check below 25% → no halt.
+  once; `service_manager.stop()` is called; runtime host
+  transitions to `recovery_required`; alert gateway publishes a
+  `critical` alert.
+- Service-stop call happens **before** the state transition
+  (ordering regression test using a mock service manager that
+  records call order).
+- `trigger_hard_halt` raising during service stop → state
+  transitions to `halted` (terminal error); `last_error`
+  records both the halt reason and the stop exception.
+- Second call with same breach → no-op (latched); service
+  manager's stop is NOT called again.
+- Controller `reset()` + new check below 25% → no halt.
 - Runtime host state after halt: `status == "recovery_required"`,
   `last_error` contains the halt reason text.
-- Integration with `request_clearance()`: clearance flow still
-  works from a hard-halt-induced `recovery_required` state
-  identically to a reconciliation-induced one.
+- `is_portfolio_hard_halted(operator_store_root)` returns True
+  when state file reports recovery_required AND the halt-reason
+  prefix is present; returns False for reconciliation-driven
+  `recovery_required` (so reconciliation halts don't
+  accidentally gate unrelated entry paths).
+- Integration with `request_clearance()`: after a halt-driven
+  stop, `_pending_start_request` is intact; a subsequent
+  `request_clearance()` call takes the host through
+  `_run_clearance_reconciliation`, which successfully restarts
+  the service via `service_manager.start(_pending_start_request)`
+  and lands the host at `nominal`.
+- Entry-gate regression: `opportunity.plan(...)` returns an
+  empty selection with `decision_reason='hard_halt_active'`
+  when `is_portfolio_hard_halted` returns True, without
+  touching the warmup or portfolio gateways.
 
 **Why this wiring closes the P1 gap.** Today
 `max_drawdown_halt = 0.25` lives on `OperatingConstraintBudget`
 and is emitted in benchmark-stack payloads
 ([validation.py:800-900](/src/tradingx/validation.py)) but no
-runtime code reads it. 1.4 makes the value **load-bearing**:
-`PortfolioHardHaltController` consumes it, triggers the runtime
-transition, and the operator control flow (already shipped in
-SPEC-0010) surfaces the halt and the clearance request. The
-25% threshold becomes a real runtime gate, not documentation.
+runtime code reads it. 1.4 makes the value **load-bearing** in
+three layered ways: `PortfolioHardHaltController` consumes it
+from the blueprint; `trigger_hard_halt` actually stops the
+service (not just state); the `is_portfolio_hard_halted` entry
+gate catches any intent producer that would otherwise race the
+service-stop. The existing operator-clearance path in
+`_run_clearance_reconciliation` then handles the restart cleanly
+because `_pending_start_request` was preserved. No new clearance
+pathway is invented; the stop-then-clearance sequence just feeds
+the existing flow with valid inputs.
 
 ### W6 — Sleeve termination rules (runtime-observable)
 
@@ -808,6 +950,7 @@ SPEC-0010) surfaces the halt and the clearance request. The
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from typing import Protocol
 
 import pandas as pd  # type: ignore[import-untyped]
@@ -825,26 +968,46 @@ class SleeveOperatorHaltStoreProtocol(Protocol):
     def is_halted(self, *, sleeve_id: str) -> bool: ...
 
 
+class RollingWindowSource(str, Enum):
+    """Where SleeveRuntimeController reads sleeve Sharpe history.
+
+    TRIAL_SUMMARY  — 1.4 default. Reads per-trial summary
+                     observed_sharpe_net_of_costs from the
+                     trials ledger, filtered to trial windows
+                     >= three_month_window_days.
+    LIVE_DAILY_RETURNS — 1.5 future. Reads the live per-sleeve
+                     daily return series (not yet shipped).
+    """
+
+    TRIAL_SUMMARY = "trial_summary"
+    LIVE_DAILY_RETURNS = "live_daily_returns"
+
+
 @dataclass(frozen=True)
 class SleeveRuntimeConfig:
     three_month_sharpe_floor: Decimal  # from blueprint
     three_month_window_days: int = 63  # ~3 trading months
+    trial_lookback: int = 3  # consecutive trials below floor
+    rolling_window_source: RollingWindowSource = (
+        RollingWindowSource.TRIAL_SUMMARY
+    )
 
 
 class SleeveRuntimeController:
     """Wraps a sleeve with runtime termination rules.
 
     When plan_for_bar is called, the controller first checks the
-    three termination sources:
+    three termination sources in precedence order:
 
     1. operator_halt_store.is_halted(sleeve_id) → emit hold-or-
        sell trades with rationale = HALT_BY_OPERATOR.
     2. drift_alarm_gateway.has_alarm(sleeve_id) → emit with
        rationale = DRIFT_ALARM_LIVE. Gateway is a stub in 1.4
        (always returns False); 1.5 fills it in.
-    3. trials_ledger recent 3-month rolling Sharpe for the
-       sleeve < config.three_month_sharpe_floor → emit with
-       rationale = SLEEVE_SHARPE_BELOW_THRESHOLD_6M.
+    3. trial-summary Sharpe gate (see below) → emit with
+       rationale = SLEEVE_SHARPE_BELOW_THRESHOLD_6M (the 1.3
+       constant is reused despite the window-name mismatch;
+       see "Constant-naming note" below).
 
     If none fire, delegates to sleeve.plan_for_bar.
 
@@ -852,16 +1015,6 @@ class SleeveRuntimeController:
     side="sell" (if current weight > 0) or side="hold" (if no
     current weight), target_weight_of_sleeve_budget=0, and the
     appropriate rationale — never an empty tuple (§P3).
-
-    Note on the rationale string: SLEEVE_SHARPE_BELOW_THRESHOLD_6M
-    is the constant name shipped in 1.3; in tranche-1 we use a
-    3-month Sharpe floor for the *threshold computation*, and
-    reuse the existing constant string for the rationale. If
-    Codex prefers renaming the constant to make this less
-    confusing (`SLEEVE_SHARPE_BELOW_THRESHOLD_ROLLING` or
-    similar), call that out in review — it's a low-risk rename
-    that propagates to tests and the docstring; all current
-    usages are in 1.4 code we are adding in this same tranche.
     """
 
     def __init__(
@@ -895,30 +1048,93 @@ Operators set the halt via a new operator-control action
 `resume_sleeve(sleeve_id)`. Both emit audit entries consistent
 with the existing operator-control pattern.
 
-**3-month Sharpe computation.** The controller queries the
-trials ledger for records matching the sleeve's `candidate_id`
-(= `sleeve_id`) within the last 63 trading days, computes a
-Sharpe on the trials' `observed_sharpe_net_of_costs` field, and
-compares to the floor. If fewer than 30 records exist, the check
-is skipped (insufficient evidence → same-semantics as
-`out_of_sample_profile` `pending` in Gate 1).
+**Trial-summary Sharpe gate (replaces the original round-1
+"3-month rolling Sharpe" phrasing).** Codex's round-1 review
+correctly pointed out that
+[TrialsLedger](/src/tradingx/trials.py:15) stores per-trial
+summary Sharpes on
+[`TrialRecord.observed_sharpe_net_of_costs`](/src/tradingx/types.py:87),
+not daily return observations, so a rolling Sharpe cannot be
+reconstructed from the ledger and a Sharpe-of-Sharpes is a
+different statistic. The 1.4 gate is reframed as a **trial-
+summary gate** whose input is exactly what the ledger stores:
+
+- Scan the trials ledger for records matching the sleeve's
+  `candidate_id` (= `sleeve_id`).
+- Keep only records whose trial window (`window_end_utc -
+  window_start_utc`) is at least `three_month_window_days`
+  trading days long — trials shorter than 3 months are rejected
+  as evidence for a 3-month-scale health check.
+- From those, take the most recent **N** trials (default:
+  `trial_lookback = 3`). If fewer than `trial_lookback` exist,
+  the check is **skipped** (insufficient evidence — same
+  pending semantics as `out_of_sample_profile` in Gate 1).
+- If every one of those trials has
+  `observed_sharpe_net_of_costs < config.three_month_sharpe_floor`,
+  the gate fires. Consecutive failures (not a running mean)
+  protect against a single-trial outlier.
+
+This is an honest trial-summary statistic: "the sleeve has
+produced `trial_lookback` consecutive ≥ 3-month-window
+evaluations below the floor." It is NOT a rolling daily-return
+Sharpe; that genuinely requires live per-sleeve daily return
+history, which 1.5 ships alongside the live drift monitoring
+(PSI / KS / execution drift / live-vs-backtest P&L divergence).
+When 1.5 lands, W6's gate can be upgraded to a real rolling-
+window Sharpe on live returns; the `SleeveRuntimeConfig`
+surface remains stable across that upgrade (the `config`
+dataclass gains a `rolling_window_source` enum; 1.4 defaults to
+`TRIAL_SUMMARY`, 1.5 defaults to `LIVE_DAILY_RETURNS`).
+
+**Constant-naming note (rename deferred).** The 1.3 constant
+[`SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M`](/src/tradingx/types.py:278)
+carries a `_6M` suffix but the 1.4 gate operates on a 3-month
+window. The first-round draft of this spec proposed renaming
+the constant to drop the suffix; after checking cross-
+references, the rename was dropped because the string is
+referenced by [DESIGN-0014 §W1](/docs/superpowers/specs/2026-04-21-tranche-1-3-sleeves-design.md)
+and the shipped [tranche-1.3 plan](/docs/superpowers/plans/2026-04-21-tranche-1-3-sleeves-plan.md).
+Renaming in 1.4 would stale-reference active draft documents
+and expand scope beyond this tranche. 1.4 **keeps the constant
+stable** at `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` and accepts the
+window-name-vs-rationale-string inconsistency as a known
+imperfection. A documentation-normalization pass in a later
+tranche (or when DESIGN-0014 promotes from draft to active)
+may normalize the name. Production code today does not emit
+this rationale anywhere (confirmed by grep — the constant is
+defined in `types.py` and pinned by `tests/unit/test_types.py`
+but never produced), so the first emission happens in 1.4's
+`SleeveRuntimeController` and the string is what Codex review
+implemented it as.
 
 **Tests cover:**
 
 - No halts, no alarm, ledger ok → controller delegates and
   returns exactly the sleeve's own output.
 - Operator halt → all in-universe symbols produce explicit
-  termination trades.
+  termination trades with `HALT_BY_OPERATOR` rationale.
 - Drift alarm gateway returns True → same behavior with
   `DRIFT_ALARM_LIVE` rationale (1.5 will provide a real
   gateway; 1.4 tests use a stub).
-- Trials ledger with rolling Sharpe < floor → termination with
-  `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` rationale.
-- Trials ledger with < 30 records → no check fires; delegates
-  as normal.
+- Trials ledger with `trial_lookback` consecutive trials
+  (window ≥ 63 days each) all below floor → termination with
+  `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` rationale (constant reused
+  from 1.3; see "Constant-naming note" above).
+- Trials ledger with `trial_lookback - 1` consecutive failures
+  followed by one passing trial → no fire (single pass resets
+  the streak; consecutive is the gate).
+- Trials ledger with windows shorter than
+  `three_month_window_days` → those trials are filtered out
+  and do not count toward the lookback.
+- Trials ledger with fewer than `trial_lookback` qualifying
+  trials → check is skipped (pending semantics).
+- Config with `rolling_window_source = LIVE_DAILY_RETURNS` in
+  1.4 → raises `NotImplementedError` with a clear message
+  pointing at 1.5 (guard rail against premature configuration).
 - Precedence order: if multiple conditions fire, operator halt
   wins (operator authority is absolute), then drift alarm, then
-  Sharpe floor. Rationale reflects the winning condition only.
+  trial-summary gate. Rationale reflects the winning condition
+  only.
 
 ### W7 — Marginal-portfolio-contribution Gate 1 criterion
 
@@ -943,21 +1159,16 @@ from tradingx.types import ValidationCriterionResult
 def evaluate_marginal_portfolio_contribution(
     *,
     candidate_returns: tuple[Decimal, ...],
-    portfolio_without_candidate_returns: tuple[Decimal, ...] | None,
-    portfolio_with_candidate_returns: tuple[Decimal, ...] | None,
+    portfolio_without_candidate_returns: tuple[Decimal, ...],
+    portfolio_with_candidate_returns: tuple[Decimal, ...],
 ) -> ValidationCriterionResult:
     """Evaluate whether adding the candidate to the book improves
     Sharpe, Calmar, and CDaR of the portfolio.
 
     Per ADR-0022 §"Deferred to tranche 1 hardening", this
     criterion supplements — does not replace — the four
-    operational Gate 1 criteria.
-
-    If either portfolio series is None, the criterion is
-    `pending` (cannot evaluate without both), status stored as
-    passed=False but details indicate the pending reason. The
-    overall Gate 1 status downstream handles `pending` as
-    separate from pass/fail — see _build_gate1_candidate_result.
+    operational Gate 1 criteria. It is a HARD-PASS criterion:
+    failure of this criterion fails Gate 1 for the candidate.
 
     Pass rule (all must hold):
         sharpe_with > sharpe_without
@@ -966,16 +1177,82 @@ def evaluate_marginal_portfolio_contribution(
 
     Returns ValidationCriterionResult with criterion_id =
     "marginal_portfolio_contribution" and details containing the
-    three observed deltas.
+    three observed deltas. All three inputs are required series
+    (not Optional); the two-sleeve book-construction rule in
+    W7 guarantees both portfolio series are always computable.
     """
 ```
 
-**Integration into the Gate 1 report.** The current
-`build_gate_report` loop evaluates candidates independently. 1.4
-restructures the Gate 1 branch into a **two-pass** flow:
+**Integration into the Gate 1 report — narrowed to the two-
+sleeve case in 1.4.** Codex's round-1 review flagged that the
+first-draft pseudocode ("evaluate each candidate against other
+pass1 passers") is ambiguous for 3+ sleeves: a candidate judged
+marginally positive against `{A, B}` may not be positive
+against `{A}` alone if `B` later fails marginal contribution
+and gets removed from the book. 1.4 explicitly **restricts the
+marginal criterion to the two-sleeve case** (exactly the two
+shipped mandatory sleeves with non-null `sleeve_class_path`:
+`trend-following-v1` and `vol-target-v1`). This keeps the book-
+construction rule deterministic:
+
+> **Book-construction rule (1.4 two-sleeve case).** For each of
+> the two candidates, the reference book is exactly the OTHER
+> mandatory sleeve-backed candidate in
+> `build_mandatory_candidate_registry()` that has
+> `sleeve_class_path is not None`. That other candidate's pass1
+> status is NOT consulted — the book is fixed by the registry,
+> not by the gate outcome of its sibling. The marginal
+> criterion asks "does adding candidate X to a book consisting
+> of sibling Y strictly improve portfolio Sharpe, Calmar, and
+> CDaR?", regardless of whether Y itself passes pass1. This is
+> what makes the rule deterministic in tranche 1.4.
+
+When a future sub-tranche adds a third sleeve-backed candidate,
+the two-sleeve simplification breaks down and the marginal
+criterion needs a book-construction rule valid for 3+
+candidates. Three plausible rules (all deferred):
+
+- **Fixed-point iteration.** Run pass2; drop failers; re-run
+  pass2 on the reduced book; iterate until the set stabilizes.
+  Deterministic but expensive.
+- **Stage-ordered admission.** Evaluate candidates in a fixed
+  deterministic order (e.g., by registry order); admit
+  marginally-positive candidates into a growing book; later
+  candidates are evaluated against the current admitted book.
+  Deterministic and cheap; introduces order sensitivity.
+- **Registry-pinned book.** The book is the set of
+  registry-listed sleeve-backed candidates minus the one
+  under evaluation — `sleeve_class_path is not None` candidates
+  only. Deterministic, order-insensitive, does NOT re-evaluate
+  after drops. This is the simplest extension of the 1.4 two-
+  sleeve rule to 3+ sleeves.
+
+The decision between these three is deferred to the tranche
+that introduces a third sleeve-backed candidate (per
+[FFL-0001-03](/docs/roadmap/future-features-ledger.md) or a
+later structural-alpha sleeve per
+[FFL-0001-05](/docs/roadmap/future-features-ledger.md)). 1.4
+hard-asserts the two-sleeve assumption at
+`build_gate_report` entry with a clear error message if the
+registry ever contains ≠ 2 mandatory sleeve-backed candidates;
+see tests below.
 
 ```python
 # Pseudocode inside build_gate_report (gate_id == "1")
+
+# Defensive assertion: 1.4 only supports the two-sleeve case.
+sleeve_candidates = tuple(
+    c for c in candidates if c.sleeve_class_path is not None
+)
+if len(sleeve_candidates) != 2:
+    raise NotImplementedError(
+        "Marginal-portfolio-contribution criterion in tranche "
+        "1.4 is scoped to the two-sleeve case; found "
+        f"{len(sleeve_candidates)} sleeve-backed candidates. "
+        "Generalization for 3+ sleeves is deferred to the "
+        "tranche that introduces the third sleeve-backed "
+        "candidate."
+    )
 
 # Pass 1: per-candidate, the four existing criteria (no change).
 pass1_results = {}
@@ -989,35 +1266,43 @@ for candidate in candidates:
         candidate, cand_returns, cand_drag, four_criteria_result
     )
 
-# Pass 2: for each candidate, compute portfolio-with/without
-# and evaluate the marginal criterion.
+# Pass 2: for each sleeve-backed candidate, compute portfolio-
+# with/without against the fixed sibling (registry rule above)
+# and evaluate the marginal criterion. Non-sleeve candidates
+# (today: mean-reversion-v1 with sleeve_class_path=None) skip
+# pass 2 and keep their pass-1 status unchanged.
 for candidate_id, (candidate, cand_returns, ...) in pass1_results.items():
-    others = [
-        (c, returns) for c_id, (c, returns, ...) in pass1_results.items()
-        if c_id != candidate_id and pass1_results[c_id][3].status == "pass"
-    ]
-    if not others:
-        marginal_criterion = ValidationCriterionResult(
-            criterion_id="marginal_portfolio_contribution",
-            passed=False,
-            threshold="adding candidate improves portfolio Sharpe, Calmar, CDaR",
-            details="pending: no other passing sleeves to form a book",
-        )
-        marginal_status = "pending"
-    else:
-        portfolio_without = _simulate_book([c for c, _ in others], ...)
-        portfolio_with = _simulate_book([candidate] + [c for c, _ in others], ...)
-        marginal_criterion = evaluate_marginal_portfolio_contribution(...)
-        marginal_status = "pass" if marginal_criterion.passed else "fail"
+    if candidate.sleeve_class_path is None:
+        continue  # non-sleeve candidate — no marginal pass
+    sibling = next(
+        c for c in sleeve_candidates if c.candidate_id != candidate_id
+    )
+    portfolio_without = _simulate_book([sibling], ...)
+    portfolio_with = _simulate_book([candidate, sibling], ...)
+    marginal_criterion = evaluate_marginal_portfolio_contribution(
+        candidate_returns=cand_returns,
+        portfolio_without_candidate_returns=portfolio_without,
+        portfolio_with_candidate_returns=portfolio_with,
+    )
+    marginal_status = "pass" if marginal_criterion.passed else "fail"
 
     # Final criteria = four existing + marginal
     final_criteria = pass1_results[candidate_id][3].criteria + (marginal_criterion,)
-    final_status = _reconcile_status(pass1_results[candidate_id][3].status, marginal_status)
+    final_status = _reconcile_status(
+        pass1_results[candidate_id][3].status, marginal_status
+    )
 ```
 
+The `pending` case from the first draft (no other passing
+sleeves) no longer arises: the book is pinned to the sibling,
+independent of its pass1 status. This is the intentional
+consequence of restricting 1.4 to two sleeves — every
+sleeve-backed candidate always has exactly one sibling. The
+`marginal_status = pending` branch is removed.
+
 **Status reconciliation rule.** The final Gate 1 status for a
-candidate combines the four-criteria pass1 status with the
-marginal criterion status:
+sleeve-backed candidate combines the four-criteria pass1 status
+with the marginal criterion status:
 
 | pass1 status | marginal status | final |
 |---|---|---|
@@ -1025,14 +1310,20 @@ marginal criterion status:
 | `pending` | any | `pending` |
 | `pass` | `pass` | `pass` |
 | `pass` | `fail` | `fail` |
-| `pass` | `pending` | `pending` |
+
+The `pending` + `pass`/`fail` row from the first-draft table is
+removed: with the two-sleeve book-construction rule, pass 2
+always produces a concrete `pass`/`fail`. Non-sleeve
+candidates (today: `mean-reversion-v1`) skip pass 2 entirely
+and keep their pass-1 status verbatim.
 
 **Simulating portfolio-with/without.** Uses
 `simulate_portfolio_returns` from W2, parameterized with a
 per-evaluation `PortfolioBlueprint` that assigns equal budgets
-to the sleeves being combined. Equal budgets is a tranche-1
-simplification; tranche 2+ may use blueprint-configured budgets
-once live data informs budget allocation.
+to the sleeves being combined (two-sleeve case → 0.5/0.5; one-
+sleeve "without" book → the sole sleeve at 1.0). Equal budgets
+is a tranche-1 simplification; tranche 2+ may use blueprint-
+configured budgets once live data informs budget allocation.
 
 **Per §P1:** both `portfolio_with` and `portfolio_without`
 simulations run through the same `run_daily_bar_backtest` —
@@ -1068,23 +1359,31 @@ are forwarded to the pack; otherwise they remain `None`.
 
 **Tests cover:**
 
-- Two passing sleeves, `trend + vol_managed_beta`: for each
-  candidate, the marginal criterion evaluates against the other
-  sleeve alone. Result is deterministic on canned data.
-- Single passing sleeve: the lone candidate gets
-  `marginal_status = pending`; final status is `pending`.
-- One passing and one failing (pass1) sleeve: the passing
-  sleeve's marginal check is against the empty other-book;
-  marginal = `pending`, final = `pending`. Failing sleeve
-  stays failed regardless.
+- Two sleeve-backed candidates, `trend + vol_managed_beta`:
+  for each, the marginal criterion evaluates against the other
+  as the fixed sibling book, independent of its pass1 status.
+  Result is deterministic on canned data.
+- Registry count != 2 sleeve-backed candidates (one or three):
+  `build_gate_report` raises `NotImplementedError` at entry
+  with the deferred-generalization error message. This is a
+  guardrail test; today's registry has exactly 2.
+- Pass-1 passing candidate whose sibling fails pass 1: the
+  marginal pass still runs (book is registry-pinned, not
+  pass1-pinned). `marginal_sharpe_delta` etc. are populated.
+  The sibling's pass1 failure does not propagate to the
+  passing candidate's marginal outcome.
+- Non-sleeve candidate (`mean-reversion-v1` with
+  `sleeve_class_path = None`): pass 2 is skipped; final status
+  equals pass-1 status; `marginal_*_delta` remains `None`.
 - Both sleeves pass pass1 AND marginal → both end `pass`.
 - Both sleeves pass pass1; neither adds marginal value → both
-  end `fail` with `marginal_sharpe_delta <= 0` (for instance).
-- `EvaluationEvidencePack.marginal_*_delta` populated for
-  candidates that ran pass-2 evaluation; `None` for candidates
-  that did not (pending or skipped).
+  end `fail` with `marginal_sharpe_delta <= 0` (or calmar/cdar
+  violated) in the criterion details.
+- `EvaluationEvidencePack.marginal_*_delta` populated for every
+  sleeve-backed candidate that reached pass 2; `None` for non-
+  sleeve candidates.
 - `ValidationCandidateResult.marginal_*_delta` mirrors the
-  evidence pack's value.
+  evidence pack's value (§P2 regression).
 - Deserialization of a pre-1.4 persisted `EvaluationEvidencePack`
   (no marginal fields on disk) produces `marginal_*_delta =
   None`.
@@ -1177,12 +1476,21 @@ Sub-tranche 1.4 is complete when:
 10. `uv run pytest -q`, `uv run mypy src/tradingx`,
     `uv run ruff check`, `python3 scripts/check_index.py`,
     `./scripts/validate` all pass.
-11. Gate 1 evaluation against the benchmark stack now emits the
+11. Gate 1 evaluation against the benchmark stack emits the
     five-criterion Gate 1 result for every sleeve-backed
-    candidate. For the two shipped sleeves
-    (`trend-following-v1`, `vol-target-v1`), the pass/fail
-    outcome of the marginal criterion is **not** gated on; we
-    are validating plumbing, not edge.
+    candidate, and the marginal-portfolio-contribution
+    criterion is a **hard-pass criterion** — a sleeve that
+    fails it fails Gate 1, per ADR-0022 §"Deferred to tranche
+    1 hardening". For the two shipped sleeves
+    (`trend-following-v1`, `vol-target-v1`), the marginal-delta
+    evidence fields (`marginal_sharpe_delta`,
+    `marginal_calmar_delta`, `marginal_cdar_delta`) are
+    populated on both `EvaluationEvidencePack` and
+    `ValidationCandidateResult`, regardless of the pass/fail
+    outcome. If either shipped sleeve fails the marginal check
+    on current historical data, that is a real Gate 1 failure
+    — 1.4 ships the machinery that surfaces that fact;
+    remediation of edge is out of scope for 1.4.
 
 ## Decisions resolved (no open items)
 
@@ -1207,13 +1515,12 @@ Implementation-level judgment calls for Codex review:
    including prior bar" for next-open consistency. If Codex
    prefers "trailing up to prior day's close," it's effectively
    the same in a daily-bar engine; flag in review if preferred.
-4. **Constant naming for sleeve-Sharpe termination.** W6 reuses
-   the existing `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` string but
-   the computation is 3-month. If Codex prefers renaming the
-   constant to match the computation window
-   (`SLEEVE_SHARPE_BELOW_THRESHOLD_ROLLING` or
-   `_3M` suffix), it's a low-risk rename we resolve in the
-   implementation plan.
+4. **Constant naming for sleeve-Sharpe termination
+   (resolved in round-1 amendment).** The 1.3 constant
+   `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` is kept stable in 1.4 to
+   avoid staling cross-references in DESIGN-0014 and the 1.3
+   plan. The window-name-vs-rationale-string inconsistency is
+   a known imperfection; see the W6 "Constant-naming note".
 
 ## Governance impact
 
