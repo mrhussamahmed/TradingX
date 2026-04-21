@@ -9,7 +9,12 @@ from tradingx.strategy import (
     DeterministicBaselineStrategy,
     build_mandatory_candidate_registry,
 )
-from tradingx.types import MarketSnapshot, PortfolioState, PositionSnapshot
+from tradingx.types import (
+    MarketSnapshot,
+    PortfolioState,
+    PositionSnapshot,
+    StrategyCandidate,
+)
 
 
 def test_strategy_module_shell_is_importable() -> None:
@@ -211,6 +216,46 @@ def test_mandatory_candidate_registry_uses_canonical_parameters() -> None:
         "zscore_threshold": Decimal("2.0"),
         "forecast_method": "garch",
     }
+
+
+def test_strategy_candidate_accepts_sleeve_class_path() -> None:
+    candidate = StrategyCandidate(
+        candidate_id="x-v1",
+        family="x",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={"forecast_method": "ewma"},
+        status="under_evaluation",
+        sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
+    )
+
+    assert candidate.sleeve_class_path == "tradingx.sleeves.trend.TrendSleeve"
+
+
+def test_strategy_candidate_sleeve_class_path_defaults_to_none() -> None:
+    candidate = StrategyCandidate(
+        candidate_id="x-v1",
+        family="x",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={},
+        status="under_evaluation",
+    )
+
+    assert candidate.sleeve_class_path is None
+
+
+def test_registry_sets_sleeve_class_path_for_trend_and_vol_target() -> None:
+    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+    by_id = {candidate.candidate_id: candidate for candidate in candidates}
+
+    assert by_id["trend-following-v1"].sleeve_class_path == (
+        "tradingx.sleeves.trend.TrendSleeve"
+    )
+    assert by_id["vol-target-v1"].sleeve_class_path == (
+        "tradingx.sleeves.vol_managed_beta.VolManagedBetaSleeve"
+    )
+    assert by_id["mean-reversion-v1"].sleeve_class_path is None
 
 
 def test_mandatory_candidate_registry_defaults_to_canonical_stage1_universe() -> None:

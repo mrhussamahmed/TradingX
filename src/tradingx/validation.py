@@ -9,7 +9,7 @@ import subprocess
 import uuid
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,6 +22,7 @@ from tradingx.evaluation import (
     AdversarialCheckContext,
     evaluate_candidate,
 )
+from tradingx.features.regime import classify_regime
 from tradingx.portfolio_construction import build_candidate_target_weight_history
 from tradingx.stats import (
     conditional_drawdown_at_risk,
@@ -34,6 +35,7 @@ from tradingx.types import (
     BenchmarkStackPayload,
     EvaluationEvidencePack,
     OperatingConstraintBudget,
+    RegimeSnapshot,
     ScalarValue,
     StrategyCandidate,
     TrialRecord,
@@ -483,11 +485,31 @@ def _candidate_returns(
     bars_by_symbol: dict[str, pd.DataFrame],
     parameter_overrides: dict[str, ScalarValue] | None = None,
     cost_model_config: CostModelConfig | None = None,
+    regime_snapshots_by_date: dict[date, RegimeSnapshot] | None = None,
+    sleeve_budget_equity: Decimal | None = None,
 ) -> tuple[tuple[Decimal, ...], Decimal]:
     configured_candidate = _candidate_with_parameter_overrides(
         candidate,
         parameter_overrides=parameter_overrides,
     )
+    if configured_candidate.sleeve_class_path is not None:
+        from tradingx.sleeves.base import build_sleeve_from_candidate
+        from tradingx.sleeves.evaluation import simulate_sleeve_returns
+
+        sleeve = build_sleeve_from_candidate(configured_candidate)
+        resolved_regimes = regime_snapshots_by_date or _build_default_regime_snapshots(
+            configured_candidate,
+            bars_by_symbol=bars_by_symbol,
+        )
+        resolved_budget = sleeve_budget_equity or Decimal("100000")
+        return simulate_sleeve_returns(
+            sleeve,
+            bars_by_symbol=bars_by_symbol,
+            regime_snapshots_by_date=resolved_regimes,
+            sleeve_budget_equity=resolved_budget,
+            cost_model_config=cost_model_config,
+        )
+
     target_weights = build_candidate_target_weight_history(
         configured_candidate,
         bars_by_symbol=bars_by_symbol,
@@ -501,6 +523,29 @@ def _candidate_returns(
     )
     returns = tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
     return returns, result.annualized_cost_drag_bps
+
+
+def _build_default_regime_snapshots(
+    candidate: StrategyCandidate,
+    *,
+    bars_by_symbol: dict[str, pd.DataFrame],
+) -> dict[date, RegimeSnapshot]:
+    benchmark_bars = bars_by_symbol.get(candidate.benchmark_symbol)
+    if benchmark_bars is None:
+        raise ValueError(f"Missing benchmark bars for {candidate.benchmark_symbol!r}.")
+
+    closes = benchmark_bars["close"].astype(float)
+    sma_200 = closes.rolling(200, min_periods=1).mean()
+    regimes: dict[date, RegimeSnapshot] = {}
+    for timestamp in benchmark_bars.index:
+        regimes[timestamp.date()] = classify_regime(
+            observation_date=timestamp.date(),
+            spy_close=Decimal(str(float(closes.loc[timestamp]))),
+            spy_sma_200=Decimal(str(float(sma_200.loc[timestamp]))),
+            vix_close=None,
+            yield_curve_spread_bps=None,
+        )
+    return regimes
 
 
 def _candidate_with_parameter_overrides(

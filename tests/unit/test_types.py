@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 import tradingx.types as types_module
@@ -48,6 +49,8 @@ from tradingx.types import (
     ServiceCycleSnapshot,
     ServiceRunResult,
     ServiceSymbolResult,
+    SleeveContext,
+    SleeveTrade,
     StrategyActivationRecord,
     StrategyCandidate,
     TradeIntent,
@@ -92,6 +95,61 @@ def test_strategy_candidate_defaults_to_no_evidence_pack() -> None:
 
     assert candidate.evidence_pack_id is None
     assert candidate.universe == ("SPY", "QQQ")
+    assert candidate.sleeve_class_path is None
+
+
+def test_sleeve_trade_is_frozen_dataclass() -> None:
+    trade = SleeveTrade(
+        sleeve_id="trend-following-v1",
+        symbol="SPY",
+        side="buy",
+        target_weight_of_sleeve_budget=Decimal("0.6"),
+        rationale="tsmom_long_vol_targeted",
+        regime="risk_on",
+    )
+
+    assert dataclasses.is_dataclass(trade)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        trade.side = "sell"  # type: ignore[misc]
+
+
+def test_sleeve_context_is_frozen_dataclass() -> None:
+    regime_snapshot = RegimeSnapshot(
+        observation_date=date(2026, 4, 21),
+        regime="risk_on",
+        above_sma_200=True,
+        vix_elevated=False,
+        vix_stressed=False,
+        yield_curve_inverted=False,
+        spy_close=Decimal("500"),
+        spy_sma_200=Decimal("480"),
+        vix_close=Decimal("15"),
+        yield_curve_spread_bps=Decimal("35"),
+    )
+    ctx = SleeveContext(
+        observation_date=date(2026, 4, 21),
+        bars_by_symbol={"SPY": pd.DataFrame()},
+        regime=regime_snapshot,
+        current_weights_by_symbol={"SPY": Decimal("0.5")},
+        sleeve_budget_equity=Decimal("100000"),
+    )
+
+    assert dataclasses.is_dataclass(ctx)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ctx.sleeve_budget_equity = Decimal("0")  # type: ignore[misc]
+
+
+def test_sleeve_failure_reason_exposes_expected_constants() -> None:
+    assert types_module.SleeveFailureReason.HALT_BY_OPERATOR == "halt_by_operator"
+    assert types_module.SleeveFailureReason.DRIFT_ALARM_LIVE == "drift_alarm_live"
+    assert (
+        types_module.SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M
+        == "sleeve_sharpe_below_threshold_6m"
+    )
+    assert types_module.SleeveFailureReason.REGIME_STRESSED == "regime_stressed"
+    assert (
+        types_module.SleeveFailureReason.INSUFFICIENT_HISTORY == "insufficient_history"
+    )
 
 
 def test_trial_record_is_frozen_dataclass() -> None:
