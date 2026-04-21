@@ -643,29 +643,29 @@ class FakeActionRunner:
     def prepare_benchmark(
         self,
         *,
-        symbol: str,
         window_start: str,
         window_end: str,
-        feed: str = "iex",
-        adjustment: str = "dividend",
     ) -> WebActionResult:
         return WebActionResult(
             action_id="action-benchmark",
             action_type="prepare_benchmark",
             status="completed",
-            message=f"Prepared benchmark for {symbol}.",
-            evidence_refs=("artifacts/validation/benchmarks/spy.json",),
+            message="Prepared benchmark stack.",
+            evidence_refs=(
+                "artifacts/validation/benchmark_stacks/stack-2023-01-01-2026-04-17.json",
+            ),
         )
 
     def generate_gate_report(
         self,
         *,
         gate: str,
-        benchmark_closes_file: str,
+        benchmark_stack_file: str,
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
     ) -> WebActionResult:
+        del benchmark_stack_file, window_start, window_end, universe
         return WebActionResult(
             action_id="action-gate",
             action_type="gate_report",
@@ -977,7 +977,6 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     benchmark = client.post(
         "/api/actions/prepare-benchmark",
         json={
-            "symbol": "SPY",
             "window_start": "2023-01-01",
             "window_end": "2026-04-17",
         },
@@ -986,7 +985,10 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
         "/api/actions/gate-report",
         json={
             "gate": "1",
-            "benchmark_closes_file": "artifacts/validation/benchmarks/spy.json",
+            "benchmark_stack_file": (
+                "artifacts/validation/benchmark_stacks/"
+                "stack-2023-01-01-2026-04-17.json"
+            ),
             "window_start": "2023-01-01",
             "window_end": "2026-04-17",
             "universe": ["SPY", "QQQ"],

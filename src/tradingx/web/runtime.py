@@ -22,12 +22,12 @@ from tradingx.automation import (
     MarketDayAutomationRunner,
     build_default_market_day_automation_runner,
 )
+from tradingx.benchmark_stack import build_default_benchmark_stack
 from tradingx.config import TradingConfig
 from tradingx.controller import (
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
-from tradingx.benchmark_stack import build_default_benchmark_stack
 from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
@@ -476,13 +476,9 @@ class LocalWebActionRunner:
     def prepare_benchmark(
         self,
         *,
-        symbol: str,
         window_start: str,
         window_end: str,
-        feed: str = "iex",
-        adjustment: str = "dividend",
     ) -> WebActionResult:
-        del symbol, feed, adjustment
         market_data_gateway = build_default_market_data_gateway(self._config)
         risk_free_series = build_default_risk_free_series(self._config)
         stack = build_default_benchmark_stack(
@@ -512,7 +508,10 @@ class LocalWebActionRunner:
             action_id=f"action-{uuid.uuid4()}",
             action_type="prepare_benchmark",
             status="completed",
-            message="Prepared benchmark stack (cash hurdle + 60/40 + operating constraint).",
+            message=(
+                "Prepared benchmark stack "
+                "(cash hurdle + 60/40 + operating constraint)."
+            ),
             evidence_refs=(str(output_file),),
         )
 
@@ -520,12 +519,12 @@ class LocalWebActionRunner:
         self,
         *,
         gate: str,
-        benchmark_closes_file: str,
+        benchmark_stack_file: str,
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
     ) -> WebActionResult:
-        benchmark_path = self._resolve_artifact_path(Path(benchmark_closes_file))
+        benchmark_path = self._resolve_artifact_path(Path(benchmark_stack_file))
         controller = build_default_gate_validation_controller(
             self._config,
             artifact_root=self._config.runtime.artifact_root / "validation",

@@ -181,11 +181,8 @@ class _Day0ActionRunner:
     def prepare_benchmark(
         self,
         *,
-        symbol: str,
         window_start: str,
         window_end: str,
-        feed: str = "iex",
-        adjustment: str = "dividend",
     ) -> WebActionResult:
         raise NotImplementedError
 
@@ -193,7 +190,7 @@ class _Day0ActionRunner:
         self,
         *,
         gate: str,
-        benchmark_closes_file: str,
+        benchmark_stack_file: str,
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),

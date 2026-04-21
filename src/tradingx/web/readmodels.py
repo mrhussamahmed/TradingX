@@ -1999,12 +1999,20 @@ class LocalWebReadModel:
         if validation_report is not None and str(validation_report.get("status", "")) != "pass":
             diagnostics.append(
                 PerformanceDiagnostic(
-                    diagnostic_id="benchmark_edge",
-                    title="Benchmark edge is still negative.",
-                    detail=str(validation_report.get("summary", "Latest validation report is not yet passing.")),
+                    diagnostic_id="gate_validation",
+                    title="Validation benchmark stack is not yet passing.",
+                    detail=str(
+                        validation_report.get(
+                            "summary",
+                            "Latest validation report is not yet passing.",
+                        )
+                    ),
                     severity="critical",
                     owner="Research",
-                    action="Investigate candidate alpha before adding capital.",
+                    action=(
+                        "Review hurdle clearance, opportunity-cost edge, and "
+                        "operating constraints before adding capital."
+                    ),
                 )
             )
         if replay_summary is not None:
@@ -2051,12 +2059,34 @@ class LocalWebReadModel:
             str(item.get("criterion_id", "")): item
             for item in self._ensure_list(candidate_payload.get("criteria", ()))
         }
-        benchmark_edge_details = str(
-            self._ensure_mapping(criteria.get("benchmark_edge", {})).get("details", "")
+        opportunity_cost_details = str(
+            self._ensure_mapping(criteria.get("opportunity_cost_edge", {})).get(
+                "details",
+                "",
+            )
         )
-        max_drawdown_details = str(
-            self._ensure_mapping(criteria.get("max_drawdown_target", {})).get(
-                "details", ""
+        benchmark_edge_details = (
+            opportunity_cost_details
+            or str(
+                self._ensure_mapping(criteria.get("benchmark_edge", {})).get(
+                    "details",
+                    "",
+                )
+            )
+        )
+        operating_constraint_details = str(
+            self._ensure_mapping(criteria.get("operating_constraint", {})).get(
+                "details",
+                "",
+            )
+        )
+        max_drawdown_details = (
+            operating_constraint_details
+            or str(
+                self._ensure_mapping(criteria.get("max_drawdown_target", {})).get(
+                    "details",
+                    "",
+                )
             )
         )
         return {
@@ -2067,7 +2097,10 @@ class LocalWebReadModel:
             ),
             "benchmark_cagr": self._extract_decimal_metric(
                 benchmark_edge_details,
-                pattern=r"benchmark CAGR=([0-9.]+)",
+                pattern=(
+                    r"(?:benchmark|[A-Z]+:[0-9.]+(?:\+[A-Z]+:[0-9.]+)*) "
+                    r"CAGR=([0-9.]+)"
+                ),
                 default=Decimal("0.036"),
             ),
             "candidate_sharpe": self._extract_decimal_metric(
@@ -2082,7 +2115,7 @@ class LocalWebReadModel:
             ),
             "max_drawdown": self._extract_decimal_metric(
                 max_drawdown_details,
-                pattern=r"drawdown=([0-9.]+)",
+                pattern=r"(?:max_)?drawdown=([0-9.]+)",
                 default=Decimal("0.060"),
             ),
         }

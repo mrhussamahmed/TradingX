@@ -311,7 +311,7 @@ def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
             gate_id="1",
             generated_at_utc=timestamp,
             status="pass",
-            benchmark_symbol="SPY",
+            benchmark_symbol="SPY+AGG",
             window_start_utc=timestamp,
             window_end_utc=timestamp,
             candidate_results=(
@@ -322,10 +322,22 @@ def test_local_web_read_model_builds_operator_platform_views(tmp_path) -> None:
                     evidence_pack_id="eval-1",
                     criteria=(
                         ValidationCriterionResult(
-                            criterion_id="benchmark_edge",
+                            criterion_id="hurdle_clearance",
                             passed=True,
-                            threshold="Sharpe >= 1.0",
-                            details="Satisfied.",
+                            threshold="Candidate total return must exceed the cash hurdle total return",
+                            details="Candidate total return=0.121, cash hurdle total return=0.019.",
+                        ),
+                        ValidationCriterionResult(
+                            criterion_id="opportunity_cost_edge",
+                            passed=True,
+                            threshold="Candidate CAGR must exceed SPY:0.6+AGG:0.4 CAGR by 0.02 absolute",
+                            details="Candidate CAGR=0.143, SPY:0.6+AGG:0.4 CAGR=0.091.",
+                        ),
+                        ValidationCriterionResult(
+                            criterion_id="operating_constraint",
+                            passed=True,
+                            threshold="max_drawdown <= 0.15 and CDaR@0.95 <= 0.08",
+                            details="max_drawdown=0.060, CDaR=0.041, halt=0.250.",
                         ),
                     ),
                     summary="Candidate cleared the benchmark gate.",

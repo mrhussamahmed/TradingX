@@ -385,7 +385,7 @@ def test_local_web_action_runner_rejects_gate_report_benchmark_outside_artifact_
     with pytest.raises(ValueError, match="artifact root"):
         runner.generate_gate_report(
             gate="1",
-            benchmark_closes_file=str(benchmark_file),
+            benchmark_stack_file=str(benchmark_file),
             window_start="2026-04-01",
             window_end="2026-04-17",
         )

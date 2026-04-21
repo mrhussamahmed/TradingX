@@ -155,18 +155,15 @@ class ActionRunnerProtocol(Protocol):
     def prepare_benchmark(
         self,
         *,
-        symbol: str,
         window_start: str,
         window_end: str,
-        feed: str = "iex",
-        adjustment: str = "dividend",
     ) -> WebActionResult: ...
 
     def generate_gate_report(
         self,
         *,
         gate: str,
-        benchmark_closes_file: str,
+        benchmark_stack_file: str,
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
@@ -240,16 +237,13 @@ class RecoverRequest(BaseModel):
 
 
 class PrepareBenchmarkRequest(BaseModel):
-    symbol: str
     window_start: str
     window_end: str
-    feed: str = "iex"
-    adjustment: str = "dividend"
 
 
 class GateReportRequest(BaseModel):
     gate: str
-    benchmark_closes_file: str
+    benchmark_stack_file: str
     window_start: str
     window_end: str
     universe: list[str] = []
@@ -554,11 +548,8 @@ def create_app(
         return JSONResponse(
             content=_serialize(
                 action_runner.prepare_benchmark(
-                    symbol=payload.symbol,
                     window_start=payload.window_start,
                     window_end=payload.window_end,
-                    feed=payload.feed,
-                    adjustment=payload.adjustment,
                 )
             )
         )
@@ -570,7 +561,7 @@ def create_app(
             content=_serialize(
                 action_runner.generate_gate_report(
                     gate=payload.gate,
-                    benchmark_closes_file=payload.benchmark_closes_file,
+                    benchmark_stack_file=payload.benchmark_stack_file,
                     window_start=payload.window_start,
                     window_end=payload.window_end,
                     universe=tuple(symbol.upper() for symbol in payload.universe),
