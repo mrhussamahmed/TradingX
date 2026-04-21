@@ -2551,7 +2551,59 @@ def test_validation_candidate_result_marginal_deltas_default_to_none():
     assert result.marginal_sharpe_delta is None
     assert result.marginal_calmar_delta is None
     assert result.marginal_cdar_delta is None
+
+
+def test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack(
+    sample_evaluate_candidate_inputs,
+):
+    """DESIGN-0015 §P2 + §P5: if a caller supplies marginal-delta
+    kwargs to evaluate_candidate, they MUST land on the returned
+    EvaluationEvidencePack. Without this forwarding contract, the
+    two-pass Gate 1 restructure in W7/Task 13 could build results
+    whose persisted evidence pack is missing the deltas."""
+    from decimal import Decimal
+
+    from tradingx.evaluation import evaluate_candidate
+
+    pack = evaluate_candidate(
+        sample_evaluate_candidate_inputs.candidate,
+        candidate_returns=sample_evaluate_candidate_inputs.candidate_returns,
+        benchmark_returns=sample_evaluate_candidate_inputs.benchmark_returns,
+        window_start_utc=sample_evaluate_candidate_inputs.window_start_utc,
+        window_end_utc=sample_evaluate_candidate_inputs.window_end_utc,
+        adversarial_context=sample_evaluate_candidate_inputs.adversarial_context,
+        marginal_sharpe_delta=Decimal("0.12"),
+        marginal_calmar_delta=Decimal("0.04"),
+        marginal_cdar_delta=Decimal("-0.02"),
+    )
+    assert pack.marginal_sharpe_delta == Decimal("0.12")
+    assert pack.marginal_calmar_delta == Decimal("0.04")
+    assert pack.marginal_cdar_delta == Decimal("-0.02")
+
+
+def test_evaluate_candidate_marginal_inputs_default_to_none(
+    sample_evaluate_candidate_inputs,
+):
+    """When callers omit marginal-delta kwargs (the existing
+    default), the returned pack's marginal fields remain None so
+    the non-Gate-1 evaluation paths continue to deserialize
+    unchanged."""
+    from tradingx.evaluation import evaluate_candidate
+
+    pack = evaluate_candidate(
+        sample_evaluate_candidate_inputs.candidate,
+        candidate_returns=sample_evaluate_candidate_inputs.candidate_returns,
+        benchmark_returns=sample_evaluate_candidate_inputs.benchmark_returns,
+        window_start_utc=sample_evaluate_candidate_inputs.window_start_utc,
+        window_end_utc=sample_evaluate_candidate_inputs.window_end_utc,
+        adversarial_context=sample_evaluate_candidate_inputs.adversarial_context,
+    )
+    assert pack.marginal_sharpe_delta is None
+    assert pack.marginal_calmar_delta is None
+    assert pack.marginal_cdar_delta is None
 ```
+
+`sample_evaluate_candidate_inputs` is a small fixture that provides a valid `StrategyCandidate` plus the positional/keyword inputs `evaluate_candidate` requires today (candidate returns, benchmark returns, window timestamps, adversarial context). Match the fixture style already used in `tests/unit/test_evaluation.py` — if no ready-made fixture exists there, define one inline at the top of this test or create a `conftest.py` helper that mirrors the existing evaluation-test setup.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -2798,7 +2850,8 @@ def test_gate1_rejects_registry_with_not_two_sleeve_backed_candidates():
 
 def test_gate1_evaluates_marginal_contribution_for_two_sleeves(sample_fixtures):
     # Two sleeve-backed candidates plus one non-sleeve candidate.
-    # Each sleeve-backed result carries populated marginal_*_delta.
+    # Each sleeve-backed result carries populated marginal_*_delta
+    # on the ValidationCandidateResult.
     report = build_gate_report(
         gate_id="1",
         bars_by_symbol=sample_fixtures.bars,
@@ -2819,11 +2872,55 @@ def test_gate1_evaluates_marginal_contribution_for_two_sleeves(sample_fixtures):
     # Non-sleeve candidate does not.
     mr_crits = {c.criterion_id for c in mr.criteria}
     assert "marginal_portfolio_contribution" not in mr_crits
-    # Deltas populated on both evidence pack and candidate result.
+    # Deltas populated on the persisted ValidationCandidateResult.
     assert trend.marginal_sharpe_delta is not None
     assert vol.marginal_sharpe_delta is not None
     assert mr.marginal_sharpe_delta is None
+
+
+def test_gate1_marginal_deltas_land_on_evidence_pack_not_just_result(sample_fixtures):
+    """DESIGN-0015 §P2 (round-1 plan review P1): the marginal
+    deltas MUST be populated on the pass-2 EvaluationEvidencePack
+    as well as on the ValidationCandidateResult, so evidence-pack
+    consumers do not silently lose the data. The evidence pack is
+    not exposed by ValidationReport (which carries pack IDs only),
+    so we assert on it via the testable pass-2 helper."""
+    from tradingx.validation import _apply_marginal_pass_to_gate1_result
+
+    pass1_result, pass1_pack, pass1_returns = (
+        sample_fixtures.trend_pass1_triplet
+    )
+    final_result, final_pack = _apply_marginal_pass_to_gate1_result(
+        candidate=sample_fixtures.trend_candidate,
+        pass1_result=pass1_result,
+        pass1_pack=pass1_pack,
+        pass1_returns=pass1_returns,
+        annualized_cost_drag_bps=sample_fixtures.trend_cost_drag_bps,
+        sibling_candidate=sample_fixtures.vol_candidate,
+        bars_by_symbol=sample_fixtures.bars,
+        regime_snapshots_by_date=sample_fixtures.regime_snapshots,
+        benchmark_stack_payload=sample_fixtures.benchmark_stack,
+        window_start_utc=sample_fixtures.window_start,
+        window_end_utc=sample_fixtures.window_end,
+        adversarial_context=sample_fixtures.adversarial_context,
+        base_cost_model_config=sample_fixtures.base_cost_model_config,
+    )
+    # Direct assertion on the PACK object, not just the result.
+    assert final_pack.marginal_sharpe_delta is not None
+    assert final_pack.marginal_calmar_delta is not None
+    assert final_pack.marginal_cdar_delta is not None
+    # The result's evidence_pack_id points at the pass-2 pack
+    # (not the pass-1 pack), so downstream consumers that look
+    # up packs by ID will see the marginal fields.
+    assert final_result.evidence_pack_id == final_pack.evidence_pack_id
+    assert final_result.evidence_pack_id != pass1_pack.evidence_pack_id
+    # Result and pack carry the same delta values.
+    assert final_result.marginal_sharpe_delta == final_pack.marginal_sharpe_delta
+    assert final_result.marginal_calmar_delta == final_pack.marginal_calmar_delta
+    assert final_result.marginal_cdar_delta == final_pack.marginal_cdar_delta
 ```
+
+`sample_fixtures` must expose a `trend_pass1_triplet` tuple `(pass1_result, pass1_pack, pass1_returns)` matching what the pass-1 branch of `build_gate_report` would produce for the trend candidate, plus the other inputs `_apply_marginal_pass_to_gate1_result` needs. Mirror the factory style in `test_validation.py` — the fixture builds these via the same helpers the production code uses (just exposing intermediate values).
 
 `sample_fixtures` should produce deterministic canned bars for SPY + QQQ, a benchmark-stack payload aligned with the window, and the three-candidate registry. Reuse whatever fixture harness other `test_validation.py` tests already rely on; if none exists, create helpers inline in this test module.
 
@@ -2982,9 +3079,64 @@ for candidate in candidates:
     )
 ```
 
-Because `pass1_entry` above is a `ValidationCandidateResult` (not a carrier of the raw returns), the implementation needs to either: (a) pass the raw returns along as a parallel dict, or (b) thread them onto a small helper dataclass and replace `pass1_results` with that. Option (a) is simpler: keep a parallel `pass1_returns: dict[str, tuple[Decimal, ...]]` populated during pass 1.
+Because `pass1_entry` above is a `ValidationCandidateResult` (not a carrier of the raw returns or the evidence pack), the implementation needs to keep parallel dicts during pass 1 so pass 2 can access them:
 
-The `evaluate_candidate` call inside pass 1 already populates `annualized_cost_drag_bps` and DSR fields on the evidence pack. The marginal delta fields are populated by a second, **targeted** update: either re-invoke `evaluate_candidate` with the three marginal inputs and swap out the evidence pack id, or persist the updated pack via the evidence-pack writer. The simplest path: re-invoke `evaluate_candidate` with the marginal inputs (keeping all other inputs identical) and use the new pack id. Two evidence packs per sleeve-backed candidate (one pass-1 intermediate, one pass-2 final) is acceptable as long as the final persisted pack is the pass-2 one. The implementer picks either direction; the test assertions check the final report's fields.
+```python
+pass1_results: dict[str, ValidationCandidateResult] = {}
+pass1_packs: dict[str, EvaluationEvidencePack] = {}
+pass1_returns: dict[str, tuple[Decimal, ...]] = {}
+pass1_cost_drag: dict[str, Decimal | None] = {}
+```
+
+All four are populated during the existing pass-1 loop (just capture the pack and returns that `_build_gate1_candidate_result` already computes; expose them via a small refactor rather than returning `ValidationCandidateResult` alone).
+
+**Pass-2 implementation is binding — single path, not a choice.** DESIGN-0015 §P2 and §P5 require `marginal_*_delta` to land on BOTH the `ValidationCandidateResult` AND the `EvaluationEvidencePack`. The marginal-delta population must therefore happen via **re-invoking `evaluate_candidate`** with the three marginal inputs — this reuses the forwarding contract pinned by `test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack` in Task 11, so the returned pack carries the deltas by construction. `dataclasses.replace` on the pass-1 pack is NOT a permitted alternative because it skirts the single-source-of-truth population rule.
+
+Extract pass-2 into a **named helper** that returns a `(result, pack)` tuple so both objects are directly testable — required by Task 13's
+`test_gate1_marginal_deltas_land_on_evidence_pack_not_just_result`:
+
+```python
+def _apply_marginal_pass_to_gate1_result(
+    *,
+    candidate: StrategyCandidate,
+    pass1_result: ValidationCandidateResult,
+    pass1_pack: EvaluationEvidencePack,
+    pass1_returns: tuple[Decimal, ...],
+    annualized_cost_drag_bps: Decimal | None,
+    sibling_candidate: StrategyCandidate,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    regime_snapshots_by_date: dict[date, RegimeSnapshot],
+    benchmark_stack_payload: BenchmarkStackPayload,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+    adversarial_context: AdversarialCheckContext,
+    base_cost_model_config: CostModelConfig | None,
+    trials_ledger: TrialsLedger | None = None,
+) -> tuple[ValidationCandidateResult, EvaluationEvidencePack]:
+    """Produce the final (result, pack) pair for a sleeve-backed
+    candidate's pass-2 marginal-contribution evaluation.
+
+    Steps:
+    1. Simulate the portfolio WITHOUT the candidate (sibling alone)
+       and WITH (candidate + sibling) via _simulate_two_sleeve_book.
+    2. Call evaluate_marginal_portfolio_contribution to produce the
+       ValidationCriterionResult; extract the three observed deltas
+       from its details string (or compute them locally from the
+       metric packs and thread them through).
+    3. RE-INVOKE evaluate_candidate with the marginal deltas supplied
+       so the returned EvaluationEvidencePack carries them. This is
+       the ONLY blessed path.
+    4. Build the final ValidationCandidateResult via dataclasses.replace
+       on pass1_result with the new evidence_pack_id, combined criteria
+       (pass1 four + marginal), reconciled status, marginal_*_delta,
+       and summary.
+    5. Return (final_result, pass2_pack).
+    """
+```
+
+Callers inside `build_gate_report` invoke this helper per sleeve-backed candidate and append the result to `final_results`; the pack is not directly returned by `build_gate_report` but is reachable in tests via this helper. Recommended refactor: compute the three deltas locally inside the helper (rather than parsing them back out of the criterion's `details` string) and pass them both to `evaluate_candidate` and onto the replaced `ValidationCandidateResult`.
+
+**On "persistence".** `GateValidationController` at [src/tradingx/controller.py](/src/tradingx/controller.py) persists the `ValidationReport` and `GateAssessment`, not individual `EvaluationEvidencePack` objects — the validation flow today does not write packs to disk. The accurate pass-2 goal is NOT "the final persisted pack carries the deltas" (no such persistence exists); it is "the pass-2 pack object exists with the deltas populated and its ID is the one recorded on the final `ValidationCandidateResult.evidence_pack_id`". Future work (tranche 1.5 or later) that adds evidence-pack persistence will inherit correctly populated packs without changes to this tranche. This plan does NOT introduce pack persistence.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -3180,7 +3332,7 @@ Move the marginal-portfolio-contribution criterion from the "Deferred to tranche
   > Marginal portfolio contribution: a surviving sleeve must also improve the portfolio's Sharpe, Calmar, and CDaR when added to the existing book with cost and correlation accounted for. This criterion ships when tranche 1's multi-sleeve portfolio construction lands.
 
 - Add to **Pass criteria (hard-pass, all required)**:
-  > `marginal_portfolio_contribution`: a sleeve-backed candidate's addition to the book of other-passing sleeves must strictly improve portfolio Sharpe AND Calmar AND not worsen portfolio CDaR@95%. For tranche 1.4, the reference book is the registry-pinned sibling (the other mandatory sleeve-backed candidate with `sleeve_class_path is not None`), independent of the sibling's pass1 status. Generalization for 3+ sleeve-backed candidates is deferred to the tranche that introduces a third sleeve.
+  > `marginal_portfolio_contribution`: for each sleeve-backed candidate, adding the candidate to the reference book of mandatory sleeve-backed candidates must strictly improve portfolio Sharpe AND Calmar AND not worsen portfolio CDaR@95%. For tranche 1.4, the reference book is the registry-pinned sibling — the other mandatory sleeve-backed candidate from `build_mandatory_candidate_registry()` with `sleeve_class_path is not None`, independent of the sibling's own Gate 1 outcome. Generalization for 3+ sleeve-backed candidates is deferred to the tranche that introduces a third sleeve-backed candidate.
 
 Note: the 25% `max_drawdown_halt` text in the `operating_constraint` bullet already says it "is not yet enforced by a runtime halt trigger; runtime enforcement ships with tranche 1's drawdown-defense subsystem." Once W5 is implemented, that sentence becomes inaccurate. Replace it with:
 
@@ -3284,7 +3436,7 @@ No TBD / TODO / "implement later" in production code. A small number of fixture-
 ### Open judgment calls left to the implementer
 
 1. **Sleeve-runtime controller runtime wiring.** Task 10 creates `SleeveRuntimeController` but does not wire it into the live service loop — that's a 1.5 concern (drift alarm is a stub; `LIVE_DAILY_RETURNS` raises). If the implementer finds a natural integration point during 1.4 that does not depend on 1.5-scope functionality, flag it; otherwise keep wiring deferred.
-2. **Targeted re-invocation vs pack replacement in Task 13.** The two-pass Gate 1 restructure must land the marginal-delta fields on the FINAL evidence pack. Two paths work: (a) re-invoke `evaluate_candidate` with the marginal inputs and use the new pack id; (b) `dataclasses.replace` the pass-1 pack with the marginal fields filled in. Either is fine; the tests check the final report, not the evidence-pack count.
+2. **Pass-2 pack population (bound, not optional — round-1 plan review P1).** The round-1 plan review correctly flagged that without a direct assertion on the pack object, an implementation could satisfy the plan by only updating `ValidationCandidateResult`. The plan now binds the path: pass-2 MUST re-invoke `evaluate_candidate` with the three marginal-delta kwargs (Task 11 pins the forwarding contract); `_apply_marginal_pass_to_gate1_result` is an extractable helper returning `(result, pack)` so both are directly testable. `dataclasses.replace` on the pass-1 pack is not permitted. Evidence-pack persistence is out of scope (it does not exist today in `GateValidationController`).
 3. **`TrialsLedger.records_for_candidate`.** If this method doesn't already exist on `src/tradingx/trials.py`, add it in a small prefatory commit. The protocol shape is `records_for_candidate(candidate_id: str) -> tuple[TrialRecord, ...]`.
 4. **Fixture-name placeholders** in test files — match whatever conventions already exist in the target test module (`runtime_host_fixture`, `sample_fixtures`, `operator_control_fixture`, `_minimal_portfolio_state`, etc.).
 5. **Correlation-cap math.** DESIGN-0015 §W2 notes the sharper rule vs a flat `max_gross × 0.85` rule. The plan implements the sharper rule (`strictest × max_gross`). If Codex wants to simplify here during implementation review, flag it — a simpler rule is a documentation amendment on the spec plus a small code tweak.
