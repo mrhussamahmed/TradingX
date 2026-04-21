@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.25
+version: 1.2.26
 status: active
 created: 2026-04-17
 last_amended: 2026-04-21
-supersedes: INDEX-0001@1.2.24
+supersedes: INDEX-0001@1.2.25
 superseded_by: null
 author_session: claude-opus-4.7-2026-04-21
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.25  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.26  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -126,6 +126,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0011 | Tranche 1.1 validation infrastructure design | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-1-validation-infrastructure-design.md` |
 | DESIGN-0012 | TradingX operator platform redesign | 1.0.0 | active | `docs/superpowers/specs/2026-04-20-operator-platform-redesign-design.md` |
 | DESIGN-0013 | Tranche 1.2 market-state features design | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-2-market-state-features-design.md` |
+| DESIGN-0014 | Tranche 1.3 sleeves — trend-following and vol-managed beta | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-3-sleeves-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 
