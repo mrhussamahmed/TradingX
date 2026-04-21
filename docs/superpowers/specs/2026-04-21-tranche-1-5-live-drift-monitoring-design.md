@@ -33,9 +33,10 @@ Fill the single remaining tranche-1 completion criterion:
 that `SleeveRuntimeController` consults but whose concrete
 implementation is a no-op stub in tranche 1.4 — into a real
 drift-alarm gateway backed by four independent monitors. It
-also adds the live per-sleeve attribution infrastructure that
+also adds the live active-sleeve attribution infrastructure that
 P&L-divergence monitoring and the `RollingWindowSource.LIVE_DAILY_RETURNS`
-upgrade both need.
+upgrade both need. Multi-sleeve attribution is deferred with the
+rest of the multi-sleeve runtime wiring (§Not in scope).
 
 Scope:
 
@@ -53,17 +54,27 @@ Scope:
    The drift monitor layers a rolling-window aggregation + alarm
    threshold on top of the existing per-execution divergence
    ratios.
-4. **Live-vs-backtest per-sleeve P&L divergence.** Rolling
-   divergence between realized per-sleeve daily returns and the
-   backtest-expected returns for the same window.
+4. **Live-vs-backtest P&L divergence — active-sleeve only in
+   1.5.** Rolling divergence between the live portfolio's
+   realized daily returns and the backtest-expected returns from
+   the currently-active sleeve-backed strategy. Multi-sleeve
+   live P&L divergence is out of scope for 1.5 because the
+   runtime today activates a single strategy at a time and
+   persists only the aggregate `RuntimePortfolioPlan` (see
+   Codex round-1 review note below and §Not in scope).
 5. **`DriftAlarmGateway` concrete implementation.** Aggregates
    the four monitors into a single `has_alarm(sleeve_id)` signal.
-6. **Per-sleeve attribution infrastructure.** A
-   `SleeveDailyAttributionRecord` type + writer that computes
-   per-sleeve daily returns from portfolio state + sleeve target
-   weights + bars — NO changes to `TradeIntent`,
-   `ExecutionLifecycleRecord`, or `ClosedTradeRecord`, per §P1
-   below.
+6. **Active-sleeve attribution record.** A per-trading-day
+   `SleeveDailyAttributionRecord` produced by the end-of-session
+   automation hook for the **currently-active** sleeve-backed
+   strategy only. Daily return is derived from persisted
+   portfolio state snapshots + the day's bars — no changes to
+   `TradeIntent`, `ExecutionLifecycleRecord`, or
+   `ClosedTradeRecord`. Because the runtime is single-active in
+   1.5, the active sleeve's live return equals the portfolio's
+   live return for that session; the "attribution" step is
+   therefore a straight capture of active-strategy identity +
+   portfolio return, NOT a multi-sleeve decomposition.
 7. **Reference-distribution snapshot artifact.** A frozen
    snapshot captured once at deployment time that both PSI and
    KS compare against. Single-file JSON; versioned; replacement
@@ -82,6 +93,26 @@ Scope:
 
 **Not in scope** (deferred explicitly):
 
+- **Multi-sleeve live runtime wiring** — *added in Codex
+  round-1 review.* The current runtime activates one
+  `strategy_id` at a time via
+  [runtime_strategy_registry.py](/src/tradingx/runtime_strategy_registry.py),
+  builds a single aggregate
+  [`RuntimePortfolioPlan`](/src/tradingx/runtime_portfolio.py:65),
+  and the service loop persists only that aggregate at
+  [service.py:206](/src/tradingx/service.py:206). There is no
+  persisted per-sleeve target-weight stream during live sessions,
+  and no multi-sleeve co-execution path. Shipping that wiring
+  (sleeve-aware portfolio plan + per-sleeve persistence + a
+  multi-strategy activation gateway) is Gate-4-enablement work
+  sized outside this sub-tranche. 1.5 explicitly narrows its
+  live-attribution surface to the **currently-active** sleeve-
+  backed strategy and treats multi-sleeve attribution as a
+  dependency of a future sub-tranche. When that wiring lands,
+  `SleeveDailyAttributionRecord` gains a proper decomposition
+  step and the P&L divergence monitor expands from "active
+  sleeve only" to "per-sleeve" without changes to the drift
+  package's public API.
 - Auto-halt on drift. 1.5 emits alarms; interpretation and
   action remain with the operator. Auto-halt wiring is a
   tranche-2+ decision; until then, the drift alarm flows into
@@ -103,6 +134,11 @@ Scope:
 - New runtime execution pathways. 1.5 reads persisted live data
   and computes drift statistics; it does not change how orders
   flow through the runtime host.
+- Persisted live feature-observation or signal-observation
+  streams. Feature values and signal outputs are **recomputed**
+  from persisted bars + regime/signal logic at monitor-refresh
+  time (§P1 below). 1.5 does not introduce a new service-cycle
+  writer for feature/signal observations.
 
 ## Prerequisites
 
@@ -127,16 +163,40 @@ Scope:
 Carried forward from DESIGN-0015 §Design principles. Repeated
 here because each applies to 1.5 as well.
 
-### P1 — No new execution model; drift reads persisted records
+### P1 — No new execution model; drift reads persisted records OR recomputes from bars
 
-Every drift monitor reads from artifacts already written by the
-runtime (`ExecutionLifecycleRecord`, `ClosedTradeRecord`,
-`ReplaySlippageRecord`, `SleeveDailyAttributionRecord`, regime
-snapshots, market bars). No monitor re-runs the backtest engine,
-re-fetches broker state, or simulates fills. The `SleeveDailyAttributionRecord`
-writer introduced in 1.5 **derives** per-sleeve daily P&L from
-existing portfolio state + sleeve target weights + bars; it does
-NOT add a parallel execution path.
+Codex's round-1 review correctly pointed out that the current
+runtime does NOT persist a feature-observation stream, a
+signal-output stream, or a per-sleeve target-weight history.
+The persisted live-runtime surface stops at: market bars
+(`AlpacaMarketDataGateway` cache), `RuntimePortfolioPlan`
+(aggregate), `ExecutionLifecycleRecord`, `ClosedTradeRecord`,
+`ReplaySlippageRecord`, `ReconciliationSnapshot`, portfolio
+state snapshots, and the new 1.5 `SleeveDailyAttributionRecord`
+(active-sleeve only).
+
+The principle therefore has two branches:
+
+- **Reads persisted records.** Execution drift consumes
+  `ReplaySlippageRecord`; P&L divergence consumes
+  `SleeveDailyAttributionRecord` + the backtest-reference-
+  returns artifact; attribution consumes portfolio state
+  snapshots + bars. No monitor re-runs the backtest engine,
+  re-fetches broker state, or simulates fills.
+- **Recomputes from bars (feature + signal monitors).** PSI and
+  KS monitors take live SAMPLES that are computed ON-DEMAND
+  from persisted bars + the regime-classification logic
+  ([features/regime.py](/src/tradingx/features/regime.py)) and
+  the sleeve signal logic ([signals/trend.py](/src/tradingx/signals/trend.py),
+  [signals/vol_target_spy.py](/src/tradingx/signals/vol_target_spy.py)).
+  Recomputation is cheap (pure functions over a bounded window)
+  and keeps 1.5 from introducing a new service-cycle writer.
+  The readers codify this recomputation path explicitly in §W8.
+
+The `SleeveDailyAttributionRecord` writer introduced in §W6
+**derives** the active sleeve's daily P&L from portfolio state
+snapshots + the day's bars; it does NOT add a parallel
+execution path.
 
 ### P2 — New fields / records on both emission and consumption
 
@@ -205,14 +265,24 @@ verdict is itself observable.
 | PSI (features) | Feature values vs frozen reference distribution | Population Stability Index | `blueprint.psi_warning`, `blueprint.psi_critical` | warning if ≥ warning; critical if ≥ critical |
 | KS (signals) | Signal outputs vs frozen reference | KS statistic + p-value | `blueprint.ks_p_value_critical` | critical if p < threshold |
 | Execution drift | `ReplaySlippageRecord.divergence_ratio` rolling window | Mean abs divergence ratio | `blueprint.execution_drift_warning`, `blueprint.execution_drift_critical` | warning if ≥ 1.5×; critical if ≥ 2.0× |
-| P&L divergence | Live per-sleeve daily return series (from `SleeveDailyAttributionRecord`) vs backtest-expected series | Absolute delta + Sharpe delta | `blueprint.pnl_absolute_warning`, `blueprint.pnl_sharpe_warning`, same for `_critical` | composite (either metric breaching) |
+| P&L divergence | Live active-sleeve daily return series (from `SleeveDailyAttributionRecord`) vs backtest-expected series for that sleeve | Absolute delta + Sharpe delta | `blueprint.pnl_absolute_warning`, `blueprint.pnl_sharpe_warning`, same for `_critical` | composite (either metric breaching) |
 
-Monitors run per-sleeve where applicable (KS on each sleeve's
-signal output, P&L divergence per sleeve). PSI runs per-feature
-at portfolio level (features are shared across sleeves).
-Execution drift runs per-symbol; `has_alarm(sleeve_id)` is True
-if ANY symbol the sleeve touches has a critical execution-drift
-alarm.
+Monitors run at different scopes:
+
+- **PSI** — portfolio-level per feature (features are shared
+  across sleeves). A critical PSI verdict on a feature that
+  both shipped sleeves consume raises `has_alarm` for both.
+- **KS** — per shipped sleeve, computed by recomputing each
+  sleeve's signal on the live bar window (§P1). A critical KS
+  verdict for sleeve X raises `has_alarm(X)` only.
+- **Execution drift** — per symbol, aggregated across the
+  rolling window of `ReplaySlippageRecord` entries.
+  `has_alarm(sleeve_id)` is True if ANY symbol the sleeve
+  touches has a critical execution-drift verdict.
+- **P&L divergence** — active-sleeve only in 1.5 (§Not in
+  scope). When the currently-active strategy is sleeve-backed,
+  its P&L-divergence verdict is computed; all other sleeves
+  skip P&L divergence for the session.
 
 ## Architecture overview
 
@@ -236,7 +306,7 @@ alarm.
    `compute_execution_drift_ratio(...)` over a rolling window
    of `ReplaySlippageRecord` entries.
 7. **`src/tradingx/drift/attribution.py`** —
-   `SleeveAttributionCalculator`,
+   `SleeveAttributionRecorder` (active-sleeve-only per §W6),
    `build_sleeve_daily_attribution_record(...)`.
 8. **`src/tradingx/drift/pnl_divergence.py`** —
    `compute_live_vs_backtest_pnl_divergence(...)` over a rolling
@@ -628,7 +698,7 @@ precedence: operator halt > drift alarm > Sharpe gate).
 - Symbol filter narrows correctly.
 - Computed mean matches manual expectation on canned data.
 
-### W6 — Per-sleeve attribution
+### W6 — Active-sleeve daily attribution
 
 **Files:**
 - Create: `src/tradingx/drift/attribution.py`
@@ -637,13 +707,20 @@ precedence: operator halt > drift alarm > Sharpe gate).
 - Modify: `src/tradingx/persistence.py` (add writer + reader).
 - Create: `tests/unit/test_drift_attribution.py`
 
-**Why attribution belongs in the drift package.** Live per-sleeve
-P&L is the ONLY live-data monitor consumer today (P&L divergence
-in §W7). Parking it in `drift/` keeps the scope co-located and
-avoids a premature abstraction that would force placement in a
-shared module. If a future sub-tranche reuses attribution for
-non-drift purposes, a relocation is cheap (no public API in
-this package is tranche-wide).
+**Scope narrowing (Codex round-1 P1).** The 1.5 runtime is
+single-active-strategy. The aggregate `RuntimePortfolioPlan` is
+the only live target-weight artifact the service loop persists,
+and the active `strategy_id` on `ApprovedWeightSnapshot` and
+`StrategyActivationRecord` identifies which sleeve-backed
+candidate — if any — is live. 1.5 therefore scopes
+`SleeveDailyAttributionRecord` to the **currently-active
+sleeve-backed strategy**. For any session where the active
+strategy's candidate has `sleeve_class_path is not None`, we
+write exactly one record; for sessions where the active
+strategy is non-sleeve (today: `baseline-long-only-v1` or
+`mean-reversion-v1`), we write no record. Multi-sleeve
+attribution is the Gate-4-enablement expansion called out in
+§Not in scope.
 
 **Contract:**
 
@@ -653,14 +730,14 @@ this package is tranche-wide).
 @dataclass(frozen=True)
 class SleeveDailyAttributionRecord:
     attribution_id: str
-    sleeve_id: str
-    trading_day: str  # YYYY-MM-DD
+    sleeve_id: str                  # == active strategy_id; sleeve_class_path resolved
+    trading_day: str                # YYYY-MM-DD in exchange calendar
     recorded_at_utc: datetime
-    starting_equity_fraction: Decimal  # sleeve's effective fraction of portfolio equity at day open
-    ending_equity_fraction: Decimal    # at day close after intraday drift
-    daily_return: Decimal              # sleeve's daily return contribution to the portfolio
-    per_symbol_effective_weight: tuple[tuple[str, Decimal], ...]  # at day close
-    per_symbol_daily_return: tuple[tuple[str, Decimal], ...]
+    starting_equity: Decimal        # portfolio equity at session open
+    ending_equity: Decimal          # portfolio equity at session close
+    daily_return: Decimal           # (ending - starting) / starting
+    per_symbol_open_weight: tuple[tuple[str, Decimal], ...]   # from portfolio state at open
+    per_symbol_close_weight: tuple[tuple[str, Decimal], ...]  # from portfolio state at close
 ```
 
 ```python
@@ -668,63 +745,87 @@ class SleeveDailyAttributionRecord:
 
 def build_sleeve_daily_attribution_record(
     *,
-    sleeve_id: str,
+    attribution_id: str,
     trading_day: str,
-    sleeve_target_weights_row: pd.Series,  # sleeve's target weights at day-open
-    portfolio_target_weights_row: pd.Series,  # post-throttle portfolio weights at day-open
-    sleeve_budget_fraction: Decimal,
-    bar_returns_by_symbol: dict[str, Decimal],
+    active_sleeve_id: str,
+    open_portfolio_state: PortfolioState,
+    close_portfolio_state: PortfolioState,
     recorded_at_utc: datetime,
 ) -> SleeveDailyAttributionRecord:
-    """Compute per-sleeve daily attribution via proportional
-    weight allocation per DESIGN-0015 §D4 ("cash is a consequence").
+    """Capture the active sleeve's session P&L from portfolio
+    state snapshots the runtime already persists.
 
-    For each symbol s that the sleeve contributed to:
-        sleeve_contribution_to_s = sleeve_weight_s * budget_fraction
-        portfolio_weight_s = portfolio_target_weights_row[s]
-        if portfolio_weight_s > 0:
-            effective_weight_s = portfolio_weight_s *
-                (sleeve_contribution_to_s / sum over contributing sleeves)
-        else:
-            effective_weight_s = 0
+    Because the 1.5 runtime activates a single strategy at a
+    time, the live portfolio's daily return IS the active
+    sleeve's daily return. The "attribution" step is therefore
+    a straight capture: identify the active sleeve_id from the
+    current activation record, compute daily_return from
+    equity snapshots, record per-symbol open/close weights for
+    downstream reconciliation.
 
-    daily_return = sum over s of effective_weight_s * bar_return_s.
+    Pure function; no I/O. The caller — an end-of-session
+    hook in automation.py — persists the result via
+    SleeveDailyAttributionRecordStore.
 
-    Pure function. The caller — `SleeveAttributionCalculator` —
-    handles iteration across sessions and persistence.
+    When multi-sleeve live wiring lands in a future sub-tranche,
+    this function's signature expands (one record per active
+    sleeve, with a decomposition step) without changing its
+    name or the downstream consumer surface in §W7.
     """
-```
 
-**The attribution model.** Each sleeve's effective weight on a
-symbol is proportional to its contribution (target_weight ×
-budget_fraction) to the combined portfolio weight on that
-symbol, after post-throttle scaling. This is clean under any
-throttle (MDD / CDaR / hard halt) because the throttle applies
-uniformly; the proportional split is preserved.
+
+class SleeveAttributionRecorder:
+    """End-of-session hook. Reads the current activation record
+    + open/close portfolio state snapshots, builds the active
+    sleeve's SleeveDailyAttributionRecord, persists it.
+
+    Skips the write when the active strategy has
+    sleeve_class_path=None (non-sleeve candidate) — attribution
+    for non-sleeve strategies is out of scope in 1.5.
+    """
+
+    def __init__(
+        self,
+        *,
+        activation_gateway: "ActivationGatewayProtocol",
+        attribution_store: "SleeveDailyAttributionRecordStore",
+        now_provider: Callable[[], datetime],
+    ) -> None:
+        ...
+
+    def record_session(
+        self,
+        *,
+        trading_day: str,
+        open_portfolio_state: PortfolioState,
+        close_portfolio_state: PortfolioState,
+    ) -> SleeveDailyAttributionRecord | None:
+        """Returns None when the active strategy is non-sleeve."""
+```
 
 **Why NOT threading `sleeve_id` through the intent chain.**
 Changing `TradeIntent`, `ExecutionLifecycleRecord`, and
-`ClosedTradeRecord` to carry `sleeve_id` is a wider refactor
-that would also require changes to the order-emission layer,
-operator dashboards, and Gate 3 evidence. Attribution via
-proportional weight gives the same answer with none of the
-surface churn. The only cost is slightly less precision on
-actual-vs-intended fill differences — a second-order concern
-that tranche 1.4 already treats as cost drag, not attribution
-noise.
+`ClosedTradeRecord` to carry `sleeve_id` would be a cross-
+cutting refactor touching the order-emission layer, operator
+dashboards, and Gate 3 evidence. The active-sleeve-capture
+model above avoids every one of those touchpoints by reading
+only the pieces already persisted: activation records +
+portfolio-state snapshots. Multi-sleeve wiring will need its
+own dedicated tranche anyway (see §Not in scope); no reason to
+make 1.5 pay that tax early.
 
 **Tests cover:**
 
-- Single-sleeve portfolio: `effective_weight = portfolio_weight`.
-- Two-sleeve portfolio with equal contribution: each sleeve gets
-  50% of the portfolio weight on shared symbols.
-- Two-sleeve portfolio where only one sleeve contributes:
-  contributing sleeve gets 100% attribution.
-- Post-throttle scaling: if portfolio_weight is half of summed
-  sleeve contributions (gross cap fired), each sleeve's
-  effective weight is halved proportionally — total daily return
-  matches half of the unthrottled case.
-- Record writer + reader round-trip preserves every field.
+- Active strategy with `sleeve_class_path` set → record is
+  written with `sleeve_id` == activation's `strategy_id` and
+  `daily_return` == `(close_equity - open_equity) / open_equity`.
+- Active strategy with `sleeve_class_path=None` → `record_session`
+  returns None and no artifact is written.
+- `open_equity == 0` → raises `ValueError` (invalid session).
+- Per-symbol open/close weights are captured from
+  `PortfolioState.positions` (price × quantity / equity).
+- Record writer + reader round-trip preserves every field;
+  ordering by `(sleeve_id, trading_day)` descending on read.
 
 ### W7 — Live-vs-backtest P&L divergence
 
@@ -780,16 +881,53 @@ def compute_live_vs_backtest_pnl_divergence(
     """
 ```
 
-**Backtest-reference series source.** For the 2 shipped sleeves
-(`trend-following-v1`, `vol-target-v1`), the backtest-expected
-series is produced by the same pass-1 evaluation path that Gate
-1 runs — `_candidate_returns(candidate, ...)` in
+**Backtest-reference series source (Codex round-1 P2 fix).**
+For the 2 shipped sleeves (`trend-following-v1`,
+`vol-target-v1`), the backtest-expected series is produced by
+the same pass-1 evaluation path that Gate 1 runs —
+`_candidate_returns(candidate, ...)` in
 [src/tradingx/validation.py:493](/src/tradingx/validation.py:493).
-1.5 adds a persisted artifact
-`config/strategy/backtest_reference_returns/<sleeve_id>.json`
-that is regenerated each time a new operator-approved strategy
-activation lands. The drift monitor reads this artifact; it
-does NOT re-run the backtest in the drift hot path (§P1).
+The persisted artifact lives under the **runtime artifact tree**,
+not `config/strategy/*`:
+
+```
+{config.runtime.artifact_root}/drift/backtest_reference_returns/<sleeve_id>.json
+```
+
+Runtime-generated drift evidence belongs under
+`config.runtime.artifact_root` alongside other runtime artifacts
+(journal, operator store, drill records). The `config/strategy/*`
+tree is reserved for operator-reviewed offline configuration
+per
+[ApprovedWeightSnapshot](/src/tradingx/types.py:648) +
+[ApprovedWeightSnapshotStore](/src/tradingx/weights.py:14) —
+runtime regeneration of artifacts in that tree would violate
+that boundary.
+
+**Artifact writer.** Generated by an end-of-session / activation-
+change hook (runs once when a new strategy activation lands;
+can also be invoked on operator command via
+`operator_control.recalibrate_drift_reference`). The writer
+uses `FilesystemArtifactStore` conventions to place the JSON
+under the runtime tree with stable naming. The drift monitor
+reads this artifact; it does NOT re-run the backtest in the
+drift hot path (§P1).
+
+**Live series source.** 1.5's attribution captures only the
+active sleeve (§W6). For the currently-active sleeve-backed
+strategy, the live daily-return series is built from
+`SleeveDailyAttributionRecord.daily_return` values. When the
+active strategy changes mid-window, the monitor computes over
+the contiguous tail of records for the now-active sleeve only
+(there is no cross-sleeve stitching — that would confuse the
+"live vs backtest for THIS sleeve" semantics).
+
+**Scope narrowing.** P&L divergence monitoring is
+active-sleeve-only in 1.5. A sleeve that is never activated
+gets no P&L-divergence verdict, only
+PSI/KS/execution-drift verdicts where applicable. This matches
+the §Purpose narrowing and the §Not in scope multi-sleeve
+deferral.
 
 **Tests cover:**
 
@@ -843,19 +981,51 @@ class DriftMonitorVerdict:
     details: str
 
 
-class BackeTestReferenceReturnsReaderProtocol(Protocol):
+class BacktestReferenceReturnsReaderProtocol(Protocol):
+    """Reads the backtest-reference-returns artifact written by
+    the §W7 end-of-activation hook. Artifact path is
+    {config.runtime.artifact_root}/drift/backtest_reference_returns/<sleeve_id>.json
+    — runtime tree, not config tree.
+    """
+
     def returns_for_sleeve(
         self, sleeve_id: str
     ) -> tuple[Decimal, ...]: ...
 
 
 class FeatureSampleReaderProtocol(Protocol):
+    """Recomputes live feature samples from persisted bars +
+    regime-classification logic. There is NO persisted live
+    feature-observation stream (Codex round-1 P1 fix). The
+    concrete implementation in §Architecture overview's
+    `drift/gateway.py` evaluates
+    `features.regime.classify_regime` plus the other feature
+    extractors on the persisted bar history for the requested
+    window and returns the resulting series.
+
+    Pure function over bars; deterministic and idempotent;
+    cost is bounded by `window_days` of bars.
+    """
+
     def live_samples(
         self, feature_name: str, *, window_days: int
     ) -> pd.Series: ...
 
 
 class SignalSampleReaderProtocol(Protocol):
+    """Recomputes live signal samples by evaluating the sleeve's
+    signal logic on persisted bars. There is NO persisted
+    live signal-observation stream (Codex round-1 P1 fix). The
+    concrete implementation in §Architecture overview's
+    `drift/gateway.py` loads the sleeve via
+    `build_sleeve_from_candidate(active_candidate)` and runs
+    its signal path on the bar window — the same code path the
+    backtest uses, producing an apples-to-apples comparison
+    against the backtest reference series.
+
+    Pure function over bars + sleeve logic.
+    """
+
     def live_samples(
         self, sleeve_id: str, *, window_days: int
     ) -> pd.Series: ...
@@ -882,7 +1052,7 @@ class DriftAlarmGateway:
         signal_sample_reader: SignalSampleReaderProtocol,
         replay_records_reader: "ReplayRecordsReaderProtocol",
         attribution_records_reader: "AttributionRecordsReaderProtocol",
-        backtest_reference_returns_reader: BackeTestReferenceReturnsReaderProtocol,
+        backtest_reference_returns_reader: BacktestReferenceReturnsReaderProtocol,
         risk_control_event_sink: "RiskControlEventSinkProtocol",
         alert_gateway: "OperatorAlertGatewayProtocol",
     ) -> None:
@@ -1085,8 +1255,12 @@ Sub-tranche 1.5 is complete when:
    `compute_live_vs_backtest_pnl_divergence` are pure functions
    with unit-test coverage of their boundary cases.
 4. `SleeveDailyAttributionRecord` is persisted each session via
-   the automation hook; attribution is computed by proportional
-   weight allocation per §W6.
+   the end-of-session automation hook **when the currently-
+   active strategy is sleeve-backed** (`sleeve_class_path is
+   not None`). Non-sleeve active strategies produce no
+   record (§W6). Daily return is captured from portfolio-state
+   equity snapshots, not reconstructed from a multi-sleeve
+   decomposition.
 5. `DriftAlarmGateway.has_alarm(sleeve_id)` returns True iff a
    CRITICAL-severity verdict targets the sleeve. Warning and
    info verdicts do NOT trigger has_alarm.
@@ -1148,17 +1322,25 @@ Implementation-level judgment calls for Codex review:
    the regime composite and sleeve signal extraction code
    already in `src/tradingx/features/`, a rename is low-risk;
    flag in review.
-2. **Attribution model for post-throttle portfolios.** §W6
-   proposes proportional weight allocation. An alternative is
-   marginal-contribution attribution (Shapley values). §W6 is
-   simpler and sufficient for divergence detection; flag if a
-   different model is preferred.
-3. **Backtest-reference returns snapshot path.** §W7 proposes
-   `config/strategy/backtest_reference_returns/<sleeve_id>.json`.
-   If a different path aligns better with
-   [ApprovedWeightSnapshot](/src/tradingx/types.py:656)
-   conventions (which live under
-   `config/strategy/weights/`), adapt.
+2. **Active-sleeve attribution (resolved in round-1
+   amendment).** §W6's original proposal was multi-sleeve
+   proportional attribution, but Codex's round-1 review
+   correctly flagged that the runtime is single-active-strategy
+   and no per-sleeve target-weight history is persisted. §W6
+   now scopes attribution to the currently-active sleeve only;
+   multi-sleeve attribution is a future expansion tied to live
+   multi-sleeve wiring (§Not in scope). The function signature
+   preserves `sleeve_id` so the record type does not change
+   when the expansion lands.
+3. **Backtest-reference returns artifact path (resolved in
+   round-1 amendment).** §W7 places the artifact under
+   `{config.runtime.artifact_root}/drift/backtest_reference_returns/<sleeve_id>.json`
+   — the runtime tree, not `config/strategy/*`. Runtime-
+   generated evidence belongs under the runtime artifact tree
+   alongside the journal, operator store, and drill records;
+   `config/strategy/*` is operator-reviewed offline config
+   (ApprovedWeightSnapshot et al.) and runtime regeneration
+   there would violate that boundary.
 4. **Default `rolling_window_source` toggle.** 1.5 keeps
    TRIAL_SUMMARY as the default to preserve backwards
    compatibility. Flipping the default is deferred to a
@@ -1237,4 +1419,6 @@ Implementation-level judgment calls for Codex review:
   Statistics.*
 - Grinold, R. C. & Kahn, R. N. (1999). *Active Portfolio
   Management.* McGraw-Hill — per-strategy attribution
-  principles (informs §W6's proportional allocation).
+  principles; 1.5 uses the single-strategy case only (§W6)
+  and reserves the multi-strategy decomposition for the
+  tranche that adds live multi-sleeve wiring.
