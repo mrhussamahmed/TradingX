@@ -3179,16 +3179,40 @@ def test_automation_calls_drift_gateway_refresh_at_end_of_session(
     market_day_automation_fixture,
 ):
     # Fixture should inject a spy DriftAlarmGateway and a spy
-    # SleeveAttributionRecorder. Match the existing fixture
-    # factory in this file.
+    # SleeveAttributionRecorder + a stub PortfolioGatewayProtocol
+    # returning a canned PortfolioState. Match the existing
+    # fixture factory in this file.
     runner = market_day_automation_fixture.runner
     spy_gateway = market_day_automation_fixture.drift_alarm_gateway
     spy_recorder = market_day_automation_fixture.attribution_recorder
 
-    runner.run_close()  # or whatever the end-of-session method is called
+    # IMPORTANT: attribution records are only written when the
+    # preopen step has already captured `_session_open_portfolio_state`.
+    # In isolation, `run_close()` would refresh drift but skip
+    # attribution. Running preopen first establishes the open
+    # snapshot so the close hook can pair it with the close snapshot.
+    runner.run_preopen()  # seeds _session_open_portfolio_state
+    runner.run_close()
 
     assert spy_gateway.refresh_call_count == 1
     assert spy_recorder.record_session_call_count == 1
+
+
+def test_automation_close_without_preopen_refreshes_drift_but_skips_attribution(
+    market_day_automation_fixture,
+):
+    # Defensive regression: if the preopen step never ran (e.g.,
+    # a recovery path that jumps straight to close), the close
+    # hook must NOT try to record attribution against a None
+    # open snapshot — it just refreshes drift and moves on.
+    runner = market_day_automation_fixture.runner
+    spy_gateway = market_day_automation_fixture.drift_alarm_gateway
+    spy_recorder = market_day_automation_fixture.attribution_recorder
+
+    runner.run_close()
+
+    assert spy_gateway.refresh_call_count == 1
+    assert spy_recorder.record_session_call_count == 0
 ```
 
 Match the existing `MarketDayAutomationRunner` test fixture style; if the fixture doesn't expose close-session hooks cleanly, build them along the existing test-harness pattern.
@@ -3260,7 +3284,13 @@ if self._portfolio_gateway is not None:
     )
 ```
 
-**Close hook addition (record attribution + refresh drift):**
+**Close hook addition (record attribution + refresh drift).**
+`trading_day` is derived explicitly from the runner's existing
+time helper — `self._now_provider()` is already injected for
+checkpoint timestamps, and its date in ISO format
+(`YYYY-MM-DD`) is the canonical `trading_day` used by
+`SleeveDailyAttributionRecord`. No new time source is
+introduced; no reliance on a local that isn't in scope:
 
 ```python
 # Inside the existing close step at automation.py:305:
@@ -3270,6 +3300,7 @@ if (
     and self._session_open_portfolio_state is not None
 ):
     close_state = self._portfolio_gateway.get_portfolio_state()
+    trading_day = self._now_provider().date().isoformat()
     self._attribution_recorder.record_session(
         trading_day=trading_day,
         open_portfolio_state=self._session_open_portfolio_state,
@@ -3280,6 +3311,14 @@ if (
 if self._drift_alarm_gateway is not None:
     self._drift_alarm_gateway.refresh()
 ```
+
+If the existing close step already constructs a session/checkpoint
+timestamp with a different name (e.g., `session_close_at_utc`,
+`close_recorded_at`), reuse that local directly —
+`trading_day = <that_local>.date().isoformat()` — rather than
+calling `self._now_provider()` a second time. The point is to
+pin `trading_day` to a concrete, already-in-scope expression at
+the call site, not to rely on an undefined local.
 
 **Wiring at `__main__.py`.** When the runner is constructed by
 `build_default_market_day_automation_runner` at
