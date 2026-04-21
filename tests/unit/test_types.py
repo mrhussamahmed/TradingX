@@ -19,6 +19,7 @@ from tradingx.types import (
     DocumentRecord,
     ExecutionLifecycleRecord,
     ExplorerRecord,
+    EvaluationEvidencePack,
     Gate3CriterionSnapshot,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
@@ -106,6 +107,14 @@ def test_trial_statistics_shape() -> None:
     assert stats.n_trials == 5
     assert stats.trial_sharpe_mean == 0.8
     assert stats.trial_sharpe_variance == 0.04
+
+
+def test_evaluation_evidence_pack_has_dsr_and_north_star_fields() -> None:
+    field_names = {field.name for field in dataclasses.fields(EvaluationEvidencePack)}
+
+    assert "deflated_sharpe_ratio" in field_names
+    assert "north_star_sharpe_met" in field_names
+    assert "annualized_cost_drag_bps" in field_names
 
 
 def test_trade_intent_and_risk_control_event_capture_stage_one_fields() -> None:

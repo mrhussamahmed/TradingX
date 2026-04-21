@@ -76,6 +76,8 @@ class EvaluationEvidencePack:
     recommendation: str
     assumptions: tuple[str, ...]
     annualized_cost_drag_bps: Decimal | None = None
+    deflated_sharpe_ratio: Decimal | None = None
+    north_star_sharpe_met: bool | None = None
 
 
 @dataclass(frozen=True)
