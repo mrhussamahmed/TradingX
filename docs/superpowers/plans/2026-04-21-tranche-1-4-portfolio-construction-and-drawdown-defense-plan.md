@@ -3030,6 +3030,18 @@ if len(sleeve_candidates) != 2:
         "Generalization for 3+ sleeves is deferred."
     )
 
+# Pass 1 (existing logic refactored): populate four parallel dicts
+# rather than returning ValidationCandidateResult alone. The pack
+# and the raw returns are load-bearing for pass 2.
+pass1_results: dict[str, ValidationCandidateResult] = {}
+pass1_packs: dict[str, EvaluationEvidencePack] = {}
+pass1_returns: dict[str, tuple[Decimal, ...]] = {}
+pass1_cost_drag: dict[str, Decimal | None] = {}
+
+# ...pass-1 loop populates all four dicts (not shown)...
+
+# Pass 2: for each sleeve-backed candidate, apply the marginal
+# criterion against the registry-pinned sibling book.
 regimes_for_book = _build_default_regime_snapshots(
     sleeve_candidates[0],
     bars_by_symbol=aligned_bars,
@@ -3038,57 +3050,34 @@ final_results: list[ValidationCandidateResult] = []
 for candidate in candidates:
     pass1_entry = pass1_results[candidate.candidate_id]
     if candidate.sleeve_class_path is None:
+        # Non-sleeve candidate (e.g., mean-reversion-v1): pass 2
+        # does not run; the pass-1 result is the final result.
         final_results.append(pass1_entry)
         continue
     sibling = next(
         c for c in sleeve_candidates if c.candidate_id != candidate.candidate_id
     )
-    without = _simulate_two_sleeve_book(
-        (sibling,),
+    # Call the extracted helper below for the (result, pack) pair.
+    final_result, _pass2_pack = _apply_marginal_pass_to_gate1_result(
+        candidate=candidate,
+        pass1_result=pass1_entry,
+        pass1_pack=pass1_packs[candidate.candidate_id],
+        pass1_returns=pass1_returns[candidate.candidate_id],
+        annualized_cost_drag_bps=pass1_cost_drag[candidate.candidate_id],
+        sibling_candidate=sibling,
         bars_by_symbol=aligned_bars,
         regime_snapshots_by_date=regimes_for_book,
-        cost_model_config=base_cost_model_config,
+        benchmark_stack_payload=benchmark_stack_payload,
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        adversarial_context=adversarial_context,
+        base_cost_model_config=base_cost_model_config,
+        trials_ledger=trials_ledger,
     )
-    with_book = _simulate_two_sleeve_book(
-        (candidate, sibling),
-        bars_by_symbol=aligned_bars,
-        regime_snapshots_by_date=regimes_for_book,
-        cost_model_config=base_cost_model_config,
-    )
-    marginal_criterion = evaluate_marginal_portfolio_contribution(
-        candidate_returns=pass1_entry.candidate_returns,  # carry through pass1
-        portfolio_without_candidate_returns=without,
-        portfolio_with_candidate_returns=with_book,
-    )
-    sharpe_delta, calmar_delta, cdar_delta = _deltas_from_details(marginal_criterion)
-    combined_criteria = pass1_entry.criteria + (marginal_criterion,)
-    marginal_status = "pass" if marginal_criterion.passed else "fail"
-    final_status = _reconcile_gate1_status(pass1_entry.status, marginal_status)
-    # Rewrite the pack to carry the marginal deltas (§P2 + §P5).
-    ...  # re-invoke evaluate_candidate OR patch the existing pack via replace(...)
-    final_results.append(
-        replace(
-            pass1_entry,
-            criteria=combined_criteria,
-            status=final_status,
-            marginal_sharpe_delta=sharpe_delta,
-            marginal_calmar_delta=calmar_delta,
-            marginal_cdar_delta=cdar_delta,
-            summary=_gate1_summary(final_status),
-        )
-    )
+    final_results.append(final_result)
 ```
 
-Because `pass1_entry` above is a `ValidationCandidateResult` (not a carrier of the raw returns or the evidence pack), the implementation needs to keep parallel dicts during pass 1 so pass 2 can access them:
-
-```python
-pass1_results: dict[str, ValidationCandidateResult] = {}
-pass1_packs: dict[str, EvaluationEvidencePack] = {}
-pass1_returns: dict[str, tuple[Decimal, ...]] = {}
-pass1_cost_drag: dict[str, Decimal | None] = {}
-```
-
-All four are populated during the existing pass-1 loop (just capture the pack and returns that `_build_gate1_candidate_result` already computes; expose them via a small refactor rather than returning `ValidationCandidateResult` alone).
+The helper shown below is the sole home for `_simulate_two_sleeve_book`, `evaluate_marginal_portfolio_contribution`, the `evaluate_candidate` re-invocation with marginal kwargs, the `_reconcile_gate1_status` reconciliation, and the final `dataclasses.replace` on the result. Keeping all of that inside the helper is what makes Task 13's `test_gate1_marginal_deltas_land_on_evidence_pack_not_just_result` a one-call direct test against the `(result, pack)` pair.
 
 **Pass-2 implementation is binding — single path, not a choice.** DESIGN-0015 §P2 and §P5 require `marginal_*_delta` to land on BOTH the `ValidationCandidateResult` AND the `EvaluationEvidencePack`. The marginal-delta population must therefore happen via **re-invoking `evaluate_candidate`** with the three marginal inputs — this reuses the forwarding contract pinned by `test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack` in Task 11, so the returned pack carries the deltas by construction. `dataclasses.replace` on the pass-1 pack is NOT a permitted alternative because it skirts the single-source-of-truth population rule.
 
