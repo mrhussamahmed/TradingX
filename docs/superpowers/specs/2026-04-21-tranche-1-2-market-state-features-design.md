@@ -53,9 +53,11 @@ features are produced; consumption is 1.3's job.
 - `scripts/compare_vol_forecasts.py` (already exists, will be
   extended) runs the empirical comparison across all four methods
   and records the winner.
-- Candidate-default `forecast_method` tune in
-  [strategy.py:34](/src/tradingx/strategy.py:34) if the comparison
-  winner differs from the current default (`garch`).
+- `trend-following-v1` candidate-default `forecast_method` tune in
+  [strategy.py:34](/src/tradingx/strategy.py:34) if the trend-sleeve
+  comparison winner differs from the current default (`garch`).
+  Vol-target and mean-reversion candidates are not retuned in this
+  tranche.
 
 ### Explicitly out of scope
 
