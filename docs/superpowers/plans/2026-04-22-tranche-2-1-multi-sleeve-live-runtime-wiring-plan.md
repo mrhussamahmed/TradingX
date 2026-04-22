@@ -2172,10 +2172,14 @@ Expected: FAIL — regeneration detector not yet implemented.
 **Recalibration-marker seam (Codex round-1 plan P1 fix).** The
 round-1 plan proposed extending `OperatorControlStore.__init__`
 with a `drift_pending_recalibration_path: Path | None = None`
-parameter and wiring it through `build_default_market_day_automation_runner`.
-Codex correctly flagged that `OperatorControlStore` is
-constructed in **four** places — not just the automation
-runner. The production construction sites are:
+parameter and wiring it only through
+`build_default_market_day_automation_runner`. That was wrong
+for a subtle reason: the automation runner does not actually
+construct an `OperatorControlStore` — at
+[automation.py:719](/src/tradingx/automation.py:719) the
+runner builds a `FilesystemArtifactStore` for operator-platform
+evidence, not an `OperatorControlStore`. The real
+`OperatorControlStore(...)` construction sites are three:
 
 - [service.py:559](/src/tradingx/service.py:559) — paper
   trading service's operator-control store.
@@ -2183,17 +2187,27 @@ runner. The production construction sites are:
   gate validation controller's store.
 - [supervisor.py:662](/src/tradingx/supervisor.py:662) —
   local supervisor's store.
-- [automation.py:719](/src/tradingx/automation.py:719) —
-  market-day automation runner (the only seam the round-1
-  plan updated).
 
-Threading a new constructor parameter through all four sites
-is a wide surface change where three sites don't care about
-the path at all. Worse, if the operator triggers
-`recalibrate_drift_reference` from a code path whose store was
-constructed without the new parameter, the marker silently
-doesn't get written and the automation runner misses the
-regeneration trigger.
+Codex's round-1 finding was therefore even sharper than the
+round-1 amendment acknowledged: threading a new constructor
+parameter ONLY at the automation runner would have added an
+argument to a builder that doesn't build the relevant class,
+while the three production sites that do construct it would
+have silently constructed stores with the new parameter
+unset. Operator recalibrate calls would write nothing the
+automation runner could read. A proper parameter-threading
+fix would have required updating all three real construction
+sites plus their test harnesses — a much wider surface than
+the round-1 plan proposed.
+
+The round-2 revision (audit-marker reuse + bookkeeping)
+sidesteps the construction-site surface entirely: the 1.5
+`OperatorControlStore.recalibrate_drift_reference` already
+writes its marker at the control-store's own root, and all
+three production sites instantiate that root at the same
+`config.runtime.data_root / "control"` path — so the
+automation runner only needs to know that path (not the
+store instance) to read the marker.
 
 **Revised approach: reuse the 1.5 audit marker already shipped
 on the operator-control store's own root directory.** The 1.5
@@ -2218,12 +2232,15 @@ same directory:
 - `OperatorControlStore` (the class in
   [`operator_control.py`](/src/tradingx/operator_control.py:82))
   is rooted at `config.runtime.data_root / "control"` in
-  every production construction site
-  ([service.py:559](/src/tradingx/service.py:559),
+  every production construction site. All three real sites —
+  [service.py:559](/src/tradingx/service.py:559),
   [controller.py:1559](/src/tradingx/controller.py:1559),
-  [supervisor.py:662](/src/tradingx/supervisor.py:662)) —
-  this is where `recalibrate_drift_reference` writes the
-  audit marker.
+  [supervisor.py:662](/src/tradingx/supervisor.py:662) —
+  use the same path formula, which is what makes path-based
+  marker discovery work from the automation runner. This is
+  where `recalibrate_drift_reference` writes the audit marker.
+  `automation.py` does NOT construct an `OperatorControlStore`;
+  it only reads the marker by path.
 
 The automation runner's regeneration detector MUST read from
 the **control-store root** (`config.runtime.data_root /
@@ -2358,16 +2375,16 @@ if activation_changed or recalibration_fresh:
 
 **What this buys.** `OperatorControlStore` stays untouched.
 Operator calls to `recalibrate_drift_reference` through ANY
-production construction site (`service.py`, `controller.py`,
-`supervisor.py`, `automation.py`) all write the 1.5 audit
+of the three production construction sites (`service.py`,
+`controller.py`, `supervisor.py`) all write the 1.5 audit
 marker at `config.runtime.data_root / "control" /
-"drift_reference_recalibration.json"`, which every site
-already configures (via `OperatorControlStore(root_dir=
-config.runtime.data_root / "control")`). The automation
-runner reads from that same control-store root on the next
-build and triggers regeneration — no new parameter threading
-and no path mismatch between the writing sites and the
-reading site.
+"drift_reference_recalibration.json"` because every site
+instantiates `OperatorControlStore` with the same root-path
+formula. The automation runner — which does not itself
+construct an `OperatorControlStore` — reads from that same
+control-store root on the next build and triggers
+regeneration. No new parameter threading, no path mismatch
+between the writing sites and the reading site.
 
 **What this does NOT do.** The audit marker is NEVER deleted
 by the automation runner — it is an operator-audit artifact
@@ -3137,23 +3154,30 @@ No TBD / TODO / "implement later" in production code. Fixture-name placeholders 
 1. **Tie-breaking for attribution fractions** (Task 10). Registry order (trend-first) favors `trend-following-v1` on 50/50 splits. If you prefer budget-fraction ordering, the change is one sort key swap.
 2. **3-cycle persistence threshold** (Task 12). The service-loop's per-cycle counter is a straightforward pattern; if Codex sees a better place to track persistence (e.g., on the `SleeveRuntimeController` itself), flag it.
 3. **`BlueprintExhaustionError` handling** (Task 12). `narrow_blueprint_on_sleeve_failure` raises; the service loop catches it and transitions to a full `recovery_required` halt via the existing `trigger_hard_halt` path. Conservative; if Codex prefers an auto-switch to the legacy baseline, flag it.
-4. **Recalibration-marker seam (resolved in round-1 plan
-   review P1 fix)** (Task 11). The round-1 plan proposed
-   threading a new path through `OperatorControlStore.__init__`.
-   Codex correctly flagged that the store is constructed in
-   four places (service.py, controller.py, supervisor.py,
-   automation.py), not just the automation runner. The plan
-   now reuses the shipped 1.5 audit marker at
-   `{config.runtime.data_root}/control/drift_reference_recalibration.json`
-   — the control-store root every production site uses. No
-   constructor-parameter threading, no `operator_control.py`
-   change. Automation runner reads the marker on each build
-   and compares its `at_utc` against its own bookkeeping.
-   (The round-2 P1 fix corrected an earlier version of this
-   note that referenced `operator_store._root_dir` — which is
-   the operator-platform artifact store at
-   `artifact_root/operator_platform`, a different directory
-   from the control-store root.)
+4. **Recalibration-marker seam (resolved across rounds 1–3
+   plan review)** (Task 11). The round-1 plan proposed
+   threading a new path through `OperatorControlStore.__init__`
+   at a single call site (the automation runner). Codex's
+   round-1 finding pointed out that the automation runner
+   doesn't construct an `OperatorControlStore` at all — it
+   only builds a `FilesystemArtifactStore`; the real
+   `OperatorControlStore(...)` construction sites are three:
+   `service.py`, `controller.py`, `supervisor.py`. A proper
+   parameter-threading fix would have meant updating those
+   three sites plus their test harnesses — a much wider
+   surface than the round-1 plan acknowledged. Round-2 sidestepped
+   the construction-site surface entirely by reusing the
+   shipped 1.5 audit marker at
+   `{config.runtime.data_root}/control/drift_reference_recalibration.json`;
+   every production `OperatorControlStore` instance writes
+   there by construction, and the automation runner reads
+   from the same path. Round-3 corrected a residual path
+   mismatch (the round-2 pseudocode pointed at
+   `operator_store._root_dir` — the operator-platform
+   artifact store at `artifact_root/operator_platform`, a
+   different directory). The merged seam: no
+   `operator_control.py` change, no new constructor
+   parameter, no path mismatch.
 5. **Dashboard file surface** (Task 14). The plan points at `portfolio.py` + `performance.py`; actual operator-platform layout may differ. Match existing convention.
 6. **Stage 2 timing (Task 16)**. Stage 2 ships after at least one week of Stage 1 paper-session data confirms attribution records populate reliably. This is an operator-triggered ship decision, not an automated one.
 
