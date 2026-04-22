@@ -78,12 +78,18 @@ Scope:
    read from the decomposition artifact when both sleeves are
    live (supplements, does not replace, the portfolio-state
    equity delta attribution).
-6. **`sleeve_id` threading through intents + executions.** Per
-   BRIEF-0003 D4: `TradeIntent`, `ExecutionLifecycleRecord`,
-   and `ClosedTradeRecord` each gain `sleeve_id: str | None`.
-   Default `None` preserves deserialization of existing
-   persisted payloads. Blueprint-based execution paths populate
-   the field; the legacy baseline path leaves it `None`.
+6. **Per-sleeve attribution fractions on intents + executions.**
+   Per BRIEF-0003 D4: `TradeIntent`, `ExecutionLifecycleRecord`,
+   and `ClosedTradeRecord` each gain
+   `sleeve_attributions: tuple[tuple[str, Decimal], ...]`
+   (the closed-trade record carries separate
+   `entry_sleeve_attributions` + `exit_sleeve_attributions`
+   fields to handle blueprint changes mid-position). Fractions
+   sum to 1.0 within tolerance for blueprint-based intents;
+   empty tuple for legacy / baseline paths. Default empty
+   tuple preserves deserialization of existing persisted
+   payloads. See W5 for population rules and the Gate 3
+   per-sleeve fill evidence reader contract.
 7. **Artifact regeneration on activation change.** When a new
    blueprint activates, the 1.5 drift-reference snapshot and
    backtest-reference returns artifacts are rebuilt. Also
@@ -350,8 +356,10 @@ for persisted payloads predating 2.1.
 - `src/tradingx/backtest.py`, `src/tradingx/costs.py`,
   `src/tradingx/sleeves/*` — engine + cost primitives +
   sleeve definitions all unchanged.
-- `config/strategy/weights/<strategy_id>/` — per-strategy
-  snapshots (D3) untouched; operator review flow unchanged.
+- `config/strategy/weights/<strategy_id>.yaml` — per-strategy
+  approved-weight YAML files (D3) untouched; operator review
+  flow unchanged. Lookup path remains
+  `ApprovedWeightSnapshotStore.load_by_strategy_id(strategy_id)`.
 
 ## Work items
 
@@ -1208,9 +1216,10 @@ Sub-tranche 2.1 Stage 1 is complete when:
    tolerance. Gate 3 per-sleeve evidence reader produces
    correct notional sums on the two-sleeve paper fixture.
 6. Artifact regeneration triggers on both activation change
-   (blueprint_id differs from last-seen) AND operator
-   recalibration (pending file written by
-   `recalibrate_drift_reference`).
+   (`activation_id` differs from last-seen — covers new
+   blueprint_id, changed bindings, AND changed
+   `captured_snapshot_id` per W6) AND operator recalibration
+   (pending file written by `recalibrate_drift_reference`).
 7. `narrow_blueprint_on_sleeve_failure` produces the narrowed
    blueprint + supersedes the record + emits
    `RiskControlEvent(control_type="blueprint_narrowed")` +
