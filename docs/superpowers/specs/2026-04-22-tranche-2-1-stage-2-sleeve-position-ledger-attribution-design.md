@@ -514,6 +514,19 @@ Additional activation-time durability requirement:
   `operator_store`, the snapshot payloads must be mirrored into
   `runtime_store/model_weight_snapshots/` as part of the same
   activation transaction;
+- if `load_or_activate_blueprint(...)` is about to return an
+  unchanged active activation from the early idempotent-reuse path,
+  it MUST still run an `ensure_activation_snapshot_payloads(...)`
+  backfill step before returning:
+  - if a captured snapshot payload is already present in
+    `runtime_store/model_weight_snapshots/`, reuse it;
+  - else if the payload is present in another known artifact root,
+    mirror it into `runtime_store`;
+  - else if the current approved snapshot loaded by `strategy_id`
+    has the same `snapshot_id` as the captured one, persist that
+    payload into `runtime_store`;
+  - else fail closed with an activation/bootstrap prerequisite error
+    rather than silently losing deterministic fallback;
 - bootstrap fallback MUST resolve captured snapshots from that
   `runtime_store` payload store by `snapshot_id`, not by reloading current
   approved YAML through `strategy_id`.
@@ -646,6 +659,18 @@ lifecycle records into that state in strict order:
 
 Cost basis method: **weighted average cost**.
 
+Reserved owner-id contract:
+
+- the dataclass field shapes introduced in DESIGN-0017 remain the
+  same (`sleeve_attributions`, `entry_sleeve_attributions`,
+  `exit_sleeve_attributions`);
+- for DESIGN-0019, the allowed owner-id set widens to:
+  - known `sleeve_id`s, and
+  - `__residual_reserve__` for reserve-domain executions;
+- reserve-domain executions therefore remain representable in the
+  existing tuple fields without introducing a second execution
+  artifact type.
+
 For a buy:
 
 1. attributed quantity per sleeve =
@@ -661,13 +686,21 @@ For a buy:
 
 For a sell/reduce:
 
-1. attributed quantity per sleeve =
-   `filled_qty * attribution_fraction`;
-2. sleeve quantity decreases;
-3. realized P&L is booked using the sleeve's weighted-average cost;
-4. attributed sale proceeds are distributed from the sleeve back to
-   the residual reserve at the fill timestamp as an explicit
-   capital distribution.
+1. if the execution is sleeve-domain
+   (`sleeve_attributions` contains only sleeve ids):
+   - attributed quantity per sleeve =
+     `filled_qty * attribution_fraction`;
+   - sleeve quantity decreases;
+   - realized P&L is booked using the sleeve's weighted-average
+     cost;
+   - attributed sale proceeds are distributed from the sleeve back
+     to the residual reserve at the fill timestamp as an explicit
+     capital distribution;
+2. if the execution is reserve-domain
+   (`sleeve_attributions == ((\"__residual_reserve__\", Decimal(\"1\")),)`):
+   - residual reserve quantity decreases;
+   - residual reserve cash increases by sale proceeds; and
+   - no sleeve realized P&L is booked for that execution.
 
 Residual reserve behavior:
 
@@ -680,10 +713,11 @@ Residual reserve behavior:
   - residual-reserve-owned,
   but never both;
 - if residual unresolved inventory exists for symbol `z`, any
-  sleeve-attributed execution for `z` is ambiguous and MUST fail
-  closed with a `SleeveAttributionGapRecord` until residual reserve
-  inventory for `z` is zero or a later explicit transition feature
-  is introduced;
+  execution for `z` must be classified consistently to the reserve
+  domain until residual reserve inventory for `z` is zero;
+- if a sleeve-domain execution arrives for symbol `z` while reserve
+  inventory for `z` is still non-zero, replay MUST fail closed with
+  a `SleeveAttributionGapRecord`;
 - reserve cash is the durable holder of free broker cash across the
   life of the ledger, not just at bootstrap;
 - reserve cash decreases only when explicitly transferred into a
@@ -711,16 +745,18 @@ break.
 
 Invariants:
 
-1. every replayed execution must have non-empty `sleeve_attributions`;
-2. attribution fractions must sum to 1.0 within tolerance;
-3. no sleeve position may go negative beyond tolerance;
-4. no symbol may be simultaneously sleeve-owned and
+1. every replayed execution must have non-empty attribution tuples;
+2. every attribution owner id must be either a known `sleeve_id` or
+   `__residual_reserve__`;
+3. attribution fractions must sum to 1.0 within tolerance;
+4. no sleeve position may go negative beyond tolerance;
+5. no symbol may be simultaneously sleeve-owned and
    residual-reserve-owned during replay; if that condition occurs,
    the day fails closed for that symbol;
-5. per-symbol sleeve quantities plus residual-reserve quantity must
+6. per-symbol sleeve quantities plus residual-reserve quantity must
    sum to the broker quantity within tolerance after bootstrap and
    after replay; and
-6. sleeve cash plus marked sleeve positions plus residual reserve
+7. sleeve cash plus marked sleeve positions plus residual reserve
    cash plus marked residual positions must sum to broker portfolio
    equity within tolerance at open and close.
 
@@ -869,8 +905,10 @@ Task 16 remains the later commit that:
 The following remain untouched by this design:
 
 - `TradeIntent`, `ExecutionLifecycleRecord`, and
-  `ClosedTradeRecord` attribution fields as introduced in
-  DESIGN-0017 Stage 1.
+  `ClosedTradeRecord` attribution field shapes as introduced in
+  DESIGN-0017 Stage 1. (This design widens the allowed owner-id
+  values to include `__residual_reserve__`, but does not add new
+  attribution fields.)
 - CPCV/PBO infrastructure from DESIGN-0018.
 - Gate 2 robustness evidence packaging.
 - Runtime blueprint activation and fallback narrowing semantics.
