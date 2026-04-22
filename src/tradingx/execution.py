@@ -16,7 +16,7 @@ from alpaca.trading.requests import (
     TakeProfitRequest,
 )
 
-from tradingx.types import OrderRecord
+from tradingx.types import ExecutionLifecycleRecord, OrderRecord
 
 REJECTED_STATUSES = {"canceled", "expired", "rejected", "suspended"}
 
@@ -289,3 +289,18 @@ class AlpacaPaperExecutionGateway:
         ):
             raise OrderRejected("All OCO exit legs were canceled before fill.")
         return None
+
+
+def sum_per_sleeve_notional(
+    records: tuple[ExecutionLifecycleRecord, ...],
+) -> dict[str, Decimal]:
+    result: dict[str, Decimal] = {}
+    for record in records:
+        if not record.sleeve_attributions:
+            continue
+        fill_notional = record.filled_qty * record.fill_price
+        for sleeve_id, fraction in record.sleeve_attributions:
+            result[sleeve_id] = result.get(sleeve_id, Decimal("0")) + (
+                fill_notional * fraction
+            )
+    return result

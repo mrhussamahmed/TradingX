@@ -58,6 +58,7 @@ class SleeveRuntimeController:
         trials_ledger: TrialsLedgerReadProtocol | None,
         config: SleeveRuntimeConfig,
         live_daily_returns_source: LiveDailyReturnsSourceProtocol | None = None,
+        trial_candidate_id: str | None = None,
     ) -> None:
         self._sleeve = wrapped_sleeve
         self._halt_store = operator_halt_store
@@ -65,6 +66,7 @@ class SleeveRuntimeController:
         self._ledger = trials_ledger
         self._config = config
         self._live_returns_source = live_daily_returns_source
+        self._trial_candidate_id = trial_candidate_id or wrapped_sleeve.sleeve_id
 
     @property
     def sleeve_id(self) -> str:
@@ -135,7 +137,7 @@ class SleeveRuntimeController:
     def _should_trigger_sharpe_gate_via_trial_summary(self) -> bool:
         if self._ledger is None:
             return False
-        records = self._ledger.records_for_candidate(self._sleeve.sleeve_id)
+        records = self._ledger.records_for_candidate(self._trial_candidate_id)
         qualifying = tuple(
             record
             for record in records

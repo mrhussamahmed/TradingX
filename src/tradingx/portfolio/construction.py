@@ -60,19 +60,27 @@ def build_portfolio_target_weight_history(
 
     reference_index = sleeve_frames[0][2].index
     columns = sorted(union_symbols)
-    combined = pd.DataFrame(0.0, index=reference_index, columns=columns, dtype=float)
-
-    for _sleeve, budget, frame in sleeve_frames:
-        aligned = frame.reindex(columns=columns, fill_value=0.0)
-        combined = combined + aligned * float(budget.budget_fraction_of_equity)
-
-    _apply_symbol_overlap_caps(
-        combined=combined,
-        sleeve_frames=sleeve_frames,
-        blueprint=blueprint,
-    )
-    combined = _apply_row_caps(combined=combined, blueprint=blueprint)
-    return combined
+    rows: list[dict[str, float]] = []
+    for timestamp in reference_index:
+        contributions: dict[str, dict[str, Decimal]] = {}
+        for sleeve, _budget, frame in sleeve_frames:
+            row = frame.loc[timestamp]
+            contributions[sleeve.sleeve_id] = {
+                str(symbol): Decimal(str(float(weight)))
+                for symbol, weight in row.items()
+                if float(weight) != 0.0
+            }
+        combined_row = _combine_sleeve_weights(
+            blueprint=blueprint,
+            contributions=contributions,
+        )
+        rows.append(
+            {
+                symbol: float(combined_row.get(symbol, Decimal("0")))
+                for symbol in columns
+            }
+        )
+    return pd.DataFrame(rows, index=reference_index, columns=columns, dtype=float)
 
 
 def simulate_portfolio_returns(
@@ -105,7 +113,7 @@ def simulate_portfolio_returns(
 def _apply_symbol_overlap_caps(
     *,
     combined: pd.DataFrame,
-    sleeve_frames: list[tuple[SleeveProtocol, SleeveRiskBudget, pd.DataFrame]],
+    sleeve_frames: list[tuple[_ContributionSleeve, SleeveRiskBudget, pd.DataFrame]],
     blueprint: PortfolioBlueprint,
 ) -> None:
     holders_by_symbol: dict[str, list[SleeveRiskBudget]] = {}
@@ -126,6 +134,57 @@ def _apply_symbol_overlap_caps(
                 lower=-symbol_cap,
                 upper=symbol_cap,
             )
+
+
+def _combine_sleeve_weights(
+    *,
+    blueprint: PortfolioBlueprint,
+    contributions: dict[str, dict[str, Decimal]],
+) -> dict[str, Decimal]:
+    budget_by_sleeve = {
+        sleeve_budget.sleeve_id: sleeve_budget
+        for sleeve_budget in blueprint.sleeve_budgets
+    }
+    missing = tuple(
+        sleeve_id for sleeve_id in contributions if sleeve_id not in budget_by_sleeve
+    )
+    if missing:
+        raise ValueError(f"sleeves {missing!r} missing from blueprint.sleeve_budgets")
+
+    union_symbols = sorted(
+        {symbol for per_sleeve in contributions.values() for symbol in per_sleeve}
+    )
+    if not union_symbols:
+        return {}
+
+    combined = pd.DataFrame(0.0, index=[0], columns=union_symbols, dtype=float)
+    sleeve_frames: list[tuple[_ContributionSleeve, SleeveRiskBudget, pd.DataFrame]] = []
+    for sleeve_id in sorted(contributions):
+        budget = budget_by_sleeve[sleeve_id]
+        row = {
+            symbol: float(weight) for symbol, weight in contributions[sleeve_id].items()
+        }
+        frame = pd.DataFrame(
+            [row],
+            index=[0],
+            columns=union_symbols,
+            dtype=float,
+        ).fillna(0.0)
+        sleeve_frames.append((_ContributionSleeve(sleeve_id=sleeve_id), budget, frame))
+        combined = combined + frame * float(budget.budget_fraction_of_equity)
+
+    _apply_symbol_overlap_caps(
+        combined=combined,
+        sleeve_frames=sleeve_frames,
+        blueprint=blueprint,
+    )
+    combined = _apply_row_caps(combined=combined, blueprint=blueprint)
+    row = combined.iloc[0]
+    return {
+        str(symbol): Decimal(str(float(weight)))
+        for symbol, weight in row.items()
+        if float(weight) != 0.0
+    }
 
 
 def _apply_row_caps(
@@ -156,8 +215,16 @@ def _apply_row_caps(
     return result
 
 
+@dataclass(frozen=True)
+class _ContributionSleeve:
+    sleeve_id: str
+    family: str = "portfolio_composition"
+    allowed_instruments: tuple[str, ...] = ()
+
+
 __all__ = (
     "PortfolioSimulationResult",
+    "_combine_sleeve_weights",
     "build_portfolio_target_weight_history",
     "simulate_portfolio_returns",
 )

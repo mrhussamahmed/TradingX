@@ -1241,6 +1241,7 @@ class PaperTradingLoopController:
             bid_price=market_snapshot.bid_price,
             ask_price=market_snapshot.ask_price,
             average_daily_volume_30d=market_snapshot.average_daily_volume_30d,
+            sleeve_attributions=trade_intent.sleeve_attributions,
         )
 
     def _marketable_limit_price(
@@ -1388,6 +1389,11 @@ class PaperTradingLoopController:
                     0,
                     int((self._now_provider() - opened_at_utc).total_seconds()),
                 ),
+                entry_sleeve_attributions=tuple(
+                    (str(item[0]), Decimal(str(item[1])))
+                    for item in entry_payload.get("sleeve_attributions", ())
+                ),
+                exit_sleeve_attributions=trade_intent.sleeve_attributions,
             )
             paths.append(self._artifacts.write_closed_trade_record(closed_trade))
             remaining_exit_quantity -= matched_quantity

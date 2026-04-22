@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-from tradingx.execution import AlpacaPaperExecutionGateway, OrderRejected
+from tradingx.execution import (
+    AlpacaPaperExecutionGateway,
+    OrderRejected,
+    sum_per_sleeve_notional,
+)
+from tradingx.types import ExecutionLifecycleRecord
 
 
 class FakeOrder:
@@ -234,3 +240,24 @@ def test_wait_for_oco_exit_fill_returns_filled_parent_order() -> None:
 
     assert filled.order_id == "order-1"
     assert filled.status == "filled"
+
+
+def test_sum_per_sleeve_notional_skips_legacy_records_without_attributions() -> None:
+    records = (
+        ExecutionLifecycleRecord(
+            execution_id="execution-1",
+            intent_id="intent-1",
+            symbol="SPY",
+            side="buy",
+            reason_code="baseline_long_entry",
+            reference_price=Decimal("100.00"),
+            fill_price=Decimal("100.00"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("0"),
+            submitted_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+            filled_at_utc=datetime(2026, 4, 22, 13, 1, tzinfo=UTC),
+            recovered=False,
+        ),
+    )
+
+    assert sum_per_sleeve_notional(records) == {}

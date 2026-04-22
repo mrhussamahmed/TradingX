@@ -13,12 +13,15 @@ from tradingx.runtime_logging import StructuredRuntimeLogger
 from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
 from tradingx.service import PaperTradingService
 from tradingx.types import (
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     MarketSnapshot,
     PortfolioState,
     PositionSnapshot,
     ReconciliationSnapshot,
     RiskControlEvent,
     ServiceSymbolResult,
+    SleeveTargetWeights,
     TradeIntent,
     TradingLoopResult,
 )
@@ -333,6 +336,148 @@ class FakeNonePortfolioPlanner:
         return None
 
 
+class FakeBlueprintPortfolioPlanner(FakePortfolioPlanner):
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord:
+        return BlueprintActivationRecord(
+            activation_id="bp-activation-1",
+            blueprint_id="bp-runtime",
+            sleeve_activation_bindings=(
+                BlueprintSleeveBinding(
+                    sleeve_id="trend-following-v1",
+                    strategy_id="trend-following-v1",
+                    captured_snapshot_id="approved-trend",
+                ),
+                BlueprintSleeveBinding(
+                    sleeve_id="vol-target-v1",
+                    strategy_id="vol-target-v1",
+                    captured_snapshot_id="approved-vol",
+                ),
+            ),
+            status="active",
+            approved_at_utc=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+            approved_by="operator",
+            source_blueprint_path=Path("/tmp/bp-runtime.yaml"),
+        )
+
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+        default_quantity: Decimal,
+    ) -> RuntimePortfolioPlan:
+        plan = super().plan_for_service(
+            symbols=symbols,
+            portfolio_state=portfolio_state,
+            default_quantity=default_quantity,
+        )
+        return RuntimePortfolioPlan(
+            plan_id=plan.plan_id,
+            generated_at_utc=plan.generated_at_utc,
+            strategy_id=plan.strategy_id,
+            universe_snapshot_id=plan.universe_snapshot_id,
+            benchmark_symbol=plan.benchmark_symbol,
+            crash_overlay_active=plan.crash_overlay_active,
+            symbols_considered=plan.symbols_considered,
+            current_weights=plan.current_weights,
+            target_weights=plan.target_weights,
+            trade_intents=plan.trade_intents,
+            planned_trades=plan.planned_trades,
+            market_snapshots=plan.market_snapshots,
+            per_sleeve_target_weights=(
+                SleeveTargetWeights(
+                    sleeve_id="trend-following-v1",
+                    target_weights_by_symbol=(
+                        ("SPY", Decimal("0.10")),
+                        ("QQQ", Decimal("0.20")),
+                    ),
+                ),
+                SleeveTargetWeights(
+                    sleeve_id="vol-target-v1",
+                    target_weights_by_symbol=(("SPY", Decimal("0.10")),),
+                ),
+            ),
+        )
+
+
+class FakeStructuralFailureBlueprintPlanner(FakeBlueprintPortfolioPlanner):
+    def __init__(self, *, blueprint_path: Path, failure_reason: str) -> None:
+        self._blueprint_path = blueprint_path
+        self._failure_reason = failure_reason
+        self._active_activation = BlueprintActivationRecord(
+            activation_id="bp-activation-1",
+            blueprint_id="bp-runtime",
+            sleeve_activation_bindings=(
+                BlueprintSleeveBinding(
+                    sleeve_id="trend-following-v1",
+                    strategy_id="trend-following-v1",
+                    captured_snapshot_id="approved-trend",
+                ),
+                BlueprintSleeveBinding(
+                    sleeve_id="vol-target-v1",
+                    strategy_id="vol-target-v1",
+                    captured_snapshot_id="approved-vol",
+                ),
+            ),
+            status="active",
+            approved_at_utc=datetime(2026, 4, 22, 10, 0, tzinfo=UTC),
+            approved_by="operator",
+            source_blueprint_path=blueprint_path,
+        )
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord:
+        return self._active_activation
+
+    def supersede_active_blueprint(
+        self,
+        *,
+        new_activation: BlueprintActivationRecord,
+        now: datetime,
+    ) -> BlueprintActivationRecord:
+        previous = self._active_activation
+        self._active_activation = new_activation
+        return BlueprintActivationRecord(
+            activation_id=previous.activation_id,
+            blueprint_id=previous.blueprint_id,
+            sleeve_activation_bindings=previous.sleeve_activation_bindings,
+            status="superseded",
+            approved_at_utc=previous.approved_at_utc,
+            approved_by=previous.approved_by,
+            source_blueprint_path=previous.source_blueprint_path,
+            superseded_at_utc=now,
+            supersedes_activation_id=new_activation.activation_id,
+        )
+
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+        default_quantity: Decimal,
+    ) -> RuntimePortfolioPlan:
+        plan = super().plan_for_service(
+            symbols=symbols,
+            portfolio_state=portfolio_state,
+            default_quantity=default_quantity,
+        )
+        return RuntimePortfolioPlan(
+            plan_id=plan.plan_id,
+            generated_at_utc=plan.generated_at_utc,
+            strategy_id=plan.strategy_id,
+            universe_snapshot_id=plan.universe_snapshot_id,
+            benchmark_symbol=plan.benchmark_symbol,
+            crash_overlay_active=plan.crash_overlay_active,
+            symbols_considered=plan.symbols_considered,
+            current_weights=plan.current_weights,
+            target_weights=plan.target_weights,
+            trade_intents=plan.trade_intents,
+            planned_trades=plan.planned_trades,
+            market_snapshots=plan.market_snapshots,
+            per_sleeve_target_weights=plan.per_sleeve_target_weights,
+            sleeve_failure_reasons=(("vol-target-v1", self._failure_reason),),
+        )
+
+
 def test_paper_trading_service_runs_multi_symbol_cycles_and_persists_summary(
     tmp_path,
 ) -> None:
@@ -622,6 +767,105 @@ def test_paper_trading_service_executes_runtime_portfolio_plan_when_available(
         ("QQQ", "buy", Decimal("20")),
     ]
     assert result.last_cycle.cycle_status == "executed"
+
+
+def test_paper_trading_service_writes_decomposition_sidecar_when_present(
+    tmp_path,
+) -> None:
+    loop_controller = FakeLoopController()
+    store = FilesystemArtifactStore(tmp_path)
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=store,
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=FakeBlueprintPortfolioPlanner(),
+    )
+
+    result = service.run(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    plans = store.list_runtime_portfolio_plans()
+    decompositions = store.list_sleeve_decomposition_records(trading_day="2026-04-17")
+
+    assert len(plans) == 1
+    assert len(decompositions) == 1
+    assert decompositions[0].cycle_id == result.last_cycle.cycle_id
+    assert {
+        entry.sleeve_id for entry in decompositions[0].per_sleeve_target_weights
+    } == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+
+
+def test_paper_trading_service_narrows_blueprint_after_three_structural_failures(
+    tmp_path,
+) -> None:
+    blueprint_path = tmp_path / "bp-runtime.json"
+    blueprint_path.write_text(
+        (
+            "{\n"
+            '  "blueprint_id": "bp-runtime",\n'
+            '  "sleeve_budgets": [\n'
+            "    {\n"
+            '      "sleeve_id": "trend-following-v1",\n'
+            '      "budget_fraction_of_equity": "0.5",\n'
+            '      "max_correlation_with_other_sleeves": "0.85"\n'
+            "    },\n"
+            "    {\n"
+            '      "sleeve_id": "vol-target-v1",\n'
+            '      "budget_fraction_of_equity": "0.5",\n'
+            '      "max_correlation_with_other_sleeves": "0.85"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    loop_controller = FakeLoopController()
+    store = FilesystemArtifactStore(tmp_path)
+    planner = FakeStructuralFailureBlueprintPlanner(
+        blueprint_path=blueprint_path,
+        failure_reason="halt_by_operator",
+    )
+    service = PaperTradingService(
+        loop_controller=loop_controller,
+        portfolio=FakePortfolio(),
+        artifacts=store,
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=lambda observed_at: True,
+        now_provider=lambda: datetime(2026, 4, 17, 18, 0, tzinfo=UTC),
+        sleep_fn=lambda seconds: None,
+        portfolio_planner=planner,
+    )
+
+    result = service.run(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=3,
+    )
+
+    assert result.last_cycle.cycle_status == "executed"
+    active = planner.get_active_blueprint_activation()
+    assert active is not None
+    assert {binding.sleeve_id for binding in active.sleeve_activation_bindings} == {
+        "trend-following-v1"
+    }
+    alerts = store.list_artifact_payloads("operator_alerts")
+    risk_events = store.list_artifact_payloads("risk_events")
+    assert any(payload.get("category") == "blueprint_narrowed" for payload in alerts)
+    assert any(
+        payload.get("control_type") == "blueprint_narrowed" for payload in risk_events
+    )
 
 
 def test_paper_trading_service_fails_closed_when_planner_returns_none(

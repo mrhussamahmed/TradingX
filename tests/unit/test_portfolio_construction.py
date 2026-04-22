@@ -12,6 +12,7 @@ from tradingx.features.regime import classify_regime
 from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
 from tradingx.portfolio.construction import (
     PortfolioSimulationResult,
+    _combine_sleeve_weights,
     build_portfolio_target_weight_history,
     simulate_portfolio_returns,
 )
@@ -185,6 +186,105 @@ def test_gross_exposure_cap_scales_uniformly_when_exceeded() -> None:
     )
 
     assert float(target_weights.iloc[-1]["SPY"]) == pytest.approx(0.8)
+
+
+def test_combine_sleeve_weights_applies_strictest_overlap_cap() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.50"),
+            ),
+            SleeveRiskBudget(
+                sleeve_id="b",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+        max_gross_exposure=Decimal("1.0"),
+        max_net_exposure=Decimal("1.0"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.8"), "IWM": Decimal("0.4")},
+        "b": {"SPY": Decimal("0.6")},
+    }
+    result = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
+    assert result["SPY"] <= Decimal("0.50") + Decimal("1e-9")
+    assert result["IWM"] <= Decimal("0.40") + Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_applies_row_gross_cap() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("1.0"),
+            ),
+        ),
+        max_gross_exposure=Decimal("1.0"),
+        max_net_exposure=Decimal("1.0"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.6"), "QQQ": Decimal("0.6")},
+    }
+    result = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
+    gross = sum(abs(weight) for weight in result.values())
+    assert abs(gross - Decimal("1.0")) < Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_applies_row_net_cap_when_gross_does_not_bind() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("1.0"),
+            ),
+        ),
+        max_gross_exposure=Decimal("1.2"),
+        max_net_exposure=Decimal("0.1"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.6"), "HEDGE": Decimal("-0.4")},
+    }
+    result = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
+    net = abs(sum(result.values(), start=Decimal("0")))
+    assert net <= Decimal("0.1") + Decimal("1e-9")
+    gross = sum(abs(weight) for weight in result.values())
+    assert gross <= Decimal("1.2") + Decimal("1e-9")
+    ratio_raw = Decimal("0.6") / Decimal("0.4")
+    ratio_scaled = abs(result["SPY"]) / abs(result["HEDGE"])
+    assert abs(ratio_raw - ratio_scaled) < Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_is_pure() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+            SleeveRiskBudget(
+                sleeve_id="b",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.4"), "QQQ": Decimal("0.2")},
+        "b": {"SPY": Decimal("0.2")},
+    }
+    first = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
+    second = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
+    assert first == second
 
 
 def test_output_dataframe_passes_backtest_validation() -> None:

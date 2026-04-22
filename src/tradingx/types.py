@@ -120,6 +120,7 @@ class TradeIntent:
     quantity: Decimal | None
     reason_code: str
     generated_at_utc: datetime
+    sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -363,6 +364,12 @@ class ServiceCycleSnapshot:
 
 
 @dataclass(frozen=True)
+class SleeveTargetWeights:
+    sleeve_id: str
+    target_weights_by_symbol: tuple[tuple[str, Decimal], ...]
+
+
+@dataclass(frozen=True)
 class ServiceRunResult:
     cycles_completed: int
     last_cycle: ServiceCycleSnapshot
@@ -386,6 +393,7 @@ class ExecutionLifecycleRecord:
     bid_price: Decimal | None = None
     ask_price: Decimal | None = None
     average_daily_volume_30d: Decimal | None = None
+    sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -403,6 +411,8 @@ class ClosedTradeRecord:
     return_pct: Decimal
     outcome: str
     holding_period_seconds: int
+    entry_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
+    exit_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -520,6 +530,28 @@ class SleeveDailyAttributionRecord:
     daily_return: Decimal
     per_symbol_open_weight: tuple[tuple[str, Decimal], ...]
     per_symbol_close_weight: tuple[tuple[str, Decimal], ...]
+
+
+@dataclass(frozen=True)
+class SleeveDecompositionRecord:
+    decomposition_id: str
+    cycle_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    blueprint_activation_id: str
+    per_sleeve_target_weights: tuple[SleeveTargetWeights, ...]
+
+
+@dataclass(frozen=True)
+class DriftMonitorVerdictRecord:
+    verdict_id: str
+    monitor_id: str
+    sleeve_id: str | None
+    severity: str
+    metric_value: Decimal | None
+    threshold_value: Decimal | None
+    details: str
+    recorded_at_utc: datetime
 
 
 @dataclass(frozen=True)
@@ -655,6 +687,26 @@ class StrategyActivationRecord:
     status: str
     activated_at_utc: datetime
     notes: str
+
+
+@dataclass(frozen=True)
+class BlueprintSleeveBinding:
+    sleeve_id: str
+    strategy_id: str
+    captured_snapshot_id: str
+
+
+@dataclass(frozen=True)
+class BlueprintActivationRecord:
+    activation_id: str
+    blueprint_id: str
+    sleeve_activation_bindings: tuple[BlueprintSleeveBinding, ...]
+    status: str
+    approved_at_utc: datetime
+    approved_by: str
+    source_blueprint_path: Path
+    superseded_at_utc: datetime | None = None
+    supersedes_activation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -944,6 +996,7 @@ class PortfolioStrategyRow:
     win_rate: str
     max_drawdown: str
     detail: str
+    drift_severity: str = "pending"
 
 
 @dataclass(frozen=True)
@@ -952,6 +1005,9 @@ class PortfolioStrategyPanel:
     headline: str
     detail: str
     strategies: tuple[PortfolioStrategyRow, ...]
+    active_blueprint_id: str | None = None
+    constituent_sleeve_ids: tuple[str, ...] = ()
+    narrowing_notice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1138,6 +1194,8 @@ __all__ = (
     "BenchmarkOption",
     "BenchmarkCloseSeries",
     "BotRuntimeState",
+    "BlueprintActivationRecord",
+    "BlueprintSleeveBinding",
     "ClosedTradeRecord",
     "ConfigProposal",
     "DashboardSnapshot",
@@ -1200,9 +1258,12 @@ __all__ = (
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",
+    "DriftMonitorVerdictRecord",
     "SleeveContext",
+    "SleeveDecompositionRecord",
     "SleeveDailyAttributionRecord",
     "SleeveFailureReason",
+    "SleeveTargetWeights",
     "SleeveTrade",
     "StrategyActivationRecord",
     "StrategyAttributionRow",

@@ -6,12 +6,15 @@ import os
 import types
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
 from tradingx.types import (
     AlertDrillRecord,
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     BotRuntimeState,
     ClosedTradeRecord,
     EvaluationEvidencePack,
@@ -30,6 +33,7 @@ from tradingx.types import (
     ReplaySlippageSummary,
     ServiceCycleSnapshot,
     ServiceSymbolResult,
+    SleeveTargetWeights,
     StrategyActivationRecord,
     TradeIntent,
     ValidationCandidateResult,
@@ -210,12 +214,53 @@ def test_filesystem_artifact_store_round_trips_runtime_portfolio_plan(tmp_path) 
                 timestamp=timestamp,
             )
         },
+        per_sleeve_target_weights=(
+            SleeveTargetWeights(
+                sleeve_id="trend-following-v1",
+                target_weights_by_symbol=(("QQQ", Decimal("0.10")),),
+            ),
+            SleeveTargetWeights(
+                sleeve_id="vol-target-v1",
+                target_weights_by_symbol=(("QQQ", Decimal("0.05")),),
+            ),
+        ),
     )
 
     store.write_runtime_portfolio_plan(plan)
     loaded = store.read_runtime_portfolio_plan("runtime-plan-1")
 
     assert loaded == plan
+
+
+def test_filesystem_artifact_store_round_trips_blueprint_activation_record(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    record = BlueprintActivationRecord(
+        activation_id="activation-blueprint-1",
+        blueprint_id="bp-default-v1",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="snap-trend-1",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="snap-vol-1",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
+        approved_by="operator:test",
+        source_blueprint_path=Path("config/portfolio/blueprints/bp-default-v1.yaml"),
+    )
+
+    store.write_blueprint_activation_record(record)
+    loaded = store.load_blueprint_activation_record(activation_id=record.activation_id)
+
+    assert loaded == record
 
 
 def test_filesystem_artifact_store_writes_json_via_atomic_replace(

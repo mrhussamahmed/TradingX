@@ -11,9 +11,14 @@ from tradingx.types import SleeveContext, SleeveTrade, StrategyCandidate
 
 @runtime_checkable
 class SleeveProtocol(Protocol):
-    sleeve_id: str
-    family: str
-    allowed_instruments: tuple[str, ...]
+    @property
+    def sleeve_id(self) -> str: ...
+
+    @property
+    def family(self) -> str: ...
+
+    @property
+    def allowed_instruments(self) -> tuple[str, ...]: ...
 
     def plan_for_bar(
         self,
