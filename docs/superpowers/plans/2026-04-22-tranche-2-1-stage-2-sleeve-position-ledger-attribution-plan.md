@@ -269,6 +269,7 @@ Out of scope in this plan:
 **Files:**
 - modify `src/tradingx/activation.py`
 - modify `src/tradingx/automation.py`
+- modify `src/tradingx/service.py`
 - create `tests/unit/test_activation_snapshot_payloads.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -281,6 +282,10 @@ Out of scope in this plan:
     activation record but no matching payload can be reconstructed
   - activation wiring in `build_default_market_day_automation_runner`
     passes both `operator_store` and `runtime_store`
+  - activation wiring in `build_default_paper_service()` also passes
+    both `operator_store` and `runtime_store`, so the live
+    `service_builder=lambda: build_default_paper_service(config)` path
+    does not regress to a single-store gateway
 
 - [ ] **Step 2: Implement**
   - add optional `runtime_snapshot_store` to `LocalActivationGateway`
@@ -289,6 +294,10 @@ Out of scope in this plan:
   - add an internal
     `ensure_activation_snapshot_payloads(active_activation, blueprint)`
     helper used on unchanged reuse
+  - update both construction paths that instantiate
+    `LocalActivationGateway`:
+    - `build_default_market_day_automation_runner(...)`
+    - `build_default_paper_service(...)`
   - keep activation-status semantics unchanged
 
 - [ ] **Step 3: Verify**
