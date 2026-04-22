@@ -620,6 +620,14 @@ def _apply_execution(
             reason="missing_attribution",
             evidence_refs=(execution.execution_id,),
         )
+    if any(fraction < Decimal("0") or fraction > Decimal("1") for _, fraction in attrs):
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="fraction_value_invalid",
+            evidence_refs=(execution.execution_id,),
+        )
     fraction_total = sum((fraction for _, fraction in attrs), start=Decimal("0"))
     if abs(fraction_total - Decimal("1")) > _ROUNDING_TOLERANCE:
         return _gap_all_sleeves(
