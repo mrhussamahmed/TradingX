@@ -59,7 +59,8 @@ operational:
 1. Multi-sleeve live runtime wiring shipped and green in paper:
    sleeve-aware `RuntimePortfolioPlan`, per-sleeve target-weight
    persistence during service cycles, blueprint-based activation
-   gateway, `sleeve_id` threaded through `TradeIntent` +
+   gateway, per-sleeve attribution **fractions** (not a single
+   primary label) threaded through `TradeIntent` +
    `ExecutionLifecycleRecord` + `ClosedTradeRecord`. (2.1)
 2. Multi-sleeve P&L divergence monitor activated — the
    `pending` semantics 1.5 shipped for non-active sleeves flip
@@ -77,10 +78,18 @@ operational:
    invokes `recalibrate_drift_reference`. (2.1; closes the P3
    nit flagged in the 1.5 code review.)
 5. Single-sleeve fallback / rollback path verified as an
-   operational requirement: if one sleeve fails (operator halt,
-   drift-alarm critical, regime-stressed liquidation), the
+   operational requirement: if one sleeve fails due to a
+   **structural** termination — operator halt via
+   `halt_sleeve`, critical drift alarm, or trial-summary
+   Sharpe gate firing (the three triggers the shipped
+   `SleeveRuntimeController` actually terminates on) — the
    other sleeve continues to run under a narrowed blueprint
-   without requiring full halt. Evidence: an operator-exercised
+   without requiring a full halt. Regime-stressed zero
+   exposure is explicitly NOT a narrowing trigger — per
+   [BRIEF-0002 D4](/docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md),
+   it is an intentional "cash is a consequence" state. See
+   [DESIGN-0017 §W7](/docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md)
+   for the exact trigger list. Evidence: an operator-exercised
    rollback drill persisted as an artifact. (2.1)
 6. Operator dashboard surfaces both sleeves side-by-side —
    per-sleeve exposure, P&L, drift verdicts, activation state,
@@ -176,36 +185,78 @@ ambiguous clearance semantics.
 ### D3 — ApprovedWeightSnapshot reshape
 
 **Resolved:** **Blueprint references N existing
-`ApprovedWeightSnapshot`s by ID.** Each sleeve keeps its own
-`ApprovedWeightSnapshot` under
-`config/strategy/weights/<strategy_id>/`; the blueprint
-composes them by recording the snapshot IDs it references. The
-existing offline operator-review workflow is untouched — the
-operator still reviews and approves per-strategy snapshots; a
-blueprint is a pure composition artifact that bundles them.
+`ApprovedWeightSnapshot`s by `strategy_id`** (Codex round-1 P1
+fix). Each sleeve keeps its own `ApprovedWeightSnapshot` at
+the existing path
+[`config/strategy/weights/<strategy_id>.yaml`](/src/tradingx/weights.py:22);
+the blueprint composes them by recording `(sleeve_id,
+strategy_id)` pairs. Lookup is via the already-shipped
+`ApprovedWeightSnapshotStore.load(strategy_id=...)` —
+no new indexing artifact, no change to the committed-YAML
+storage contract. The existing offline operator-review workflow
+is untouched: the operator reviews and approves
+per-strategy YAML files; a blueprint is a pure composition
+artifact that bundles references to those files.
 
-**Rejected alternative:** a new `PortfolioWeightSnapshot` type
-bundling multiple snapshots into one. Would split operator
-review between two artifact types and require migration of
-existing single-strategy deployments.
+**Audit capture of snapshot identity at activation time.**
+At the moment a blueprint activates, the gateway reads each
+bound strategy's current approved snapshot via
+`ApprovedWeightSnapshotStore.load(strategy_id)`, captures the
+resolved `ApprovedWeightSnapshot.snapshot_id`, and persists
+both `strategy_id` (for future lookup) and `captured_snapshot_id`
+(for audit/reproducibility) on the `BlueprintActivationRecord`.
+Subsequent snapshot updates to the same strategy_id do not
+retroactively rewrite active activation records — the captured
+snapshot_id pins what was approved when.
+
+**Rejected alternatives:**
+- A new `PortfolioWeightSnapshot` type bundling multiple
+  snapshots into one → splits operator review between two
+  artifact types; requires migration of existing single-
+  strategy deployments.
+- Adding a standalone `snapshot_id`-keyed lookup / index
+  artifact to the weights store → new storage-contract
+  surface with no operator-facing benefit; the
+  strategy_id + captured-at-activation audit gives the same
+  reproducibility with zero new storage primitives.
 
 ### D4 — Attribution upgrade timing
 
-**Resolved:** **Ship `sleeve_id` threading on `TradeIntent` +
-`ExecutionLifecycleRecord` + `ClosedTradeRecord` in tranche
-2.1.** This is the whole point of "live multi-sleeve" — Gate 3
-evidence and operator attribution become sleeve-resolved
-instead of aggregate-only. The 1.5 proportional-attribution
-workaround (via `SleeveDailyAttributionRecord` computed from
-portfolio-state equity deltas) **stays in place** for live per-
-sleeve daily P&L tracking; the `sleeve_id` thread through
-executions is complementary (fill-level attribution vs. daily
-P&L).
+**Resolved:** **Ship per-sleeve attribution fractions on
+`TradeIntent` + `ExecutionLifecycleRecord` + `ClosedTradeRecord`
+in tranche 2.1.** This is the whole point of "live multi-sleeve"
+— Gate 3 evidence and operator attribution become sleeve-
+resolved instead of aggregate-only.
 
-**Rejected alternative:** defer the threading to a later
-cleanup. Would leave Gate 3 with aggregate-only fill evidence
-and make per-sleeve execution drift (when it lands in a future
-tranche) ambiguous.
+**Fractions, not a single winner-take-all label.** For overlap
+symbols like SPY (which both shipped sleeves touch), a single
+primary `sleeve_id` would erase the minority sleeve's share
+from the execution chain. Tranche 2.1 therefore records
+`sleeve_attributions: tuple[(sleeve_id, fraction), ...]` — the
+full decomposition of who contributed to each fill. Fractions
+sum to 1.0 (within rounding tolerance) for blueprint-based
+intents; empty tuple for legacy / baseline intents. See
+[DESIGN-0017 §W5](/docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md)
+for the exact shape, the normalization rule, and the Gate 3
+per-sleeve evidence reader that consumes it.
+
+The 1.5 proportional-attribution workaround (via
+`SleeveDailyAttributionRecord` computed from portfolio-state
+equity deltas) **stays in place** for live per-sleeve daily
+P&L tracking; the attribution-fraction thread through
+executions is complementary (fill-level attribution vs. daily
+P&L; different consumers).
+
+**Rejected alternatives:**
+- Defer the threading to a later cleanup → leaves Gate 3 with
+  aggregate-only fill evidence.
+- Single `sleeve_id` with majority attribution → primary label
+  only, not true fill-level evidence for overlap symbols.
+- Split overlapping-symbol intents by sleeve (one intent per
+  `(symbol, sleeve_id)` pair) → changes the one-intent-per-
+  symbol invariant the current runtime and broker routing
+  depend on; higher blast radius for negligible benefit over
+  fractions.
 
 ### D5 — Rollout ordering
 

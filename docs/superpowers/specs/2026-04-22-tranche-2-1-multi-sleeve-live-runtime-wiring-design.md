@@ -91,13 +91,24 @@ Scope:
    `OperatorControlStore.recalibrate_drift_reference`.
    Closes the P3 nit from the 1.5 code review.
 8. **Single-sleeve fallback / rollback path.** If one sleeve
-   fails (operator halt, critical drift alarm, regime-stressed
-   liquidation that persists), the other sleeve continues
-   running under a **narrowed blueprint**. The narrowed
-   blueprint is a new `BlueprintActivationRecord` with one
-   sleeve; the original blueprint's activation record is
-   updated with `status="superseded"`. Explicit operator drill
-   documented as an operational requirement.
+   fails due to a **structural** termination trigger —
+   operator halt via `halt_sleeve`, critical drift alarm,
+   or trial-summary Sharpe gate firing (the three conditions
+   the shipped `SleeveRuntimeController` actually terminates
+   on) — the other sleeve continues running under a
+   **narrowed blueprint**. The narrowed blueprint is a new
+   `BlueprintActivationRecord` with one sleeve; the original
+   activation record is updated with `status="superseded"`.
+   Explicit operator drill documented as an operational
+   requirement.
+
+   **Regime-stressed exposure is NOT a narrowing trigger.**
+   Per [BRIEF-0002 D4](/docs/superpowers/specs/2026-04-21-tranche-1-planning-brief.md):
+   a sleeve going to 0% exposure in the `stressed` regime is
+   an intentional "cash is a consequence" state, not evidence
+   that the sleeve has failed. When regime flips back, the
+   sleeve resumes without any blueprint action. See W7 for
+   the exact termination-trigger list.
 9. **Operator dashboard two-sleeve view.** Both sleeves shown
    side-by-side: per-sleeve exposure, daily return, drift
    verdicts (from `DriftAlarmGateway.latest_verdicts`),
@@ -252,13 +263,18 @@ surface returns `None`.
 
 ### New fields on existing dataclasses
 
-- `TradeIntent.sleeve_id: str | None = None`
-- `ExecutionLifecycleRecord.sleeve_id: str | None = None`
-- `ClosedTradeRecord.sleeve_id: str | None = None`
+- `TradeIntent.sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()`
+  — per-sleeve fill attribution fractions (see W5).
+- `ExecutionLifecycleRecord.sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()`
+  — carried through from the originating intent; immutable after fill.
+- `ClosedTradeRecord.entry_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()`
+  and `ClosedTradeRecord.exit_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()`
+  — separate entry and exit attributions (may differ if
+  blueprint changed mid-position).
 - `RuntimePortfolioPlan.per_sleeve_target_weights: tuple[SleeveTargetWeights, ...] = ()`
 
-Default values preserve backwards compatibility for
-persisted payloads predating 2.1.
+Default empty-tuple values preserve backwards compatibility
+for persisted payloads predating 2.1.
 
 ### Modified files
 
@@ -401,22 +417,40 @@ to drift out of sync.
 - Modify: `src/tradingx/persistence.py` (writer + reader).
 - Create: `tests/unit/test_blueprint_activation.py`.
 
-**Contract:**
+**Contract (Codex round-1 P1 fix — bindings keyed by
+`strategy_id` to match the existing store).**
 
 ```python
 # src/tradingx/types.py (addition)
 
 @dataclass(frozen=True)
+class BlueprintSleeveBinding:
+    """One row of a blueprint's activation bindings.
+
+    Matches the shipped ApprovedWeightSnapshotStore at
+    src/tradingx/weights.py, which resolves approved weights
+    by strategy_id (one committed YAML per strategy). The
+    captured_snapshot_id is the ApprovedWeightSnapshot.snapshot_id
+    read at activation time — pins which snapshot was approved
+    when, so subsequent updates to the same strategy_id don't
+    retroactively rewrite the activation's audit trail.
+    """
+
+    sleeve_id: str
+    strategy_id: str          # lookup key for ApprovedWeightSnapshotStore
+    captured_snapshot_id: str  # audit-time snapshot identity
+
+
+@dataclass(frozen=True)
 class BlueprintActivationRecord:
     activation_id: str
     blueprint_id: str
-    # Constituent sleeves + the snapshot each should use.
-    # Preserves D3: the blueprint references N snapshots by ID;
-    # no bundled snapshot type.
-    sleeve_activation_bindings: tuple[
-        tuple[str, str],  # (sleeve_id, snapshot_id)
-        ...,
-    ]
+    # Constituent sleeves + each's bound strategy and captured
+    # snapshot identity at activation time. Preserves D3: the
+    # blueprint references N snapshots via the existing
+    # ApprovedWeightSnapshotStore lookup path; no new indexing
+    # artifact, no bundled snapshot type.
+    sleeve_activation_bindings: tuple[BlueprintSleeveBinding, ...]
     status: str  # "active" | "superseded" | "halted"
     approved_at_utc: datetime
     approved_by: str  # operator identifier / audit tag
@@ -437,13 +471,28 @@ class LocalActivationGateway:
         self,
         *,
         blueprint: PortfolioBlueprint,
+        sleeve_to_strategy_bindings: tuple[tuple[str, str], ...],
         operator_identifier: str,
         source_blueprint_path: Path,
     ) -> BlueprintActivationRecord:
         """Load the latest non-superseded blueprint record if
-        present; otherwise create one by validating that each
-        sleeve's ApprovedWeightSnapshot exists for the bound
-        snapshot_id, then persisting.
+        present; otherwise create one.
+
+        Validation:
+        - Every sleeve in blueprint.sleeve_budgets MUST have a
+          matching (sleeve_id, strategy_id) entry in
+          sleeve_to_strategy_bindings.
+        - For each bound strategy_id, call
+          self._snapshot_store.load(strategy_id) via the
+          existing ApprovedWeightSnapshotStore contract. The
+          returned ApprovedWeightSnapshot.snapshot_id is
+          captured as captured_snapshot_id on the binding.
+        - If any strategy_id fails to resolve, raise
+          BlueprintActivationValidationError; no record
+          persisted.
+
+        The blueprint activates against the store's current
+        resolution; captured_snapshot_id pins reproducibility.
         """
 
     def get_active_blueprint_activation(
@@ -466,23 +515,44 @@ class LocalActivationGateway:
         """
 ```
 
-**Validation on load_or_activate_blueprint:** each sleeve in
-`blueprint.sleeve_budgets` must have a matching binding in
-`sleeve_activation_bindings`, and each referenced snapshot_id
-must resolve via `ApprovedWeightSnapshotStore` before
-persistence commits. Validation failure raises
-`BlueprintActivationValidationError`.
+**Why `(sleeve_id, strategy_id)` and not `(sleeve_id, snapshot_id)`.**
+The shipped `ApprovedWeightSnapshotStore.load` at
+[weights.py:22](/src/tradingx/weights.py:22) resolves committed
+YAML files by `strategy_id`; there is no `snapshot_id`-keyed
+index. Using `strategy_id` as the binding key keeps the
+existing storage contract and operator-review workflow
+untouched (operators review and commit
+`config/strategy/weights/<strategy_id>.yaml`). Reproducibility
+is handled by capturing `snapshot_id` at activation time — the
+activation record is audit-immutable even if the underlying
+YAML is edited later.
+
+**For the two shipped sleeves today, `sleeve_id == strategy_id`
+(both equal `trend-following-v1` / `vol-target-v1`).** The
+two-field binding is redundant for the current deployment but
+keeps the design clean if a future sleeve were ever backed by
+a strategy whose approved-snapshot file lives under a
+different `strategy_id`.
 
 **Tests cover:**
 
-- Activating a fresh blueprint from `PortfolioBlueprint` +
-  two snapshot IDs → record persisted with status="active".
-- Activating when already active (same blueprint_id + same
-  sleeve_activation_bindings) → returns the existing record
-  unchanged (idempotent).
-- Activating a blueprint whose referenced snapshot_id doesn't
-  exist → raises `BlueprintActivationValidationError` and no
-  record persisted.
+- Activating a fresh blueprint with bindings
+  `(("trend-following-v1", "trend-following-v1"),
+  ("vol-target-v1", "vol-target-v1"))` → record persisted
+  with status="active" and captured_snapshot_ids populated
+  from `ApprovedWeightSnapshotStore.load(strategy_id)` for
+  each binding.
+- Activating when already active with the same blueprint_id +
+  same bindings → returns the existing record unchanged
+  (idempotent).
+- Activating a blueprint whose bound strategy_id has no
+  committed YAML → raises `BlueprintActivationValidationError`
+  and no record persisted. Exercised with a missing
+  `config/strategy/weights/<strategy_id>.yaml`.
+- Captured `snapshot_id` on the binding equals
+  `ApprovedWeightSnapshotStore.load(strategy_id).snapshot_id`
+  at activation time — regression test asserts the audit
+  pin holds even after a subsequent YAML edit.
 - `get_active_blueprint_activation` returns the latest active
   record; returns None after supersession with no replacement.
 - `supersede_active_blueprint` atomically writes the new
@@ -606,22 +676,44 @@ the decomposition is empty and no sidecar is written.
   `RuntimePortfolioPlan.cycle_id`.
 - Writer + reader round-trip preserves every field.
 
-### W5 — `sleeve_id` threading through intents + executions
+### W5 — Per-sleeve attribution fractions on intents + executions (Codex round-1 P1 fix)
+
+**Scope correction.** The first draft proposed a single
+`sleeve_id: str | None` field populated by majority
+attribution. Codex correctly flagged that for overlap symbols
+like SPY (which both shipped sleeves touch), majority-attribution
+erases the minority sleeve's share from the execution chain —
+producing a primary label, not true sleeve-resolved Gate 3
+evidence. BRIEF-0003 D4's intent is "Gate 3 evidence and
+operator attribution become sleeve-resolved instead of
+aggregate-only"; primary labeling doesn't satisfy that.
+
+2.1 ships per-sleeve **attribution fractions**, not a single
+`sleeve_id`. Each intent, execution, and closed-trade record
+carries the full decomposition of "who contributed to this
+fill." The one-intent-per-symbol invariant from the current
+runtime is preserved (broker routing is unchanged); the new
+field records the per-sleeve breakdown alongside it.
 
 **Files:**
-- Modify: `src/tradingx/types.py` (add `sleeve_id` to
-  `TradeIntent`, `ExecutionLifecycleRecord`,
+- Modify: `src/tradingx/types.py` (add `sleeve_attributions`
+  field to `TradeIntent`, `ExecutionLifecycleRecord`,
   `ClosedTradeRecord`).
 - Modify: `src/tradingx/persistence.py` (writers +
-  deserializers handle the new field; default `None`).
+  deserializers handle the new field; default `()`).
 - Modify: `src/tradingx/runtime_portfolio.py`
-  (`_trade_intent_for_plan_item` populates `sleeve_id` from
-  the decomposition).
+  (`_trade_intent_for_plan_item` populates
+  `sleeve_attributions` from the decomposition).
 - Modify: `src/tradingx/execution.py` (execution path
-  propagates `sleeve_id` from intent → lifecycle record).
+  propagates `sleeve_attributions` from intent → lifecycle
+  record).
 - Modify: `src/tradingx/lifecycle.py` or equivalent —
-  closed-trade aggregation path propagates `sleeve_id` from
-  the matching entry/exit intents.
+  closed-trade aggregation path carries the entry and exit
+  intents' `sleeve_attributions`. For round-trips where entry
+  and exit have different attributions (e.g., entry was
+  100% trend, exit was 60% trend + 40% vol-target due to a
+  blueprint activation between them), the closed-trade record
+  stores **both** sides as separate fields — see contract below.
 - Update: all call sites + tests.
 
 **Contract:**
@@ -630,48 +722,89 @@ the decomposition is empty and no sidecar is written.
 @dataclass(frozen=True)
 class TradeIntent:
     # ...existing fields unchanged...
-    sleeve_id: str | None = None
+    # Full attribution breakdown for this intent. Each entry is
+    # (sleeve_id, fraction_of_intent). Fractions sum to 1.0
+    # (within rounding tolerance) when the intent originates
+    # from a blueprint-based plan. Empty tuple for legacy
+    # single-strategy / baseline intents.
+    sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
 class ExecutionLifecycleRecord:
     # ...existing fields unchanged...
-    sleeve_id: str | None = None
+    # Copy of the intent's sleeve_attributions at execution
+    # time. Immutable after fill. Allocation of fill_qty *
+    # fraction per sleeve gives sleeve-resolved fill evidence
+    # for Gate 3.
+    sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
 class ClosedTradeRecord:
     # ...existing fields unchanged...
-    sleeve_id: str | None = None
+    # Attributions from the entry intent (when the position
+    # opened) and the exit intent (when it closed). Usually
+    # identical; may differ if a blueprint change occurred
+    # mid-position. Per-round-trip attribution is consumed by
+    # Gate 3 per-sleeve realized-slippage / hit-rate evidence.
+    entry_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
+    exit_sleeve_attributions: tuple[tuple[str, Decimal], ...] = ()
 ```
 
 **Population rules:**
 
-- Blueprint-based plan items → `sleeve_id` populated from the
-  `SleeveTargetWeights` entry that contributed the majority of
-  the intent's symbol weight. For a symbol that two sleeves
-  both contribute to (SPY, for both shipped sleeves), majority
-  wins; ties break by registry order (`trend-following-v1`
-  first). Rationale: one intent, one primary attribution;
-  minority attribution is preserved on `SleeveDecompositionRecord`
-  for secondary analysis.
-- Legacy single-strategy plans → `sleeve_id = None`.
-- Baseline candidate intents → `sleeve_id = None`.
+- Blueprint-based plan items → `sleeve_attributions` populated
+  from the `SleeveTargetWeights` entries that contributed to
+  the symbol on this cycle, normalized so fractions sum to
+  `Decimal("1")` (within a tolerance of `Decimal("1e-9")`).
+  Computation: for each sleeve `s` contributing to symbol `y`,
+  `fraction_s = (sleeve_weight_s[y] * budget_fraction_s) /
+  sum over contributing sleeves of same`. One intent per
+  symbol per cycle; the attribution tuple is the full
+  breakdown.
+- Legacy single-strategy plans → `sleeve_attributions = ()`
+  (empty tuple). Downstream readers that encounter an empty
+  tuple know to fall back to aggregate-only attribution.
+- Baseline candidate intents → `sleeve_attributions = ()`.
+- Entries ordered by descending fraction (largest contributor
+  first); ties by registry order (`trend-following-v1` before
+  `vol-target-v1`). Deterministic for regression testing.
+
+**Fill-level consumption (Gate 3 evidence).** A Gate 3 per-sleeve
+evidence report computes each sleeve's share of realized fills:
+for each `ExecutionLifecycleRecord`, per-sleeve filled notional
+is `fill_qty * fill_price * fraction_from_sleeve_attributions`.
+Summing across records by `sleeve_id` gives the sleeve's live
+fill profile (notional, slippage bps, hit rate), which Gate 3
+can compare to that sleeve's backtest expectations. Majority
+labeling could not have supported this report; fractions do.
 
 **Tests cover:**
 
 - Blueprint-based intent for a symbol held only by
-  `trend-following-v1` → `sleeve_id = "trend-following-v1"`.
-- Blueprint-based intent for SPY held by both sleeves,
-  60% trend + 40% vol-target budget contribution → primary
-  attribution "trend-following-v1".
-- Tie-breaking: 50/50 → "trend-following-v1" (registry order).
-- Legacy single-strategy → `sleeve_id = None`.
+  `trend-following-v1` → `sleeve_attributions =
+  (("trend-following-v1", Decimal("1")),)`.
+- Blueprint-based intent for SPY where both sleeves contribute
+  (60% trend / 40% vol-target combined weight share) →
+  `sleeve_attributions = (("trend-following-v1", Decimal("0.6")),
+  ("vol-target-v1", Decimal("0.4")))` — ordered descending.
+- 50/50 tie → `(("trend-following-v1", Decimal("0.5")),
+  ("vol-target-v1", Decimal("0.5")))` — registry order.
+- Fractions sum to 1.0 within `Decimal("1e-9")` for every
+  blueprint-based intent.
+- Legacy single-strategy plan → `sleeve_attributions = ()`.
 - Deserializing a pre-2.1 `ClosedTradeRecord` payload (no
-  `sleeve_id` field on disk) → `sleeve_id = None`.
-- `sleeve_id` propagates through the
-  `TradeIntent → ExecutionLifecycleRecord → ClosedTradeRecord`
-  chain; the downstream records preserve the intent's value.
+  `sleeve_attributions` / `entry_sleeve_attributions` /
+  `exit_sleeve_attributions` fields on disk) → empty tuples.
+- `sleeve_attributions` propagates from `TradeIntent` →
+  `ExecutionLifecycleRecord` without modification.
+- `ClosedTradeRecord` captures entry and exit attributions
+  separately when they differ (activation-change mid-position
+  test).
+- Gate 3 evidence reader: sum `fill_qty * fill_price *
+  fraction` across records for a single sleeve matches the
+  expected notional within rounding.
 
 ### W6 — Artifact regeneration on activation change / recalibration
 
@@ -769,18 +902,52 @@ def narrow_blueprint_on_sleeve_failure(
     """
 ```
 
-**Fallback triggers (service-loop side):**
+**Fallback triggers (service-loop side, Codex round-1 P1 fix).**
 
-The service loop's existing per-cycle sleeve-runtime evaluation
-already produces a `SleeveFailureReason` when a sleeve
-terminates (operator halt, drift-alarm critical, regime
-stressed with persistent liquidation, trial-summary Sharpe
-below floor). When a sleeve's termination persists across
-`N` consecutive cycles (default: N=3), the service loop
-invokes `narrow_blueprint_on_sleeve_failure`. Transient
-single-cycle terminations (e.g., a single regime-stressed bar
-that clears the next cycle) do NOT trigger narrowing —
-narrowing is for sustained failure only.
+The shipped `SleeveRuntimeController` at
+[sleeve_runtime.py:91](/src/tradingx/portfolio/sleeve_runtime.py:91)
+terminates on exactly three conditions, each producing a
+`SleeveFailureReason`:
+
+- `HALT_BY_OPERATOR` — operator invoked
+  `OperatorControlStore.halt_sleeve(sleeve_id, reason)`.
+- `DRIFT_ALARM_LIVE` — the `DriftAlarmGateway.has_alarm(
+  sleeve_id)` returned True (critical drift verdict targets
+  this sleeve).
+- `SLEEVE_SHARPE_BELOW_THRESHOLD_6M` — the trial-summary or
+  (with 1.5's LIVE_DAILY_RETURNS path) live-Sharpe gate
+  fired below the configured floor.
+
+These are the only narrowing triggers. When one of the three
+persists across `N` consecutive cycles (default: N=3), the
+service loop invokes `narrow_blueprint_on_sleeve_failure`.
+
+**What's explicitly NOT a narrowing trigger:**
+
+- **Regime-stressed exposure (`REGIME_STRESSED`).**
+  [`apply_regime_exposure_floor`](/src/tradingx/sleeves/regime_gate.py:20)
+  returns `0` exposure in `stressed` regime; this is the
+  intended D4 behavior from BRIEF-0002 ("cash is a
+  consequence"), not a sleeve failure. The `SleeveRuntimeController`
+  does NOT emit `REGIME_STRESSED` as a controller-level
+  termination — the zero-exposure comes from the sleeve's own
+  `plan_for_bar` via the regime gate. The sleeve continues
+  running normally; it just holds no position in `stressed`
+  regime. When regime flips back (e.g., VIX falls below 35),
+  the sleeve resumes exposure automatically without blueprint
+  action. Narrowing the blueprint on stressed regime would
+  reinterpret a normal risk-off state as structural sleeve
+  failure and require an operator-triggered reactivation to
+  re-add the sleeve — operationally wrong.
+- **`INSUFFICIENT_HISTORY`.** Short-window emission by the
+  sleeve itself; resolves as history accumulates.
+- **Single-cycle terminations.** The 3-cycle persistence rule
+  above: transient single-cycle critical-drift or
+  Sharpe-gate firings do not narrow the blueprint.
+
+Transient terminations in any of the three structural
+categories also do NOT trigger narrowing — narrowing is for
+**sustained** structural failure only.
 
 **Rollback drill (integration test):**
 
@@ -936,10 +1103,13 @@ Sub-tranche 2.1 Stage 1 is complete when:
    element-wise regression test passes.
 4. Service loop writes `SleeveDecompositionRecord` sidecar
    per cycle when blueprint is active.
-5. `sleeve_id` threads through `TradeIntent`,
-   `ExecutionLifecycleRecord`, `ClosedTradeRecord`; all three
-   default to `None` for backwards compatibility; blueprint-
-   based paths populate.
+5. `sleeve_attributions` threads through `TradeIntent`,
+   `ExecutionLifecycleRecord`, `ClosedTradeRecord` (entry +
+   exit variants on `ClosedTradeRecord`); all fields default
+   to the empty tuple for backwards compatibility; blueprint-
+   based paths populate with fractions that sum to 1.0 within
+   tolerance. Gate 3 per-sleeve evidence reader produces
+   correct notional sums on the two-sleeve paper fixture.
 6. Artifact regeneration triggers on both activation change
    (blueprint_id differs from last-seen) AND operator
    recalibration (pending file written by
