@@ -9,6 +9,7 @@ import pytest
 from tradingx.drift.blueprint import DriftMonitorBlueprint
 from tradingx.drift.gateway import (
     DRIFT_ALARM_CONTROL_TYPE,
+    ArtifactBackedDriftAlarmStateReader,
     DriftAlarmGateway,
 )
 from tradingx.drift.reference import (
@@ -16,7 +17,9 @@ from tradingx.drift.reference import (
     ReferenceDistributionSnapshot,
     SignalDistribution,
 )
+from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
+    DriftMonitorVerdictRecord,
     OperatorAlert,
     ReplaySlippageRecord,
     RiskControlEvent,
@@ -211,6 +214,95 @@ def test_refresh_emits_one_risk_control_event_per_verdict(base_snapshot) -> None
     assert all(
         event.control_type == DRIFT_ALARM_CONTROL_TYPE for event in risk_sink.events
     )
+
+
+def test_artifact_backed_alarm_reader_uses_latest_persisted_verdict_batch(
+    base_snapshot,
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    gateway = DriftAlarmGateway(
+        blueprint=DriftMonitorBlueprint(blueprint_id="bp"),
+        reference_snapshot=base_snapshot,
+        feature_sample_reader=_FeatureReader(
+            {
+                "spy_close_over_sma_200": pd.Series(
+                    [index / 1000 for index in range(1000)]
+                ),
+            }
+        ),
+        signal_sample_reader=_SignalReader(
+            {
+                "trend-following-v1": pd.Series([5.0] * 100),
+                "vol-target-v1": pd.Series([value / 100 for value in range(100)]),
+            }
+        ),
+        replay_records_reader=_ReplayReader(records=()),
+        attribution_records_reader=_AttributionReader(records=()),
+        backtest_reference_returns_reader=_ReferenceReturnsReader(returns={}),
+        risk_control_event_sink=_RiskEventSink(),
+        alert_gateway=_AlertGateway(),
+        verdict_sink=store,
+        now_provider=lambda: datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+    )
+
+    gateway.refresh()
+
+    reader = ArtifactBackedDriftAlarmStateReader(store=store)
+    assert reader.has_alarm(sleeve_id="trend-following-v1") is True
+    assert reader.has_alarm(sleeve_id="vol-target-v1") is False
+
+    # A later all-info batch clears the previously persisted critical signal.
+    info_gateway = DriftAlarmGateway(
+        blueprint=DriftMonitorBlueprint(blueprint_id="bp"),
+        reference_snapshot=base_snapshot,
+        feature_sample_reader=_FeatureReader(
+            {
+                "spy_close_over_sma_200": pd.Series(
+                    [index / 1000 for index in range(1000)]
+                ),
+            }
+        ),
+        signal_sample_reader=_SignalReader(
+            {
+                "trend-following-v1": pd.Series([value / 100 for value in range(100)]),
+                "vol-target-v1": pd.Series([value / 100 for value in range(100)]),
+            }
+        ),
+        replay_records_reader=_ReplayReader(records=()),
+        attribution_records_reader=_AttributionReader(records=()),
+        backtest_reference_returns_reader=_ReferenceReturnsReader(returns={}),
+        risk_control_event_sink=_RiskEventSink(),
+        alert_gateway=_AlertGateway(),
+        verdict_sink=store,
+        now_provider=lambda: datetime(2026, 4, 24, 20, 0, tzinfo=UTC),
+    )
+    info_gateway.refresh()
+
+    assert reader.has_alarm(sleeve_id="trend-following-v1") is False
+
+
+def test_artifact_backed_alarm_reader_ignores_portfolio_level_critical_verdicts(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-1",
+            monitor_id="psi::spy_close_over_sma_200",
+            sleeve_id=None,
+            severity="critical",
+            metric_value=Decimal("0.41"),
+            threshold_value=Decimal("0.35"),
+            details="psi critical",
+            recorded_at_utc=datetime(2026, 4, 25, 20, 0, tzinfo=UTC),
+        )
+    )
+
+    reader = ArtifactBackedDriftAlarmStateReader(store=store)
+
+    assert reader.has_alarm(sleeve_id="trend-following-v1") is False
+    assert reader.has_alarm(sleeve_id="vol-target-v1") is False
 
 
 def test_ks_sleeve_without_registry_candidate_records_pending(base_snapshot) -> None:

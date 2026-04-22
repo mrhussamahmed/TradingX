@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, cast
 
 from alpaca.trading.client import TradingClient
 
@@ -12,26 +13,37 @@ from tradingx.activation import LocalActivationGateway
 from tradingx.config import TradingConfig
 from tradingx.controller import build_default_paper_trading_controller
 from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
+from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
 from tradingx.historical import HistoricalWarmupService
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.portfolio.blueprint import PortfolioBlueprint, load_portfolio_blueprint
+from tradingx.portfolio.fallback import (
+    ActivationGatewaySupersedeProtocol,
+    BlueprintExhaustionError,
+    narrow_blueprint_on_sleeve_failure,
+)
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
 )
-from tradingx.runtime_portfolio import RuntimePortfolioPlan
+from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioPlanner
 from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     build_default_runtime_registry,
 )
+from tradingx.trials import TrialsLedger
 from tradingx.types import (
+    BlueprintActivationRecord,
+    OperatorAlert,
     PortfolioState,
     ServiceCycleSnapshot,
     ServiceRunResult,
     ServiceSymbolResult,
+    SleeveDecompositionRecord,
     TradingLoopResult,
 )
 
@@ -92,6 +104,7 @@ class PaperTradingService:
         self._session_start_equity: Decimal | None = None
         self._last_successful_broker_call_at: datetime | None = None
         self._last_known_portfolio_state: PortfolioState | None = None
+        self._sleeve_failure_streaks: dict[str, tuple[str, int]] = {}
 
     def run(
         self,
@@ -204,6 +217,11 @@ class PaperTradingService:
                     portfolio_plan = None
                 if portfolio_plan is not None:
                     self._artifacts.write_runtime_portfolio_plan(portfolio_plan)
+                    self._write_sleeve_decomposition_record_if_available(
+                        plan=portfolio_plan,
+                        cycle_id=service_cycle_id,
+                        started_at=started_at,
+                    )
                     executor = getattr(
                         self._loop_controller,
                         "execute_trade_intent",
@@ -247,7 +265,17 @@ class PaperTradingService:
                         if not result.reconciliation.resolved:
                             reconciliation_failure_count += 1
                             cycle_status = "recovery_required"
+                    fallback_cycle_status = (
+                        self._maybe_narrow_blueprint_after_structural_failures(
+                            plan=portfolio_plan,
+                            started_at=started_at,
+                            cycle_correlation_id=service_cycle_id,
+                        )
+                    )
+                    if fallback_cycle_status is not None:
+                        cycle_status = fallback_cycle_status
                 elif self._portfolio_planner is None:
+                    self._sleeve_failure_streaks.clear()
                     (
                         symbol_results,
                         blocked_trade_count,
@@ -276,6 +304,7 @@ class PaperTradingService:
                             ),
                         },
                     )
+                    self._sleeve_failure_streaks.clear()
                 broker_status_after_cycle, portfolio_state = (
                     self._get_portfolio_state_guarded()
                 )
@@ -523,6 +552,159 @@ class PaperTradingService:
             fields=fields,
         )
 
+    def _write_sleeve_decomposition_record_if_available(
+        self,
+        *,
+        plan: RuntimePortfolioPlan,
+        cycle_id: str,
+        started_at: datetime,
+    ) -> None:
+        if not plan.per_sleeve_target_weights:
+            return
+        activation_getter = getattr(
+            self._portfolio_planner,
+            "get_active_blueprint_activation",
+            None,
+        )
+        if not callable(activation_getter):
+            return
+        active_blueprint = activation_getter()
+        if active_blueprint is None:
+            return
+        record = SleeveDecompositionRecord(
+            decomposition_id=f"decomposition-{cycle_id}",
+            cycle_id=cycle_id,
+            trading_day=started_at.date().isoformat(),
+            recorded_at_utc=self._now_provider(),
+            blueprint_activation_id=active_blueprint.activation_id,
+            per_sleeve_target_weights=plan.per_sleeve_target_weights,
+        )
+        self._artifacts.write_sleeve_decomposition_record(record)
+
+    def _maybe_narrow_blueprint_after_structural_failures(
+        self,
+        *,
+        plan: RuntimePortfolioPlan,
+        started_at: datetime,
+        cycle_correlation_id: str,
+    ) -> str | None:
+        activation_getter = getattr(
+            self._portfolio_planner,
+            "get_active_blueprint_activation",
+            None,
+        )
+        if not callable(activation_getter):
+            self._sleeve_failure_streaks.clear()
+            return None
+        active_activation = activation_getter()
+        if active_activation is None:
+            self._sleeve_failure_streaks.clear()
+            return None
+        supersede_method = getattr(
+            self._portfolio_planner,
+            "supersede_active_blueprint",
+            None,
+        )
+        if not callable(supersede_method):
+            self._sleeve_failure_streaks.clear()
+            return None
+
+        failure_by_sleeve = dict(plan.sleeve_failure_reasons)
+        active_sleeve_ids = {
+            binding.sleeve_id
+            for binding in active_activation.sleeve_activation_bindings
+        }
+        for sleeve_id in tuple(self._sleeve_failure_streaks):
+            if sleeve_id not in active_sleeve_ids or sleeve_id not in failure_by_sleeve:
+                self._sleeve_failure_streaks.pop(sleeve_id, None)
+
+        for sleeve_id, failure_reason in failure_by_sleeve.items():
+            current_reason, current_count = self._sleeve_failure_streaks.get(
+                sleeve_id,
+                ("", 0),
+            )
+            next_count = current_count + 1 if current_reason == failure_reason else 1
+            self._sleeve_failure_streaks[sleeve_id] = (failure_reason, next_count)
+            if next_count < 3:
+                continue
+            try:
+                narrow_blueprint_on_sleeve_failure(
+                    active_blueprint=self._active_blueprint_for_activation(
+                        active_activation
+                    ),
+                    active_activation=active_activation,
+                    failed_sleeve_id=sleeve_id,
+                    failure_reason=failure_reason,
+                    operator_identifier="system:service-fallback",
+                    now=started_at,
+                    activation_gateway=cast(
+                        ActivationGatewaySupersedeProtocol,
+                        self._portfolio_planner,
+                    ),
+                    risk_control_event_sink=self._artifacts,
+                    alert_gateway=_ArtifactAlertGateway(store=self._artifacts),
+                )
+            except BlueprintExhaustionError as error:
+                if self._operator_control_store is not None:
+                    self._operator_control_store.request_halt(now=started_at)
+                self._log_cycle_event(
+                    event_type="blueprint_exhausted",
+                    severity="warning",
+                    message="Blueprint narrowing would leave zero surviving sleeves.",
+                    cycle_correlation_id=cycle_correlation_id,
+                    fields={
+                        "error": str(error),
+                        "failed_sleeve_id": sleeve_id,
+                    },
+                )
+                self._sleeve_failure_streaks.clear()
+                return "recovery_required"
+            self._log_cycle_event(
+                event_type="blueprint_narrowed",
+                severity="warning",
+                message="Blueprint narrowed after structural sleeve failure.",
+                cycle_correlation_id=cycle_correlation_id,
+                fields={
+                    "failed_sleeve_id": sleeve_id,
+                    "failure_reason": failure_reason,
+                },
+            )
+            self._sleeve_failure_streaks.clear()
+            return None
+        return None
+
+    def _active_blueprint_for_activation(
+        self,
+        activation: BlueprintActivationRecord,
+    ) -> PortfolioBlueprint:
+        blueprint = load_portfolio_blueprint(activation.source_blueprint_path)
+        active_sleeve_ids = {
+            binding.sleeve_id for binding in activation.sleeve_activation_bindings
+        }
+        narrowed_budgets = tuple(
+            budget
+            for budget in blueprint.sleeve_budgets
+            if budget.sleeve_id in active_sleeve_ids
+        )
+        if len(narrowed_budgets) != len(active_sleeve_ids):
+            raise ValueError(
+                "Active blueprint activation references sleeves missing from the "
+                "source blueprint file."
+            )
+        return dataclasses.replace(
+            blueprint,
+            blueprint_id=activation.blueprint_id,
+            sleeve_budgets=narrowed_budgets,
+        )
+
+
+class _ArtifactAlertGateway:
+    def __init__(self, *, store: FilesystemArtifactStore) -> None:
+        self._store = store
+
+    def publish(self, alert: OperatorAlert) -> None:
+        self._store.write_operator_alert(alert)
+
 
 def build_default_paper_service(
     config: TradingConfig,
@@ -537,6 +719,8 @@ def build_default_paper_service(
     operator_store = FilesystemArtifactStore(
         config.runtime.artifact_root / "operator_platform"
     )
+    paper_store = FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop")
+    runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
     market_data_gateway = build_default_market_data_gateway(config)
     runtime_registry = build_default_runtime_registry(
         market_data_gateway=market_data_gateway,
@@ -546,19 +730,29 @@ def build_default_paper_service(
         store=operator_store,
         strategy_id_validator=runtime_registry.can_resolve,
     )
+    operator_control_store = OperatorControlStore(config.runtime.data_root / "control")
+    blueprint_planner = RuntimePortfolioPlanner(
+        market_data=market_data_gateway,
+        activation_gateway=activation_gateway,
+        artifact_store=paper_store,
+        operator_halt_store=operator_control_store,
+        drift_alarm_gateway=ArtifactBackedDriftAlarmStateReader(store=runtime_store),
+        trials_ledger=TrialsLedger(
+            database_path=config.runtime.data_root / "validation" / "trials.db"
+        ),
+    )
     return PaperTradingService(
         loop_controller=build_default_paper_trading_controller(config),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
-        artifacts=FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop"),
+        artifacts=paper_store,
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         portfolio_planner=ActivatedRuntimePlanner(
             activation_gateway=activation_gateway,
             registry=runtime_registry,
+            blueprint_planner=blueprint_planner,
         ),
-        operator_control_store=OperatorControlStore(
-            config.runtime.data_root / "control"
-        ),
+        operator_control_store=operator_control_store,
         runtime_logger=build_default_runtime_logger(config, component="service"),
     )
 

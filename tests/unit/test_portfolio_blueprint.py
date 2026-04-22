@@ -66,3 +66,45 @@ def test_blueprint_is_frozen() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         blueprint.blueprint_id = "bp-2"  # type: ignore[misc]
+
+
+def test_sleeve_risk_budget_strategy_id_defaults_to_none() -> None:
+    budget = SleeveRiskBudget(
+        sleeve_id="trend-following-v1",
+        budget_fraction_of_equity=Decimal("0.5"),
+        max_correlation_with_other_sleeves=Decimal("0.85"),
+    )
+    assert budget.strategy_id is None
+
+
+def test_sleeve_risk_budget_accepts_explicit_strategy_id() -> None:
+    budget = SleeveRiskBudget(
+        sleeve_id="trend-following-v1",
+        budget_fraction_of_equity=Decimal("0.5"),
+        max_correlation_with_other_sleeves=Decimal("0.85"),
+        strategy_id="trend-following-v1-paper",
+    )
+    assert budget.strategy_id == "trend-following-v1-paper"
+
+
+def test_effective_strategy_id_falls_back_to_sleeve_id_when_none() -> None:
+    from tradingx.portfolio.blueprint import effective_strategy_id
+
+    budget = SleeveRiskBudget(
+        sleeve_id="trend-following-v1",
+        budget_fraction_of_equity=Decimal("0.5"),
+        max_correlation_with_other_sleeves=Decimal("0.85"),
+    )
+    assert effective_strategy_id(budget) == "trend-following-v1"
+
+
+def test_effective_strategy_id_honors_explicit_field() -> None:
+    from tradingx.portfolio.blueprint import effective_strategy_id
+
+    budget = SleeveRiskBudget(
+        sleeve_id="trend-following-v1",
+        budget_fraction_of_equity=Decimal("0.5"),
+        max_correlation_with_other_sleeves=Decimal("0.85"),
+        strategy_id="trend-following-v1-paper",
+    )
+    assert effective_strategy_id(budget) == "trend-following-v1-paper"

@@ -26,6 +26,7 @@ from tradingx.signals.trend import generate_trend_signal
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
+    DriftMonitorVerdictRecord,
     OperatorAlert,
     ReplaySlippageRecord,
     RiskControlEvent,
@@ -81,6 +82,13 @@ class RiskControlEventSinkProtocol(Protocol):
 
 class OperatorAlertGatewayProtocol(Protocol):
     def publish(self, alert: OperatorAlert) -> None: ...
+
+
+class DriftMonitorVerdictSinkProtocol(Protocol):
+    def write_drift_monitor_verdict_record(
+        self,
+        record: DriftMonitorVerdictRecord,
+    ) -> object: ...
 
 
 class MarketDataHistoryProtocol(Protocol):
@@ -303,6 +311,8 @@ class DriftAlarmGateway:
         backtest_reference_returns_reader: BacktestReferenceReturnsReaderProtocol,
         risk_control_event_sink: RiskControlEventSinkProtocol,
         alert_gateway: OperatorAlertGatewayProtocol,
+        verdict_sink: DriftMonitorVerdictSinkProtocol | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._blueprint = blueprint
         self._reference_snapshot = reference_snapshot
@@ -313,6 +323,8 @@ class DriftAlarmGateway:
         self._backtest_reference_reader = backtest_reference_returns_reader
         self._risk_sink = risk_control_event_sink
         self._alert_gateway = alert_gateway
+        self._verdict_sink = verdict_sink
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._latest_verdicts: tuple[DriftMonitorVerdict, ...] = ()
 
     def has_alarm(self, *, sleeve_id: str) -> bool:
@@ -324,6 +336,7 @@ class DriftAlarmGateway:
         return False
 
     def refresh(self) -> tuple[DriftMonitorVerdict, ...]:
+        recorded_at_utc = self._now_provider().astimezone(UTC)
         verdicts = (
             *self._psi_verdicts(),
             *self._ks_verdicts(),
@@ -334,6 +347,13 @@ class DriftAlarmGateway:
             self._risk_sink.write_risk_control_event(self._to_risk_event(verdict))
             if verdict.severity in {"warning", "critical"}:
                 self._alert_gateway.publish(self._to_alert(verdict))
+            if self._verdict_sink is not None:
+                self._verdict_sink.write_drift_monitor_verdict_record(
+                    build_drift_monitor_verdict_record(
+                        verdict=verdict,
+                        recorded_at_utc=recorded_at_utc,
+                    )
+                )
         self._latest_verdicts = tuple(verdicts)
         return self._latest_verdicts
 
@@ -559,6 +579,41 @@ class DriftAlarmGateway:
         )
 
 
+class ArtifactBackedDriftAlarmStateReader:
+    def __init__(self, *, store: FilesystemArtifactStore) -> None:
+        self._store = store
+
+    def has_alarm(self, *, sleeve_id: str) -> bool:
+        records = self._store.list_drift_monitor_verdict_records()
+        if not records:
+            return False
+        latest_recorded_at = max(record.recorded_at_utc for record in records)
+        latest_batch = tuple(
+            record for record in records if record.recorded_at_utc == latest_recorded_at
+        )
+        return any(
+            record.severity == "critical" and record.sleeve_id == sleeve_id
+            for record in latest_batch
+        )
+
+
+def build_drift_monitor_verdict_record(
+    *,
+    verdict: DriftMonitorVerdict,
+    recorded_at_utc: datetime,
+) -> DriftMonitorVerdictRecord:
+    return DriftMonitorVerdictRecord(
+        verdict_id=f"drift-verdict-{uuid.uuid4()}",
+        monitor_id=verdict.monitor_id,
+        sleeve_id=verdict.sleeve_id,
+        severity=verdict.severity,
+        metric_value=verdict.metric_value,
+        threshold_value=verdict.threshold_value,
+        details=verdict.details,
+        recorded_at_utc=recorded_at_utc.astimezone(UTC),
+    )
+
+
 def _candidate_for_sleeve(sleeve_id: str) -> StrategyCandidate | None:
     for candidate in build_mandatory_candidate_registry():
         if candidate.candidate_id == sleeve_id:
@@ -583,9 +638,11 @@ def _pending_verdict(
 
 
 __all__ = (
+    "ArtifactBackedDriftAlarmStateReader",
     "ArtifactBacktestReferenceReturnsReader",
     "AttributionRecordsReaderProtocol",
     "BacktestReferenceReturnsReaderProtocol",
+    "build_drift_monitor_verdict_record",
     "DRIFT_ALARM_CONTROL_TYPE",
     "DriftAlarmGateway",
     "DriftMonitorVerdict",

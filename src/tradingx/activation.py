@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio.blueprint import PortfolioBlueprint, effective_strategy_id
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     StrategyActivationRecord,
     StrategyCandidate,
 )
@@ -19,18 +24,25 @@ from tradingx.weights import (
 )
 
 
+class BlueprintActivationValidationError(ValueError):
+    """Raised when a blueprint cannot be resolved against approved snapshots."""
+
+
 class LocalActivationGateway:
     def __init__(
         self,
         *,
         store: FilesystemArtifactStore,
         approved_snapshot_store: ApprovedWeightSnapshotStore | None = None,
+        snapshot_store: ApprovedWeightSnapshotStore | None = None,
         now_provider: Callable[[], datetime] | None = None,
         strategy_id_validator: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
-        self._approved_snapshot_store = approved_snapshot_store or (
-            ApprovedWeightSnapshotStore(default_approved_weight_snapshot_root())
+        self._snapshot_store = (
+            snapshot_store
+            or approved_snapshot_store
+            or (ApprovedWeightSnapshotStore(default_approved_weight_snapshot_root()))
         )
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._strategy_id_validator = strategy_id_validator
@@ -59,9 +71,7 @@ class LocalActivationGateway:
 
         snapshot = self.get_latest_snapshot(strategy_id=activation.strategy_id)
         if snapshot is None:
-            snapshot = self._approved_snapshot_store.load_by_strategy_id(
-                activation.strategy_id
-            )
+            snapshot = self._snapshot_store.load_by_strategy_id(activation.strategy_id)
         self._store.write_model_weight_snapshot(snapshot)
         return activation, snapshot
 
@@ -89,7 +99,7 @@ class LocalActivationGateway:
 
     def get_latest_snapshot(self, *, strategy_id: str) -> ApprovedWeightSnapshot | None:
         try:
-            return self._approved_snapshot_store.load_by_strategy_id(strategy_id)
+            return self._snapshot_store.load_by_strategy_id(strategy_id)
         except ApprovedWeightSnapshotNotFoundError:
             return None
 
@@ -104,6 +114,84 @@ class LocalActivationGateway:
                 return candidate
         return None
 
+    def load_or_activate_blueprint(
+        self,
+        *,
+        blueprint: PortfolioBlueprint,
+        operator_identifier: str,
+        source_blueprint_path: Path,
+    ) -> BlueprintActivationRecord:
+        bindings: list[BlueprintSleeveBinding] = []
+        for budget in blueprint.sleeve_budgets:
+            strategy_id = effective_strategy_id(budget)
+            self._validate_strategy_id(strategy_id)
+            try:
+                snapshot = self._snapshot_store.load_by_strategy_id(strategy_id)
+            except ApprovedWeightSnapshotNotFoundError as exc:
+                raise BlueprintActivationValidationError(
+                    f"strategy_id {strategy_id!r} bound to sleeve "
+                    f"{budget.sleeve_id!r} has no approved-weight snapshot"
+                ) from exc
+            bindings.append(
+                BlueprintSleeveBinding(
+                    sleeve_id=budget.sleeve_id,
+                    strategy_id=strategy_id,
+                    captured_snapshot_id=snapshot.snapshot_id,
+                )
+            )
+
+        active = self.get_active_blueprint_activation()
+        normalized_bindings = tuple(bindings)
+        if active is not None:
+            if (
+                active.blueprint_id == blueprint.blueprint_id
+                and active.sleeve_activation_bindings == normalized_bindings
+            ):
+                return active
+
+        record = BlueprintActivationRecord(
+            activation_id=f"activation-{uuid.uuid4()}",
+            blueprint_id=blueprint.blueprint_id,
+            sleeve_activation_bindings=normalized_bindings,
+            status="active",
+            approved_at_utc=self._now(),
+            approved_by=operator_identifier,
+            source_blueprint_path=source_blueprint_path,
+        )
+        self._store.write_blueprint_activation_record(record)
+        return record
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        records = self._store.list_blueprint_activation_records()
+        active = tuple(record for record in records if record.status == "active")
+        if not active:
+            return None
+        return max(active, key=lambda record: record.approved_at_utc)
+
+    def supersede_active_blueprint(
+        self,
+        *,
+        new_activation: BlueprintActivationRecord,
+        now: datetime,
+    ) -> BlueprintActivationRecord:
+        self._store.write_blueprint_activation_record(new_activation)
+        active_records = tuple(
+            record
+            for record in self._store.list_blueprint_activation_records()
+            if record.status == "active"
+            and record.activation_id != new_activation.activation_id
+        )
+        if not active_records:
+            return new_activation
+        predecessor = max(active_records, key=lambda record: record.approved_at_utc)
+        updated = dataclasses.replace(
+            predecessor,
+            status="superseded",
+            superseded_at_utc=now,
+        )
+        self._store.write_blueprint_activation_record(updated)
+        return updated
+
     def _validate_strategy_id(self, strategy_id: str) -> None:
         if self._strategy_id_validator is not None and not self._strategy_id_validator(
             strategy_id
@@ -113,5 +201,8 @@ class LocalActivationGateway:
                 f"{strategy_id} is not resolvable by the runtime planner."
             )
 
+    def _now(self) -> datetime:
+        return self._now_provider()
 
-__all__ = ("LocalActivationGateway",)
+
+__all__ = ("BlueprintActivationValidationError", "LocalActivationGateway")

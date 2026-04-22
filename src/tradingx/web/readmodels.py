@@ -16,6 +16,7 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
+    BlueprintActivationRecord,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -63,6 +64,7 @@ from tradingx.types import (
     RuntimeSymbolHeartbeatRow,
     RuntimeTruthItem,
     ScalarValue,
+    SleeveDailyAttributionRecord,
     StrategyActivationRecord,
     StrategyAttributionRow,
     StrategyHeatmapCell,
@@ -1106,6 +1108,62 @@ class LocalWebReadModel:
         closed_trades: list[dict[str, object]],
         runtime_state: BotRuntimeState,
     ) -> PortfolioStrategyPanel:
+        active_blueprint = self._latest_active_blueprint_activation()
+        if active_blueprint is not None:
+            drift_by_sleeve = self._latest_drift_severity_by_sleeve()
+            trade_counts = self._closed_trade_count_by_sleeve(closed_trades)
+            rows: list[PortfolioStrategyRow] = []
+            for binding in active_blueprint.sleeve_activation_bindings:
+                attribution = self._latest_sleeve_daily_attribution(binding.sleeve_id)
+                pnl = (
+                    self._format_signed_money(
+                        attribution.ending_equity - attribution.starting_equity
+                    )
+                    if attribution is not None
+                    else "n/a"
+                )
+                daily_return = (
+                    self._format_percent(
+                        attribution.daily_return * Decimal("100"), signed=True
+                    )
+                    if attribution is not None
+                    else "pending"
+                )
+                rows.append(
+                    PortfolioStrategyRow(
+                        strategy_id=binding.sleeve_id,
+                        label=binding.sleeve_id.replace("-v1", "")
+                        .replace("-", " ")
+                        .title(),
+                        status=(
+                            "halted"
+                            if self._is_sleeve_halted(binding.sleeve_id)
+                            else "active"
+                        ),
+                        pnl=pnl,
+                        trade_count=str(trade_counts.get(binding.sleeve_id, 0)),
+                        win_rate="n/a",
+                        max_drawdown="n/a",
+                        detail=(
+                            f"Daily return {daily_return}; drift {drift_by_sleeve.get(binding.sleeve_id, 'pending')}."
+                        ),
+                        drift_severity=drift_by_sleeve.get(
+                            binding.sleeve_id, "pending"
+                        ),
+                    )
+                )
+            return PortfolioStrategyPanel(
+                status="available",
+                headline="Blueprint sleeve attribution is available",
+                detail="The active blueprint is driving per-sleeve runtime and drift views.",
+                strategies=tuple(rows),
+                active_blueprint_id=active_blueprint.blueprint_id,
+                constituent_sleeve_ids=tuple(
+                    binding.sleeve_id
+                    for binding in active_blueprint.sleeve_activation_bindings
+                ),
+                narrowing_notice=self._latest_blueprint_narrowing_notice(),
+            )
         if not closed_trades:
             return PortfolioStrategyPanel(
                 status="unavailable",
@@ -1131,9 +1189,78 @@ class LocalWebReadModel:
                     win_rate="n/a",
                     max_drawdown="n/a",
                     detail="Only closed-trade count is available right now.",
+                    drift_severity="pending",
                 ),
             ),
         )
+
+    def _latest_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        records = self._operator_platform_store().list_blueprint_activation_records()
+        active = tuple(record for record in records if record.status == "active")
+        if not active:
+            return None
+        return max(active, key=lambda record: record.approved_at_utc)
+
+    def _latest_sleeve_daily_attribution(
+        self,
+        sleeve_id: str,
+    ) -> SleeveDailyAttributionRecord | None:
+        records = FilesystemArtifactStore(
+            self._config.runtime.artifact_root
+        ).list_sleeve_daily_attribution_records(sleeve_id=sleeve_id)
+        if not records:
+            return None
+        return max(records, key=lambda record: record.recorded_at_utc)
+
+    def _latest_drift_severity_by_sleeve(self) -> dict[str, str]:
+        store = FilesystemArtifactStore(self._config.runtime.artifact_root)
+        payloads = store.list_artifact_payloads("operator_alerts")
+        by_sleeve: dict[str, str] = {}
+        pattern = re.compile(r"^[a-z_]+::(?P<sleeve_id>[^ ]+) (?P<severity>[A-Z]+):")
+        for payload in payloads:
+            if str(payload.get("category", "")) != "portfolio_drift_alarm":
+                continue
+            summary = str(payload.get("summary", ""))
+            match = pattern.match(summary)
+            if match is None:
+                continue
+            by_sleeve[match.group("sleeve_id")] = match.group("severity").lower()
+        return by_sleeve
+
+    def _closed_trade_count_by_sleeve(
+        self,
+        closed_trades: list[dict[str, object]],
+    ) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for payload in closed_trades:
+            sleeve_ids: set[str] = set()
+            for field in (
+                "entry_sleeve_attributions",
+                "exit_sleeve_attributions",
+            ):
+                for entry in self._ensure_list(payload.get(field, ())):
+                    if isinstance(entry, (list, tuple)) and entry:
+                        sleeve_ids.add(str(entry[0]))
+            for sleeve_id in sleeve_ids:
+                counts[sleeve_id] = counts.get(sleeve_id, 0) + 1
+        return counts
+
+    def _is_sleeve_halted(self, sleeve_id: str) -> bool:
+        path = self._data_root_path() / "control" / "sleeve_halts" / f"{sleeve_id}.json"
+        return path.exists()
+
+    def _latest_blueprint_narrowing_notice(self) -> str | None:
+        payloads = self._paper_store.list_artifact_payloads("operator_alerts")
+        narrowed = [
+            payload
+            for payload in payloads
+            if str(payload.get("category", "")) == "blueprint_narrowed"
+        ]
+        if not narrowed:
+            return None
+        latest = max(narrowed, key=lambda payload: str(payload.get("sent_at_utc", "")))
+        summary = str(latest.get("summary", "")).strip()
+        return summary or None
 
     def _build_portfolio_execution_panel(
         self,

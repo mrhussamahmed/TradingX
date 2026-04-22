@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from tradingx.baseline_runtime_planner import BaselineLongOnlyPlanner
 from tradingx.runtime_portfolio import RuntimePortfolioPlan
@@ -11,6 +12,8 @@ from tradingx.runtime_strategy_registry import (
 )
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     MarketSnapshot,
     OpportunityScore,
     OpportunitySelectionRecord,
@@ -80,9 +83,16 @@ class FakeSelector:
 
 
 class FakeActivationGateway:
-    def __init__(self, *, strategy_id: str, approved_symbols: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        *,
+        strategy_id: str,
+        approved_symbols: tuple[str, ...],
+        blueprint_activation: BlueprintActivationRecord | None = None,
+    ) -> None:
         self.strategy_id = strategy_id
         self.approved_symbols = approved_symbols
+        self._blueprint_activation = blueprint_activation
 
     def load_or_create_active_records(
         self,
@@ -111,8 +121,27 @@ class FakeActivationGateway:
             ),
         )
 
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        return self._blueprint_activation
+
 
 class CapturingResolver:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], Decimal]] = []
+
+    def plan_for_service(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        portfolio_state: PortfolioState,
+        default_quantity: Decimal,
+    ) -> RuntimePortfolioPlan | None:
+        del portfolio_state
+        self.calls.append((symbols, default_quantity))
+        return None
+
+
+class CapturingBlueprintPlanner:
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[str, ...], Decimal]] = []
 
@@ -212,3 +241,44 @@ def test_activated_runtime_planner_passes_activation_quantity() -> None:
 
     assert plan is None
     assert resolver.calls == [(("SPY", "QQQ"), Decimal("3"))]
+
+
+def test_activated_runtime_planner_uses_blueprint_planner_when_active() -> None:
+    resolver = CapturingResolver()
+    blueprint_planner = CapturingBlueprintPlanner()
+    registry = RuntimeStrategyRegistry()
+    registry.register("baseline-long-only-v1", resolver)
+    planner = ActivatedRuntimePlanner(
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            approved_symbols=("SPY", "QQQ"),
+            blueprint_activation=BlueprintActivationRecord(
+                activation_id="bp-activation-1",
+                blueprint_id="bp-runtime",
+                sleeve_activation_bindings=(
+                    BlueprintSleeveBinding(
+                        sleeve_id="trend-following-v1",
+                        strategy_id="trend-following-v1",
+                        captured_snapshot_id="approved-trend",
+                    ),
+                ),
+                status="active",
+                approved_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+                approved_by="operator",
+                source_blueprint_path=Path("/tmp/bp-runtime.yaml"),
+            ),
+        ),
+        registry=registry,
+        blueprint_planner=blueprint_planner,
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=_portfolio_state(),
+        default_quantity=Decimal("3"),
+    )
+
+    assert plan is None
+    assert resolver.calls == []
+    assert blueprint_planner.calls == [(("SPY",), Decimal("3"))]
+    assert planner.last_strategy_id == "bp-runtime"

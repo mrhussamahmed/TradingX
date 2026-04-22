@@ -12,6 +12,8 @@ from tradingx.drift.attribution import (
 from tradingx.types import (
     PortfolioState,
     PositionSnapshot,
+    SleeveDecompositionRecord,
+    SleeveTargetWeights,
     StrategyCandidate,
 )
 
@@ -96,6 +98,20 @@ class _FakeStore:
         self.written.append(record)
 
 
+class _FakeDecompositionStore:
+    def __init__(self, records: tuple[SleeveDecompositionRecord, ...]) -> None:
+        self._records = records
+
+    def list_sleeve_decomposition_records(
+        self,
+        *,
+        trading_day: str,
+    ) -> tuple[SleeveDecompositionRecord, ...]:
+        return tuple(
+            record for record in self._records if record.trading_day == trading_day
+        )
+
+
 def test_recorder_skips_non_sleeve_active_strategy() -> None:
     candidate = StrategyCandidate(
         candidate_id="baseline-long-only-v1",
@@ -118,7 +134,7 @@ def test_recorder_skips_non_sleeve_active_strategy() -> None:
         close_portfolio_state=_state(equity=Decimal("101000")),
     )
 
-    assert result is None
+    assert result == ()
 
 
 def test_recorder_writes_record_for_sleeve_backed_active_strategy() -> None:
@@ -144,6 +160,71 @@ def test_recorder_writes_record_for_sleeve_backed_active_strategy() -> None:
         close_portfolio_state=_state(equity=Decimal("101000")),
     )
 
-    assert result is not None
-    assert result.sleeve_id == "trend-following-v1"
-    assert store.written == [result]
+    assert result == tuple(store.written)
+    assert result[0].sleeve_id == "trend-following-v1"
+    assert len(store.written) == 1
+
+
+def test_recorder_prefers_decomposition_records_when_present() -> None:
+    store = _FakeStore()
+    recorder = SleeveAttributionRecorder(
+        activation_gateway=_FakeActivationGateway(candidate=None),
+        attribution_store=store,
+        now_provider=lambda: datetime(2026, 4, 21, 20, 0, tzinfo=UTC),
+        decomposition_store=_FakeDecompositionStore(
+            (
+                SleeveDecompositionRecord(
+                    decomposition_id="decomp-open",
+                    cycle_id="cycle-open",
+                    trading_day="2026-04-21",
+                    recorded_at_utc=datetime(2026, 4, 21, 9, 30, tzinfo=UTC),
+                    blueprint_activation_id="bp-1",
+                    per_sleeve_target_weights=(
+                        SleeveTargetWeights(
+                            sleeve_id="trend-following-v1",
+                            target_weights_by_symbol=(("SPY", Decimal("0.4")),),
+                        ),
+                        SleeveTargetWeights(
+                            sleeve_id="vol-target-v1",
+                            target_weights_by_symbol=(("SPY", Decimal("0.2")),),
+                        ),
+                    ),
+                ),
+                SleeveDecompositionRecord(
+                    decomposition_id="decomp-close",
+                    cycle_id="cycle-close",
+                    trading_day="2026-04-21",
+                    recorded_at_utc=datetime(2026, 4, 21, 16, 0, tzinfo=UTC),
+                    blueprint_activation_id="bp-1",
+                    per_sleeve_target_weights=(
+                        SleeveTargetWeights(
+                            sleeve_id="trend-following-v1",
+                            target_weights_by_symbol=(("SPY", Decimal("0.5")),),
+                        ),
+                        SleeveTargetWeights(
+                            sleeve_id="vol-target-v1",
+                            target_weights_by_symbol=(("SPY", Decimal("0.1")),),
+                        ),
+                    ),
+                ),
+            )
+        ),
+    )
+
+    result = recorder.record_session(
+        trading_day="2026-04-21",
+        open_portfolio_state=_state(equity=Decimal("100000")),
+        close_portfolio_state=_state(equity=Decimal("102000")),
+    )
+
+    assert {record.sleeve_id for record in result} == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    by_sleeve = {record.sleeve_id: record for record in result}
+    assert by_sleeve["trend-following-v1"].starting_equity == Decimal("40000.0")
+    assert by_sleeve["trend-following-v1"].ending_equity == Decimal("40800.000")
+    assert by_sleeve["trend-following-v1"].daily_return == Decimal("0.02")
+    assert by_sleeve["vol-target-v1"].starting_equity == Decimal("20000.0")
+    assert by_sleeve["vol-target-v1"].ending_equity == Decimal("20400.000")
+    assert by_sleeve["vol-target-v1"].daily_return == Decimal("0.02")

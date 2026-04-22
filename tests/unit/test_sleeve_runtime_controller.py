@@ -32,6 +32,10 @@ class _FakeSleeve:
         return self._response
 
 
+class _CustomIdSleeve(_FakeSleeve):
+    sleeve_id = "custom-trend"
+
+
 class _FakeHaltStore:
     def __init__(self, halted_ids: set[str]) -> None:
         self._halted = halted_ids
@@ -190,6 +194,25 @@ def test_sharpe_gate_fires_when_lookback_consecutive_trials_below_floor() -> Non
         drift_alarm_gateway=_FakeDriftGateway(set()),
         trials_ledger=_FakeTrialsLedger(failing),
         config=_config(),
+    )
+
+    out = controller.plan_for_bar(_context())
+
+    assert out[0].rationale == SleeveFailureReason.SLEEVE_SHARPE_BELOW_THRESHOLD_6M
+
+
+def test_sharpe_gate_uses_trial_candidate_override() -> None:
+    failing = tuple(
+        _trial(candidate_id="trend-following-v1", sharpe="-0.5", days_ago=days_ago)
+        for days_ago in (1, 2, 3)
+    )
+    controller = SleeveRuntimeController(
+        wrapped_sleeve=_CustomIdSleeve(_sleeve_trade()),
+        operator_halt_store=_FakeHaltStore(set()),
+        drift_alarm_gateway=_FakeDriftGateway(set()),
+        trials_ledger=_FakeTrialsLedger(failing),
+        config=_config(),
+        trial_candidate_id="trend-following-v1",
     )
 
     out = controller.plan_for_bar(_context())

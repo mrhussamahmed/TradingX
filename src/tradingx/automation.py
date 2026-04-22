@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from collections.abc import Callable
@@ -628,9 +629,10 @@ def _load_or_build_reference_snapshot(
     feature_reader: MarketDataFeatureSampleReader,
     signal_reader: MarketDataSignalSampleReader,
     now_provider: Callable[[], datetime],
+    force_rebuild: bool = False,
 ) -> ReferenceDistributionSnapshot:
     path = _reference_snapshot_path(artifact_root=artifact_root)
-    if path.exists():
+    if path.exists() and not force_rebuild:
         return load_reference_distribution_snapshot(path)
 
     now_utc = now_provider()
@@ -677,16 +679,18 @@ def _ensure_backtest_reference_returns(
     config: TradingConfig,
     market_data_gateway: MarketDataHistoryProtocol,
     now_provider: Callable[[], datetime],
+    force_rebuild: bool = False,
 ) -> None:
     end_utc = now_provider()
     start_utc = end_utc - timedelta(days=400)
     for candidate in build_mandatory_candidate_registry(config.runtime.symbol_universe):
         if candidate.sleeve_class_path is None:
             continue
-        if backtest_reference_artifact_path(
+        path = backtest_reference_artifact_path(
             artifact_root=config.runtime.artifact_root,
             sleeve_id=candidate.candidate_id,
-        ).exists():
+        )
+        if path.exists() and not force_rebuild:
             continue
         bars_by_symbol = {
             symbol: market_data_gateway.get_daily_bar_history(
@@ -714,6 +718,132 @@ def _ensure_backtest_reference_returns(
             sleeve_id=candidate.candidate_id,
             returns=returns,
         )
+
+
+def _last_activation_bookkeeping_path(*, artifact_root: Path) -> Path:
+    return artifact_root / "drift" / "last_activation.json"
+
+
+def _read_last_seen_bookkeeping(path: Path) -> dict[str, str | None]:
+    if not path.exists():
+        return {"activation_id": None, "last_processed_recalibration_at": None}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"activation_id": None, "last_processed_recalibration_at": None}
+    return {
+        "activation_id": str(payload.get("activation_id") or "") or None,
+        "last_processed_recalibration_at": (
+            str(payload.get("last_processed_recalibration_at") or "") or None
+        ),
+    }
+
+
+def _write_last_seen_bookkeeping(
+    path: Path,
+    *,
+    activation_id: str | None,
+    last_processed_recalibration_at: str | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, str | None] = {
+        "activation_id": activation_id,
+        "last_processed_recalibration_at": last_processed_recalibration_at,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _read_operator_recalibration_marker_timestamp(
+    *,
+    control_store_root: Path,
+) -> datetime | None:
+    path = control_store_root / "drift_reference_recalibration.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw = payload.get("at_utc")
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _parse_bookkeeping_timestamp(raw: str | None) -> datetime | None:
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _resolve_drift_reference_snapshot(
+    *,
+    config: TradingConfig,
+    activation_gateway: LocalActivationGateway,
+    blueprint: DriftMonitorBlueprint,
+    feature_reader: MarketDataFeatureSampleReader,
+    signal_reader: MarketDataSignalSampleReader,
+    market_data_gateway: MarketDataHistoryProtocol,
+    now_provider: Callable[[], datetime],
+) -> ReferenceDistributionSnapshot:
+    bookkeeping_path = _last_activation_bookkeeping_path(
+        artifact_root=config.runtime.artifact_root
+    )
+    control_store_root = config.runtime.data_root / "control"
+    current_activation = activation_gateway.get_active_blueprint_activation()
+    last_seen = _read_last_seen_bookkeeping(bookkeeping_path)
+    marker_at = _read_operator_recalibration_marker_timestamp(
+        control_store_root=control_store_root
+    )
+    last_processed_recalibration_at = _parse_bookkeeping_timestamp(
+        last_seen["last_processed_recalibration_at"]
+    )
+
+    activation_changed = (
+        current_activation is not None
+        and current_activation.activation_id != last_seen["activation_id"]
+    )
+    recalibration_fresh = marker_at is not None and (
+        last_processed_recalibration_at is None
+        or last_processed_recalibration_at < marker_at
+    )
+    force_rebuild = activation_changed or recalibration_fresh
+
+    reference_snapshot = _load_or_build_reference_snapshot(
+        artifact_root=config.runtime.artifact_root,
+        blueprint=blueprint,
+        feature_reader=feature_reader,
+        signal_reader=signal_reader,
+        now_provider=now_provider,
+        force_rebuild=force_rebuild,
+    )
+    _ensure_backtest_reference_returns(
+        config=config,
+        market_data_gateway=market_data_gateway,
+        now_provider=now_provider,
+        force_rebuild=force_rebuild,
+    )
+    if force_rebuild:
+        _write_last_seen_bookkeeping(
+            bookkeeping_path,
+            activation_id=(
+                current_activation.activation_id
+                if current_activation is not None
+                else last_seen["activation_id"]
+            ),
+            last_processed_recalibration_at=(
+                marker_at.isoformat().replace("+00:00", "Z")
+                if marker_at is not None
+                else last_seen["last_processed_recalibration_at"]
+            ),
+        )
+    return reference_snapshot
 
 
 def build_default_market_day_automation_runner(
@@ -755,15 +885,12 @@ def build_default_market_day_automation_runner(
         market_data_gateway=market_data_gateway,
         now_provider=now_provider,
     )
-    reference_snapshot = _load_or_build_reference_snapshot(
-        artifact_root=artifact_root,
+    reference_snapshot = _resolve_drift_reference_snapshot(
+        config=config,
+        activation_gateway=activation_gateway,
         blueprint=blueprint,
         feature_reader=feature_reader,
         signal_reader=signal_reader,
-        now_provider=now_provider,
-    )
-    _ensure_backtest_reference_returns(
-        config=config,
         market_data_gateway=market_data_gateway,
         now_provider=now_provider,
     )
@@ -783,11 +910,14 @@ def build_default_market_day_automation_runner(
         ),
         risk_control_event_sink=runtime_store,
         alert_gateway=_ArtifactAlertGateway(store=runtime_store),
+        verdict_sink=runtime_store,
+        now_provider=now_provider,
     )
     attribution_recorder = SleeveAttributionRecorder(
         activation_gateway=activation_gateway,
         attribution_store=runtime_store,
         now_provider=now_provider,
+        decomposition_store=runtime_store,
     )
     return MarketDayAutomationRunner(
         paper_store=paper_store,

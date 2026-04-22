@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
@@ -13,7 +14,7 @@ from tradingx.runtime_portfolio import (
     RuntimePortfolioPlan,
     RuntimePortfolioPlanner,
 )
-from tradingx.types import PortfolioState
+from tradingx.types import BlueprintActivationRecord, PortfolioState
 
 
 class RuntimeStrategyResolver(Protocol):
@@ -46,9 +47,11 @@ class ActivatedRuntimePlanner:
         *,
         activation_gateway: LocalActivationGateway,
         registry: RuntimeStrategyRegistry,
+        blueprint_planner: RuntimePortfolioPlanner | None = None,
     ) -> None:
         self._activation_gateway = activation_gateway
         self._registry = registry
+        self._blueprint_planner = blueprint_planner
         self.last_strategy_id = ""
 
     def plan_for_service(
@@ -58,6 +61,14 @@ class ActivatedRuntimePlanner:
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
     ) -> RuntimePortfolioPlan | None:
+        active_blueprint = self._activation_gateway.get_active_blueprint_activation()
+        if self._blueprint_planner is not None and active_blueprint is not None:
+            self.last_strategy_id = active_blueprint.blueprint_id
+            return self._blueprint_planner.plan_for_service(
+                symbols=symbols,
+                portfolio_state=portfolio_state,
+                default_quantity=default_quantity,
+            )
         activation, _snapshot = self._activation_gateway.load_or_create_active_records(
             symbols
         )
@@ -70,6 +81,20 @@ class ActivatedRuntimePlanner:
             symbols=runtime_symbols,
             portfolio_state=portfolio_state,
             default_quantity=default_quantity,
+        )
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        return self._activation_gateway.get_active_blueprint_activation()
+
+    def supersede_active_blueprint(
+        self,
+        *,
+        new_activation: BlueprintActivationRecord,
+        now: datetime,
+    ) -> BlueprintActivationRecord:
+        return self._activation_gateway.supersede_active_blueprint(
+            new_activation=new_activation,
+            now=now,
         )
 
 
