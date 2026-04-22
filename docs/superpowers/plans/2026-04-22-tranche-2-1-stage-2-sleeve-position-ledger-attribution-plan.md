@@ -270,6 +270,8 @@ Out of scope in this plan:
 - modify `src/tradingx/activation.py`
 - modify `src/tradingx/automation.py`
 - modify `src/tradingx/service.py`
+- modify `src/tradingx/web/runtime.py`
+- modify `src/tradingx/__main__.py`
 - create `tests/unit/test_activation_snapshot_payloads.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -286,6 +288,15 @@ Out of scope in this plan:
     both `operator_store` and `runtime_store`, so the live
     `service_builder=lambda: build_default_paper_service(config)` path
     does not regress to a single-store gateway
+  - `build_runtime_host_paper_service()` passes the dual-store gateway
+    into `LiveOpportunitySelector`, so the runtime-host paper-service
+    path does not regress
+  - `build_default_local_web_components()` passes a dual-store gateway
+    into `LocalRuntimeHostManager`, so the web/runtime-host manager path
+    does not regress
+  - the CLI/runtime entrypoints in `src/tradingx/__main__.py`
+    (`runtime-plan`, `runtime-start`) also instantiate dual-store
+    gateways instead of keeping a hidden single-store constructor
 
 - [ ] **Step 2: Implement**
   - add optional `runtime_snapshot_store` to `LocalActivationGateway`
@@ -298,6 +309,9 @@ Out of scope in this plan:
     `LocalActivationGateway`:
     - `build_default_market_day_automation_runner(...)`
     - `build_default_paper_service(...)`
+    - `build_runtime_host_paper_service(...)`
+    - `build_default_local_web_components(...)`
+    - `src/tradingx/__main__.py` runtime CLI entrypoints
   - keep activation-status semantics unchanged
 
 - [ ] **Step 3: Verify**
