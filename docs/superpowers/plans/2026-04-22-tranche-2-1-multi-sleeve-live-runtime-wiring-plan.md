@@ -59,7 +59,7 @@ Tranche-1 outcomes (Gate 1 criteria, drift monitors at narrowed 1.5 scope, tranc
 - `src/tradingx/drift/reference.py` — add `force_rebuild=True` code path on the build helper.
 - `src/tradingx/drift/backtest_reference.py` — add `force_rebuild=True` path on the writer.
 - `src/tradingx/drift/gateway.py` — Task 16 (Stage 2) only: fixture + threshold tightening. No Stage 1 code change.
-- `src/tradingx/automation.py` — activation-change detection on `build_default_market_day_automation_runner` keyed on `activation_id`; pending-recalibration-file integration.
+- `src/tradingx/automation.py` — activation-change detection on `build_default_market_day_automation_runner` keyed on `activation_id`; reads the shipped 1.5 operator-control audit marker at `{operator_store_root}/drift_reference_recalibration.json` to detect operator-triggered recalibrations (no changes to `operator_control.py` — Codex round-1 plan P1 fix).
 - Operator dashboard modules (exact files depend on existing layout; see Task 14 for implementer-convention note).
 - Test files listed above + updates to existing `tests/unit/test_runtime_portfolio.py`, `tests/unit/test_service.py`, `tests/unit/test_activation.py`, `tests/unit/test_automation.py`.
 
@@ -68,6 +68,12 @@ Tranche-1 outcomes (Gate 1 criteria, drift monitors at narrowed 1.5 scope, tranc
 - `src/tradingx/backtest.py`, `src/tradingx/costs.py`, `src/tradingx/sleeves/*` — engine + cost primitives + sleeve definitions unchanged.
 - `src/tradingx/portfolio/hard_halt.py`, `src/tradingx/portfolio/throttle.py`, `src/tradingx/portfolio/sleeve_runtime.py` — halt + throttles + sleeve-runtime controller unchanged.
 - `src/tradingx/validation.py` — Gate 1 logic unchanged.
+- `src/tradingx/operator_control.py` — unchanged. The 1.5
+  audit marker written by `recalibrate_drift_reference` is
+  reused as the regeneration-trigger source; no new
+  constructor parameter is threaded through the four
+  production construction sites (service.py, controller.py,
+  supervisor.py, automation.py). Codex round-1 plan P1 fix.
 - `config/strategy/weights/<strategy_id>.yaml` — approved-weight YAMLs untouched; operator review flow unchanged.
 
 ---
@@ -866,34 +872,142 @@ git commit -m "feat(activation): add blueprint-as-a-unit activation methods on L
 - Modify: `src/tradingx/portfolio/construction.py`
 - Modify: `tests/unit/test_portfolio_construction.py` (regression)
 
+**Extraction must preserve 1.4's full cap stack (Codex round-1
+plan P1 fix).** The shipped batch path in
+[construction.py](/src/tradingx/portfolio/construction.py)
+applies THREE stages of caps, not two:
+
+1. Per-sleeve budget scaling (multiply each sleeve's row by
+   `budget_fraction_of_equity`).
+2. **Per-symbol strictest-holder correlation cap** via
+   [`_apply_symbol_overlap_caps`](/src/tradingx/portfolio/construction.py:105)
+   — for every symbol held by ≥ 2 sleeves, the cap is
+   `max_gross_exposure × min(budget.max_correlation_with_other_sleeves
+   for budget in symbol_holders)`. Each symbol can have a
+   different cap because the "strictest holder" set differs.
+3. Row-level **gross cap** (sum of abs) AND **net cap** (abs
+   of sum) via
+   [`_apply_row_caps`](/src/tradingx/portfolio/construction.py:131),
+   applied as uniform multiplicative scaling across the row.
+
+A single `max_correlation` scalar and a missing net cap would
+silently relax the composition and change portfolio math. The
+extracted helper accepts the full blueprint (which carries all
+three pieces of cap state) and replicates all three stages.
+
 - [ ] **Step 1: Write failing regression**
 
 Add to `tests/unit/test_portfolio_construction.py`:
 
 ```python
-def test_combine_sleeve_weights_importable_and_pure():
+def test_combine_sleeve_weights_applies_per_symbol_strictest_holder_correlation_cap():
+    """Regression from the round-1 plan P1 fix. Each symbol
+    held by multiple sleeves is capped by the strictest of
+    those sleeves' correlation caps; other symbols see their
+    own (possibly different) cap.
+    """
+    from tradingx.portfolio.blueprint import (
+        PortfolioBlueprint,
+        SleeveRiskBudget,
+    )
     from tradingx.portfolio.construction import _combine_sleeve_weights
 
-    # Pure — same inputs give same outputs.
-    budget_by_sleeve_id = {
-        "a": Decimal("0.5"),
-        "b": Decimal("0.5"),
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("0.50"),
+            ),
+            SleeveRiskBudget(
+                sleeve_id="b",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+        max_gross_exposure=Decimal("1.0"),
+        max_net_exposure=Decimal("1.0"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.8"), "IWM": Decimal("0.4")},
+        "b": {"SPY": Decimal("0.6")},  # overlaps on SPY only
     }
+    result = _combine_sleeve_weights(
+        blueprint=blueprint,
+        contributions=contributions,
+    )
+    # SPY is overlap-held → cap = max_gross * min(0.50, 0.85) = 0.50.
+    # IWM is single-holder → no per-symbol cap applies.
+    assert result["SPY"] <= Decimal("0.50") + Decimal("1e-9")
+    assert result["IWM"] <= Decimal("0.40") + Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_applies_row_gross_and_net_caps():
+    """Both row caps are enforced; dropping either would silently
+    change the shipped 1.4 portfolio math."""
+    from tradingx.portfolio.blueprint import (
+        PortfolioBlueprint,
+        SleeveRiskBudget,
+    )
+    from tradingx.portfolio.construction import _combine_sleeve_weights
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("1.0"),
+            ),
+        ),
+        max_gross_exposure=Decimal("1.0"),
+        max_net_exposure=Decimal("1.0"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.6"), "QQQ": Decimal("0.6")},
+    }
+    result = _combine_sleeve_weights(
+        blueprint=blueprint,
+        contributions=contributions,
+    )
+    # Raw sum = 1.2; gross cap scales proportionally so
+    # sum(abs) == 1.0.
+    gross = sum(abs(weight) for weight in result.values())
+    assert abs(gross - Decimal("1.0")) < Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_is_pure():
+    from tradingx.portfolio.blueprint import (
+        PortfolioBlueprint,
+        SleeveRiskBudget,
+    )
+    from tradingx.portfolio.construction import _combine_sleeve_weights
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+            SleeveRiskBudget(
+                sleeve_id="b",
+                budget_fraction_of_equity=Decimal("0.5"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
     contributions = {
         "a": {"SPY": Decimal("0.4"), "QQQ": Decimal("0.2")},
         "b": {"SPY": Decimal("0.2")},
     }
     first = _combine_sleeve_weights(
-        budget_by_sleeve_id=budget_by_sleeve_id,
-        contributions=contributions,
-        max_gross_exposure=Decimal("1.0"),
-        max_correlation=Decimal("0.85"),
+        blueprint=blueprint, contributions=contributions,
     )
     second = _combine_sleeve_weights(
-        budget_by_sleeve_id=budget_by_sleeve_id,
-        contributions=contributions,
-        max_gross_exposure=Decimal("1.0"),
-        max_correlation=Decimal("0.85"),
+        blueprint=blueprint, contributions=contributions,
     )
     assert first == second
 ```
@@ -906,35 +1020,48 @@ Expected: FAIL on ImportError (private helper not yet extracted).
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/portfolio/construction.py`, extract the weight-combination logic from `build_portfolio_target_weight_history` into a pure helper:
+In `src/tradingx/portfolio/construction.py`, extract the
+weight-combination logic from `build_portfolio_target_weight_history`
+into a pure helper that consumes the full blueprint so all
+three cap stages apply identically to batch and live:
 
 ```python
 def _combine_sleeve_weights(
     *,
-    budget_by_sleeve_id: dict[str, Decimal],
+    blueprint: PortfolioBlueprint,
     contributions: dict[str, dict[str, Decimal]],
-    max_gross_exposure: Decimal,
-    max_correlation: Decimal,
 ) -> dict[str, Decimal]:
     """Compose per-sleeve contributions into portfolio-equity-
     space weights.
 
-    Steps (extracted unchanged from the tranche-1.4 batch path):
-    1. Scale each sleeve's contributions by its budget fraction.
-    2. Apply the correlation cap on symbols held by multiple
-       sleeves.
-    3. Apply the gross-exposure cap as a uniform row scale.
+    Three stages, in this order (stage ordering is load-bearing
+    for parity with the shipped batch path):
 
-    Pure function. Called by both build_portfolio_target_weight_history
-    (batch) and build_portfolio_cycle_target_weights (live) so
-    there is ONE composition primitive shared across the seam.
+    1. Per-sleeve budget scaling — multiply each sleeve's
+       contributions by its budget_fraction_of_equity.
+    2. Per-symbol strictest-holder correlation cap — for each
+       symbol held by >= 2 sleeves, cap its combined weight at
+       max_gross_exposure * min(holder.max_correlation_with_other_sleeves
+       for holder in sleeves_holding_this_symbol). Different
+       symbols can have different caps.
+    3. Row-level gross cap AND net cap — uniform multiplicative
+       scaling so sum(|weights|) <= max_gross_exposure AND
+       |sum(weights)| <= max_net_exposure. Both caps apply.
+
+    Pure function. Shared by build_portfolio_target_weight_history
+    (batch) and build_portfolio_cycle_target_weights (live).
+    The sleeve-id iteration order is deterministic
+    (sorted(contributions.keys())) so serialization is
+    reproducible.
     """
-    # Port the existing logic from build_portfolio_target_weight_history.
-    # Take care: if the existing logic mutates `combined` in place
-    # across stages, keep the same ordering when extracting.
+    # Port the existing logic from
+    # build_portfolio_target_weight_history + _apply_symbol_overlap_caps
+    # + _apply_row_caps. Reuse those helpers internally rather
+    # than re-implementing — the extraction should be
+    # mechanical, not a rewrite.
 ```
 
-Refactor `build_portfolio_target_weight_history` to call `_combine_sleeve_weights` for each bar. The element-wise equality regression 1.4 already carries MUST continue to pass.
+Refactor `build_portfolio_target_weight_history` to call `_combine_sleeve_weights(blueprint=..., contributions=...)` for each bar. The pre-existing batch integration tests in 1.4 MUST continue to pass unchanged — that's the canary for the extraction being faithful.
 
 - [ ] **Step 4: Run tests**
 
@@ -1138,22 +1265,14 @@ def build_portfolio_cycle_target_weights(
             if trade.target_weight_of_sleeve_budget > Decimal("0")
         }
 
-    # Cap values pulled from blueprint; same cap shape as the
-    # batch helper.
-    max_correlation = (
-        min(
-            budget.max_correlation_with_other_sleeves
-            for budget in blueprint.sleeve_budgets
-        )
-        if blueprint.sleeve_budgets
-        else Decimal("1")
-    )
-
+    # Single composition primitive shared with the batch path.
+    # _combine_sleeve_weights consumes the whole blueprint so
+    # per-symbol strictest-holder correlation caps + row-level
+    # gross + net caps all apply identically to live and batch
+    # (Codex round-1 plan P1 fix).
     aggregate = _combine_sleeve_weights(
-        budget_by_sleeve_id=budget_by_sleeve_id,
+        blueprint=blueprint,
         contributions=contributions,
-        max_gross_exposure=blueprint.max_gross_exposure,
-        max_correlation=max_correlation,
     )
 
     # Build the decomposition: each sleeve's contribution AFTER
@@ -1897,7 +2016,50 @@ def test_same_blueprint_id_new_captured_snapshot_triggers_regeneration(
     assert reference_path.stat().st_mtime > original_mtime
 
 
-def test_recalibrate_pending_file_triggers_regeneration_and_is_deleted(
+def test_operator_recalibrate_triggers_regeneration_without_deleting_audit_marker(
+    market_day_runner_with_blueprint_fixture,
+):
+    """Round-1 plan P1 fix. Recalibration uses the 1.5
+    operator-control audit marker
+    (drift_reference_recalibration.json on operator_store root)
+    as the trigger source — no separate pending file, no
+    OperatorControlStore constructor surgery. The audit marker
+    is NEVER deleted; the automation runner tracks
+    last_processed_recalibration_at in its own bookkeeping
+    file."""
+    fixture = market_day_runner_with_blueprint_fixture
+    reference_path = (
+        fixture.artifact_root
+        / "drift"
+        / "reference_distribution_snapshot.json"
+    )
+    audit_marker_path = (
+        fixture.operator_control_store._root_dir
+        / "drift_reference_recalibration.json"
+    )
+    bookkeeping_path = (
+        fixture.artifact_root / "drift" / "last_activation.json"
+    )
+    original_mtime = reference_path.stat().st_mtime
+
+    fixture.operator_control_store.recalibrate_drift_reference(
+        snapshot_id="ref-operator-1",
+        now=fixture.now(),
+    )
+    assert audit_marker_path.exists()
+
+    fixture.rebuild_runner()
+
+    # Regeneration triggered.
+    assert reference_path.stat().st_mtime > original_mtime
+    # Audit marker preserved (not deleted).
+    assert audit_marker_path.exists()
+    # Bookkeeping updated so the next rebuild is idempotent.
+    bookkeeping = json.loads(bookkeeping_path.read_text(encoding="utf-8"))
+    assert bookkeeping["last_processed_recalibration_at"] is not None
+
+
+def test_second_rebuild_after_recalibration_is_idempotent(
     market_day_runner_with_blueprint_fixture,
 ):
     fixture = market_day_runner_with_blueprint_fixture
@@ -1906,27 +2068,48 @@ def test_recalibrate_pending_file_triggers_regeneration_and_is_deleted(
         / "drift"
         / "reference_distribution_snapshot.json"
     )
-    pending_path = (
-        fixture.artifact_root
-        / "drift"
-        / "pending_recalibration.json"
-    )
-    original_mtime = reference_path.stat().st_mtime
-
     fixture.operator_control_store.recalibrate_drift_reference(
         snapshot_id="ref-operator-1",
         now=fixture.now(),
     )
-    # The recalibrate call should write the pending marker (see
-    # DESIGN-0017 W6). Implementation binds `recalibrate_drift_reference`
-    # to drop pending_recalibration.json alongside its audit
-    # marker.
-    assert pending_path.exists()
+    fixture.rebuild_runner()
+    after_first_rebuild_mtime = reference_path.stat().st_mtime
+
+    # Same audit marker, no activation change, no new
+    # recalibration → no regeneration.
+    fixture.rebuild_runner()
+    assert reference_path.stat().st_mtime == after_first_rebuild_mtime
+
+
+def test_operator_recalibrate_from_service_py_construction_site_triggers_regeneration(
+    market_day_runner_with_blueprint_fixture,
+):
+    """§P2 cross-seam regression: the operator-control store
+    constructed in service.py (or controller.py / supervisor.py)
+    shares the same root_dir as the one the automation runner
+    reads. A recalibrate call from any of those production
+    sites must produce a marker the runner can see on the next
+    rebuild — no new constructor parameter needed.
+    """
+    fixture = market_day_runner_with_blueprint_fixture
+    # Fixture exposes a second store instance with the same
+    # root, mimicking the multi-construction-site layout.
+    secondary_store = fixture.make_secondary_operator_store()
+
+    secondary_store.recalibrate_drift_reference(
+        snapshot_id="ref-from-service",
+        now=fixture.now(),
+    )
+    reference_path = (
+        fixture.artifact_root
+        / "drift"
+        / "reference_distribution_snapshot.json"
+    )
+    original_mtime = reference_path.stat().st_mtime
 
     fixture.rebuild_runner()
 
     assert reference_path.stat().st_mtime > original_mtime
-    assert not pending_path.exists()
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1999,37 +2182,154 @@ if should_regenerate:
 
 Update `_load_or_build_reference_snapshot` and `_ensure_backtest_reference_returns` to accept `force_rebuild: bool = False`. When True, overwrite even if the artifact already exists.
 
-In `src/tradingx/operator_control.py`, update `recalibrate_drift_reference` to additionally write the pending marker:
+**Recalibration-marker seam (Codex round-1 plan P1 fix).** The
+round-1 plan proposed extending `OperatorControlStore.__init__`
+with a `drift_pending_recalibration_path: Path | None = None`
+parameter and wiring it through `build_default_market_day_automation_runner`.
+Codex correctly flagged that `OperatorControlStore` is
+constructed in **four** places — not just the automation
+runner. The production construction sites are:
 
-```python
-def recalibrate_drift_reference(
-    self,
-    *,
-    snapshot_id: str,
-    now: datetime,
-) -> OperatorControlState:
-    # ...existing state + audit marker write unchanged...
-    pending_marker = self._root_dir / "pending_recalibration.json"
-    pending_marker.parent.mkdir(parents=True, exist_ok=True)
-    pending_marker.write_text(
-        json.dumps(
-            {
-                "snapshot_id": snapshot_id,
-                "at_utc": now.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-            },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    return state
+- [service.py:559](/src/tradingx/service.py:559) — paper
+  trading service's operator-control store.
+- [controller.py:1559](/src/tradingx/controller.py:1559) —
+  gate validation controller's store.
+- [supervisor.py:662](/src/tradingx/supervisor.py:662) —
+  local supervisor's store.
+- [automation.py:719](/src/tradingx/automation.py:719) —
+  market-day automation runner (the only seam the round-1
+  plan updated).
+
+Threading a new constructor parameter through all four sites
+is a wide surface change where three sites don't care about
+the path at all. Worse, if the operator triggers
+`recalibrate_drift_reference` from a code path whose store was
+constructed without the new parameter, the marker silently
+doesn't get written and the automation runner misses the
+regeneration trigger.
+
+**Revised approach: reuse the 1.5 audit marker already shipped
+on the operator-control store's own root directory.** The 1.5
+`OperatorControlStore.recalibrate_drift_reference` at
+[operator_control.py:72](/src/tradingx/operator_control.py:72)
+already writes `self._root_dir / "drift_reference_recalibration.json"`
+with `{"snapshot_id": ..., "at_utc": ...}`. That file lives on
+every construction site by construction — no new parameter
+threading is required. The automation runner reads from it
+directly.
+
+**Implementation in `src/tradingx/operator_control.py`:** no
+change. The 1.5 behavior is already what we need.
+
+**Implementation in `src/tradingx/automation.py`:** the
+regeneration-trigger check reads the operator-control store's
+audit marker and compares its `at_utc` against a
+`last_processed_recalibration_at` bookkeeping value that the
+automation runner maintains in
+`{artifact_root}/drift/last_activation.json`. The combined
+bookkeeping file now carries two fields:
+
+```json
+{
+  "activation_id": "<uuid>",
+  "last_processed_recalibration_at": "2026-04-22T14:00:00Z"
+}
 ```
 
-Wait — the pending marker should live under the **artifact_root/drift/** tree (where the automation runner looks), not under the operator control store. Adjust so the `OperatorControlStore` knows the artifact_root (via a constructor-injected `pending_recalibration_marker_path: Path`) or move the write to a new helper the operator calls out-of-band.
+The regeneration decision becomes:
 
-Simplest: extend `OperatorControlStore.__init__` with a `drift_pending_recalibration_path: Path | None = None` parameter; when the operator calls `recalibrate_drift_reference`, write the pending marker to that path (if set). The composition in `build_default_market_day_automation_runner` passes `artifact_root / "drift" / "pending_recalibration.json"`.
+```python
+def _read_last_seen_bookkeeping(path: Path) -> dict[str, str | None]:
+    if not path.exists():
+        return {"activation_id": None, "last_processed_recalibration_at": None}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"activation_id": None, "last_processed_recalibration_at": None}
+    return {
+        "activation_id": str(payload.get("activation_id") or "") or None,
+        "last_processed_recalibration_at": (
+            str(payload.get("last_processed_recalibration_at") or "")
+            or None
+        ),
+    }
 
-Match the exact existing `OperatorControlStore` constructor shape; adapt if the actual module uses a different injection pattern.
+
+def _read_operator_recalibration_marker_timestamp(
+    operator_store_root: Path,
+) -> datetime | None:
+    path = operator_store_root / "drift_reference_recalibration.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    at_raw = payload.get("at_utc")
+    if at_raw is None:
+        return None
+    normalized = str(at_raw).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+# inside build_default_market_day_automation_runner:
+
+bookkeeping_path = artifact_root / "drift" / "last_activation.json"
+current_activation = activation_gateway.get_active_blueprint_activation()
+last_seen = _read_last_seen_bookkeeping(bookkeeping_path)
+marker_at = _read_operator_recalibration_marker_timestamp(
+    operator_store_root=operator_store._root_dir,
+)
+
+activation_changed = (
+    current_activation is not None
+    and current_activation.activation_id != last_seen["activation_id"]
+)
+recalibration_fresh = (
+    marker_at is not None
+    and (
+        last_seen["last_processed_recalibration_at"] is None
+        or datetime.fromisoformat(
+            last_seen["last_processed_recalibration_at"].replace("Z", "+00:00"),
+        ).astimezone(UTC) < marker_at
+    )
+)
+
+if activation_changed or recalibration_fresh:
+    reference_snapshot = _load_or_build_reference_snapshot(..., force_rebuild=True)
+    _ensure_backtest_reference_returns(..., force_rebuild=True)
+    _write_last_seen_bookkeeping(
+        bookkeeping_path,
+        activation_id=(
+            current_activation.activation_id
+            if current_activation is not None
+            else last_seen["activation_id"]
+        ),
+        last_processed_recalibration_at=(
+            marker_at.isoformat().replace("+00:00", "Z")
+            if marker_at is not None
+            else last_seen["last_processed_recalibration_at"]
+        ),
+    )
+```
+
+**What this buys.** `OperatorControlStore` stays untouched.
+Operator calls to `recalibrate_drift_reference` through ANY
+production construction site (`service.py`, `controller.py`,
+`supervisor.py`, `automation.py`) all write the 1.5 audit
+marker in the store's own root, which every site already
+configures. The automation runner reads from that root on the
+next build and triggers regeneration.
+
+**What this does NOT do.** The audit marker is NEVER deleted
+by the automation runner — it is an operator-audit artifact
+and must remain readable for forensic purposes. The bookkeeping
+path in `{artifact_root}/drift/last_activation.json` is what
+tracks "which marker the runner has already processed,"
+preventing duplicate regenerations for the same recalibration.
 
 - [ ] **Step 4: Run tests**
 
@@ -2040,9 +2340,14 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/tradingx/automation.py src/tradingx/drift/reference.py src/tradingx/drift/backtest_reference.py src/tradingx/operator_control.py tests/unit/test_drift_artifact_regeneration.py
+git add src/tradingx/automation.py src/tradingx/drift/reference.py src/tradingx/drift/backtest_reference.py tests/unit/test_drift_artifact_regeneration.py
 git commit -m "feat(automation): regenerate drift artifacts on activation-change + recalibrate"
 ```
+
+Note the file list: `operator_control.py` is **not** in this
+task's commit. Per the round-1 plan P1 fix, the 1.5 audit
+marker already written by `OperatorControlStore.recalibrate_drift_reference`
+is the trigger source — no changes needed on the store side.
 
 ---
 
@@ -2787,7 +3092,17 @@ No TBD / TODO / "implement later" in production code. Fixture-name placeholders 
 1. **Tie-breaking for attribution fractions** (Task 10). Registry order (trend-first) favors `trend-following-v1` on 50/50 splits. If you prefer budget-fraction ordering, the change is one sort key swap.
 2. **3-cycle persistence threshold** (Task 12). The service-loop's per-cycle counter is a straightforward pattern; if Codex sees a better place to track persistence (e.g., on the `SleeveRuntimeController` itself), flag it.
 3. **`BlueprintExhaustionError` handling** (Task 12). `narrow_blueprint_on_sleeve_failure` raises; the service loop catches it and transitions to a full `recovery_required` halt via the existing `trigger_hard_halt` path. Conservative; if Codex prefers an auto-switch to the legacy baseline, flag it.
-4. **Pending-recalibration marker path** (Task 11). Plan puts it at `{artifact_root}/drift/pending_recalibration.json`. If the operator control store constructor doesn't accept an `artifact_root` kwarg today, the marker could live under the operator-control store root and the automation runner reads across both paths. Either works; match the smallest-footprint change.
+4. **Recalibration-marker seam (resolved in round-1 plan
+   review P1 fix)** (Task 11). The round-1 plan proposed
+   threading a new path through `OperatorControlStore.__init__`.
+   Codex correctly flagged that the store is constructed in
+   four places (service.py, controller.py, supervisor.py,
+   automation.py), not just the automation runner. The plan
+   now reuses the shipped 1.5 audit marker at
+   `{operator_store_root}/drift_reference_recalibration.json`
+   — no constructor-parameter threading, no operator_control.py
+   change. Automation runner reads the marker on each build
+   and compares its `at_utc` against its own bookkeeping.
 5. **Dashboard file surface** (Task 14). The plan points at `portfolio.py` + `performance.py`; actual operator-platform layout may differ. Match existing convention.
 6. **Stage 2 timing (Task 16)**. Stage 2 ships after at least one week of Stage 1 paper-session data confirms attribution records populate reliably. This is an operator-triggered ship decision, not an automated one.
 
