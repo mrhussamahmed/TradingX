@@ -504,12 +504,26 @@ Additional activation-time durability requirement:
   activation path MUST also persist that exact snapshot payload into
   `model_weight_snapshots/{snapshot_id}.json` if it is not already
   present;
+- the concrete owner of that persistence/backfill step is
+  `LocalActivationGateway`, because it is the current seam that owns
+  both fresh blueprint activation creation and unchanged-activation
+  reuse in [/src/tradingx/activation.py:117](/src/tradingx/activation.py:117);
 - the canonical store root for these persisted snapshot payloads is
   the top-level `runtime_store = FilesystemArtifactStore(artifact_root)`
   used by `SleeveAttributionRecorder` and drift readers in
   [/src/tradingx/automation.py:856](/src/tradingx/automation.py:856)
   and [/src/tradingx/automation.py:916](/src/tradingx/automation.py:916),
   not the narrower `operator_store`;
+- `LocalActivationGateway` therefore gains a second artifact-store
+  dependency dedicated to this durability path, for example
+  `runtime_snapshot_store: FilesystemArtifactStore`;
+- in the market-day automation wiring, that dependency MUST be bound
+  explicitly to the existing top-level `runtime_store`, while the
+  gateway's existing `store=` dependency continues to point at
+  `operator_store` for activation records;
+- callers that do not have distinct roots may pass the same
+  `FilesystemArtifactStore` object for both dependencies, but the
+  interface must make the dual-root ownership explicit;
 - if blueprint activation still writes other activation artifacts via
   `operator_store`, the snapshot payloads must be mirrored into
   `runtime_store/model_weight_snapshots/` as part of the same
@@ -671,6 +685,29 @@ Reserved owner-id contract:
   existing tuple fields without introducing a second execution
   artifact type.
 
+Reserve-domain production path:
+
+- `RuntimePortfolioPlanner` already owns the runtime trade-intent seam
+  through `plan_for_service(...)` and already carries an
+  `artifact_store` dependency in
+  [/src/tradingx/runtime_portfolio.py:104](/src/tradingx/runtime_portfolio.py:104);
+- DESIGN-0019 adds one narrow reserve-liquidation pre-pass inside the
+  blueprint runtime path:
+  - read `latest_residual_reserve_snapshot()` from that store;
+  - if residual inventory exists for symbol `z`, synthesize a
+    reserve-liquidation `RuntimePortfolioTrade` for `z` before any
+    sleeve-domain trade for that symbol;
+  - build the corresponding `TradeIntent` with
+    `candidate_id="residual-reserve-bootstrap"` and
+    `sleeve_attributions=((\"__residual_reserve__\", Decimal(\"1\")),)`;
+  - prepend those reserve-domain intents ahead of normal sleeve-domain
+    intents in deterministic symbol order; and
+  - suppress sleeve-domain trades for `z` while residual-reserve
+    quantity for `z` remains non-zero;
+- `controller.py` then remains shape-compatible because it already
+  copies `trade_intent.sleeve_attributions` into
+  `ExecutionLifecycleRecord` without needing a second execution schema.
+
 For a buy:
 
 1. attributed quantity per sleeve =
@@ -730,6 +767,21 @@ Residual reserve behavior:
   percentages; and
 - a broker-valid buy is never rejected merely because another sleeve
   previously realized the cash.
+
+Operational consequence:
+
+- residual-reserve-owned symbols are not merely representable on disk;
+  the runtime actively emits reserve-domain liquidation intents for
+  them until residual quantity reaches zero;
+- because those intents use
+  `candidate_id="residual-reserve-bootstrap"` and
+  `sleeve_attributions=((\"__residual_reserve__\", Decimal(\"1\")),)`,
+  reserve inventory unwinds through the same persisted
+  `TradeIntent -> ExecutionLifecycleRecord -> ClosedTradeRecord` path as
+  normal sleeve trades; and
+- Task 16's "unresolved reserve positions are zero" precondition is
+  therefore a reachable runtime state, not a manual cleanup
+  requirement.
 
 Why weighted average cost:
 
@@ -909,9 +961,12 @@ The following remain untouched by this design:
   DESIGN-0017 Stage 1. (This design widens the allowed owner-id
   values to include `__residual_reserve__`, but does not add new
   attribution fields.)
+- The activation-state semantics from DESIGN-0017. (This design adds a
+  snapshot-payload durability/backfill seam to `LocalActivationGateway`,
+  but does not change what makes an activation active or superseded.)
 - CPCV/PBO infrastructure from DESIGN-0018.
 - Gate 2 robustness evidence packaging.
-- Runtime blueprint activation and fallback narrowing semantics.
+- Runtime blueprint fallback narrowing semantics.
 - Strategy evaluation logic and candidate validation.
 
 ## Acceptance criteria
@@ -943,18 +998,28 @@ The following remain untouched by this design:
    fallback is used, rerunning bootstrap after approved YAML edits
    still resolves the same captured snapshot payloads and produces
    the same fallback allocation.
-10. **Anomalies fail closed.** Missing sleeve attribution, negative
-   inventory, or irreconcilable symbol ownership emit explicit
-   gap artifacts and do not fabricate a valid daily return.
-11. **Drift readers remain compatible.** Existing drift readers and
+10. **Idempotent reuse still backfills snapshots.** Reusing an
+    unchanged active blueprint still ensures any missing captured
+    snapshot payloads are mirrored into `runtime_store` before
+    bootstrap fallback can run; deterministic fallback never depends
+    on forcing a fresh activation.
+11. **Reserve inventory has a runtime exit path.** A symbol owned by
+    `__residual_reserve__` causes the runtime planner to emit
+    deterministic reserve-domain sell intents until residual quantity
+    is zero, rather than leaving that inventory operationally
+    stranded.
+12. **Anomalies fail closed.** Missing sleeve attribution, negative
+    inventory, or irreconcilable symbol ownership emit explicit
+    gap artifacts and do not fabricate a valid daily return.
+13. **Drift readers remain compatible.** Existing drift readers and
     dashboards can read the new attribution records without
     changing their primary input type, and gap days force
     `pending` rather than a false verdict.
-12. **Live Sharpe readers are gap-aware.** Any
+14. **Live Sharpe readers are gap-aware.** Any
     `LIVE_DAILY_RETURNS`-based sleeve Sharpe consumer treats gap
     days as insufficient history rather than a shorter valid
     return series.
-13. **Task 16 remains separate.** No monitor activation is coupled
+15. **Task 16 remains separate.** No monitor activation is coupled
     to the ledger merge; rollback can still target the activation
     step independently.
 
