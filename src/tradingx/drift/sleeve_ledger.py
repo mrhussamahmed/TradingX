@@ -613,31 +613,32 @@ def _apply_execution(
 ) -> dict[str, SleeveAttributionGapRecord]:
     attrs = execution.sleeve_attributions
     if not attrs:
-        return {
-            sleeve_id: _gap_record(
-                sleeve_id=sleeve_id,
-                trading_day=trading_day,
-                recorded_at_utc=recorded_at_utc,
-                reason="missing_attribution",
-                evidence_refs=(execution.execution_id,),
-            )
-            for sleeve_id in sleeves
-        }
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="missing_attribution",
+            evidence_refs=(execution.execution_id,),
+        )
     fraction_total = sum((fraction for _, fraction in attrs), start=Decimal("0"))
     if abs(fraction_total - Decimal("1")) > _ROUNDING_TOLERANCE:
-        return {
-            sleeve_id: _gap_record(
-                sleeve_id=sleeve_id,
-                trading_day=trading_day,
-                recorded_at_utc=recorded_at_utc,
-                reason="fraction_sum_invalid",
-                evidence_refs=(execution.execution_id,),
-            )
-            for sleeve_id, _ in attrs
-            if sleeve_id != RESIDUAL_RESERVE_OWNER_ID
-        }
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="fraction_sum_invalid",
+            evidence_refs=(execution.execution_id,),
+        )
 
     owner_ids = {owner_id for owner_id, _ in attrs}
+    if RESIDUAL_RESERVE_OWNER_ID in owner_ids and len(owner_ids) > 1:
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="mixed_owner_domains",
+            evidence_refs=(execution.execution_id,),
+        )
     if owner_ids == {RESIDUAL_RESERVE_OWNER_ID}:
         return _apply_reserve_execution(
             execution=execution,
@@ -651,30 +652,23 @@ def _apply_execution(
         execution.symbol in reserve.positions
         and reserve.positions[execution.symbol].quantity > _TOLERANCE
     ):
-        return {
-            sleeve_id: _gap_record(
-                sleeve_id=sleeve_id,
-                trading_day=trading_day,
-                recorded_at_utc=recorded_at_utc,
-                reason="reserve_inventory_conflict",
-                evidence_refs=(execution.execution_id,),
-            )
-            for sleeve_id, _ in attrs
-        }
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="reserve_inventory_conflict",
+            evidence_refs=(execution.execution_id,),
+        )
 
     for sleeve_id, fraction in attrs:
         if sleeve_id not in sleeves:
-            return {
-                known_sleeve_id: _gap_record(
-                    sleeve_id=known_sleeve_id,
-                    trading_day=trading_day,
-                    recorded_at_utc=recorded_at_utc,
-                    reason="unknown_owner_id",
-                    evidence_refs=(execution.execution_id,),
-                )
-                for known_sleeve_id, _ in attrs
-                if known_sleeve_id != RESIDUAL_RESERVE_OWNER_ID
-            }
+            return _gap_all_sleeves(
+                sleeves=sleeves,
+                trading_day=trading_day,
+                recorded_at_utc=recorded_at_utc,
+                reason="unknown_owner_id",
+                evidence_refs=(execution.execution_id,),
+            )
         attributed_quantity = execution.filled_qty * fraction
         notional = attributed_quantity * execution.fill_price
         sleeve = sleeves[sleeve_id]
@@ -733,23 +727,31 @@ def _apply_reserve_execution(
         and sleeve.positions[execution.symbol].quantity > _TOLERANCE
         for sleeve in sleeves.values()
     ):
-        return {
-            sleeve_id: _gap_record(
-                sleeve_id=sleeve_id,
-                trading_day=trading_day,
-                recorded_at_utc=recorded_at_utc,
-                reason="mixed_reserve_and_sleeve_ownership",
-                evidence_refs=(execution.execution_id,),
-            )
-            for sleeve_id in sleeves
-            if execution.symbol in sleeves[sleeve_id].positions
-        }
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="mixed_reserve_and_sleeve_ownership",
+            evidence_refs=(execution.execution_id,),
+        )
     reserve_position = reserve.positions.get(execution.symbol)
     if reserve_position is None:
-        return {}
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="reserve_position_missing",
+            evidence_refs=(execution.execution_id,),
+        )
     if execution.side in {"sell", "reduce"}:
         if execution.filled_qty > reserve_position.quantity + _ROUNDING_TOLERANCE:
-            return {}
+            return _gap_all_sleeves(
+                sleeves=sleeves,
+                trading_day=trading_day,
+                recorded_at_utc=recorded_at_utc,
+                reason="negative_reserve_position_violation",
+                evidence_refs=(execution.execution_id,),
+            )
         new_quantity = max(
             Decimal("0"), reserve_position.quantity - execution.filled_qty
         )
@@ -765,7 +767,34 @@ def _apply_reserve_execution(
                 reason=reserve_position.reason,
                 evidence_refs=reserve_position.evidence_refs,
             )
-    return {}
+        return {}
+    return _gap_all_sleeves(
+        sleeves=sleeves,
+        trading_day=trading_day,
+        recorded_at_utc=recorded_at_utc,
+        reason="unsupported_reserve_execution_side",
+        evidence_refs=(execution.execution_id,),
+    )
+
+
+def _gap_all_sleeves(
+    *,
+    sleeves: dict[str, _MutableSleeveState],
+    trading_day: str,
+    recorded_at_utc: datetime,
+    reason: str,
+    evidence_refs: tuple[str, ...],
+) -> dict[str, SleeveAttributionGapRecord]:
+    return {
+        sleeve_id: _gap_record(
+            sleeve_id=sleeve_id,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+        for sleeve_id in sleeves
+    }
 
 
 def _gap_record(

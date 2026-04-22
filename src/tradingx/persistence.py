@@ -704,6 +704,8 @@ class FilesystemArtifactStore:
         self,
         *,
         sleeve_id: str,
+        before_trading_day: str | None = None,
+        include_same_day_bootstrap: bool = False,
     ) -> SleevePositionLedgerSnapshot | None:
         category_dir = self._root_dir / "sleeve_position_ledger"
         if not category_dir.exists():
@@ -712,11 +714,27 @@ class FilesystemArtifactStore:
         for path in sorted(category_dir.glob(f"*__{sleeve_id}.json")):
             payload = json.loads(path.read_text(encoding="utf-8"))
             record = self._deserialize_sleeve_position_ledger_snapshot(payload)
+            if before_trading_day is not None:
+                if record.trading_day < before_trading_day:
+                    pass
+                elif (
+                    include_same_day_bootstrap
+                    and record.trading_day == before_trading_day
+                    and record.snapshot_id.startswith("bootstrap-")
+                ):
+                    pass
+                else:
+                    continue
             if latest is None or record.recorded_at_utc > latest.recorded_at_utc:
                 latest = record
         return latest
 
-    def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None:
+    def latest_residual_reserve_snapshot(
+        self,
+        *,
+        before_trading_day: str | None = None,
+        include_same_day_bootstrap: bool = False,
+    ) -> ResidualReserveSnapshot | None:
         category_dir = self._root_dir / "residual_reserve"
         if not category_dir.exists():
             return None
@@ -724,6 +742,17 @@ class FilesystemArtifactStore:
         for path in sorted(category_dir.glob("*.json")):
             payload = json.loads(path.read_text(encoding="utf-8"))
             record = self._deserialize_residual_reserve_snapshot(payload)
+            if before_trading_day is not None:
+                if record.trading_day < before_trading_day:
+                    pass
+                elif (
+                    include_same_day_bootstrap
+                    and record.trading_day == before_trading_day
+                    and record.snapshot_id.startswith("bootstrap-")
+                ):
+                    pass
+                else:
+                    continue
             if latest is None or record.recorded_at_utc > latest.recorded_at_utc:
                 latest = record
         return latest

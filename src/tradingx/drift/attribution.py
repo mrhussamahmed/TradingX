@@ -36,9 +36,16 @@ class AttributionStoreProtocol(Protocol):
         self,
         *,
         sleeve_id: str,
+        before_trading_day: str | None = None,
+        include_same_day_bootstrap: bool = False,
     ) -> SleevePositionLedgerSnapshot | None: ...
 
-    def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None: ...
+    def latest_residual_reserve_snapshot(
+        self,
+        *,
+        before_trading_day: str | None = None,
+        include_same_day_bootstrap: bool = False,
+    ) -> ResidualReserveSnapshot | None: ...
 
     def write_sleeve_bootstrap_allocation_record(
         self,
@@ -220,12 +227,17 @@ class SleeveAttributionRecorder:
             for sleeve_id in sleeve_ids
             if (
                 snapshot := self._store.latest_sleeve_position_ledger_snapshot(
-                    sleeve_id=sleeve_id
+                    sleeve_id=sleeve_id,
+                    before_trading_day=trading_day,
+                    include_same_day_bootstrap=True,
                 )
             )
             is not None
         )
-        opening_reserve = self._store.latest_residual_reserve_snapshot()
+        opening_reserve = self._store.latest_residual_reserve_snapshot(
+            before_trading_day=trading_day,
+            include_same_day_bootstrap=True,
+        )
         if (
             bootstrap_record is None
             or len(opening_snapshots) != len(sleeve_ids)

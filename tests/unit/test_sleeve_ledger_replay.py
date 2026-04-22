@@ -61,10 +61,7 @@ def _write_blueprint(path: Path) -> None:
     )
 
 
-def test_bootstrap_uses_exact_history_before_blueprint_fallback(tmp_path) -> None:
-    runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
-    blueprint_path = tmp_path / "bp.yaml"
-    _write_blueprint(blueprint_path)
+def _write_snapshots(runtime_store: FilesystemArtifactStore) -> None:
     runtime_store.write_model_weight_snapshot(
         ApprovedWeightSnapshot(
             snapshot_id="snap-trend-1",
@@ -85,6 +82,61 @@ def test_bootstrap_uses_exact_history_before_blueprint_fallback(tmp_path) -> Non
             weights={"signal": Decimal("1")},
         )
     )
+
+
+def _bootstrap_exact_history(
+    tmp_path: Path,
+):
+    runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
+    blueprint_path = tmp_path / "bp.yaml"
+    _write_blueprint(blueprint_path)
+    _write_snapshots(runtime_store)
+    open_state = PortfolioState(
+        as_of_utc=datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+        cash=Decimal("1000"),
+        equity=Decimal("2000"),
+        buying_power=Decimal("3000"),
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("10"),
+                average_entry_price=Decimal("100"),
+                market_value=Decimal("1000"),
+            ),
+        ),
+        open_orders=(),
+    )
+    bootstrap = build_bootstrap_allocation(
+        active_activation=_active_activation(blueprint_path),
+        snapshot_store=runtime_store,
+        open_portfolio_state=open_state,
+        historical_execution_records=(
+            ExecutionLifecycleRecord(
+                execution_id="exec-open",
+                intent_id="intent-open",
+                symbol="SPY",
+                side="buy",
+                reason_code="entry",
+                reference_price=Decimal("100"),
+                fill_price=Decimal("100"),
+                filled_qty=Decimal("10"),
+                slippage_bps=Decimal("0"),
+                submitted_at_utc=datetime(2026, 4, 20, 13, 30, tzinfo=UTC),
+                filled_at_utc=datetime(2026, 4, 20, 13, 31, tzinfo=UTC),
+                recovered=False,
+                sleeve_attributions=(("trend-following-v1", Decimal("1")),),
+            ),
+        ),
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+    )
+    return runtime_store, open_state, bootstrap
+
+
+def test_bootstrap_uses_exact_history_before_blueprint_fallback(tmp_path) -> None:
+    runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
+    blueprint_path = tmp_path / "bp.yaml"
+    _write_blueprint(blueprint_path)
+    _write_snapshots(runtime_store)
     open_state = PortfolioState(
         as_of_utc=datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
         cash=Decimal("1000"),
@@ -137,26 +189,7 @@ def test_reserve_domain_sell_books_no_sleeve_realized_pnl(tmp_path) -> None:
     runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
     blueprint_path = tmp_path / "bp.yaml"
     _write_blueprint(blueprint_path)
-    runtime_store.write_model_weight_snapshot(
-        ApprovedWeightSnapshot(
-            snapshot_id="snap-trend-1",
-            strategy_id="trend-following-v1",
-            status="approved",
-            generated_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
-            minimum_supporting_trades=5,
-            weights={"signal": Decimal("1")},
-        )
-    )
-    runtime_store.write_model_weight_snapshot(
-        ApprovedWeightSnapshot(
-            snapshot_id="snap-vol-1",
-            strategy_id="vol-target-v1",
-            status="approved",
-            generated_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
-            minimum_supporting_trades=5,
-            weights={"signal": Decimal("1")},
-        )
-    )
+    _write_snapshots(runtime_store)
     open_state = PortfolioState(
         as_of_utc=datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
         cash=Decimal("1000"),
@@ -223,3 +256,81 @@ def test_reserve_domain_sell_books_no_sleeve_realized_pnl(tmp_path) -> None:
     )
     assert result.residual_reserve_snapshot.positions == ()
     assert result.residual_reserve_snapshot.cash_balance == Decimal("1990")
+
+
+def test_unknown_owner_id_fails_closed_for_all_active_sleeves(tmp_path) -> None:
+    _, open_state, bootstrap = _bootstrap_exact_history(tmp_path)
+    result = build_daily_ledger_result(
+        opening_snapshots=bootstrap.sleeve_snapshots,
+        opening_reserve_snapshot=bootstrap.residual_reserve_snapshot,
+        bootstrap_record=bootstrap.bootstrap_record,
+        execution_records=(
+            ExecutionLifecycleRecord(
+                execution_id="exec-bad-owner",
+                intent_id="intent-bad-owner",
+                symbol="SPY",
+                side="buy",
+                reason_code="entry",
+                reference_price=Decimal("100"),
+                fill_price=Decimal("100"),
+                filled_qty=Decimal("1"),
+                slippage_bps=Decimal("0"),
+                submitted_at_utc=datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
+                filled_at_utc=datetime(2026, 4, 22, 15, 1, tzinfo=UTC),
+                recovered=False,
+                sleeve_attributions=(("unknown-owner", Decimal("1")),),
+            ),
+        ),
+        open_portfolio_state=open_state,
+        close_portfolio_state=open_state,
+        trading_day="2026-04-22",
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        active_blueprint_activation_id="activation-1",
+    )
+
+    assert result.attribution_records == ()
+    assert {gap.sleeve_id for gap in result.gap_records} == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    assert {gap.reason for gap in result.gap_records} == {"unknown_owner_id"}
+
+
+def test_invalid_reserve_only_fraction_fails_closed_for_all_active_sleeves(
+    tmp_path,
+) -> None:
+    _, open_state, bootstrap = _bootstrap_exact_history(tmp_path)
+    result = build_daily_ledger_result(
+        opening_snapshots=bootstrap.sleeve_snapshots,
+        opening_reserve_snapshot=bootstrap.residual_reserve_snapshot,
+        bootstrap_record=bootstrap.bootstrap_record,
+        execution_records=(
+            ExecutionLifecycleRecord(
+                execution_id="exec-bad-reserve-fraction",
+                intent_id="intent-bad-reserve-fraction",
+                symbol="SPY",
+                side="sell",
+                reason_code="residual_reserve_liquidation",
+                reference_price=Decimal("100"),
+                fill_price=Decimal("100"),
+                filled_qty=Decimal("1"),
+                slippage_bps=Decimal("0"),
+                submitted_at_utc=datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
+                filled_at_utc=datetime(2026, 4, 22, 15, 1, tzinfo=UTC),
+                recovered=False,
+                sleeve_attributions=((RESIDUAL_RESERVE_OWNER_ID, Decimal("0.5")),),
+            ),
+        ),
+        open_portfolio_state=open_state,
+        close_portfolio_state=open_state,
+        trading_day="2026-04-22",
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        active_blueprint_activation_id="activation-1",
+    )
+
+    assert result.attribution_records == ()
+    assert {gap.sleeve_id for gap in result.gap_records} == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    assert {gap.reason for gap in result.gap_records} == {"fraction_sum_invalid"}
