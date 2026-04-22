@@ -91,6 +91,21 @@ class _PendingStartRequest:
 SERVICE_STOP_SUCCESS_STATUSES: Final[frozenset[str]] = frozenset(
     {"accepted", "completed"}
 )
+ACTIVE_RUNTIME_STATUSES: Final[frozenset[str]] = frozenset(
+    {
+        "bootstrapping",
+        "historical_warmup",
+        "broker_sync",
+        "feature_ready",
+        "strategy_ready",
+        "trading_ready",
+        "recovery_required",
+        "clearance_requested",
+        "reconciling",
+        "nominal",
+        "stopping",
+    }
+)
 
 
 class LocalRuntimeHostManager:
@@ -154,6 +169,14 @@ class LocalRuntimeHostManager:
                     action_type="runtime_host_start",
                     status="blocked",
                     message="Runtime host is already starting or running.",
+                    evidence_refs=(),
+                )
+            if self._state.status in ACTIVE_RUNTIME_STATUSES:
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="runtime_host_start",
+                    status="blocked",
+                    message="Runtime host is already active.",
                     evidence_refs=(),
                 )
             self._set_state(

@@ -395,6 +395,81 @@ def test_runtime_host_bootstraps_to_trading_ready_and_starts_service(tmp_path) -
     assert (tmp_path / "artifacts" / "operator_platform" / "runtime_host").exists()
 
 
+def test_runtime_host_rejects_second_start_when_already_active(tmp_path) -> None:
+    activation = StrategyActivationRecord(
+        activation_id="activation-repeat",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY", "QQQ"),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Repeat-start regression.",
+    )
+    snapshot = ApprovedWeightSnapshot(
+        snapshot_id="snapshot-repeat",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 15, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={
+            "signal": Decimal("1.0"),
+            "regime": Decimal("1.0"),
+            "liquidity": Decimal("1.0"),
+            "spread_penalty": Decimal("1.0"),
+            "volatility_penalty": Decimal("1.0"),
+            "portfolio_overlap_penalty": Decimal("1.0"),
+            "execution_cost_penalty": Decimal("1.0"),
+        },
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-repeat",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY", "QQQ"),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY", "QQQ"),
+        symbols_blocked={},
+        return_summary={"benchmark": {"cumulative_return": Decimal("0.02")}},
+    )
+    service_manager = FakeServiceManager()
+    manager = LocalRuntimeHostManager(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        operator_store_root=tmp_path / "artifacts" / "operator_platform",
+        service_manager=service_manager,
+        warmup_service=FakeWarmupService(warmup),
+        activation_gateway=FakeActivationGateway(activation, snapshot),
+        opportunity_planner=FakeOpportunityPlanner(),
+        portfolio_gateway=FakePortfolioGateway(),
+    )
+
+    first_result = manager.start(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+    _wait_for(lambda: manager.get_state().status == "trading_ready")
+
+    second_result = manager.start(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    assert first_result.status == "accepted"
+    assert second_result.status == "blocked"
+    assert second_result.message == "Runtime host is already active."
+    assert manager.get_state().status == "trading_ready"
+    assert service_manager.calls == [(("SPY", "QQQ"), Decimal("1"), 300, 1)]
+
+
 def test_runtime_host_halts_when_warmup_is_incomplete(tmp_path) -> None:
     activation = StrategyActivationRecord(
         activation_id="activation-2",

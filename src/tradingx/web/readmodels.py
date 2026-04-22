@@ -736,17 +736,25 @@ class LocalWebReadModel:
         payloads = self._operator_platform_store().list_artifact_payloads(
             "historical_warmups"
         )
-        if not payloads:
+        payload = self._pick_latest_payload(
+            payloads,
+            timestamp_field="generated_at_utc",
+        )
+        if payload is None:
             return None
-        return self._historical_warmup_from_payload(payloads[-1])
+        return self._historical_warmup_from_payload(payload)
 
     def get_latest_strategy_activation(self) -> StrategyActivationRecord | None:
         payloads = self._operator_platform_store().list_artifact_payloads(
             "strategy_activations"
         )
-        if not payloads:
+        payload = self._pick_latest_payload(
+            payloads,
+            timestamp_field="activated_at_utc",
+        )
+        if payload is None:
             return None
-        return self._activation_from_payload(payloads[-1])
+        return self._activation_from_payload(payload)
 
     def get_latest_model_weight_snapshot(self) -> ApprovedWeightSnapshot | None:
         activation = self.get_latest_strategy_activation()
@@ -763,9 +771,13 @@ class LocalWebReadModel:
         payloads = self._operator_platform_store().list_artifact_payloads(
             "opportunity_selections"
         )
-        if not payloads:
+        payload = self._pick_latest_payload(
+            payloads,
+            timestamp_field="generated_at_utc",
+        )
+        if payload is None:
             return None
-        return self._opportunity_selection_from_payload(payloads[-1])
+        return self._opportunity_selection_from_payload(payload)
 
     def build_runtime_heartbeat_snapshot(self) -> RuntimeHeartbeatSnapshot:
         runtime_state = self.get_runtime_host_state()
@@ -893,15 +905,20 @@ class LocalWebReadModel:
             pending_orders_count=pending_orders_count,
             last_evaluation_at_utc=last_evaluation_at_utc,
         )
+        heartbeat_symbols = self._heartbeat_symbols(
+            activation=activation,
+            selection=selection,
+            current_open_symbols=current_open_symbols,
+        )
         symbol_rows = self._build_runtime_symbol_rows(
-            configured_symbols=self._config.runtime.symbol_universe,
+            configured_symbols=heartbeat_symbols,
             warmup=warmup,
             selection=selection,
             activation=activation,
             current_open_symbols=current_open_symbols,
         )
         decision_ladder = self._build_runtime_decision_ladder_rows(
-            configured_symbols=self._config.runtime.symbol_universe,
+            configured_symbols=heartbeat_symbols,
             warmup=warmup,
             selection=selection,
             activation=activation,
@@ -1802,6 +1819,25 @@ class LocalWebReadModel:
             detail="The runtime is stable, no urgent blocker is active, and TradingX can continue under normal supervision.",
             tone="good",
         )
+
+    def _heartbeat_symbols(
+        self,
+        *,
+        activation: StrategyActivationRecord | None,
+        selection: OpportunitySelectionRecord | None,
+        current_open_symbols: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        ordered_symbols: list[str] = []
+        for candidate_symbols in (
+            activation.approved_symbols if activation is not None else (),
+            selection.symbols_considered if selection is not None else (),
+            current_open_symbols,
+            self._config.runtime.symbol_universe,
+        ):
+            for symbol in candidate_symbols:
+                if symbol and symbol not in ordered_symbols:
+                    ordered_symbols.append(symbol)
+        return tuple(ordered_symbols)
 
     def _primary_penalty_driver(self, score: OpportunityScore) -> str:
         penalty_pairs = (

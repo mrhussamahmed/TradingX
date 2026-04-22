@@ -27,6 +27,7 @@ class OpportunitySelectorProtocol(Protocol):
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        decision_symbols: tuple[str, ...] | None = None,
     ) -> OpportunitySelectionRecord: ...
 
 
@@ -94,8 +95,9 @@ class BaselineLongOnlyPlanner:
         selected_entry_symbols = candidate_symbols
         if self._selector is not None and candidate_symbols:
             selection = self._selector.select_for_service(
-                symbols=candidate_symbols,
+                symbols=symbols,
                 portfolio_state=portfolio_state,
+                decision_symbols=candidate_symbols,
             )
             if selection.decision == "selected" and selection.selected_symbol:
                 selected_entry_symbols = (selection.selected_symbol,)

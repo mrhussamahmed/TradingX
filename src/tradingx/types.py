@@ -84,6 +84,8 @@ class EvaluationEvidencePack:
     marginal_sharpe_delta: Decimal | None = None
     marginal_calmar_delta: Decimal | None = None
     marginal_cdar_delta: Decimal | None = None
+    pbo_value: Decimal | None = None
+    pbo_report_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,60 @@ class TrialStatistics:
     n_trials: int
     trial_sharpe_mean: float
     trial_sharpe_variance: float
+
+
+@dataclass(frozen=True)
+class CPCVTrialRecord:
+    trial_id: str
+    cohort_window_id: str
+    candidate_id: str
+    config_fingerprint: str
+    strategy_config_id: str
+    cpcv_path_id: str
+    n_groups: int
+    test_group_count: int
+    embargo_days: int
+    label_horizon: int
+    window_start_utc: datetime
+    window_end_utc: datetime
+    train_indices: tuple[int, ...]
+    test_indices: tuple[int, ...]
+    in_sample_sharpe: Decimal
+    out_of_sample_sharpe: Decimal
+    in_sample_n_trades: int
+    out_of_sample_n_trades: int
+    git_sha: str
+    recorded_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class PBOReport:
+    report_id: str
+    evaluation_id: str
+    cohort_window_id: str
+    cohort_size: int
+    n_paths: int
+    n_splits_sampled: int
+    pbo_value: Decimal
+    logit_distribution_percentiles: tuple[tuple[Decimal, Decimal], ...]
+    cpcv_config_fingerprint: str
+    metric_name: str
+    random_seed: int
+    generated_at_utc: datetime
+
+
+@dataclass(frozen=True)
+class CPCVCohortWindowSummary:
+    cohort_window_id: str
+    cpcv_config_fingerprint: str
+    window_start_utc: datetime
+    window_end_utc: datetime
+    earliest_recorded_at_utc: datetime
+    latest_recorded_at_utc: datetime
+    record_count: int
+    strategy_config_count: int
+    path_count: int
+    git_shas: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -1196,6 +1252,8 @@ __all__ = (
     "BotRuntimeState",
     "BlueprintActivationRecord",
     "BlueprintSleeveBinding",
+    "CPCVCohortWindowSummary",
+    "CPCVTrialRecord",
     "ClosedTradeRecord",
     "ConfigProposal",
     "DashboardSnapshot",
@@ -1223,6 +1281,7 @@ __all__ = (
     "OpportunitySelectionRecord",
     "OperatorAlert",
     "OrderRecord",
+    "PBOReport",
     "PortfolioBenchmarkPanel",
     "PortfolioBenchmarkRow",
     "PortfolioCurvePanel",

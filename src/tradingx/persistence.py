@@ -18,6 +18,8 @@ from tradingx.types import (
     BlueprintSleeveBinding,
     BotRuntimeState,
     ClosedTradeRecord,
+    CPCVCohortWindowSummary,
+    CPCVTrialRecord,
     DailySessionDigest,
     DriftMonitorVerdictRecord,
     EvaluationEvidencePack,
@@ -32,6 +34,7 @@ from tradingx.types import (
     OperatorAlert,
     OpportunitySelectionRecord,
     OrderRecord,
+    PBOReport,
     PortfolioState,
     PositionSnapshot,
     ReconciliationSnapshot,
@@ -289,6 +292,34 @@ class FilesystemArtifactStore:
             f"{report.report_id}.json",
             report,
         )
+
+    def write_cpcv_trial_record(
+        self,
+        record: CPCVTrialRecord,
+    ) -> Path:
+        filename = (
+            f"{record.cohort_window_id}__{record.strategy_config_id}"
+            f"__{record.cpcv_path_id}.json"
+        )
+        return self._write_json("cpcv_trials", filename, record)
+
+    def write_pbo_report(self, report: PBOReport) -> Path:
+        return self._write_json("pbo_reports", f"{report.report_id}.json", report)
+
+    def load_pbo_report_by_evaluation_id(
+        self,
+        *,
+        evaluation_id: str,
+    ) -> PBOReport | None:
+        category_dir = self._root_dir / "pbo_reports"
+        if not category_dir.exists():
+            return None
+        for path in sorted(category_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if str(payload.get("evaluation_id")) != evaluation_id:
+                continue
+            return self._deserialize_pbo_report(payload)
+        return None
 
     def write_execution_lifecycle_record(
         self,
@@ -620,6 +651,61 @@ class FilesystemArtifactStore:
                 records.append(loaded)
         return tuple(records)
 
+    def list_cpcv_trial_records(
+        self,
+        *,
+        cohort_window_id: str,
+    ) -> tuple[CPCVTrialRecord, ...]:
+        category_dir = self._root_dir / "cpcv_trials"
+        if not category_dir.exists():
+            return ()
+        records: list[CPCVTrialRecord] = []
+        for path in sorted(category_dir.glob(f"{cohort_window_id}__*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(self._deserialize_cpcv_trial_record(payload))
+        return tuple(records)
+
+    def list_cpcv_cohort_windows(
+        self,
+    ) -> tuple[CPCVCohortWindowSummary, ...]:
+        category_dir = self._root_dir / "cpcv_trials"
+        if not category_dir.exists():
+            return ()
+        grouped: dict[str, list[CPCVTrialRecord]] = {}
+        for path in sorted(category_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = self._deserialize_cpcv_trial_record(payload)
+            grouped.setdefault(record.cohort_window_id, []).append(record)
+        summaries = [
+            CPCVCohortWindowSummary(
+                cohort_window_id=cohort_window_id,
+                cpcv_config_fingerprint=(
+                    f"N={records[0].n_groups},"
+                    f"k={records[0].test_group_count},"
+                    f"h={records[0].embargo_days},"
+                    f"L={records[0].label_horizon}"
+                ),
+                window_start_utc=records[0].window_start_utc,
+                window_end_utc=records[0].window_end_utc,
+                earliest_recorded_at_utc=min(
+                    record.recorded_at_utc for record in records
+                ),
+                latest_recorded_at_utc=max(
+                    record.recorded_at_utc for record in records
+                ),
+                record_count=len(records),
+                strategy_config_count=len(
+                    {record.strategy_config_id for record in records}
+                ),
+                path_count=len({record.cpcv_path_id for record in records}),
+                git_shas=frozenset(record.git_sha for record in records),
+            )
+            for cohort_window_id, records in grouped.items()
+        ]
+        return tuple(
+            sorted(summaries, key=lambda summary: summary.earliest_recorded_at_utc)
+        )
+
     def _write_json(self, category: str, filename: str, payload: Any) -> Path:
         path = self._path_for(category, filename)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -670,6 +756,33 @@ class FilesystemArtifactStore:
                 (str(item[0]), Decimal(str(item[1])))
                 for item in payload["per_symbol_close_weight"]
             ),
+        )
+
+    def _deserialize_cpcv_trial_record(
+        self,
+        payload: dict[str, Any],
+    ) -> CPCVTrialRecord:
+        return CPCVTrialRecord(
+            trial_id=str(payload["trial_id"]),
+            cohort_window_id=str(payload["cohort_window_id"]),
+            candidate_id=str(payload["candidate_id"]),
+            config_fingerprint=str(payload["config_fingerprint"]),
+            strategy_config_id=str(payload["strategy_config_id"]),
+            cpcv_path_id=str(payload["cpcv_path_id"]),
+            n_groups=int(payload["n_groups"]),
+            test_group_count=int(payload["test_group_count"]),
+            embargo_days=int(payload["embargo_days"]),
+            label_horizon=int(payload["label_horizon"]),
+            window_start_utc=datetime.fromisoformat(str(payload["window_start_utc"])),
+            window_end_utc=datetime.fromisoformat(str(payload["window_end_utc"])),
+            train_indices=tuple(int(index) for index in payload["train_indices"]),
+            test_indices=tuple(int(index) for index in payload["test_indices"]),
+            in_sample_sharpe=Decimal(str(payload["in_sample_sharpe"])),
+            out_of_sample_sharpe=Decimal(str(payload["out_of_sample_sharpe"])),
+            in_sample_n_trades=int(payload["in_sample_n_trades"]),
+            out_of_sample_n_trades=int(payload["out_of_sample_n_trades"]),
+            git_sha=str(payload["git_sha"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
         )
 
     def _deserialize_blueprint_activation_record(
@@ -752,6 +865,28 @@ class FilesystemArtifactStore:
             recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
         )
 
+    def _deserialize_pbo_report(
+        self,
+        payload: dict[str, Any],
+    ) -> PBOReport:
+        return PBOReport(
+            report_id=str(payload["report_id"]),
+            evaluation_id=str(payload["evaluation_id"]),
+            cohort_window_id=str(payload["cohort_window_id"]),
+            cohort_size=int(payload["cohort_size"]),
+            n_paths=int(payload["n_paths"]),
+            n_splits_sampled=int(payload["n_splits_sampled"]),
+            pbo_value=Decimal(str(payload["pbo_value"])),
+            logit_distribution_percentiles=tuple(
+                (Decimal(str(pair[0])), Decimal(str(pair[1])))
+                for pair in payload["logit_distribution_percentiles"]
+            ),
+            cpcv_config_fingerprint=str(payload["cpcv_config_fingerprint"]),
+            metric_name=str(payload["metric_name"]),
+            random_seed=int(payload["random_seed"]),
+            generated_at_utc=datetime.fromisoformat(str(payload["generated_at_utc"])),
+        )
+
     def build_operator_evidence_report(self) -> dict[str, object]:
         categories = (
             "trade_intents",
@@ -764,6 +899,8 @@ class FilesystemArtifactStore:
             "service_cycles",
             "runtime_portfolio_plans",
             "validation_reports",
+            "cpcv_trials",
+            "pbo_reports",
             "execution_lifecycles",
             "closed_trades",
             "drift_monitor_verdicts",

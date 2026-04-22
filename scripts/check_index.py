@@ -13,6 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INDEX_PATH = REPO_ROOT / "docs" / "INDEX.md"
 IGNORED_DIRS = {
+    ".claude",
     ".git",
     ".venv",
     ".mypy_cache",

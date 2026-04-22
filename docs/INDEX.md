@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.32
+version: 1.2.33
 status: active
 created: 2026-04-17
 last_amended: 2026-04-22
-supersedes: INDEX-0001@1.2.31
+supersedes: INDEX-0001@1.2.32
 superseded_by: null
 author_session: claude-opus-4.7-2026-04-22
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.32  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.33  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -130,7 +130,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0015 | Tranche 1.4 portfolio construction and drawdown defense | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-4-portfolio-construction-and-drawdown-defense-design.md` |
 | DESIGN-0016 | Tranche 1.5 live drift monitoring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-5-live-drift-monitoring-design.md` |
 | DESIGN-0017 | Tranche 2.1 multi-sleeve live runtime wiring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md` |
-| DESIGN-0018 | Tranche 2.2 CPCV + PBO design | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-2-cpcv-pbo-design.md` |
+| DESIGN-0018 | Tranche 2.2 CPCV + PBO design | 1.0.0 | active | `docs/superpowers/specs/2026-04-22-tranche-2-2-cpcv-pbo-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 

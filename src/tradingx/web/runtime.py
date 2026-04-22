@@ -955,12 +955,11 @@ def build_default_local_web_components(
     config: TradingConfig,
 ) -> tuple[LocalWebReadModel, LocalWebActionRunner]:
     repo_root = Path(__file__).resolve().parents[3]
-    service_manager = LocalServiceManager(config=config)
-    scheduler_manager = LocalSchedulerManager(config=config)
-    runtime_service_manager = LocalServiceManager(
+    service_manager = LocalServiceManager(
         config=config,
         service_builder=lambda: build_runtime_host_paper_service(config),
     )
+    scheduler_manager = LocalSchedulerManager(config=config)
     operator_store_root = config.runtime.artifact_root / "operator_platform"
     market_data_gateway = build_default_market_data_gateway(config)
     trading_client = TradingClient(
@@ -974,7 +973,7 @@ def build_default_local_web_components(
     runtime_host_manager = LocalRuntimeHostManager(
         config=config,
         operator_store_root=operator_store_root,
-        service_manager=runtime_service_manager,
+        service_manager=service_manager,
         warmup_service=HistoricalWarmupService(
             market_data_gateway=market_data_gateway,
         ),

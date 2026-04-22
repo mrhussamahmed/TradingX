@@ -7,7 +7,7 @@ import json
 import logging
 import subprocess
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -23,6 +23,8 @@ from tradingx.evaluation import (
     evaluate_candidate,
 )
 from tradingx.features.regime import classify_regime
+from tradingx.pbo import cohort_window_id_for
+from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio_construction import build_candidate_target_weight_history
 from tradingx.stats import (
     conditional_drawdown_at_risk,
@@ -33,6 +35,7 @@ from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkCloseSeries,
     BenchmarkStackPayload,
+    CPCVTrialRecord,
     EvaluationEvidencePack,
     OperatingConstraintBudget,
     RegimeSnapshot,
@@ -43,6 +46,7 @@ from tradingx.types import (
     ValidationCriterionResult,
     ValidationReport,
 )
+from tradingx.validation_folds import generate_cpcv_paths
 
 LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +61,11 @@ GATE1_MAX_PROFILE_DRIFT = Decimal("0.30")
 GATE2_MIN_WALK_FORWARD_DAYS = 252
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE2_MIN_WALK_FORWARD_SHARPE = Decimal("0.5")
+
+_CPCV_LABEL_HORIZON_DAYS = 1
+_CPCV_N_GROUPS = 10
+_CPCV_TEST_GROUP_COUNT = 2
+_CPCV_EMBARGO_DAYS = 5
 
 
 def _to_float_sequence(values: Sequence[Decimal]) -> tuple[float, ...]:
@@ -77,6 +86,10 @@ def _sharpe_ratio(returns: Sequence[float]) -> float:
         periods_per_year=TRADING_DAYS_PER_YEAR,
     )
     if sharpe_ratio is None:
+        LOGGER.warning(
+            "criterion: sharpe_ratio_undefined sample_count=%s",
+            len(returns),
+        )
         return 0.0
     return sharpe_ratio
 
@@ -587,6 +600,144 @@ def _candidate_returns(
     )
     returns = tuple(Decimal(str(value)) for value in result.portfolio_returns.tolist())
     return returns, result.annualized_cost_drag_bps
+
+
+def _contiguous_index_segments(indices: tuple[int, ...]) -> tuple[tuple[int, ...], ...]:
+    if not indices:
+        return ()
+
+    segments: list[tuple[int, ...]] = []
+    start = indices[0]
+    previous = indices[0]
+    for index in indices[1:]:
+        if index == previous + 1:
+            previous = index
+            continue
+        segments.append(tuple(range(start, previous + 1)))
+        start = index
+        previous = index
+    segments.append(tuple(range(start, previous + 1)))
+    return tuple(segments)
+
+
+def _cpcv_returns_for_indices(
+    *,
+    candidate: StrategyCandidate,
+    aligned_bars: dict[str, pd.DataFrame],
+    indices: tuple[int, ...],
+) -> tuple[Decimal, ...]:
+    returns: list[Decimal] = []
+    for segment in _contiguous_index_segments(indices):
+        segment_bars = {
+            symbol: bars.iloc[segment[0] : segment[-1] + 1].copy()
+            for symbol, bars in aligned_bars.items()
+        }
+        segment_returns, _ = _candidate_returns(
+            candidate=candidate,
+            bars_by_symbol=segment_bars,
+            cost_model_config=CostModelConfig(),
+        )
+        returns.extend(segment_returns)
+    return tuple(returns)
+
+
+def _run_cpcv_for_candidate(
+    *,
+    candidate: StrategyCandidate,
+    bars_by_symbol: dict[str, pd.DataFrame],
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+    artifact_store: FilesystemArtifactStore,
+    git_sha: str | None = None,
+    now_provider: Callable[[], datetime] | None = None,
+) -> tuple[CPCVTrialRecord, ...]:
+    if candidate.sleeve_class_path is None:
+        return ()
+
+    aligned_bars = _align_bars_by_symbol(bars_by_symbol)
+    primary_bars = aligned_bars.get(candidate.benchmark_symbol)
+    if primary_bars is None:
+        primary_bars = next(iter(aligned_bars.values()))
+    n_samples = len(primary_bars.index)
+    minimum_samples = _CPCV_N_GROUPS * (
+        2 + _CPCV_LABEL_HORIZON_DAYS + _CPCV_EMBARGO_DAYS
+    )
+    if n_samples < minimum_samples:
+        LOGGER.info(
+            "criterion: cpcv_insufficient_history "
+            "candidate_id=%s n_samples=%s required=%s",
+            candidate.candidate_id,
+            n_samples,
+            minimum_samples,
+        )
+        return ()
+
+    cpcv_config_fingerprint = (
+        f"N={_CPCV_N_GROUPS},"
+        f"k={_CPCV_TEST_GROUP_COUNT},"
+        f"h={_CPCV_EMBARGO_DAYS},"
+        f"L={_CPCV_LABEL_HORIZON_DAYS}"
+    )
+    cohort_window_id = cohort_window_id_for(
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        cpcv_config_fingerprint=cpcv_config_fingerprint,
+    )
+    strategy_config_id = f"{candidate.candidate_id}::{_config_fingerprint(candidate)}"
+    recorded_at_utc = now_provider() if now_provider is not None else datetime.now(UTC)
+    resolved_git_sha = git_sha or _resolve_git_sha()
+    paths = generate_cpcv_paths(
+        n_samples=n_samples,
+        n_groups=_CPCV_N_GROUPS,
+        test_group_count=_CPCV_TEST_GROUP_COUNT,
+        embargo_days=_CPCV_EMBARGO_DAYS,
+        label_horizon=_CPCV_LABEL_HORIZON_DAYS,
+    )
+    records: list[CPCVTrialRecord] = []
+    for path_index, (train_indices, test_indices) in enumerate(paths):
+        train_returns = _cpcv_returns_for_indices(
+            candidate=candidate,
+            aligned_bars=aligned_bars,
+            indices=train_indices,
+        )
+        test_returns = _cpcv_returns_for_indices(
+            candidate=candidate,
+            aligned_bars=aligned_bars,
+            indices=test_indices,
+        )
+        record = CPCVTrialRecord(
+            trial_id=(
+                f"cpcv-{cohort_window_id}-{strategy_config_id}-path-{path_index:04d}"
+            ),
+            cohort_window_id=cohort_window_id,
+            candidate_id=candidate.candidate_id,
+            config_fingerprint=_config_fingerprint(candidate),
+            strategy_config_id=strategy_config_id,
+            cpcv_path_id=f"path-{path_index:04d}",
+            n_groups=_CPCV_N_GROUPS,
+            test_group_count=_CPCV_TEST_GROUP_COUNT,
+            embargo_days=_CPCV_EMBARGO_DAYS,
+            label_horizon=_CPCV_LABEL_HORIZON_DAYS,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            train_indices=train_indices,
+            test_indices=test_indices,
+            in_sample_sharpe=Decimal(
+                str(_sharpe_ratio(_to_float_sequence(train_returns)))
+            ),
+            out_of_sample_sharpe=Decimal(
+                str(_sharpe_ratio(_to_float_sequence(test_returns)))
+            ),
+            # Stage 1 does not yet plumb execution counts through the sleeve
+            # evaluation bridge, so keep these diagnostics explicitly unset.
+            in_sample_n_trades=0,
+            out_of_sample_n_trades=0,
+            git_sha=resolved_git_sha,
+            recorded_at_utc=recorded_at_utc,
+        )
+        artifact_store.write_cpcv_trial_record(record)
+        records.append(record)
+    return tuple(records)
 
 
 def _build_default_regime_snapshots(
