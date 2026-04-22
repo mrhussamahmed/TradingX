@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import subprocess
 import time
 from dataclasses import asdict
@@ -71,7 +72,9 @@ from tradingx.types import (
     TradeIntent,
     TradingLoopResult,
 )
-from tradingx.validation import build_gate_report
+from tradingx.validation import _run_cpcv_for_candidate, build_gate_report
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _serialize(value: Any) -> Any:
@@ -1482,6 +1485,22 @@ class GateValidationController:
             )
             for symbol in sorted(required_symbols)
         }
+        if gate_id == "1":
+            for candidate in candidates:
+                try:
+                    _run_cpcv_for_candidate(
+                        candidate=candidate,
+                        bars_by_symbol=bars_by_symbol,
+                        window_start_utc=window_start_utc,
+                        window_end_utc=window_end_utc,
+                        artifact_store=self._artifacts,
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "criterion: cpcv_run_failed gate_id=%s candidate_id=%s",
+                        gate_id,
+                        candidate.candidate_id,
+                    )
         report = build_gate_report(
             gate_id=gate_id,
             bars_by_symbol=bars_by_symbol,

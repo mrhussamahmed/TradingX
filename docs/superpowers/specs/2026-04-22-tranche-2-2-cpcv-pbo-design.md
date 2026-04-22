@@ -1,8 +1,8 @@
 ---
 id: DESIGN-0018
 title: Tranche 2.2 CPCV + PBO design
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: active
 created: 2026-04-22
 last_amended: 2026-04-22
 supersedes: null
@@ -12,7 +12,7 @@ author_session: claude-opus-4.7-2026-04-22
 
 # DESIGN-0018 — Tranche 2.2 CPCV + PBO Design
 
-**Status:** draft v0.1.0 — 2026-04-22
+**Status:** active v1.0.0 — 2026-04-22
 
 **Supersedes / Amends:** none (net-new).
 

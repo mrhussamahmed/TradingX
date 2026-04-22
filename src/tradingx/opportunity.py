@@ -235,9 +235,7 @@ class LiveOpportunitySelector:
         )
         if decision_symbols is not None:
             decision_symbol_set = {
-                symbol.strip().upper()
-                for symbol in decision_symbols
-                if symbol.strip()
+                symbol.strip().upper() for symbol in decision_symbols if symbol.strip()
             }
             selected_score = next(
                 (
