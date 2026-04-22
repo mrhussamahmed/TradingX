@@ -504,8 +504,18 @@ Additional activation-time durability requirement:
   activation path MUST also persist that exact snapshot payload into
   `model_weight_snapshots/{snapshot_id}.json` if it is not already
   present;
+- the canonical store root for these persisted snapshot payloads is
+  the top-level `runtime_store = FilesystemArtifactStore(artifact_root)`
+  used by `SleeveAttributionRecorder` and drift readers in
+  [/src/tradingx/automation.py:856](/src/tradingx/automation.py:856)
+  and [/src/tradingx/automation.py:916](/src/tradingx/automation.py:916),
+  not the narrower `operator_store`;
+- if blueprint activation still writes other activation artifacts via
+  `operator_store`, the snapshot payloads must be mirrored into
+  `runtime_store/model_weight_snapshots/` as part of the same
+  activation transaction;
 - bootstrap fallback MUST resolve captured snapshots from that
-  persisted payload store by `snapshot_id`, not by reloading current
+  `runtime_store` payload store by `snapshot_id`, not by reloading current
   approved YAML through `strategy_id`.
 
 Without this, `captured_snapshot_id` is only an identifier, not a
@@ -664,15 +674,23 @@ Residual reserve behavior:
 - unresolved inherited positions remain in the residual reserve
   until future sells reduce them or future economic events allow a
   safe ownership transition;
-- if a sell targets a symbol with residual unresolved inventory,
-  the replay reduces residual inventory first before reducing any
-  sleeve-owned quantity for that symbol;
+- a symbol may be in exactly one ownership domain at a time for
+  accounting purposes:
+  - sleeve-owned, or
+  - residual-reserve-owned,
+  but never both;
+- if residual unresolved inventory exists for symbol `z`, any
+  sleeve-attributed execution for `z` is ambiguous and MUST fail
+  closed with a `SleeveAttributionGapRecord` until residual reserve
+  inventory for `z` is zero or a later explicit transition feature
+  is introduced;
 - reserve cash is the durable holder of free broker cash across the
   life of the ledger, not just at bootstrap;
 - reserve cash decreases only when explicitly transferred into a
   sleeve to fund attributed buys;
 - proceeds from reducing residual unresolved inventory stay in the
-  residual reserve cash balance;
+  residual reserve cash balance when the execution is classified to
+  the residual reserve domain;
 - attributed sale proceeds also return to the residual reserve;
 - reserve cash is not automatically reallocated by blueprint
   percentages; and
@@ -696,10 +714,13 @@ Invariants:
 1. every replayed execution must have non-empty `sleeve_attributions`;
 2. attribution fractions must sum to 1.0 within tolerance;
 3. no sleeve position may go negative beyond tolerance;
-4. per-symbol sleeve quantities plus residual-reserve quantity must
+4. no symbol may be simultaneously sleeve-owned and
+   residual-reserve-owned during replay; if that condition occurs,
+   the day fails closed for that symbol;
+5. per-symbol sleeve quantities plus residual-reserve quantity must
    sum to the broker quantity within tolerance after bootstrap and
    after replay; and
-5. sleeve cash plus marked sleeve positions plus residual reserve
+6. sleeve cash plus marked sleeve positions plus residual reserve
    cash plus marked residual positions must sum to broker portfolio
    equity within tolerance at open and close.
 
