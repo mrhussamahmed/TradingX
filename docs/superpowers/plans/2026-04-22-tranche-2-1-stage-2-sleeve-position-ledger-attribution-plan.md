@@ -166,6 +166,8 @@ Out of scope in this plan:
 - `src/tradingx/activation.py`
 - `src/tradingx/automation.py`
 - `src/tradingx/service.py`
+- `src/tradingx/web/runtime.py`
+- `src/tradingx/__main__.py`
 - `src/tradingx/runtime_portfolio.py`
 - `src/tradingx/drift/attribution.py`
 - `src/tradingx/drift/gateway.py`
