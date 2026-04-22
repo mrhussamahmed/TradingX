@@ -412,6 +412,17 @@ Persistence categories:
 - `sleeve_bootstrap/`
 - `sleeve_position_ledger/`
 - existing `sleeve_daily_attribution/`
+- existing `sleeve_decomposition/` when read as runtime state for
+  sleeve/current-weight continuity
+
+Canonical root for these DESIGN-0019 runtime-state categories:
+
+- the top-level `runtime_store = FilesystemArtifactStore(artifact_root)`,
+  not `paper_loop/`;
+- this keeps bootstrap, reserve, decomposition, attribution, and drift
+  readers on one shared runtime-root store, matching the current
+  `SleeveAttributionRecorder`/drift-reader side in
+  [/src/tradingx/automation.py:916](/src/tradingx/automation.py:916).
 
 Suggested filenames:
 
@@ -688,12 +699,25 @@ Reserved owner-id contract:
 Reserve-domain production path:
 
 - `RuntimePortfolioPlanner` already owns the runtime trade-intent seam
-  through `plan_for_service(...)` and already carries an
-  `artifact_store` dependency in
+  through `plan_for_service(...)`;
+- the current code only gives that planner one `artifact_store`
+  dependency in
   [/src/tradingx/runtime_portfolio.py:104](/src/tradingx/runtime_portfolio.py:104);
+- DESIGN-0019 makes the runtime-root dependency explicit by adding a
+  dedicated `runtime_state_store: FilesystemArtifactStore` to
+  `RuntimePortfolioPlanner` for:
+  - `latest_sleeve_decomposition_record()`; and
+  - `latest_residual_reserve_snapshot()`;
+- in `build_default_paper_service()`, that dependency MUST be bound to
+  the same top-level `runtime_store` used by
+  `SleeveAttributionRecorder`, not to `paper_store`;
+- `paper_store` remains the home for paper-loop cycle artifacts such as
+  `runtime_portfolio_plan` snapshots, but not for DESIGN-0019 ledger or
+  reserve state;
 - DESIGN-0019 adds one narrow reserve-liquidation pre-pass inside the
   blueprint runtime path:
-  - read `latest_residual_reserve_snapshot()` from that store;
+  - read `latest_residual_reserve_snapshot()` from
+    `runtime_state_store`;
   - if residual inventory exists for symbol `z`, synthesize a
     reserve-liquidation `RuntimePortfolioTrade` for `z` before any
     sleeve-domain trade for that symbol;
@@ -779,6 +803,10 @@ Operational consequence:
   reserve inventory unwinds through the same persisted
   `TradeIntent -> ExecutionLifecycleRecord -> ClosedTradeRecord` path as
   normal sleeve trades; and
+- because both the planner and recorder now read/write reserve and
+  decomposition state from the same `runtime_store` root, the unwind
+  path cannot miss residual inventory merely because it was written
+  under `paper_loop`; and
 - Task 16's "unresolved reserve positions are zero" precondition is
   therefore a reachable runtime state, not a manual cleanup
   requirement.
@@ -1008,18 +1036,22 @@ The following remain untouched by this design:
     deterministic reserve-domain sell intents until residual quantity
     is zero, rather than leaving that inventory operationally
     stranded.
-12. **Anomalies fail closed.** Missing sleeve attribution, negative
+12. **Planner/recorder store roots are unified.** The planner's reserve
+    and decomposition reads use the same `runtime_store` root that the
+    recorder uses for ledger and attribution artifacts, so reserve
+    inventory cannot be hidden by a `paper_loop`/runtime-root mismatch.
+13. **Anomalies fail closed.** Missing sleeve attribution, negative
     inventory, or irreconcilable symbol ownership emit explicit
     gap artifacts and do not fabricate a valid daily return.
-13. **Drift readers remain compatible.** Existing drift readers and
+14. **Drift readers remain compatible.** Existing drift readers and
     dashboards can read the new attribution records without
     changing their primary input type, and gap days force
     `pending` rather than a false verdict.
-14. **Live Sharpe readers are gap-aware.** Any
+15. **Live Sharpe readers are gap-aware.** Any
     `LIVE_DAILY_RETURNS`-based sleeve Sharpe consumer treats gap
     days as insufficient history rather than a shorter valid
     return series.
-15. **Task 16 remains separate.** No monitor activation is coupled
+16. **Task 16 remains separate.** No monitor activation is coupled
     to the ledger merge; rollback can still target the activation
     step independently.
 
