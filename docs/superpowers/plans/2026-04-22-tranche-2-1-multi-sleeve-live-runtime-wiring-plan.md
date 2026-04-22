@@ -59,7 +59,7 @@ Tranche-1 outcomes (Gate 1 criteria, drift monitors at narrowed 1.5 scope, tranc
 - `src/tradingx/drift/reference.py` — add `force_rebuild=True` code path on the build helper.
 - `src/tradingx/drift/backtest_reference.py` — add `force_rebuild=True` path on the writer.
 - `src/tradingx/drift/gateway.py` — Task 16 (Stage 2) only: fixture + threshold tightening. No Stage 1 code change.
-- `src/tradingx/automation.py` — activation-change detection on `build_default_market_day_automation_runner` keyed on `activation_id`; reads the shipped 1.5 operator-control audit marker at `{operator_store_root}/drift_reference_recalibration.json` to detect operator-triggered recalibrations (no changes to `operator_control.py` — Codex round-1 plan P1 fix).
+- `src/tradingx/automation.py` — activation-change detection on `build_default_market_day_automation_runner` keyed on `activation_id`; reads the shipped 1.5 operator-control audit marker at `{config.runtime.data_root}/control/drift_reference_recalibration.json` (the same control-store root the shipped `OperatorControlStore` uses at service.py/controller.py/supervisor.py construction sites) to detect operator-triggered recalibrations — no changes to `operator_control.py`, no path mismatch between writers and reader (Codex round-1 + round-2 plan P1 fixes).
 - Operator dashboard modules (exact files depend on existing layout; see Task 14 for implementer-convention note).
 - Test files listed above + updates to existing `tests/unit/test_runtime_portfolio.py`, `tests/unit/test_service.py`, `tests/unit/test_activation.py`, `tests/unit/test_automation.py`.
 
@@ -2205,6 +2205,32 @@ every construction site by construction — no new parameter
 threading is required. The automation runner reads from it
 directly.
 
+**Control-store root vs artifact-store root (Codex round-2
+plan P1 fix).** Two similarly-named things that are NOT the
+same directory:
+
+- `operator_store` in
+  [`build_default_market_day_automation_runner`](/src/tradingx/automation.py:725)
+  is a `FilesystemArtifactStore` rooted at
+  `config.runtime.artifact_root / "operator_platform"` —
+  this is the operator-platform audit/evidence tree (trade
+  intents, order records, sleeve halts, etc.).
+- `OperatorControlStore` (the class in
+  [`operator_control.py`](/src/tradingx/operator_control.py:82))
+  is rooted at `config.runtime.data_root / "control"` in
+  every production construction site
+  ([service.py:559](/src/tradingx/service.py:559),
+  [controller.py:1559](/src/tradingx/controller.py:1559),
+  [supervisor.py:662](/src/tradingx/supervisor.py:662)) —
+  this is where `recalibrate_drift_reference` writes the
+  audit marker.
+
+The automation runner's regeneration detector MUST read from
+the **control-store root** (`config.runtime.data_root /
+"control"`), not from `operator_store._root_dir`. Reading
+from the wrong path silently misses every operator-triggered
+recalibration.
+
 **Implementation in `src/tradingx/operator_control.py`:** no
 change. The 1.5 behavior is already what we need.
 
@@ -2243,9 +2269,15 @@ def _read_last_seen_bookkeeping(path: Path) -> dict[str, str | None]:
 
 
 def _read_operator_recalibration_marker_timestamp(
-    operator_store_root: Path,
+    control_store_root: Path,
 ) -> datetime | None:
-    path = operator_store_root / "drift_reference_recalibration.json"
+    """Read at_utc from the 1.5 audit marker written by
+    OperatorControlStore.recalibrate_drift_reference. Path is
+    control_store_root / "drift_reference_recalibration.json"
+    — NOT the operator-platform artifact-store root. See the
+    Codex round-2 plan P1 fix above for the distinction.
+    """
+    path = control_store_root / "drift_reference_recalibration.json"
     if not path.exists():
         return None
     try:
@@ -2282,10 +2314,14 @@ def _write_last_seen_bookkeeping(
 # inside build_default_market_day_automation_runner:
 
 bookkeeping_path = artifact_root / "drift" / "last_activation.json"
+# control_store_root matches the path the shipped
+# OperatorControlStore uses in service.py, controller.py, and
+# supervisor.py: config.runtime.data_root / "control".
+control_store_root = config.runtime.data_root / "control"
 current_activation = activation_gateway.get_active_blueprint_activation()
 last_seen = _read_last_seen_bookkeeping(bookkeeping_path)
 marker_at = _read_operator_recalibration_marker_timestamp(
-    operator_store_root=operator_store._root_dir,
+    control_store_root=control_store_root,
 )
 
 activation_changed = (
@@ -2324,9 +2360,14 @@ if activation_changed or recalibration_fresh:
 Operator calls to `recalibrate_drift_reference` through ANY
 production construction site (`service.py`, `controller.py`,
 `supervisor.py`, `automation.py`) all write the 1.5 audit
-marker in the store's own root, which every site already
-configures. The automation runner reads from that root on the
-next build and triggers regeneration.
+marker at `config.runtime.data_root / "control" /
+"drift_reference_recalibration.json"`, which every site
+already configures (via `OperatorControlStore(root_dir=
+config.runtime.data_root / "control")`). The automation
+runner reads from that same control-store root on the next
+build and triggers regeneration — no new parameter threading
+and no path mismatch between the writing sites and the
+reading site.
 
 **What this does NOT do.** The audit marker is NEVER deleted
 by the automation runner — it is an operator-audit artifact
@@ -3103,10 +3144,16 @@ No TBD / TODO / "implement later" in production code. Fixture-name placeholders 
    four places (service.py, controller.py, supervisor.py,
    automation.py), not just the automation runner. The plan
    now reuses the shipped 1.5 audit marker at
-   `{operator_store_root}/drift_reference_recalibration.json`
-   — no constructor-parameter threading, no operator_control.py
+   `{config.runtime.data_root}/control/drift_reference_recalibration.json`
+   — the control-store root every production site uses. No
+   constructor-parameter threading, no `operator_control.py`
    change. Automation runner reads the marker on each build
    and compares its `at_utc` against its own bookkeeping.
+   (The round-2 P1 fix corrected an earlier version of this
+   note that referenced `operator_store._root_dir` — which is
+   the operator-platform artifact store at
+   `artifact_root/operator_platform`, a different directory
+   from the control-store root.)
 5. **Dashboard file surface** (Task 14). The plan points at `portfolio.py` + `performance.py`; actual operator-platform layout may differ. Match existing convention.
 6. **Stage 2 timing (Task 16)**. Stage 2 ships after at least one week of Stage 1 paper-session data confirms attribution records populate reliably. This is an operator-triggered ship decision, not an automated one.
 
