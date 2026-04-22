@@ -44,15 +44,18 @@ class FakeMarketData:
 class FakeSelector:
     def __init__(self, *, selected_symbol: str) -> None:
         self.selected_symbol = selected_symbol
-        self.calls: list[tuple[tuple[str, ...], PortfolioState]] = []
+        self.calls: list[
+            tuple[tuple[str, ...], PortfolioState, tuple[str, ...] | None]
+        ] = []
 
     def select_for_service(
         self,
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        decision_symbols: tuple[str, ...] | None = None,
     ) -> OpportunitySelectionRecord:
-        self.calls.append((symbols, portfolio_state))
+        self.calls.append((symbols, portfolio_state, decision_symbols))
         return OpportunitySelectionRecord(
             selection_id="selection-1",
             generated_at_utc=datetime(2026, 4, 19, 13, 30, tzinfo=UTC),
@@ -217,6 +220,8 @@ def test_baseline_long_only_planner_uses_selector_for_entry_symbol() -> None:
     )
 
     assert selector.calls
+    assert selector.calls[0][0] == ("SPY", "QQQ", "IWM")
+    assert selector.calls[0][2] == ("QQQ", "IWM")
     assert [intent.symbol for intent in plan.trade_intents] == ["SPY", "IWM"]
     assert [intent.side for intent in plan.trade_intents] == ["hold", "buy"]
 

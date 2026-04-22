@@ -1003,3 +1003,381 @@ def test_local_web_read_model_builds_runtime_heartbeat_from_latest_cycle_and_sel
         heartbeat.operator_guidance.detail
         == "IWM is still blocked by warmup, so TradingX is evaluating an incomplete universe. Resolve the warmup gap before broadening unattended operation."
     )
+
+
+def test_runtime_heartbeat_prefers_latest_operator_artifacts_by_timestamp(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    older_timestamp = datetime(2026, 4, 20, 17, 4, tzinfo=UTC)
+    newer_timestamp = datetime(2026, 4, 22, 14, 2, 13, tzinfo=UTC)
+
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-latest",
+            started_at_utc=newer_timestamp,
+            completed_at_utc=newer_timestamp,
+            cycle_status="executed",
+            symbols=("SPY", "QQQ", "IWM"),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY", "QQQ", "IWM"),
+            cash=Decimal("98316.59"),
+            equity=Decimal("100004.46"),
+            buying_power=Decimal("398122.25"),
+        )
+    )
+    operator_store.write_historical_warmup_record(
+        HistoricalWarmupRecord(
+            warmup_id="warmup-z-old",
+            generated_at_utc=older_timestamp,
+            benchmark_symbol="SPY",
+            symbols=("SPY",),
+            window_start_utc=older_timestamp,
+            window_end_utc=older_timestamp,
+            required_bar_count=30,
+            symbols_ready=("SPY",),
+            symbols_blocked={},
+            return_summary={
+                "SPY": {
+                    "cumulative_return": "0.03673855618034435164581019192",
+                    "mean_return": "0.0",
+                    "volatility": "0.01046714083591610900",
+                }
+            },
+        )
+    )
+    operator_store.write_historical_warmup_record(
+        HistoricalWarmupRecord(
+            warmup_id="warmup-a-new",
+            generated_at_utc=newer_timestamp,
+            benchmark_symbol="SPY",
+            symbols=("SPY", "QQQ", "IWM"),
+            window_start_utc=newer_timestamp,
+            window_end_utc=newer_timestamp,
+            required_bar_count=30,
+            symbols_ready=("SPY", "QQQ", "IWM"),
+            symbols_blocked={},
+            return_summary={
+                "SPY": {
+                    "cumulative_return": "0.05396956955943802895846951408",
+                    "mean_return": "0.0",
+                    "volatility": "0.01031118289880468900",
+                },
+                "QQQ": {
+                    "cumulative_return": "0.1033020836578743735363571369",
+                    "mean_return": "0.0",
+                    "volatility": "0.01273729624580978000",
+                },
+                "IWM": {
+                    "cumulative_return": "0.08350809089345879210123877161",
+                    "mean_return": "0.0",
+                    "volatility": "0.01414188890150961400",
+                },
+            },
+        )
+    )
+    operator_store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-z-old",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY",),
+            deploy_threshold="0.50",
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=older_timestamp,
+            notes="Old activation.",
+        )
+    )
+    operator_store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-a-new",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY", "QQQ", "IWM"),
+            deploy_threshold="0.50",
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=newer_timestamp,
+            notes="Latest activation.",
+        )
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-z-old",
+            generated_at_utc=older_timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY",),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("0.3673855618034435164581019192"),
+                    regime_weight=Decimal("1.029045582802455129883352241"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.50"),
+                    spread_penalty=Decimal("0.008480445506070585574762194174"),
+                    volatility_penalty=Decimal("0.1046714083591610900"),
+                    portfolio_overlap_penalty=Decimal("0.0"),
+                    execution_cost_penalty=Decimal("0.004240222753035292787381097087"),
+                    final_score=Decimal("0.4496926577205809292058637092"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="",
+            decision="no_trade",
+            decision_reason="No eligible opportunity cleared the deploy threshold.",
+        )
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-a-new",
+            generated_at_utc=newer_timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY", "QQQ", "IWM"),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("0.5396956955943802895846951408"),
+                    regime_weight=Decimal("1.043144746509919177075679647"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.50"),
+                    spread_penalty=Decimal("0.01127252744155899054516760839"),
+                    volatility_penalty=Decimal("0.1031118289880468900"),
+                    portfolio_overlap_penalty=Decimal("0.00"),
+                    execution_cost_penalty=Decimal("0.005636263720779495272583804195"),
+                    final_score=Decimal("0.7244504742095561209447578289"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+                OpportunityScore(
+                    symbol="QQQ",
+                    base_signal=Decimal("1.033020836578743735363571369"),
+                    regime_weight=Decimal("1.043144746509919177075679647"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.174694866666666666666666667"),
+                    spread_penalty=Decimal("0.01537657225451302395669957253"),
+                    volatility_penalty=Decimal("0.127372962458097800"),
+                    portfolio_overlap_penalty=Decimal("1.00"),
+                    execution_cost_penalty=Decimal("0.007688286127256511978349786265"),
+                    final_score=Decimal("0.115401924439592197252488572"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+                OpportunityScore(
+                    symbol="IWM",
+                    base_signal=Decimal("0.8350809089345879210123877161"),
+                    regime_weight=Decimal("1.043144746509919177075679647"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.48162350"),
+                    spread_penalty=Decimal("0.3464265738050989661331938004"),
+                    volatility_penalty=Decimal("0.1414188890150961400"),
+                    portfolio_overlap_penalty=Decimal("1.00"),
+                    execution_cost_penalty=Decimal("0.1732132869025494830665969002"),
+                    final_score=Decimal("-0.370401312873208638402102467"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="Top-ranked eligible opportunity.",
+        )
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "TRADINGX_SERVICE_INTERVAL_SECONDS": "180",
+                "TRADINGX_SYMBOL_UNIVERSE": "SPY,QQQ,IWM",
+            }
+        ),
+        paper_store=paper_store,
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="running",
+                active_symbols=("SPY", "QQQ", "IWM"),
+                interval_seconds=180,
+                cycles_completed=1,
+                started_at_utc=newer_timestamp,
+                last_completed_at_utc=newer_timestamp,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=("SPY", "QQQ", "IWM"),
+                started_at_utc=newer_timestamp,
+                updated_at_utc=newer_timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="approved-baseline-long-only-v1",
+                latest_selection_id="selection-a-new",
+            )
+        ),
+    )
+
+    heartbeat = read_model.build_runtime_heartbeat_snapshot()
+    symbol_rows = {row.symbol: row for row in heartbeat.symbol_rows}
+
+    assert heartbeat.last_evaluation_at_utc == newer_timestamp
+    assert heartbeat.score_explanation.startswith("SPY scored 0.7245")
+    assert symbol_rows["SPY"].score == "0.7245"
+    assert symbol_rows["QQQ"].score == "0.1154"
+    assert symbol_rows["QQQ"].threshold_gap == "-0.3846"
+    assert symbol_rows["IWM"].score == "-0.3704"
+    assert symbol_rows["IWM"].threshold_gap == "-0.8704"
+    assert symbol_rows["QQQ"].warmup_state == "Ready"
+    assert symbol_rows["IWM"].warmup_state == "Ready"
+
+
+def test_runtime_heartbeat_uses_active_approved_symbols_over_config_universe(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    timestamp = datetime(2026, 4, 22, 14, 59, 2, tzinfo=UTC)
+    approved_symbols = ("SPY", "QQQ", "IWM", "XLE", "XLF", "XLK", "EEM", "TLT")
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="cycle-8-symbols",
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=approved_symbols,
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY", "QQQ", "IWM", "XLF"),
+            cash=Decimal("98316.59"),
+            equity=Decimal("100004.46"),
+            buying_power=Decimal("398122.25"),
+        )
+    )
+    operator_store.write_historical_warmup_record(
+        HistoricalWarmupRecord(
+            warmup_id="warmup-8-symbols",
+            generated_at_utc=timestamp,
+            benchmark_symbol="SPY",
+            symbols=approved_symbols,
+            window_start_utc=timestamp,
+            window_end_utc=timestamp,
+            required_bar_count=30,
+            symbols_ready=approved_symbols,
+            symbols_blocked={},
+            return_summary={
+                symbol: {
+                    "cumulative_return": "0.02",
+                    "mean_return": "0.0",
+                    "volatility": "0.01",
+                }
+                for symbol in approved_symbols
+            },
+        )
+    )
+    operator_store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-8-symbols",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=approved_symbols,
+            deploy_threshold="0.50",
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=timestamp,
+            notes="Expanded activation.",
+        )
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-8-symbols",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=approved_symbols,
+            ranked_opportunities=tuple(
+                OpportunityScore(
+                    symbol=symbol,
+                    base_signal=Decimal("0.5"),
+                    regime_weight=Decimal("1.0"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.0"),
+                    spread_penalty=Decimal("0.01"),
+                    volatility_penalty=Decimal("0.02"),
+                    portfolio_overlap_penalty=(
+                        Decimal("1.0")
+                        if symbol in {"SPY", "QQQ", "IWM", "XLF"}
+                        else Decimal("0.0")
+                    ),
+                    execution_cost_penalty=Decimal("0.01"),
+                    final_score=Decimal("0.46"),
+                    eligible=True,
+                    ineligibility_reason="",
+                )
+                for symbol in approved_symbols
+            ),
+            selected_symbol="",
+            decision="no_trade",
+            decision_reason="No eligible opportunity cleared the deploy threshold.",
+        )
+    )
+
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "TRADINGX_SERVICE_INTERVAL_SECONDS": "180",
+                "TRADINGX_SYMBOL_UNIVERSE": "SPY,QQQ,IWM",
+            }
+        ),
+        paper_store=paper_store,
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=180,
+                cycles_completed=1,
+                started_at_utc=timestamp,
+                last_completed_at_utc=timestamp,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            BotRuntimeState(
+                status="trading_ready",
+                status_reason="Runtime boot complete.",
+                active_symbols=approved_symbols,
+                started_at_utc=timestamp,
+                updated_at_utc=timestamp,
+                last_error="",
+                active_strategy_id="baseline-long-only-v1",
+                active_model_snapshot_id="approved-baseline-long-only-v1",
+                latest_selection_id="selection-8-symbols",
+            )
+        ),
+    )
+
+    heartbeat = read_model.build_runtime_heartbeat_snapshot()
+
+    assert [row.symbol for row in heartbeat.symbol_rows] == list(approved_symbols)
+    assert [row.symbol for row in heartbeat.decision_ladder] == list(approved_symbols)

@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tradingx.opportunity import OpportunitySelector
+from tradingx.opportunity import LiveOpportunitySelector, OpportunitySelector
+from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     ApprovedWeightSnapshot,
     HistoricalWarmupRecord,
     MarketSnapshot,
     PortfolioState,
+    PositionSnapshot,
     StrategyActivationRecord,
 )
 
@@ -417,3 +419,131 @@ def test_runtime_planner_passes_through_when_hard_halt_gate_is_false() -> None:
     )
 
     assert selection.decision_reason != "hard_halt_active"
+
+
+def test_live_opportunity_selector_ranks_full_universe_but_filters_entry_decision(
+    tmp_path,
+) -> None:
+    class _ActivationGateway:
+        def load_or_create_active_records(
+            self,
+            symbols: tuple[str, ...],
+        ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]:
+            del symbols
+            return (
+                StrategyActivationRecord(
+                    activation_id="activation-live",
+                    strategy_id="baseline-long-only-v1",
+                    strategy_version="1.0.0",
+                    approved_symbols=("SPY", "QQQ"),
+                    deploy_threshold=Decimal("0.10"),
+                    allow_fallback_weights=True,
+                    status="approved",
+                    activated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+                    notes="Live selector fixture.",
+                ),
+                _minimal_snapshot(),
+            )
+
+    class _WarmupService:
+        def build_warmup(
+            self,
+            *,
+            symbols: tuple[str, ...],
+            benchmark_symbol: str,
+            warmup_days: int,
+            required_bar_count: int,
+        ) -> HistoricalWarmupRecord:
+            del benchmark_symbol, warmup_days, required_bar_count
+            return HistoricalWarmupRecord(
+                warmup_id="warmup-live",
+                generated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+                benchmark_symbol="IVV",
+                symbols=symbols,
+                window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+                window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+                required_bar_count=30,
+                symbols_ready=symbols,
+                symbols_blocked={},
+                return_summary={
+                    "SPY": {
+                        "cumulative_return": Decimal("0.06"),
+                        "mean_return": Decimal("0.002"),
+                        "volatility": Decimal("0.01"),
+                    },
+                    "QQQ": {
+                        "cumulative_return": Decimal("0.04"),
+                        "mean_return": Decimal("0.0015"),
+                        "volatility": Decimal("0.015"),
+                    },
+                    "IVV": {
+                        "cumulative_return": Decimal("0.03"),
+                        "mean_return": Decimal("0.001"),
+                        "volatility": Decimal("0.012"),
+                    },
+                },
+            )
+
+    class _MarketDataGateway:
+        def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
+            return {
+                "SPY": _snapshot(
+                    "SPY",
+                    last_trade_price="505",
+                    bid_price="504.95",
+                    ask_price="505.05",
+                    average_daily_volume_30d="1500000",
+                ),
+                "QQQ": _snapshot(
+                    "QQQ",
+                    last_trade_price="430",
+                    bid_price="429.80",
+                    ask_price="430.20",
+                    average_daily_volume_30d="1900000",
+                ),
+            }[symbol]
+
+    selector = LiveOpportunitySelector(
+        market_data_gateway=_MarketDataGateway(),
+        warmup_service=_WarmupService(),
+        activation_gateway=_ActivationGateway(),
+        operator_store=FilesystemArtifactStore(
+            tmp_path / "artifacts" / "operator_platform"
+        ),
+    )
+    portfolio = PortfolioState(
+        as_of_utc=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+        cash=Decimal("100000"),
+        equity=Decimal("100000"),
+        buying_power=Decimal("200000"),
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("1"),
+                average_entry_price=Decimal("500"),
+                market_value=Decimal("505"),
+            ),
+        ),
+        open_orders=(),
+    )
+
+    selection = selector.select_for_service(
+        symbols=("SPY", "QQQ"),
+        portfolio_state=portfolio,
+        decision_symbols=("QQQ",),
+    )
+
+    assert selection.symbols_considered == ("SPY", "QQQ")
+    assert {score.symbol for score in selection.ranked_opportunities} == {"SPY", "QQQ"}
+    assert all(
+        score.final_score != Decimal("-999999")
+        for score in selection.ranked_opportunities
+    )
+    assert selection.selected_symbol == "QQQ"
+    assert selection.decision == "selected"
+
+    payloads = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    ).list_artifact_payloads("opportunity_selections")
+    assert len(payloads) == 1
+    assert payloads[0]["selected_symbol"] == "QQQ"

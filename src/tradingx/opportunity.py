@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
@@ -208,6 +209,7 @@ class LiveOpportunitySelector:
         *,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        decision_symbols: tuple[str, ...] | None = None,
     ) -> OpportunitySelectionRecord:
         activation, snapshot = self._activation_gateway.load_or_create_active_records(
             symbols
@@ -231,6 +233,34 @@ class LiveOpportunitySelector:
             activation=activation,
             model_snapshot=snapshot,
         )
+        if decision_symbols is not None:
+            decision_symbol_set = {
+                symbol.strip().upper()
+                for symbol in decision_symbols
+                if symbol.strip()
+            }
+            selected_score = next(
+                (
+                    score
+                    for score in selection.ranked_opportunities
+                    if score.symbol in decision_symbol_set
+                    and score.eligible
+                    and score.final_score >= activation.deploy_threshold
+                ),
+                None,
+            )
+            selection = replace(
+                selection,
+                selected_symbol=(
+                    selected_score.symbol if selected_score is not None else ""
+                ),
+                decision=("selected" if selected_score is not None else "no_trade"),
+                decision_reason=(
+                    "Top-ranked eligible opportunity."
+                    if selected_score is not None
+                    else "No eligible opportunity cleared the deploy threshold."
+                ),
+            )
         self._operator_store.write_opportunity_selection_record(selection)
         return selection
 

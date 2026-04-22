@@ -11,7 +11,12 @@ import pytest
 from tradingx.config import TradingConfig
 from tradingx.service import ServiceRunResult
 from tradingx.types import ServiceCycleSnapshot
-from tradingx.web.runtime import LocalServiceManager, LocalWebActionRunner
+from tradingx.web import runtime as web_runtime
+from tradingx.web.runtime import (
+    LocalServiceManager,
+    LocalWebActionRunner,
+    build_default_local_web_components,
+)
 
 
 class FakePaperService:
@@ -212,6 +217,80 @@ def test_local_service_manager_stops_running_service() -> None:
 
     _wait_for(lambda: manager.get_state().status == "stopped")
     assert result.status == "accepted"
+
+
+def test_build_default_local_web_components_shares_runtime_service_manager(
+    monkeypatch, tmp_path
+) -> None:
+    service_manager_instances: list[object] = []
+
+    class RecordingServiceManager:
+        def __init__(self, *, config, service_builder=None) -> None:
+            self.config = config
+            self.service_builder = service_builder
+            service_manager_instances.append(self)
+
+    class RecordingSchedulerManager:
+        def __init__(self, *, config) -> None:
+            self.config = config
+
+    class RecordingRuntimeHostManager:
+        def __init__(self, *, service_manager, **kwargs) -> None:
+            self.service_manager = service_manager
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(web_runtime, "LocalServiceManager", RecordingServiceManager)
+    monkeypatch.setattr(
+        web_runtime,
+        "LocalSchedulerManager",
+        RecordingSchedulerManager,
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "LocalRuntimeHostManager",
+        RecordingRuntimeHostManager,
+    )
+    monkeypatch.setattr(web_runtime, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        web_runtime,
+        "build_default_market_data_gateway",
+        lambda config: object(),
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "LocalActivationGateway",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "HistoricalWarmupService",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "RuntimeOpportunityPlanner",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "AlpacaPortfolioGateway",
+        lambda *args, **kwargs: object(),
+    )
+
+    config = TradingConfig.from_mapping(
+        {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+    )
+
+    read_model, action_runner = build_default_local_web_components(config)
+
+    assert len(service_manager_instances) == 1
+    assert service_manager_instances[0].service_builder is not None
+    assert read_model._service_manager is service_manager_instances[0]
+    assert action_runner._service_manager is service_manager_instances[0]
+    assert (
+        action_runner._runtime_host_manager.service_manager
+        is service_manager_instances[0]
+    )
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
