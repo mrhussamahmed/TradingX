@@ -77,16 +77,16 @@ In scope:
    broker positions are assigned to sleeves automatically using
    recent attributed execution history first, with deterministic
    fallback only when history is absent.
-2. **Bootstrap residual reserve.** Existing broker cash and any
-   unresolved inventory are preserved in an explicit residual
-   reserve instead of being synthetically assigned to sleeves on
-   day 1.
+2. **Persistent shared funding reserve.** Existing broker cash and
+   any unresolved inventory are preserved in an explicit residual
+   reserve that remains the durable holder of free broker cash,
+   instead of being synthetically assigned to sleeves on day 1.
 3. **Sleeve position ledger state.** Each sleeve gets its own
    persisted mini-account: cash balance, symbol quantities,
    weighted-average cost basis, and realized/unrealized P&L.
-4. **Residual reserve state.** The bootstrap reserve tracks
-   inherited cash and any unresolved positions until future
-   economic events consume them or close them out.
+4. **Residual reserve state.** The reserve tracks inherited cash,
+   unresolved positions, and the shared broker-cash funding layer
+   used by later attributed buys and sells.
 5. **Deterministic end-of-day ledger update.** The ledger is
    updated from persisted execution artifacts at session close,
    not by adding new live runtime state mutations intraday.
@@ -118,7 +118,8 @@ Out of scope:
 5. Rewriting broker reconciliation, execution persistence, or the
    portfolio planner.
 6. A general-purpose treasury or cash-optimization subsystem
-   outside the bounded bootstrap residual reserve introduced here.
+   beyond the deterministic shared-funding reserve introduced
+   here.
 
 ## Relationship to prior tranche decisions
 
@@ -169,10 +170,13 @@ Each sleeve ledger MUST track both positions and cash. A sleeve's
 daily return is the return of that sleeve's own mini-portfolio,
 not a share of the aggregate portfolio return.
 
-Bootstrap cash and unresolved inherited inventory live in one
-explicit residual reserve outside sleeves. That reserve exists only
-to preserve broker truth without making up sleeve ownership. It is
-not a permanent treasury optimization subsystem.
+Free broker cash and unresolved inherited inventory live in one
+explicit residual reserve outside sleeves. That reserve persists
+after bootstrap as the shared broker-cash funding layer for replay.
+It is not a permanent treasury optimization subsystem; it is the
+minimal accounting construct needed so a valid broker execution does
+not become unreplayable just because free cash sat outside the
+buying sleeve.
 
 ### P4 — Daily return comes from owned holdings, not target weights
 
@@ -336,6 +340,8 @@ class SleevePositionLedgerSnapshot:
     cash_balance: Decimal
     positions: tuple[SleeveLedgerPosition, ...]
     bootstrap_id: str
+    # Analytical capital account for performance measurement.
+    # Durable deployable broker cash remains in the residual reserve.
 
 
 @dataclass(frozen=True)
@@ -464,6 +470,12 @@ def read_session_open_portfolio_state_record(
     trading_day: str,
 ) -> SessionOpenPortfolioStateRecord | None: ...
 
+def load_approved_weight_snapshot_by_snapshot_id(
+    self,
+    *,
+    snapshot_id: str,
+) -> ApprovedWeightSnapshot: ...
+
 def list_execution_lifecycle_records(
     self,
     *,
@@ -535,8 +547,11 @@ For each symbol:
    - confidence = `medium`.
 3. **`blueprint_fallback`**
    - if there is no usable attributed history at all, assign by the
-     current blueprint:
-     - if only one sleeve owns that symbol in the referenced
+     active blueprint activation's captured snapshots, not by
+     current approved YAML:
+     - resolve the weight snapshots from
+       `BlueprintActivationRecord.sleeve_activation_bindings[*].captured_snapshot_id`;
+     - if only one sleeve owns that symbol in those captured
        snapshots, give it 100%;
      - if multiple sleeves own it, split by their relative target
        weights for that symbol;
@@ -558,7 +573,8 @@ Average cost rule:
 
 All existing broker cash starts in the residual reserve, not inside
 any sleeve. This preserves broker truth without inventing sleeve
-cash ownership on day 1.
+cash ownership on day 1, and it also establishes the reserve as the
+durable shared-cash source for future replay funding.
 
 If unresolved inherited positions remain after Step 3, those
 positions also live in the residual reserve until future economic
@@ -608,11 +624,12 @@ For a buy:
 
 1. attributed quantity per sleeve =
    `filled_qty * attribution_fraction`;
-2. sleeve cash decreases by attributed notional if the sleeve
-   already has cash;
-3. if sleeve cash is insufficient, the shortfall is transferred
-   from the residual reserve into the sleeve as an explicit capital
-   contribution at the fill timestamp;
+2. attributed buy notional is funded from the residual reserve as
+   an explicit capital contribution into the sleeve at the fill
+   timestamp;
+3. the sleeve's analytical cash balance is updated for performance
+   accounting, but insufficient sleeve cash never blocks replay of a
+   broker-valid buy;
 4. sleeve quantity increases; and
 5. average cost updates by weighted average.
 
@@ -620,9 +637,11 @@ For a sell/reduce:
 
 1. attributed quantity per sleeve =
    `filled_qty * attribution_fraction`;
-2. sleeve cash increases by attributed proceeds;
-3. sleeve quantity decreases;
-4. realized P&L is booked using the sleeve's weighted-average cost.
+2. sleeve quantity decreases;
+3. realized P&L is booked using the sleeve's weighted-average cost;
+4. attributed sale proceeds are distributed from the sleeve back to
+   the residual reserve at the fill timestamp as an explicit
+   capital distribution.
 
 Residual reserve behavior:
 
@@ -632,12 +651,17 @@ Residual reserve behavior:
 - if a sell targets a symbol with residual unresolved inventory,
   the replay reduces residual inventory first before reducing any
   sleeve-owned quantity for that symbol;
+- reserve cash is the durable holder of free broker cash across the
+  life of the ledger, not just at bootstrap;
 - reserve cash decreases only when explicitly transferred into a
   sleeve to fund attributed buys;
 - proceeds from reducing residual unresolved inventory stay in the
   residual reserve cash balance;
+- attributed sale proceeds also return to the residual reserve;
 - reserve cash is not automatically reallocated by blueprint
-  percentages.
+  percentages; and
+- a broker-valid buy is never rejected merely because another sleeve
+  previously realized the cash.
 
 Why weighted average cost:
 
@@ -774,8 +798,12 @@ Additional prerequisite hardening before Task 16:
    live rolling window;
 2. `StoreBackedAttributionRecordsReader` windowing must be
    gap-aware by `trading_day`, not just `recorded_at_utc`; and
-3. gap days are therefore explicit pending states, not silent
-   count-shifts in the live series.
+3. `SleeveDailyReturnsReader.live_daily_returns(...)` and any
+   `LIVE_DAILY_RETURNS`-based `SleeveRuntimeController` path must
+   treat any gap in the requested window as insufficient history
+   rather than a shorter valid series; and
+4. gap days are therefore explicit pending/insufficient-history
+   states, not silent count-shifts in the live series.
 
 Task 16 remains the later commit that:
 
@@ -830,7 +858,11 @@ The following remain untouched by this design:
     dashboards can read the new attribution records without
     changing their primary input type, and gap days force
     `pending` rather than a false verdict.
-11. **Task 16 remains separate.** No monitor activation is coupled
+11. **Live Sharpe readers are gap-aware.** Any
+    `LIVE_DAILY_RETURNS`-based sleeve Sharpe consumer treats gap
+    days as insufficient history rather than a shorter valid
+    return series.
+12. **Task 16 remains separate.** No monitor activation is coupled
     to the ledger merge; rollback can still target the activation
     step independently.
 
@@ -850,9 +882,9 @@ Rejected alternatives:
 
 ### D2 — Existing cash handling
 
-**Decision:** keep existing broker cash in an explicit residual
-reserve at bootstrap and transfer it into sleeves only through
-future attributed economic events.
+**Decision:** keep broker free cash in an explicit residual reserve
+that persists after bootstrap and funds future attributed economic
+events.
 
 Rejected alternatives:
 
