@@ -620,7 +620,10 @@ def _apply_execution(
             reason="missing_attribution",
             evidence_refs=(execution.execution_id,),
         )
-    if any(fraction < Decimal("0") or fraction > Decimal("1") for _, fraction in attrs):
+    if any(
+        (not fraction.is_finite()) or fraction < Decimal("0") or fraction > Decimal("1")
+        for _, fraction in attrs
+    ):
         return _gap_all_sleeves(
             sleeves=sleeves,
             trading_day=trading_day,
