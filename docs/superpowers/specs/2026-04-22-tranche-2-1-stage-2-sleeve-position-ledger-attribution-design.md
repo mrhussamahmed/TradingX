@@ -75,27 +75,37 @@ In scope:
 
 1. **Automatic bootstrap for already-open positions.** Existing
    broker positions are assigned to sleeves automatically using
-   recent attributed execution history first, with blueprint-based
-   fallback only when history is incomplete.
-2. **Existing-cash allocation at bootstrap.** Shared account cash
-   is split across sleeves using the current blueprint budget
-   percentages.
+   recent attributed execution history first, with deterministic
+   fallback only when history is absent.
+2. **Bootstrap residual reserve.** Existing broker cash and any
+   unresolved inventory are preserved in an explicit residual
+   reserve instead of being synthetically assigned to sleeves on
+   day 1.
 3. **Sleeve position ledger state.** Each sleeve gets its own
    persisted mini-account: cash balance, symbol quantities,
    weighted-average cost basis, and realized/unrealized P&L.
-4. **Deterministic end-of-day ledger update.** The ledger is
+4. **Residual reserve state.** The bootstrap reserve tracks
+   inherited cash and any unresolved positions until future
+   economic events consume them or close them out.
+5. **Deterministic end-of-day ledger update.** The ledger is
    updated from persisted execution artifacts at session close,
    not by adding new live runtime state mutations intraday.
-5. **Sleeve-specific daily return generation.** Daily return is
+6. **Sleeve-specific daily return generation.** Daily return is
    computed from sleeve-owned cash plus sleeve-owned marked
    positions, not from the portfolio return proxy.
-6. **Audit trail on bootstrap quality.** The bootstrap result
+7. **Audit trail on bootstrap quality.** The bootstrap result
    records whether each symbol allocation came from strong
-   evidence, scaled evidence, or blueprint fallback.
-7. **Compatibility with the existing drift stack.** The 1.5/2.1
-   readers still consume `SleeveDailyAttributionRecord`; Task 16
-   remains a separate activation change after this prerequisite
-   lands and is observed.
+   evidence, rounding-only adjustment, blueprint fallback, or
+   unresolved residual handling.
+8. **Explicit gap handling for drift.** Any sleeve/day that cannot
+   be attributed safely emits a gap artifact instead of silently
+   disappearing from the live series.
+9. **Compatibility with the existing drift stack.** The 1.5/2.1
+   readers still consume `SleeveDailyAttributionRecord`, with
+   small prerequisite hardening so gap days yield `pending`
+   instead of a false verdict. Task 16 remains a separate
+   activation change after this prerequisite lands and is
+   observed.
 
 Out of scope:
 
@@ -107,7 +117,8 @@ Out of scope:
 4. Intraday sleeve NAV snapshots.
 5. Rewriting broker reconciliation, execution persistence, or the
    portfolio planner.
-6. A shared cash-pool abstraction outside sleeves.
+6. A general-purpose treasury or cash-optimization subsystem
+   outside the bounded bootstrap residual reserve introduced here.
 
 ## Relationship to prior tranche decisions
 
@@ -122,30 +133,48 @@ DESIGN-0017:
    two-stage rollout decision from BRIEF-0003 D5; it supplies the
    missing prerequisite so the later activation commit has real
    sleeve returns to work with.
-3. **The drift monitor contract stays stable.**
+3. **The drift monitor contract stays stable at the artifact
+   boundary.**
    `StoreBackedAttributionRecordsReader.records_for_sleeve(...)`
    in [/src/tradingx/drift/gateway.py:277](/src/tradingx/drift/gateway.py:277)
    continues to read `SleeveDailyAttributionRecord.daily_return`
    values; the meaning of `daily_return` becomes correct rather
-   than approximate.
+   than approximate. This design does allow a small prerequisite
+   hardening around gap awareness before Task 16, but it does not
+   replace the public live-return artifact type.
 
 ## Principles
 
-### P1 — Evidence-first bootstrap, blueprint fallback only when needed
+### P1 — Evidence-first bootstrap, no silent proportional scaling
 
 When the account already has open positions, the bootstrap MUST
 assign those positions using actual sleeve-attributed trade
 history first. The blueprint is a deterministic fallback, not the
 primary source of truth. If historical evidence exists for a
-symbol, the design MUST use it.
+symbol, the design MUST use it. Partial history that does not
+reconcile may not be scaled up silently; it must either reconcile
+within a tiny rounding tolerance or stay outside sleeve ownership
+as unresolved residual inventory.
 
-### P2 — Each sleeve is a mini-portfolio
+### P2 — Ownership survives activation changes until a trade changes it
+
+Once the ledger bootstrap is established, an activation change
+alone MUST NOT reassign already-open inventory. Existing sleeve
+ownership continues across blueprint activation changes until new
+attributed trades alter that ownership economically.
+
+### P3 — Each sleeve is a mini-portfolio, plus one bounded residual reserve
 
 Each sleeve ledger MUST track both positions and cash. A sleeve's
 daily return is the return of that sleeve's own mini-portfolio,
 not a share of the aggregate portfolio return.
 
-### P3 — Daily return comes from owned holdings, not target weights
+Bootstrap cash and unresolved inherited inventory live in one
+explicit residual reserve outside sleeves. That reserve exists only
+to preserve broker truth without making up sleeve ownership. It is
+not a permanent treasury optimization subsystem.
+
+### P4 — Daily return comes from owned holdings, not target weights
 
 `daily_return` MUST be derived from:
 
@@ -160,28 +189,30 @@ Target weights and decomposition records are supporting evidence
 for bootstrap fallback and auditability. They are not the P&L
 source of truth.
 
-### P4 — Accounting anomalies fail closed
+### P5 — Accounting anomalies fail closed, with explicit gap artifacts
 
 If the ledger encounters an attributed fill it cannot apply
 safely — missing sleeve attribution, negative post-fill quantity,
 or irreconcilable symbol ownership mismatch — the design MUST fail
-closed for the affected sleeve/symbol and emit explicit operator
-evidence. Silent approximation is forbidden.
+closed for the affected sleeve/symbol, emit explicit operator
+evidence, and write a day-keyed gap artifact. Silent
+approximation and silent omission are both forbidden.
 
-### P5 — Determinism beats convenience
+### P6 — Determinism requires durable inputs and explicit ordering
 
 Given the same:
 
-- active blueprint activation;
+- initial bootstrap activation context;
 - broker opening positions and cash;
 - persisted execution history; and
 - session open/close portfolio states,
 
 the bootstrap and daily attribution outputs MUST be identical
 across reruns. No UUID fallback, wall-clock ordering dependence,
-or hidden randomization is allowed.
+or hidden randomization is allowed. Replay order MUST be explicit:
+`filled_at_utc`, then `execution_id` as the stable tie-breaker.
 
-### P6 — Task 16 stays a separate activation step
+### P7 — Task 16 stays a separate activation step
 
 This design lands the accounting foundation only. The commit that
 activates `pnl::<sleeve_id>` remains separate so rollback can still
@@ -193,26 +224,34 @@ At a high level, the feature is an end-of-day sleeve accounting
 pipeline:
 
 ```text
-session_open PortfolioState
+persisted session_open PortfolioState record
         +
-latest blueprint activation
+latest ledger snapshot(s)
         +
-existing execution/closed-trade artifacts
+latest residual reserve snapshot
         +
-latest sleeve ledger snapshot (if any)
+latest active blueprint activation
+        +
+execution artifacts from paper_loop store
         |
         v
-bootstrap or load sleeve opening ledger
+bootstrap once or load opening ledger state
         |
         v
 replay today's attributed executions into each sleeve ledger
+        +
+replay same executions into residual reserve transfers / reductions
         |
         v
 mark each sleeve's remaining positions to the session_close PortfolioState
         |
         +--> write SleevePositionLedgerSnapshot(s)
         |
+        +--> write ResidualReserveSnapshot
+        |
         +--> write SleeveDailyAttributionRecord(s)
+        |
+        +--> write SleeveAttributionGapRecord(s) if needed
         |
         +--> later Task 16 reads these returns for pnl::<sleeve_id>
 ```
@@ -222,11 +261,14 @@ The important design choice is where the ledger lives:
 - **Not in the live execution loop.** We do not add new mutable
   state to broker-facing trading code.
 - **At the session-close attribution seam.** The end-of-day
-  recorder already has:
-  - session-open portfolio state,
-  - session-close portfolio state,
-  - persisted execution artifacts, and
-  - persisted sleeve attribution fractions.
+  recorder is the right place to derive accounting, but the
+  current seam does **not** yet have all durable inputs. This
+  design therefore adds:
+  - a persisted session-open portfolio-state record at preopen;
+  - a typed execution-lifecycle reader from the `paper_loop`
+    store; and
+  - stable replay ordering by `filled_at_utc`, then
+    `execution_id`.
 
 That makes the ledger an accounting layer derived from persisted
 facts, which is safer to reason about and easier to rerun for
@@ -246,19 +288,31 @@ class BootstrapPositionAllocation:
     quantity: Decimal
     average_cost: Decimal
     market_value: Decimal
-    allocation_source: str    # history_exact | history_scaled | blueprint_fallback
+    allocation_source: str    # history_exact | history_rounding_adjusted | blueprint_fallback
     confidence: str           # high | medium | low
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResidualPositionAllocation:
+    symbol: str
+    quantity: Decimal
+    average_cost: Decimal
+    market_value: Decimal
+    reason: str               # unresolved_history | no_active_owner
     evidence_refs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class SleeveBootstrapAllocationRecord:
     bootstrap_id: str
-    blueprint_activation_id: str
+    ledger_genesis_id: str
+    bootstrapped_from_activation_id: str
     trading_day: str
     recorded_at_utc: datetime
-    cash_by_sleeve: tuple[tuple[str, Decimal], ...]
     position_allocations: tuple[BootstrapPositionAllocation, ...]
+    residual_cash_balance: Decimal
+    residual_positions: tuple[ResidualPositionAllocation, ...]
     notes: tuple[str, ...]
 
 
@@ -274,13 +328,45 @@ class SleeveLedgerPosition:
 @dataclass(frozen=True)
 class SleevePositionLedgerSnapshot:
     snapshot_id: str
-    blueprint_activation_id: str
+    ledger_genesis_id: str
+    active_blueprint_activation_id: str
     trading_day: str
     recorded_at_utc: datetime
     sleeve_id: str
     cash_balance: Decimal
     positions: tuple[SleeveLedgerPosition, ...]
     bootstrap_id: str
+
+
+@dataclass(frozen=True)
+class ResidualReserveSnapshot:
+    snapshot_id: str
+    ledger_genesis_id: str
+    active_blueprint_activation_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    cash_balance: Decimal
+    positions: tuple[ResidualPositionAllocation, ...]
+    bootstrap_id: str
+
+
+@dataclass(frozen=True)
+class SessionOpenPortfolioStateRecord:
+    record_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    portfolio_state: PortfolioState
+
+
+@dataclass(frozen=True)
+class SleeveAttributionGapRecord:
+    gap_id: str
+    sleeve_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    severity: str
+    reason: str
+    evidence_refs: tuple[str, ...]
 ```
 
 Existing record extended:
@@ -294,16 +380,24 @@ class SleeveDailyAttributionRecord:
     cash_balance: Decimal | None = None
     calculation_mode: str | None = None      # active_sleeve_equity | sleeve_ledger_mark_to_market
     bootstrap_confidence: str | None = None  # high | medium | low | mixed
+    ledger_genesis_id: str | None = None
 ```
 
 Rationale:
 
 1. `SleeveBootstrapAllocationRecord` is the one-time provenance
-   record for how the system inherited existing positions and cash.
+   record for how the system inherited existing positions and
+   created the initial residual reserve.
 2. `SleevePositionLedgerSnapshot` is the persisted state that lets
    the next session start from the prior close instead of replaying
    all history from zero every day.
-3. `SleeveDailyAttributionRecord` remains the public drift-facing
+3. `ResidualReserveSnapshot` keeps inherited broker truth that
+   cannot safely be assigned to sleeves on day 1.
+4. `SessionOpenPortfolioStateRecord` closes the current durability
+   gap in the automation seam.
+5. `SleeveAttributionGapRecord` prevents a missing day from being
+   silently interpreted as a valid day-count shift.
+6. `SleeveDailyAttributionRecord` remains the public drift-facing
    record so existing readers and dashboards do not need a new
    primary input type.
 
@@ -315,8 +409,11 @@ Persistence categories:
 
 Suggested filenames:
 
-- `sleeve_bootstrap/{blueprint_activation_id}__{trading_day}.json`
-- `sleeve_position_ledger/{trading_day}__{sleeve_id}.json`
+- `sleeve_bootstrap/{ledger_genesis_id}.json`
+- `sleeve_position_ledger/{trading_day}__{snapshot_id}__{sleeve_id}.json`
+- `residual_reserve/{trading_day}__{snapshot_id}.json`
+- `session_open_portfolio_state/{trading_day}.json`
+- `sleeve_attribution_gaps/{sleeve_id}__{trading_day}.json`
 - existing attribution filename stays `{sleeve_id}__{trading_day}.json`
 
 ### W2 — Query helpers
@@ -334,30 +431,59 @@ def write_sleeve_position_ledger_snapshot(
     record: SleevePositionLedgerSnapshot,
 ) -> Path: ...
 
+def write_residual_reserve_snapshot(
+    self,
+    record: ResidualReserveSnapshot,
+) -> Path: ...
+
+def write_session_open_portfolio_state_record(
+    self,
+    record: SessionOpenPortfolioStateRecord,
+) -> Path: ...
+
+def write_sleeve_attribution_gap_record(
+    self,
+    record: SleeveAttributionGapRecord,
+) -> Path: ...
+
 def latest_sleeve_position_ledger_snapshot(
     self,
     *,
     sleeve_id: str,
-    blueprint_activation_id: str,
 ) -> SleevePositionLedgerSnapshot | None: ...
+
+def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None: ...
 
 def latest_sleeve_bootstrap_allocation(
     self,
-    *,
-    blueprint_activation_id: str,
 ) -> SleeveBootstrapAllocationRecord | None: ...
+
+def read_session_open_portfolio_state_record(
+    self,
+    *,
+    trading_day: str,
+) -> SessionOpenPortfolioStateRecord | None: ...
 
 def list_execution_lifecycle_records(
     self,
     *,
     trading_day: str,
 ) -> tuple[ExecutionLifecycleRecord, ...]: ...
+
+def list_sleeve_attribution_gap_records(
+    self,
+    *,
+    sleeve_id: str,
+) -> tuple[SleeveAttributionGapRecord, ...]: ...
 ```
 
 The new execution query is required because the current store only
 writes execution lifecycle records at
 [/src/tradingx/persistence.py:324](/src/tradingx/persistence.py:324)
 but does not expose a typed list/read helper for day-end replay.
+The session-open record is required because the current automation
+runner keeps the open `PortfolioState` only in memory at
+[/src/tradingx/automation.py:301](/src/tradingx/automation.py:301).
 
 ## Bootstrap design
 
@@ -366,8 +492,7 @@ but does not expose a typed list/read helper for day-end replay.
 Bootstrap runs only when all of the following are true:
 
 1. a blueprint activation is active;
-2. no ledger snapshot exists yet for the active
-   `blueprint_activation_id`; and
+2. no prior `ledger_genesis_id` exists; and
 3. the session-open portfolio state contains positions and/or cash.
 
 The algorithm is symbol-by-symbol.
@@ -402,19 +527,26 @@ For each symbol:
      current broker quantity within tolerance, assign those exact
      quantities;
    - confidence = `high`.
-2. **`history_scaled`**
-   - if attributed history exists but does not fully match the
-     broker quantity, preserve the sleeve proportions from history
-     and scale them to the broker quantity;
+2. **`history_rounding_adjusted`**
+   - if attributed history differs from broker quantity only by a
+     de minimis rounding tolerance, assign the broker quantity with
+     the smallest deterministic correction needed to match broker
+     truth;
    - confidence = `medium`.
 3. **`blueprint_fallback`**
-   - if there is no usable attributed history, assign by the
+   - if there is no usable attributed history at all, assign by the
      current blueprint:
      - if only one sleeve owns that symbol in the referenced
        snapshots, give it 100%;
      - if multiple sleeves own it, split by their relative target
        weights for that symbol;
    - confidence = `low`.
+4. **`residual_unowned`**
+   - if history exists but does not reconcile beyond rounding
+     tolerance, or if no currently-active sleeve owns the symbol at
+     all, do not assign the position to a sleeve;
+   - keep it in the residual reserve instead;
+   - confidence = `none`.
 
 Average cost rule:
 
@@ -422,20 +554,15 @@ Average cost rule:
 - otherwise use the broker `average_entry_price` for that symbol
   and apply it to each split quantity.
 
-#### Step 4: Split existing cash
+#### Step 4: Initialize the residual reserve
 
-Account cash at bootstrap is split by current blueprint sleeve
-budget percentages. Cash is not reconstructed from history in this
-first design because broker cash is shared and historical cash
-provenance is not recorded per sleeve today.
+All existing broker cash starts in the residual reserve, not inside
+any sleeve. This preserves broker truth without inventing sleeve
+cash ownership on day 1.
 
-Example:
-
-- blueprint budgets: trend 60%, vol 40%
-- broker cash: `10,000`
-- bootstrap cash:
-  - trend `6,000`
-  - vol `4,000`
+If unresolved inherited positions remain after Step 3, those
+positions also live in the residual reserve until future economic
+events close them or create a safe ownership transition.
 
 #### Step 5: Persist bootstrap result
 
@@ -443,21 +570,26 @@ Write one `SleeveBootstrapAllocationRecord` capturing:
 
 - each symbol's sleeve quantities;
 - each symbol's source and confidence;
-- the cash split;
+- the residual cash balance;
+- any residual unresolved positions; and
 - evidence references to execution records when history was used.
 
 ### W4 — Bootstrap determinism and activation boundary
 
-Bootstrap is keyed to `blueprint_activation_id`, not just date.
+Bootstrap creates a one-time `ledger_genesis_id`, not a
+re-bootstrap-per-activation rule.
 That means:
 
-1. if the same activation reruns on the same opening positions, the
-   same bootstrap result is reused;
-2. if a new blueprint activation becomes active, a new bootstrap is
-   allowed because sleeve ownership semantics may have changed; and
-3. ledger snapshots and bootstrap records remain audit-linked to the
-   same activation boundary that DESIGN-0017 already made the source
-   of truth for runtime state.
+1. if the same bootstrap inputs rerun before the first ledger is
+   persisted, the same bootstrap result is reused;
+2. once the ledger exists, later blueprint activation changes do
+   not reassign already-open inventory; and
+3. future attributed trades under the new activation are what
+   change sleeve ownership economically.
+
+Ledger snapshots may still record the currently-active
+`blueprint_activation_id` for audit, but that field is descriptive,
+not identity-defining.
 
 ## Ongoing ledger design
 
@@ -465,7 +597,10 @@ That means:
 
 Once bootstrap or the previous close snapshot establishes opening
 state, the recorder replays the current trading day's execution
-lifecycle records into that state.
+lifecycle records into that state in strict order:
+
+1. ascending `filled_at_utc`;
+2. `execution_id` tie-breaker.
 
 Cost basis method: **weighted average cost**.
 
@@ -473,9 +608,13 @@ For a buy:
 
 1. attributed quantity per sleeve =
    `filled_qty * attribution_fraction`;
-2. sleeve cash decreases by attributed notional;
-3. sleeve quantity increases;
-4. average cost updates by weighted average.
+2. sleeve cash decreases by attributed notional if the sleeve
+   already has cash;
+3. if sleeve cash is insufficient, the shortfall is transferred
+   from the residual reserve into the sleeve as an explicit capital
+   contribution at the fill timestamp;
+4. sleeve quantity increases; and
+5. average cost updates by weighted average.
 
 For a sell/reduce:
 
@@ -484,6 +623,21 @@ For a sell/reduce:
 2. sleeve cash increases by attributed proceeds;
 3. sleeve quantity decreases;
 4. realized P&L is booked using the sleeve's weighted-average cost.
+
+Residual reserve behavior:
+
+- unresolved inherited positions remain in the residual reserve
+  until future sells reduce them or future economic events allow a
+  safe ownership transition;
+- if a sell targets a symbol with residual unresolved inventory,
+  the replay reduces residual inventory first before reducing any
+  sleeve-owned quantity for that symbol;
+- reserve cash decreases only when explicitly transferred into a
+  sleeve to fund attributed buys;
+- proceeds from reducing residual unresolved inventory stay in the
+  residual reserve cash balance;
+- reserve cash is not automatically reallocated by blueprint
+  percentages.
 
 Why weighted average cost:
 
@@ -502,22 +656,24 @@ Invariants:
 1. every replayed execution must have non-empty `sleeve_attributions`;
 2. attribution fractions must sum to 1.0 within tolerance;
 3. no sleeve position may go negative beyond tolerance;
-4. per-symbol sleeve quantities must sum to the broker quantity
-   within tolerance after bootstrap and after replay; and
-5. sleeve cash plus marked sleeve positions must sum to the broker
-   portfolio equity within tolerance at open and close.
+4. per-symbol sleeve quantities plus residual-reserve quantity must
+   sum to the broker quantity within tolerance after bootstrap and
+   after replay; and
+5. sleeve cash plus marked sleeve positions plus residual reserve
+   cash plus marked residual positions must sum to broker portfolio
+   equity within tolerance at open and close.
 
 Failure behavior:
 
 1. emit an operator-visible alert or evidence record naming the
    sleeve/symbol and invariant that failed;
-2. skip writing the affected sleeve's daily attribution record for
-   that day; and
+2. write a `SleeveAttributionGapRecord` for that sleeve/day; and
 3. do not silently replace missing facts with guessed ownership.
 
 This is stricter than the current portfolio-return proxy by design.
 Once Task 16 is active, wrong sleeve returns are more dangerous than
-missing sleeve returns.
+missing sleeve returns, and missing sleeve returns must be visible
+as gaps rather than silently absent days.
 
 ## Daily attribution calculation
 
@@ -525,14 +681,17 @@ missing sleeve returns.
 
 At session close:
 
-1. load opening sleeve ledger state;
-2. replay the day's executions into each sleeve ledger;
+1. load opening sleeve ledger state and opening residual reserve;
+2. replay the day's executions into each sleeve ledger and reserve;
 3. allocate session-open portfolio market values to sleeves by
    opening sleeve quantities;
 4. allocate session-close portfolio market values to sleeves by
-   closing sleeve quantities;
-5. compute sleeve opening equity and closing equity; and
-6. persist `SleeveDailyAttributionRecord`.
+   closing sleeve quantities, with a zero-quantity branch for fully
+   liquidated symbols;
+5. compute sleeve opening equity and closing equity;
+6. compute any net capital contribution from residual reserve into
+   the sleeve during the session; and
+7. persist `SleeveDailyAttributionRecord`.
 
 Formulas:
 
@@ -546,7 +705,11 @@ closing_equity(s) =
     + sum over symbols z of closing_market_value(s, z)
 
 daily_return(s) =
-    (closing_equity(s) - opening_equity(s)) / opening_equity(s)
+    modified_dietz(
+        opening_equity(s),
+        closing_equity(s),
+        external_cash_flows_from_reserve(s)
+    )
 ```
 
 Where:
@@ -557,13 +720,19 @@ opening_market_value(s, z) =
     * opening_sleeve_quantity(s, z) / broker_open_quantity(z)
 
 closing_market_value(s, z) =
-    broker_close_market_value(z)
-    * closing_sleeve_quantity(s, z) / broker_close_quantity(z)
+    0, if broker_close_quantity(z) == 0
+    else broker_close_market_value(z)
+         * closing_sleeve_quantity(s, z) / broker_close_quantity(z)
 ```
 
 This keeps sleeve valuations anchored to the broker's actual open
 and close market values while still using the sleeve ledger as the
-ownership source of truth.
+ownership source of truth. The Modified Dietz adjustment is needed
+only because residual-reserve cash can be transferred into a sleeve
+mid-session to fund attributed buys without inventing day-0 sleeve
+cash ownership. Each external cash flow from reserve is weighted by
+its `filled_at_utc` position between the persisted session-open and
+session-close timestamps.
 
 The resulting `SleeveDailyAttributionRecord` writes:
 
@@ -584,7 +753,8 @@ opening/closing equity, not from aggregate portfolio fractions.
 
 ### W8 — Keep the public drift contract stable
 
-The already-shipped drift readers keep their current contract:
+The already-shipped drift readers keep their current contract at the
+artifact boundary:
 
 - `StoreBackedAttributionRecordsReader.records_for_sleeve(...)`
   still returns `SleeveDailyAttributionRecord`s.
@@ -597,11 +767,24 @@ What changes is the truthfulness of the numbers:
 - after this design: each sleeve reads the return of its own
   cash-plus-holdings ledger.
 
+Additional prerequisite hardening before Task 16:
+
+1. `compute_live_vs_backtest_pnl_divergence(...)` stays pending if
+   any `SleeveAttributionGapRecord` exists for the sleeve inside the
+   live rolling window;
+2. `StoreBackedAttributionRecordsReader` windowing must be
+   gap-aware by `trading_day`, not just `recorded_at_utc`; and
+3. gap days are therefore explicit pending states, not silent
+   count-shifts in the live series.
+
 Task 16 remains the later commit that:
 
 1. confirms enough new ledger-based records exist for both sleeves;
-2. recalibrates thresholds if needed; and
-3. flips `pnl::<sleeve_id>` from pending to active.
+2. confirms residual reserve cash and unresolved residual positions
+   are no longer material for the active sleeves' monitoring
+   window;
+3. recalibrates thresholds if needed; and
+4. flips `pnl::<sleeve_id>` from pending to active.
 
 ## Not touched
 
@@ -620,39 +803,43 @@ The following remain untouched by this design:
 1. **Existing positions are preserved.** Turning on the new sleeve
    ledger with an account that already holds positions does not
    discard them or require manual operator mapping.
-2. **Bootstrap is deterministic.** Re-running bootstrap with the
-   same activation, broker opening state, and execution evidence
-   produces identical allocation records.
-3. **Cash is fully allocated.** Bootstrap cash across sleeves sums
-   exactly to broker cash within Decimal tolerance.
-4. **Ledger ownership is conserved.** For every symbol, sleeve
-   quantities sum to the broker quantity at open and close within
-   tolerance.
-5. **Equity is conserved.** Sum of sleeve opening equities equals
-   portfolio opening equity within tolerance, and same for close.
-6. **Sleeves can diverge.** Two sleeves holding different symbols or
+2. **Bootstrap is one-time.** Activation changes alone do not
+   reassign already-open inventory after ledger genesis.
+3. **Bootstrap is deterministic.** Re-running bootstrap with the
+   same genesis inputs, broker opening state, and execution
+   evidence produces identical allocation records.
+4. **Cash is preserved, not invented.** Existing broker cash begins
+   in the residual reserve and is not synthetically split across
+   sleeves on day 1.
+5. **Ledger ownership is conserved.** For every symbol, sleeve
+   quantities plus residual-reserve quantity sum to the broker
+   quantity at open and close within tolerance.
+6. **Equity is conserved.** Sum of sleeve equities plus residual
+   reserve equals broker portfolio equity within tolerance at open
+   and close.
+7. **Sleeves can diverge.** Two sleeves holding different symbols or
    trading differently can produce different `daily_return` values
    on the same trading day.
-7. **Weak bootstrap is visible.** Every bootstrapped symbol records
+8. **Weak bootstrap is visible.** Every bootstrapped symbol records
    `allocation_source` and `confidence`, and that confidence is
    surfaced into the daily attribution output.
-8. **Anomalies fail closed.** Missing sleeve attribution, negative
-   inventory, or irreconcilable symbol ownership prevent a fake
-   daily attribution record from being written for the affected
-   sleeve/day.
-9. **Drift readers remain compatible.** Existing drift readers and
-   dashboards can read the new attribution records without changing
-   their primary input type.
-10. **Task 16 remains separate.** No monitor activation is coupled to
-    the ledger merge; rollback can still target the activation step
-    independently.
+9. **Anomalies fail closed.** Missing sleeve attribution, negative
+   inventory, or irreconcilable symbol ownership emit explicit
+   gap artifacts and do not fabricate a valid daily return.
+10. **Drift readers remain compatible.** Existing drift readers and
+    dashboards can read the new attribution records without
+    changing their primary input type, and gap days force
+    `pending` rather than a false verdict.
+11. **Task 16 remains separate.** No monitor activation is coupled
+    to the ledger merge; rollback can still target the activation
+    step independently.
 
 ## Decisions resolved
 
 ### D1 — Bootstrap style
 
-**Decision:** automatic bootstrap, evidence-first, blueprint
-fallback.
+**Decision:** automatic bootstrap, evidence-first, with residual
+reserve fallback when ownership cannot be assigned safely.
 
 Rejected alternatives:
 
@@ -661,17 +848,19 @@ Rejected alternatives:
 - blueprint-only split — too approximate when real attributed
   execution history exists.
 
-### D2 — Existing cash split
+### D2 — Existing cash handling
 
-**Decision:** split existing broker cash by current blueprint budget
-percentages.
+**Decision:** keep existing broker cash in an explicit residual
+reserve at bootstrap and transfer it into sleeves only through
+future attributed economic events.
 
 Rejected alternatives:
 
+- split by blueprint budgets — contradicted DESIGN-0017 narrowed
+  blueprint semantics and invented sleeve cash ownership without
+  evidence;
 - proportional to bootstrapped position size — creates a circular
-  dependency between position reconstruction and cash assignment;
-- shared cash pool — adds a second accounting system and weakens the
-  "each sleeve is a mini-portfolio" model.
+  dependency between position reconstruction and cash assignment.
 
 ### D3 — Cost basis method
 
@@ -682,7 +871,17 @@ Rejected alternative:
 - FIFO/LIFO — more complex than needed for drift attribution and
   would widen the scope into tax-lot accounting.
 
-### D4 — Valuation source for daily return
+### D4 — Activation-boundary rule
+
+**Decision:** bootstrap is one-time ledger genesis; activation
+changes do not trigger rebootstrap.
+
+Rejected alternative:
+
+- rebootstrap on every `blueprint_activation_id` change — could
+  rewrite live ownership without a trade.
+
+### D5 — Valuation source for daily return
 
 **Decision:** value opening and closing positions using the session
 open/close `PortfolioState` market values.
@@ -694,16 +893,28 @@ Rejected alternatives:
 - separate quote sourcing in the attribution layer — duplicates
   already persisted broker truth.
 
-### D5 — Failure posture
+### D6 — Failure posture
 
-**Decision:** fail closed on unattributed or irreconcilable fills.
+**Decision:** fail closed on unattributed or irreconcilable fills,
+with explicit day-keyed gap artifacts and Task 16 reader hardening.
 
 Rejected alternative:
 
 - make up ownership using latest target weights — unsafe once the
   result feeds the drift monitor.
 
-### D6 — Sequencing
+### D7 — Partial-history handling
+
+**Decision:** no `history_scaled` mode beyond a tiny
+rounding-adjustment tolerance; unresolved partial history stays in
+the residual reserve.
+
+Rejected alternative:
+
+- proportional scaling of partial history — deterministic but can
+  silently assign the wrong sleeve owner.
+
+### D8 — Sequencing
 
 **Decision:** this design lands before Task 16 activation and does
 not itself flip `pnl::<sleeve_id>`.
