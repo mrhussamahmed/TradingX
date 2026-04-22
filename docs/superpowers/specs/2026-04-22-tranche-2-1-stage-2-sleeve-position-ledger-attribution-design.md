@@ -422,7 +422,13 @@ Canonical root for these DESIGN-0019 runtime-state categories:
 - this keeps bootstrap, reserve, decomposition, attribution, and drift
   readers on one shared runtime-root store, matching the current
   `SleeveAttributionRecorder`/drift-reader side in
-  [/src/tradingx/automation.py:916](/src/tradingx/automation.py:916).
+  [/src/tradingx/automation.py:916](/src/tradingx/automation.py:916); and
+- the existing decomposition writer in
+  `PaperTradingService._write_sleeve_decomposition_record_if_available()`
+  at [/src/tradingx/service.py:555](/src/tradingx/service.py:555)
+  must be rehomed to that same runtime-root store instead of writing
+  `SleeveDecompositionRecord` through `self._artifacts` when
+  `self._artifacts` is still bound to `paper_store`.
 
 Suggested filenames:
 
@@ -711,6 +717,11 @@ Reserve-domain production path:
 - in `build_default_paper_service()`, that dependency MUST be bound to
   the same top-level `runtime_store` used by
   `SleeveAttributionRecorder`, not to `paper_store`;
+- `PaperTradingService` likewise needs a parallel
+  `runtime_state_store: FilesystemArtifactStore` seam so
+  `_write_sleeve_decomposition_record_if_available()` writes
+  `SleeveDecompositionRecord` into `runtime_store` rather than the
+  paper-loop artifact root;
 - `paper_store` remains the home for paper-loop cycle artifacts such as
   `runtime_portfolio_plan` snapshots, but not for DESIGN-0019 ledger or
   reserve state;
@@ -1040,18 +1051,22 @@ The following remain untouched by this design:
     and decomposition reads use the same `runtime_store` root that the
     recorder uses for ledger and attribution artifacts, so reserve
     inventory cannot be hidden by a `paper_loop`/runtime-root mismatch.
-13. **Anomalies fail closed.** Missing sleeve attribution, negative
+13. **Decomposition continuity is written to that same root.** The live
+    `SleeveDecompositionRecord` writer is migrated off `paper_store` and
+    into `runtime_store`, so sleeve/current-weight continuity cannot
+    split across roots even before Task 16.
+14. **Anomalies fail closed.** Missing sleeve attribution, negative
     inventory, or irreconcilable symbol ownership emit explicit
     gap artifacts and do not fabricate a valid daily return.
-14. **Drift readers remain compatible.** Existing drift readers and
+15. **Drift readers remain compatible.** Existing drift readers and
     dashboards can read the new attribution records without
     changing their primary input type, and gap days force
     `pending` rather than a false verdict.
-15. **Live Sharpe readers are gap-aware.** Any
+16. **Live Sharpe readers are gap-aware.** Any
     `LIVE_DAILY_RETURNS`-based sleeve Sharpe consumer treats gap
     days as insufficient history rather than a shorter valid
     return series.
-16. **Task 16 remains separate.** No monitor activation is coupled
+17. **Task 16 remains separate.** No monitor activation is coupled
     to the ledger merge; rollback can still target the activation
     step independently.
 
