@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.33
+version: 1.2.34
 status: active
 created: 2026-04-17
 last_amended: 2026-04-22
-supersedes: INDEX-0001@1.2.32
+supersedes: INDEX-0001@1.2.33
 superseded_by: null
-author_session: claude-opus-4.7-2026-04-22
+author_session: gpt-5-codex-2026-04-22
 ---
 
 # Artifact index
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.33  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.34  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -131,6 +131,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0016 | Tranche 1.5 live drift monitoring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-5-live-drift-monitoring-design.md` |
 | DESIGN-0017 | Tranche 2.1 multi-sleeve live runtime wiring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md` |
 | DESIGN-0018 | Tranche 2.2 CPCV + PBO design | 1.0.0 | active | `docs/superpowers/specs/2026-04-22-tranche-2-2-cpcv-pbo-design.md` |
+| DESIGN-0019 | Tranche 2.1 Stage 2 sleeve position ledger attribution | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-1-stage-2-sleeve-position-ledger-attribution-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 
