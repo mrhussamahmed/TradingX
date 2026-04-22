@@ -943,9 +943,9 @@ def test_combine_sleeve_weights_applies_per_symbol_strictest_holder_correlation_
     assert result["IWM"] <= Decimal("0.40") + Decimal("1e-9")
 
 
-def test_combine_sleeve_weights_applies_row_gross_and_net_caps():
-    """Both row caps are enforced; dropping either would silently
-    change the shipped 1.4 portfolio math."""
+def test_combine_sleeve_weights_applies_row_gross_cap():
+    """Gross cap binds when all weights are same-sign and their
+    absolute sum exceeds max_gross_exposure."""
     from tradingx.portfolio.blueprint import (
         PortfolioBlueprint,
         SleeveRiskBudget,
@@ -975,6 +975,55 @@ def test_combine_sleeve_weights_applies_row_gross_and_net_caps():
     # sum(abs) == 1.0.
     gross = sum(abs(weight) for weight in result.values())
     assert abs(gross - Decimal("1.0")) < Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_applies_row_net_cap_when_gross_does_not_bind():
+    """Codex round-2 plan P2 fix: isolate net-cap behavior.
+    Long/short offsetting weights where sum(abs) <=
+    max_gross_exposure but |sum| > max_net_exposure. A helper
+    that enforced only the gross cap would leave the net
+    unconstrained; the shipped 1.4 math applies both. This test
+    fails if the net cap is missing.
+    """
+    from tradingx.portfolio.blueprint import (
+        PortfolioBlueprint,
+        SleeveRiskBudget,
+    )
+    from tradingx.portfolio.construction import _combine_sleeve_weights
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("1.0"),
+            ),
+        ),
+        # Gross cap is slack — 0.6 + 0.4 = 1.0 within 1.2.
+        # Net cap is the binding constraint — 0.6 + (-0.4) = 0.2
+        # within 0.1 would require scaling.
+        max_gross_exposure=Decimal("1.2"),
+        max_net_exposure=Decimal("0.1"),
+    )
+    contributions = {
+        "a": {"SPY": Decimal("0.6"), "HEDGE": Decimal("-0.4")},
+    }
+    result = _combine_sleeve_weights(
+        blueprint=blueprint,
+        contributions=contributions,
+    )
+    # Net = sum(signed_weights) = 0.2 raw → must scale to <= 0.1.
+    net = abs(sum(result.values(), start=Decimal("0")))
+    assert net <= Decimal("0.1") + Decimal("1e-9")
+    # Gross was not binding, so the gross invariant still holds.
+    gross = sum(abs(weight) for weight in result.values())
+    assert gross <= Decimal("1.2") + Decimal("1e-9")
+    # And the scaling was uniform: the ratio between the two
+    # weights is preserved after the net cap applies.
+    ratio_raw = Decimal("0.6") / Decimal("0.4")
+    ratio_scaled = abs(result["SPY"]) / abs(result["HEDGE"])
+    assert abs(ratio_raw - ratio_scaled) < Decimal("1e-9")
 
 
 def test_combine_sleeve_weights_is_pure():
@@ -2120,68 +2169,6 @@ Expected: FAIL — regeneration detector not yet implemented.
 
 - [ ] **Step 3: Implement**
 
-In `src/tradingx/automation.py`, modify `build_default_market_day_automation_runner`:
-
-```python
-def _read_last_seen_activation_id(path: Path) -> str | None:
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return str(payload.get("activation_id") or "") or None
-
-
-def _write_last_seen_activation_id(path: Path, activation_id: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"activation_id": activation_id}, indent=2),
-        encoding="utf-8",
-    )
-
-
-# inside build_default_market_day_automation_runner, after
-# reference/backtest generation logic:
-
-last_activation_path = artifact_root / "drift" / "last_activation.json"
-pending_path = artifact_root / "drift" / "pending_recalibration.json"
-
-current_activation = activation_gateway.get_active_blueprint_activation()
-pending_recalibration = pending_path.exists()
-last_seen = _read_last_seen_activation_id(last_activation_path)
-
-should_regenerate = pending_recalibration or (
-    current_activation is not None
-    and current_activation.activation_id != last_seen
-)
-
-if should_regenerate:
-    reference_snapshot = _load_or_build_reference_snapshot(
-        artifact_root=artifact_root,
-        blueprint=blueprint,
-        feature_reader=feature_reader,
-        signal_reader=signal_reader,
-        now_provider=now_provider,
-        force_rebuild=True,
-    )
-    _ensure_backtest_reference_returns(
-        config=config,
-        market_data_gateway=market_data_gateway,
-        now_provider=now_provider,
-        force_rebuild=True,
-    )
-    if current_activation is not None:
-        _write_last_seen_activation_id(
-            last_activation_path,
-            current_activation.activation_id,
-        )
-    if pending_path.exists():
-        pending_path.unlink()
-```
-
-Update `_load_or_build_reference_snapshot` and `_ensure_backtest_reference_returns` to accept `force_rebuild: bool = False`. When True, overwrite even if the artifact already exists.
-
 **Recalibration-marker seam (Codex round-1 plan P1 fix).** The
 round-1 plan proposed extending `OperatorControlStore.__init__`
 with a `drift_pending_recalibration_path: Path | None = None`
@@ -2273,6 +2260,23 @@ def _read_operator_recalibration_marker_timestamp(
         return datetime.fromisoformat(normalized).astimezone(UTC)
     except ValueError:
         return None
+
+
+def _write_last_seen_bookkeeping(
+    path: Path,
+    *,
+    activation_id: str | None,
+    last_processed_recalibration_at: str | None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, str | None] = {
+        "activation_id": activation_id,
+        "last_processed_recalibration_at": last_processed_recalibration_at,
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 # inside build_default_market_day_automation_runner:
