@@ -130,6 +130,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0015 | Tranche 1.4 portfolio construction and drawdown defense | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-4-portfolio-construction-and-drawdown-defense-design.md` |
 | DESIGN-0016 | Tranche 1.5 live drift monitoring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-21-tranche-1-5-live-drift-monitoring-design.md` |
 | DESIGN-0017 | Tranche 2.1 multi-sleeve live runtime wiring | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md` |
+| DESIGN-0018 | Tranche 2.2 CPCV + PBO design | 0.1.0 | draft | `docs/superpowers/specs/2026-04-22-tranche-2-2-cpcv-pbo-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 
