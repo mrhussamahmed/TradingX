@@ -497,6 +497,20 @@ The session-open record is required because the current automation
 runner keeps the open `PortfolioState` only in memory at
 [/src/tradingx/automation.py:301](/src/tradingx/automation.py:301).
 
+Additional activation-time durability requirement:
+
+- when `load_or_activate_blueprint(...)` captures
+  `captured_snapshot_id` from an `ApprovedWeightSnapshot`, the same
+  activation path MUST also persist that exact snapshot payload into
+  `model_weight_snapshots/{snapshot_id}.json` if it is not already
+  present;
+- bootstrap fallback MUST resolve captured snapshots from that
+  persisted payload store by `snapshot_id`, not by reloading current
+  approved YAML through `strategy_id`.
+
+Without this, `captured_snapshot_id` is only an identifier, not a
+durable reproducibility anchor.
+
 ## Bootstrap design
 
 ### W3 — Automatic bootstrap for existing positions
@@ -551,6 +565,8 @@ For each symbol:
      current approved YAML:
      - resolve the weight snapshots from
        `BlueprintActivationRecord.sleeve_activation_bindings[*].captured_snapshot_id`;
+     - those snapshot payloads must have been persisted at
+       activation time into `model_weight_snapshots/`;
      - if only one sleeve owns that symbol in those captured
        snapshots, give it 100%;
      - if multiple sleeves own it, split by their relative target
@@ -713,8 +729,8 @@ At session close:
    closing sleeve quantities, with a zero-quantity branch for fully
    liquidated symbols;
 5. compute sleeve opening equity and closing equity;
-6. compute any net capital contribution from residual reserve into
-   the sleeve during the session; and
+6. build the sleeve's ordered signed external cash-flow series
+   against the residual reserve for the session; and
 7. persist `SleeveDailyAttributionRecord`.
 
 Formulas:
@@ -732,7 +748,7 @@ daily_return(s) =
     modified_dietz(
         opening_equity(s),
         closing_equity(s),
-        external_cash_flows_from_reserve(s)
+        ordered_signed_external_cash_flows(s)
     )
 ```
 
@@ -752,11 +768,21 @@ closing_market_value(s, z) =
 This keeps sleeve valuations anchored to the broker's actual open
 and close market values while still using the sleeve ledger as the
 ownership source of truth. The Modified Dietz adjustment is needed
-only because residual-reserve cash can be transferred into a sleeve
-mid-session to fund attributed buys without inventing day-0 sleeve
-cash ownership. Each external cash flow from reserve is weighted by
-its `filled_at_utc` position between the persisted session-open and
-session-close timestamps.
+because residual-reserve cash can move both into and out of a sleeve
+mid-session without inventing day-0 sleeve cash ownership. The
+implementation MUST treat these as an ordered tuple of signed cash
+flows, not as one netted amount:
+
+- reserve -> sleeve funding for buys = positive external flow into
+  the sleeve;
+- sleeve -> reserve sale distributions = negative external flow out
+  of the sleeve.
+
+Each flow is weighted independently by its `filled_at_utc` position
+between the persisted session-open and session-close timestamps.
+Sell-then-buy and buy-then-sell days therefore remain distinct; the
+implementation may not collapse intraday opposing flows into one net
+cash-flow figure before weighting.
 
 The resulting `SleeveDailyAttributionRecord` writes:
 
@@ -808,11 +834,14 @@ Additional prerequisite hardening before Task 16:
 Task 16 remains the later commit that:
 
 1. confirms enough new ledger-based records exist for both sleeves;
-2. confirms residual reserve cash and unresolved residual positions
-   are no longer material for the active sleeves' monitoring
-   window;
-3. recalibrates thresholds if needed; and
-4. flips `pnl::<sleeve_id>` from pending to active.
+2. confirms unresolved residual reserve positions are zero for the
+   active sleeves' monitoring window;
+3. confirms residual reserve cash is below a concrete non-blocking
+   threshold for the same window:
+   - recommended default = max(5% of broker equity, the notional of
+     one minimum-sized sleeve trade);
+4. recalibrates thresholds if needed; and
+5. flips `pnl::<sleeve_id>` from pending to active.
 
 ## Not touched
 
@@ -851,18 +880,22 @@ The following remain untouched by this design:
 8. **Weak bootstrap is visible.** Every bootstrapped symbol records
    `allocation_source` and `confidence`, and that confidence is
    surfaced into the daily attribution output.
-9. **Anomalies fail closed.** Missing sleeve attribution, negative
+9. **Snapshot-pinned fallback is reproducible.** If blueprint
+   fallback is used, rerunning bootstrap after approved YAML edits
+   still resolves the same captured snapshot payloads and produces
+   the same fallback allocation.
+10. **Anomalies fail closed.** Missing sleeve attribution, negative
    inventory, or irreconcilable symbol ownership emit explicit
    gap artifacts and do not fabricate a valid daily return.
-10. **Drift readers remain compatible.** Existing drift readers and
+11. **Drift readers remain compatible.** Existing drift readers and
     dashboards can read the new attribution records without
     changing their primary input type, and gap days force
     `pending` rather than a false verdict.
-11. **Live Sharpe readers are gap-aware.** Any
+12. **Live Sharpe readers are gap-aware.** Any
     `LIVE_DAILY_RETURNS`-based sleeve Sharpe consumer treats gap
     days as insufficient history rather than a shorter valid
     return series.
-12. **Task 16 remains separate.** No monitor activation is coupled
+13. **Task 16 remains separate.** No monitor activation is coupled
     to the ledger merge; rollback can still target the activation
     step independently.
 
