@@ -60,6 +60,7 @@ from tradingx.types import (
     OperatorAlert,
     PortfolioState,
     ReplaySlippageGenerationResult,
+    SessionOpenPortfolioStateRecord,
     WebActionResult,
 )
 from tradingx.validation import _build_default_regime_snapshots
@@ -95,6 +96,7 @@ class MarketDayAutomationRunner:
         validation_store: FilesystemArtifactStore,
         operator_store: FilesystemArtifactStore,
         service_builder: ServiceBuilderProtocol,
+        runtime_store: FilesystemArtifactStore | None = None,
         portfolio_gateway: PortfolioGatewayProtocol | None = None,
         drift_alarm_gateway: DriftAlarmGateway | None = None,
         attribution_recorder: SleeveAttributionRecorder | None = None,
@@ -113,6 +115,7 @@ class MarketDayAutomationRunner:
         self._paper_store = paper_store
         self._validation_store = validation_store
         self._operator_store = operator_store
+        self._runtime_store = runtime_store or operator_store
         self._service_builder = service_builder
         self._portfolio_gateway = portfolio_gateway
         self._drift_alarm_gateway = drift_alarm_gateway
@@ -303,6 +306,15 @@ class MarketDayAutomationRunner:
             self._session_open_portfolio_state = (
                 self._portfolio_gateway.get_portfolio_state()
             )
+            trading_day = self._now_provider().date().isoformat()
+            self._runtime_store.write_session_open_portfolio_state_record(
+                SessionOpenPortfolioStateRecord(
+                    record_id=f"session-open-{trading_day}",
+                    trading_day=trading_day,
+                    recorded_at_utc=self._now_provider(),
+                    portfolio_state=self._session_open_portfolio_state,
+                )
+            )
         return self._write_checkpoint(
             session_label="session_preopen",
             service_status="idle",
@@ -356,19 +368,31 @@ class MarketDayAutomationRunner:
         )
 
     def _execute_close(self) -> _AutomationStepArtifacts:
+        trading_day = self._now_provider().date().isoformat()
         if (
             self._attribution_recorder is not None
             and self._portfolio_gateway is not None
-            and self._session_open_portfolio_state is not None
         ):
-            close_state = self._portfolio_gateway.get_portfolio_state()
-            trading_day = self._now_provider().date().isoformat()
-            self._attribution_recorder.record_session(
-                trading_day=trading_day,
-                open_portfolio_state=self._session_open_portfolio_state,
-                close_portfolio_state=close_state,
-            )
-            self._session_open_portfolio_state = None
+            open_state = self._session_open_portfolio_state
+            if open_state is None:
+                persisted_open = (
+                    self._runtime_store.read_session_open_portfolio_state_record(
+                        trading_day=trading_day
+                    )
+                )
+                open_state = (
+                    persisted_open.portfolio_state
+                    if persisted_open is not None
+                    else None
+                )
+            if open_state is not None:
+                close_state = self._portfolio_gateway.get_portfolio_state()
+                self._attribution_recorder.record_session(
+                    trading_day=trading_day,
+                    open_portfolio_state=open_state,
+                    close_portfolio_state=close_state,
+                )
+                self._session_open_portfolio_state = None
         if self._drift_alarm_gateway is not None:
             self._drift_alarm_gateway.refresh()
         replay_result = self._replay_generator(
@@ -864,6 +888,7 @@ def build_default_market_day_automation_runner(
     )
     activation_gateway = LocalActivationGateway(
         store=operator_store,
+        runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
     )
     trading_client = TradingClient(
@@ -918,11 +943,13 @@ def build_default_market_day_automation_runner(
         attribution_store=runtime_store,
         now_provider=now_provider,
         decomposition_store=runtime_store,
+        execution_store=paper_store,
     )
     return MarketDayAutomationRunner(
         paper_store=paper_store,
         validation_store=validation_store,
         operator_store=operator_store,
+        runtime_store=runtime_store,
         service_builder=lambda: build_default_paper_service(config),
         portfolio_gateway=portfolio_gateway,
         drift_alarm_gateway=drift_alarm_gateway,

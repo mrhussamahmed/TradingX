@@ -33,12 +33,14 @@ class LocalActivationGateway:
         self,
         *,
         store: FilesystemArtifactStore,
+        runtime_snapshot_store: FilesystemArtifactStore | None = None,
         approved_snapshot_store: ApprovedWeightSnapshotStore | None = None,
         snapshot_store: ApprovedWeightSnapshotStore | None = None,
         now_provider: Callable[[], datetime] | None = None,
         strategy_id_validator: Callable[[str], bool] | None = None,
     ) -> None:
         self._store = store
+        self._runtime_snapshot_store = runtime_snapshot_store or store
         self._snapshot_store = (
             snapshot_store
             or approved_snapshot_store
@@ -72,7 +74,7 @@ class LocalActivationGateway:
         snapshot = self.get_latest_snapshot(strategy_id=activation.strategy_id)
         if snapshot is None:
             snapshot = self._snapshot_store.load_by_strategy_id(activation.strategy_id)
-        self._store.write_model_weight_snapshot(snapshot)
+        self._persist_snapshot_payload(snapshot)
         return activation, snapshot
 
     def get_latest_activation(self) -> StrategyActivationRecord | None:
@@ -147,6 +149,7 @@ class LocalActivationGateway:
                 active.blueprint_id == blueprint.blueprint_id
                 and active.sleeve_activation_bindings == normalized_bindings
             ):
+                self.ensure_activation_snapshot_payloads(active)
                 return active
 
         record = BlueprintActivationRecord(
@@ -159,7 +162,37 @@ class LocalActivationGateway:
             source_blueprint_path=source_blueprint_path,
         )
         self._store.write_blueprint_activation_record(record)
+        for binding in record.sleeve_activation_bindings:
+            snapshot = self._snapshot_store.load_by_strategy_id(binding.strategy_id)
+            if snapshot.snapshot_id != binding.captured_snapshot_id:
+                raise BlueprintActivationValidationError(
+                    "Approved snapshot changed during blueprint activation for "
+                    f"{binding.strategy_id!r}."
+                )
+            self._persist_snapshot_payload(snapshot)
         return record
+
+    def ensure_activation_snapshot_payloads(
+        self,
+        record: BlueprintActivationRecord,
+    ) -> None:
+        for binding in record.sleeve_activation_bindings:
+            if self._has_runtime_snapshot(binding.captured_snapshot_id):
+                continue
+            if self._has_operator_snapshot(binding.captured_snapshot_id):
+                snapshot = self._store.load_approved_weight_snapshot_by_snapshot_id(
+                    snapshot_id=binding.captured_snapshot_id
+                )
+                self._runtime_snapshot_store.write_model_weight_snapshot(snapshot)
+                continue
+            snapshot = self._snapshot_store.load_by_strategy_id(binding.strategy_id)
+            if snapshot.snapshot_id != binding.captured_snapshot_id:
+                raise BlueprintActivationValidationError(
+                    "Captured snapshot payload is unavailable for activation "
+                    f"{record.activation_id!r} and current approved snapshot for "
+                    f"{binding.strategy_id!r} no longer matches."
+                )
+            self._persist_snapshot_payload(snapshot)
 
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
         records = self._store.list_blueprint_activation_records()
@@ -203,6 +236,28 @@ class LocalActivationGateway:
 
     def _now(self) -> datetime:
         return self._now_provider()
+
+    def _persist_snapshot_payload(self, snapshot: ApprovedWeightSnapshot) -> None:
+        self._store.write_model_weight_snapshot(snapshot)
+        self._runtime_snapshot_store.write_model_weight_snapshot(snapshot)
+
+    def _has_operator_snapshot(self, snapshot_id: str) -> bool:
+        try:
+            self._store.load_approved_weight_snapshot_by_snapshot_id(
+                snapshot_id=snapshot_id
+            )
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _has_runtime_snapshot(self, snapshot_id: str) -> bool:
+        try:
+            self._runtime_snapshot_store.load_approved_weight_snapshot_by_snapshot_id(
+                snapshot_id=snapshot_id
+            )
+        except FileNotFoundError:
+            return False
+        return True
 
 
 __all__ = ("BlueprintActivationValidationError", "LocalActivationGateway")

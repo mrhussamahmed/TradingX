@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol
 
+from tradingx.drift.sleeve_ledger import RESIDUAL_RESERVE_OWNER_ID
 from tradingx.features.regime import classify_regime
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio.blueprint import PortfolioBlueprint, load_portfolio_blueprint
@@ -109,6 +110,7 @@ class RuntimePortfolioPlanner:
         activation_gateway: ActivationGatewayProtocol | None = None,
         strategy_id: str | None = None,
         artifact_store: FilesystemArtifactStore | None = None,
+        runtime_state_store: FilesystemArtifactStore | None = None,
         operator_halt_store: SleeveOperatorHaltStoreProtocol | None = None,
         drift_alarm_gateway: DriftAlarmGatewayProtocol | None = None,
         trials_ledger: TrialsLedgerReadProtocol | None = None,
@@ -120,6 +122,7 @@ class RuntimePortfolioPlanner:
         self._activation_gateway = activation_gateway
         self._strategy_id = strategy_id
         self._artifact_store = artifact_store
+        self._runtime_state_store = runtime_state_store or artifact_store
         self._operator_halt_store = operator_halt_store
         self._drift_alarm_gateway = drift_alarm_gateway
         self._trials_ledger = trials_ledger
@@ -397,8 +400,13 @@ class RuntimePortfolioPlanner:
             sleeve_trades_by_id=sleeve_trades_by_id
         )
         current_weights = _current_weights(portfolio_state)
+        reserve_liquidation_quantities = self._reserve_liquidation_quantities()
         tracked_symbols = tuple(
-            sorted(set(aggregate_target_weights) | set(current_weights))
+            sorted(
+                set(aggregate_target_weights)
+                | set(current_weights)
+                | set(reserve_liquidation_quantities)
+            )
         )
         market_snapshots: dict[str, MarketSnapshot] = {}
         planned_trade_rows: list[RuntimePortfolioTrade] = []
@@ -409,37 +417,62 @@ class RuntimePortfolioPlanner:
                 snapshot = self._market_data.get_market_snapshot(symbol)
                 market_snapshots[symbol] = snapshot
                 last_trade_price = snapshot.last_trade_price
-            trade = self._build_planned_trade(
-                symbol=symbol,
-                current_weight=current_weights.get(symbol, Decimal("0")),
-                target_weight=aggregate_target_weights.get(symbol, Decimal("0")),
-                raw_target_weight=aggregate_target_weights.get(symbol, Decimal("0")),
-                current_quantity=current_quantity,
-                last_trade_price=last_trade_price,
-                candidate_id=blueprint.blueprint_id,
-                generated_at=generated_at,
-                account_equity=portfolio_state.equity,
-            )
+            reserve_quantity = reserve_liquidation_quantities.get(symbol)
+            if reserve_quantity is not None:
+                trade = self._build_reserve_liquidation_trade(
+                    symbol=symbol,
+                    reserve_quantity=reserve_quantity,
+                    current_quantity=current_quantity,
+                    current_weight=current_weights.get(symbol, Decimal("0")),
+                    last_trade_price=last_trade_price,
+                    account_equity=portfolio_state.equity,
+                )
+            else:
+                trade = self._build_planned_trade(
+                    symbol=symbol,
+                    current_weight=current_weights.get(symbol, Decimal("0")),
+                    target_weight=aggregate_target_weights.get(symbol, Decimal("0")),
+                    raw_target_weight=aggregate_target_weights.get(
+                        symbol, Decimal("0")
+                    ),
+                    current_quantity=current_quantity,
+                    last_trade_price=last_trade_price,
+                    candidate_id=blueprint.blueprint_id,
+                    generated_at=generated_at,
+                    account_equity=portfolio_state.equity,
+                )
             if (
                 trade.side in {"buy", "sell", "reduce"}
                 and symbol not in market_snapshots
             ):
                 snapshot = self._market_data.get_market_snapshot(symbol)
                 market_snapshots[symbol] = snapshot
-                trade = self._build_planned_trade(
-                    symbol=symbol,
-                    current_weight=current_weights.get(symbol, Decimal("0")),
-                    target_weight=aggregate_target_weights.get(symbol, Decimal("0")),
-                    raw_target_weight=aggregate_target_weights.get(
-                        symbol,
-                        Decimal("0"),
-                    ),
-                    current_quantity=current_quantity,
-                    last_trade_price=snapshot.last_trade_price,
-                    candidate_id=blueprint.blueprint_id,
-                    generated_at=generated_at,
-                    account_equity=portfolio_state.equity,
-                )
+                if reserve_quantity is not None:
+                    trade = self._build_reserve_liquidation_trade(
+                        symbol=symbol,
+                        reserve_quantity=reserve_quantity,
+                        current_quantity=current_quantity,
+                        current_weight=current_weights.get(symbol, Decimal("0")),
+                        last_trade_price=snapshot.last_trade_price,
+                        account_equity=portfolio_state.equity,
+                    )
+                else:
+                    trade = self._build_planned_trade(
+                        symbol=symbol,
+                        current_weight=current_weights.get(symbol, Decimal("0")),
+                        target_weight=aggregate_target_weights.get(
+                            symbol, Decimal("0")
+                        ),
+                        raw_target_weight=aggregate_target_weights.get(
+                            symbol,
+                            Decimal("0"),
+                        ),
+                        current_quantity=current_quantity,
+                        last_trade_price=snapshot.last_trade_price,
+                        candidate_id=blueprint.blueprint_id,
+                        generated_at=generated_at,
+                        account_equity=portfolio_state.equity,
+                    )
             planned_trade_rows.append(trade)
         ordered_trades = tuple(
             sorted(
@@ -458,12 +491,19 @@ class RuntimePortfolioPlanner:
             )
         }
         trade_intents = tuple(
-            _trade_intent_for_plan_item(
-                trade,
-                candidate_id=blueprint.blueprint_id,
-                generated_at=generated_at,
-                decomposition=decomposition,
-                registry_order_by_sleeve_id=registry_order_by_sleeve_id,
+            (
+                _reserve_trade_intent_for_plan_item(
+                    trade,
+                    generated_at=generated_at,
+                )
+                if trade.reason_code == "residual_reserve_liquidation"
+                else _trade_intent_for_plan_item(
+                    trade,
+                    candidate_id=blueprint.blueprint_id,
+                    generated_at=generated_at,
+                    decomposition=decomposition,
+                    registry_order_by_sleeve_id=registry_order_by_sleeve_id,
+                )
             )
             for trade in ordered_trades
         )
@@ -547,9 +587,9 @@ class RuntimePortfolioPlanner:
         default: dict[str, dict[str, Decimal]] = {
             budget.sleeve_id: {} for budget in blueprint.sleeve_budgets
         }
-        if self._artifact_store is None:
+        if self._runtime_state_store is None:
             return default
-        latest = self._artifact_store.latest_sleeve_decomposition_record()
+        latest = self._runtime_state_store.latest_sleeve_decomposition_record()
         if latest is None:
             return default
         weights: dict[str, dict[str, Decimal]] = {}
@@ -605,6 +645,49 @@ class RuntimePortfolioPlanner:
             delta_quantity=delta_quantity,
             no_trade_band_applied=target_weight != raw_target_weight,
         )
+
+    def _build_reserve_liquidation_trade(
+        self,
+        *,
+        symbol: str,
+        reserve_quantity: Decimal,
+        current_quantity: Decimal,
+        current_weight: Decimal,
+        last_trade_price: Decimal,
+        account_equity: Decimal,
+    ) -> RuntimePortfolioTrade:
+        target_quantity = max(Decimal("0"), current_quantity - reserve_quantity)
+        target_weight = (
+            Decimal("0")
+            if account_equity <= Decimal("0")
+            else (target_quantity * last_trade_price) / account_equity
+        )
+        side = "sell" if target_quantity == Decimal("0") else "reduce"
+        reason_code = "residual_reserve_liquidation"
+        return RuntimePortfolioTrade(
+            symbol=symbol,
+            side=side,
+            reason_code=reason_code,
+            last_trade_price=last_trade_price,
+            current_weight=current_weight,
+            target_weight=target_weight,
+            current_quantity=current_quantity,
+            target_quantity=target_quantity,
+            delta_quantity=-reserve_quantity,
+            no_trade_band_applied=False,
+        )
+
+    def _reserve_liquidation_quantities(self) -> dict[str, Decimal]:
+        if self._runtime_state_store is None:
+            return {}
+        latest = self._runtime_state_store.latest_residual_reserve_snapshot()
+        if latest is None:
+            return {}
+        return {
+            position.symbol: position.quantity
+            for position in latest.positions
+            if position.quantity > Decimal("0")
+        }
 
 
 def _current_weights(portfolio_state: PortfolioState) -> dict[str, Decimal]:
@@ -684,6 +767,32 @@ def _trade_intent_for_plan_item(
             decomposition=decomposition,
             registry_order_by_sleeve_id=registry_order_by_sleeve_id,
         ),
+    )
+
+
+def _reserve_trade_intent_for_plan_item(
+    trade: RuntimePortfolioTrade,
+    *,
+    generated_at: datetime,
+) -> TradeIntent:
+    payload = "|".join(
+        (
+            "residual-reserve-bootstrap",
+            trade.symbol,
+            trade.side,
+            str(trade.delta_quantity),
+            generated_at.astimezone(UTC).isoformat(),
+        )
+    )
+    return TradeIntent(
+        intent_id=str(uuid.uuid5(uuid.NAMESPACE_URL, payload)),
+        candidate_id="residual-reserve-bootstrap",
+        symbol=trade.symbol,
+        side=trade.side,
+        quantity=(None if trade.side == "hold" else abs(trade.delta_quantity)),
+        reason_code=trade.reason_code,
+        generated_at_utc=generated_at,
+        sleeve_attributions=((RESIDUAL_RESERVE_OWNER_ID, Decimal("1")),),
     )
 
 

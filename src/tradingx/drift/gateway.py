@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Final, Protocol
@@ -70,6 +70,8 @@ class AttributionRecordsReaderProtocol(Protocol):
         *,
         window_days: int,
     ) -> tuple[SleeveDailyAttributionRecord, ...]: ...
+
+    def has_gap_for_sleeve(self, sleeve_id: str, *, window_days: int) -> bool: ...
 
 
 class BacktestReferenceReturnsReaderProtocol(Protocol):
@@ -281,9 +283,20 @@ class StoreBackedAttributionRecordsReader:
         window_days: int,
     ) -> tuple[SleeveDailyAttributionRecord, ...]:
         records = self._store.list_sleeve_daily_attribution_records(sleeve_id=sleeve_id)
-        window_start = datetime.now(UTC) - timedelta(days=window_days)
+        window_start = (datetime.now(UTC) - timedelta(days=window_days)).date()
         return tuple(
-            record for record in records if record.recorded_at_utc >= window_start
+            record
+            for record in records
+            if date.fromisoformat(record.trading_day) >= window_start
+        )
+
+    def has_gap_for_sleeve(self, sleeve_id: str, *, window_days: int) -> bool:
+        window_start = (datetime.now(UTC) - timedelta(days=window_days)).date()
+        return any(
+            date.fromisoformat(record.trading_day) >= window_start
+            for record in self._store.list_sleeve_attribution_gap_records(
+                sleeve_id=sleeve_id
+            )
         )
 
 
@@ -453,8 +466,7 @@ class DriftAlarmGateway:
                         monitor_id=f"ks::{sleeve_id}",
                         sleeve_id=sleeve_id,
                         details=(
-                            "sleeve not in mandatory registry or "
-                            "sleeve_class_path=None"
+                            "sleeve not in mandatory registry or sleeve_class_path=None"
                         ),
                     )
                 )
@@ -524,7 +536,16 @@ class DriftAlarmGateway:
 
     def _pnl_verdicts(self) -> tuple[DriftMonitorVerdict, ...]:
         verdicts: list[DriftMonitorVerdict] = []
+        has_gap_for_sleeve = getattr(
+            self._attribution_reader,
+            "has_gap_for_sleeve",
+            lambda sleeve_id, *, window_days: False,
+        )
         for sleeve_id in self._blueprint.signal_monitor_sleeve_ids:
+            has_gap = has_gap_for_sleeve(
+                sleeve_id,
+                window_days=self._blueprint.pnl_divergence_rolling_window_days,
+            )
             verdict = compute_live_vs_backtest_pnl_divergence(
                 sleeve_id=sleeve_id,
                 live_attribution_records=self._attribution_reader.records_for_sleeve(
@@ -537,6 +558,7 @@ class DriftAlarmGateway:
                 thresholds=self._blueprint.thresholds,
                 rolling_window_days=self._blueprint.pnl_divergence_rolling_window_days,
                 minimum_live_days=self._blueprint.minimum_live_days_for_alarm,
+                has_gap=has_gap,
             )
             verdicts.append(
                 DriftMonitorVerdict(
@@ -570,8 +592,7 @@ class DriftAlarmGateway:
             severity=verdict.severity,
             category=DRIFT_ALARM_CONTROL_TYPE,
             summary=(
-                f"{verdict.monitor_id} {verdict.severity.upper()}: "
-                f"{verdict.details}"
+                f"{verdict.monitor_id} {verdict.severity.upper()}: {verdict.details}"
             ),
             evidence_refs=(),
             delivery_targets=("operator_dashboard",),

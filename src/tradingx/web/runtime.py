@@ -961,6 +961,7 @@ def build_default_local_web_components(
     )
     scheduler_manager = LocalSchedulerManager(config=config)
     operator_store_root = config.runtime.artifact_root / "operator_platform"
+    runtime_store_root = config.runtime.artifact_root
     market_data_gateway = build_default_market_data_gateway(config)
     trading_client = TradingClient(
         config.paper_credentials.api_key,
@@ -968,7 +969,8 @@ def build_default_local_web_components(
         paper=True,
     )
     activation_gateway = LocalActivationGateway(
-        store=FilesystemArtifactStore(operator_store_root)
+        store=FilesystemArtifactStore(operator_store_root),
+        runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
     )
     runtime_host_manager = LocalRuntimeHostManager(
         config=config,

@@ -18,6 +18,8 @@ from tradingx.types import (
     MarketSnapshot,
     PortfolioState,
     PositionSnapshot,
+    ResidualPositionAllocation,
+    ResidualReserveSnapshot,
     SleeveFailureReason,
     SleeveTrade,
     StrategyActivationRecord,
@@ -138,6 +140,17 @@ class _NoopSleeve:
                 regime="risk_on",
             ),
         )
+
+
+class _RuntimeStateStore:
+    def __init__(self, reserve_snapshot: ResidualReserveSnapshot | None) -> None:
+        self._reserve_snapshot = reserve_snapshot
+
+    def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None:
+        return self._reserve_snapshot
+
+    def latest_sleeve_decomposition_record(self):
+        return None
 
 
 def _trial(*, candidate_id: str, sharpe: str) -> TrialRecord:
@@ -617,4 +630,108 @@ def test_runtime_portfolio_planner_tie_breaks_equal_fractions_by_bound_strategy_
     assert spy_intent.sleeve_attributions == (
         ("alpha-sleeve", Decimal("0.5")),
         ("beta-sleeve", Decimal("0.5")),
+    )
+
+
+def test_runtime_portfolio_planner_emits_residual_reserve_liquidation_intent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint_path = tmp_path / "bp-runtime.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-runtime",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    budget_fraction_of_equity: 1.0",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "build_portfolio_cycle_target_weights",
+        lambda **kwargs: ({"SPY": Decimal("1.0")}, ()),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_sleeve_from_candidate",
+        lambda candidate: _NoopSleeve(sleeve_id=candidate.candidate_id),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+        ),
+        runtime_state_store=_RuntimeStateStore(
+            ResidualReserveSnapshot(
+                snapshot_id="reserve-1",
+                ledger_genesis_id="genesis-1",
+                active_blueprint_activation_id="bp-activation-1",
+                trading_day="2026-04-21",
+                recorded_at_utc=datetime(2026, 4, 21, 20, 0, tzinfo=UTC),
+                cash_balance=Decimal("1000"),
+                positions=(
+                    ResidualPositionAllocation(
+                        symbol="SPY",
+                        quantity=Decimal("5"),
+                        average_cost=Decimal("100"),
+                        market_value=Decimal("500"),
+                        reason="unresolved_history",
+                        evidence_refs=(),
+                    ),
+                ),
+                bootstrap_id="bootstrap-1",
+            )
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("10000"),
+            equity=Decimal("10000"),
+            buying_power=Decimal("20000"),
+            positions=(
+                PositionSnapshot(
+                    symbol="SPY",
+                    quantity=Decimal("5"),
+                    average_entry_price=Decimal("100"),
+                    market_value=Decimal("500"),
+                ),
+            ),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+    )
+
+    assert plan is not None
+    assert len(plan.trade_intents) == 1
+    assert plan.trade_intents[0].candidate_id == "residual-reserve-bootstrap"
+    assert plan.trade_intents[0].sleeve_attributions == (
+        ("__residual_reserve__", Decimal("1")),
     )

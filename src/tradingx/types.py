@@ -576,6 +576,94 @@ class ReplaySlippageGenerationResult:
 
 
 @dataclass(frozen=True)
+class BootstrapPositionAllocation:
+    sleeve_id: str
+    symbol: str
+    quantity: Decimal
+    average_cost: Decimal
+    market_value: Decimal
+    allocation_source: str
+    confidence: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResidualPositionAllocation:
+    symbol: str
+    quantity: Decimal
+    average_cost: Decimal
+    market_value: Decimal
+    reason: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SleeveBootstrapAllocationRecord:
+    bootstrap_id: str
+    ledger_genesis_id: str
+    bootstrapped_from_activation_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    position_allocations: tuple[BootstrapPositionAllocation, ...]
+    residual_cash_balance: Decimal
+    residual_positions: tuple[ResidualPositionAllocation, ...]
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SleeveLedgerPosition:
+    sleeve_id: str
+    symbol: str
+    quantity: Decimal
+    average_cost: Decimal
+    realized_pnl_cumulative: Decimal
+
+
+@dataclass(frozen=True)
+class SleevePositionLedgerSnapshot:
+    snapshot_id: str
+    ledger_genesis_id: str
+    active_blueprint_activation_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    sleeve_id: str
+    cash_balance: Decimal
+    positions: tuple[SleeveLedgerPosition, ...]
+    bootstrap_id: str
+
+
+@dataclass(frozen=True)
+class ResidualReserveSnapshot:
+    snapshot_id: str
+    ledger_genesis_id: str
+    active_blueprint_activation_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    cash_balance: Decimal
+    positions: tuple[ResidualPositionAllocation, ...]
+    bootstrap_id: str
+
+
+@dataclass(frozen=True)
+class SessionOpenPortfolioStateRecord:
+    record_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    portfolio_state: PortfolioState
+
+
+@dataclass(frozen=True)
+class SleeveAttributionGapRecord:
+    gap_id: str
+    sleeve_id: str
+    trading_day: str
+    recorded_at_utc: datetime
+    severity: str
+    reason: str
+    evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SleeveDailyAttributionRecord:
     attribution_id: str
     sleeve_id: str
@@ -586,6 +674,12 @@ class SleeveDailyAttributionRecord:
     daily_return: Decimal
     per_symbol_open_weight: tuple[tuple[str, Decimal], ...]
     per_symbol_close_weight: tuple[tuple[str, Decimal], ...]
+    realized_pnl: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    cash_balance: Decimal | None = None
+    calculation_mode: str | None = None
+    bootstrap_confidence: str | None = None
+    ledger_genesis_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1249,6 +1343,7 @@ __all__ = (
     "BenchmarkComparisonRow",
     "BenchmarkOption",
     "BenchmarkCloseSeries",
+    "BootstrapPositionAllocation",
     "BotRuntimeState",
     "BlueprintActivationRecord",
     "BlueprintSleeveBinding",
@@ -1309,19 +1404,26 @@ __all__ = (
     "ReplaySlippageSummary",
     "ReconciliationSnapshot",
     "RecoveryDrillRecord",
+    "ResidualPositionAllocation",
+    "ResidualReserveSnapshot",
     "RegimeSnapshot",
     "RiskControlEvent",
     "RoundTripResult",
     "RuntimeHeartbeatSnapshot",
     "ScalarValue",
+    "SessionOpenPortfolioStateRecord",
     "ServiceCycleSnapshot",
     "ServiceRunResult",
     "ServiceSymbolResult",
     "DriftMonitorVerdictRecord",
+    "SleeveAttributionGapRecord",
+    "SleeveBootstrapAllocationRecord",
     "SleeveContext",
     "SleeveDecompositionRecord",
     "SleeveDailyAttributionRecord",
     "SleeveFailureReason",
+    "SleeveLedgerPosition",
+    "SleevePositionLedgerSnapshot",
     "SleeveTargetWeights",
     "SleeveTrade",
     "StrategyActivationRecord",

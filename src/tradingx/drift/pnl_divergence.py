@@ -27,6 +27,7 @@ def compute_live_vs_backtest_pnl_divergence(
     thresholds: DriftThresholds,
     rolling_window_days: int = 60,
     minimum_live_days: int = 30,
+    has_gap: bool = False,
 ) -> PnlDivergenceVerdict:
     ordered_records = sorted(
         live_attribution_records,
@@ -38,6 +39,15 @@ def compute_live_vs_backtest_pnl_divergence(
         if record.sleeve_id == sleeve_id
     )
     live_returns = tuple(record.daily_return for record in filtered_records)
+    if has_gap:
+        return PnlDivergenceVerdict(
+            sleeve_id=sleeve_id,
+            live_daily_return_series=live_returns,
+            backtest_daily_return_series=(),
+            absolute_delta=Decimal("0"),
+            sharpe_delta_ratio=Decimal("0"),
+            severity="pending",
+        )
     if len(live_returns) < minimum_live_days:
         return PnlDivergenceVerdict(
             sleeve_id=sleeve_id,

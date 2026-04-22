@@ -7,16 +7,63 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
+from tradingx.drift.sleeve_ledger import (
+    build_bootstrap_allocation,
+    build_daily_ledger_result,
+)
 from tradingx.types import (
+    ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    ExecutionLifecycleRecord,
     PortfolioState,
+    ResidualReserveSnapshot,
+    SleeveAttributionGapRecord,
+    SleeveBootstrapAllocationRecord,
     SleeveDailyAttributionRecord,
     SleeveDecompositionRecord,
+    SleevePositionLedgerSnapshot,
     StrategyActivationRecord,
     StrategyCandidate,
 )
 
 
 class AttributionStoreProtocol(Protocol):
+    def latest_sleeve_bootstrap_allocation(
+        self,
+    ) -> SleeveBootstrapAllocationRecord | None: ...
+
+    def latest_sleeve_position_ledger_snapshot(
+        self,
+        *,
+        sleeve_id: str,
+    ) -> SleevePositionLedgerSnapshot | None: ...
+
+    def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None: ...
+
+    def write_sleeve_bootstrap_allocation_record(
+        self,
+        record: SleeveBootstrapAllocationRecord,
+    ) -> object: ...
+
+    def write_sleeve_position_ledger_snapshot(
+        self,
+        record: SleevePositionLedgerSnapshot,
+    ) -> object: ...
+
+    def write_residual_reserve_snapshot(
+        self,
+        record: ResidualReserveSnapshot,
+    ) -> object: ...
+
+    def write_sleeve_attribution_gap_record(
+        self,
+        record: SleeveAttributionGapRecord,
+    ) -> object: ...
+
+    def load_approved_weight_snapshot_by_snapshot_id(
+        self, *, snapshot_id: str
+    ) -> ApprovedWeightSnapshot: ...
+
     def write_sleeve_daily_attribution_record(
         self,
         record: SleeveDailyAttributionRecord,
@@ -31,9 +78,18 @@ class DecompositionStoreProtocol(Protocol):
     ) -> tuple[SleeveDecompositionRecord, ...]: ...
 
 
+class ExecutionStoreProtocol(Protocol):
+    def list_execution_lifecycle_records(
+        self,
+        *,
+        trading_day: str | None = None,
+    ) -> tuple[ExecutionLifecycleRecord, ...]: ...
+
+
 class ActivationGatewayProtocol(Protocol):
     def get_latest_activation(self) -> StrategyActivationRecord | None: ...
     def get_active_candidate(self) -> StrategyCandidate | None: ...
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None: ...
 
 
 def build_sleeve_daily_attribution_record(
@@ -71,11 +127,13 @@ class SleeveAttributionRecorder:
         attribution_store: AttributionStoreProtocol,
         now_provider: Callable[[], datetime],
         decomposition_store: DecompositionStoreProtocol | None = None,
+        execution_store: ExecutionStoreProtocol | None = None,
     ) -> None:
         self._activation_gateway = activation_gateway
         self._store = attribution_store
         self._now_provider = now_provider
         self._decomposition_store = decomposition_store
+        self._execution_store = execution_store
 
     def record_session(
         self,
@@ -91,7 +149,7 @@ class SleeveAttributionRecorder:
                 )
             )
             if decomposition_records:
-                return self._record_from_decomposition(
+                return self._record_from_ledger(
                     trading_day=trading_day,
                     decomposition_records=decomposition_records,
                     open_portfolio_state=open_portfolio_state,
@@ -111,7 +169,110 @@ class SleeveAttributionRecorder:
         self._store.write_sleeve_daily_attribution_record(record)
         return (record,)
 
-    def _record_from_decomposition(
+    def _record_from_ledger(
+        self,
+        *,
+        trading_day: str,
+        decomposition_records: tuple[SleeveDecompositionRecord, ...],
+        open_portfolio_state: PortfolioState,
+        close_portfolio_state: PortfolioState,
+    ) -> tuple[SleeveDailyAttributionRecord, ...]:
+        recorded_at_utc = self._now_provider()
+        activation_getter = getattr(
+            self._activation_gateway,
+            "get_active_blueprint_activation",
+            None,
+        )
+        if not callable(activation_getter):
+            return self._record_from_decomposition_legacy(
+                trading_day=trading_day,
+                decomposition_records=decomposition_records,
+                open_portfolio_state=open_portfolio_state,
+                close_portfolio_state=close_portfolio_state,
+            )
+        active_activation = activation_getter()
+        if active_activation is None:
+            return self._record_from_decomposition_legacy(
+                trading_day=trading_day,
+                decomposition_records=decomposition_records,
+                open_portfolio_state=open_portfolio_state,
+                close_portfolio_state=close_portfolio_state,
+            )
+        sleeve_ids = tuple(
+            sorted(
+                {
+                    entry.sleeve_id
+                    for record in decomposition_records
+                    for entry in record.per_sleeve_target_weights
+                }
+            )
+        )
+        execution_records = (
+            self._execution_store.list_execution_lifecycle_records(
+                trading_day=trading_day
+            )
+            if self._execution_store is not None
+            else ()
+        )
+        bootstrap_record = self._store.latest_sleeve_bootstrap_allocation()
+        opening_snapshots = tuple(
+            snapshot
+            for sleeve_id in sleeve_ids
+            if (
+                snapshot := self._store.latest_sleeve_position_ledger_snapshot(
+                    sleeve_id=sleeve_id
+                )
+            )
+            is not None
+        )
+        opening_reserve = self._store.latest_residual_reserve_snapshot()
+        if (
+            bootstrap_record is None
+            or len(opening_snapshots) != len(sleeve_ids)
+            or opening_reserve is None
+        ):
+            if self._execution_store is None:
+                return ()
+            bootstrap = build_bootstrap_allocation(
+                active_activation=active_activation,
+                snapshot_store=self._store,  # type: ignore[arg-type]
+                open_portfolio_state=open_portfolio_state,
+                historical_execution_records=self._execution_store.list_execution_lifecycle_records(),
+                recorded_at_utc=recorded_at_utc,
+            )
+            bootstrap_record = bootstrap.bootstrap_record
+            opening_snapshots = bootstrap.sleeve_snapshots
+            opening_reserve = bootstrap.residual_reserve_snapshot
+            self._store.write_sleeve_bootstrap_allocation_record(
+                bootstrap.bootstrap_record
+            )
+            for snapshot in bootstrap.sleeve_snapshots:
+                self._store.write_sleeve_position_ledger_snapshot(snapshot)
+            self._store.write_residual_reserve_snapshot(
+                bootstrap.residual_reserve_snapshot
+            )
+
+        result = build_daily_ledger_result(
+            opening_snapshots=opening_snapshots,
+            opening_reserve_snapshot=opening_reserve,
+            bootstrap_record=bootstrap_record,
+            execution_records=execution_records,
+            open_portfolio_state=open_portfolio_state,
+            close_portfolio_state=close_portfolio_state,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            active_blueprint_activation_id=active_activation.activation_id,
+        )
+        for snapshot in result.sleeve_snapshots:
+            self._store.write_sleeve_position_ledger_snapshot(snapshot)
+        self._store.write_residual_reserve_snapshot(result.residual_reserve_snapshot)
+        for record in result.attribution_records:
+            self._store.write_sleeve_daily_attribution_record(record)
+        for gap in result.gap_records:
+            self._store.write_sleeve_attribution_gap_record(gap)
+        return result.attribution_records
+
+    def _record_from_decomposition_legacy(
         self,
         *,
         trading_day: str,
@@ -182,6 +343,7 @@ __all__ = (
     "ActivationGatewayProtocol",
     "AttributionStoreProtocol",
     "DecompositionStoreProtocol",
+    "ExecutionStoreProtocol",
     "SleeveAttributionRecorder",
     "build_sleeve_daily_attribution_record",
 )

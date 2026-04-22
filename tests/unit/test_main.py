@@ -742,8 +742,8 @@ def test_main_runtime_plan_command_writes_plan_artifact(
             )
 
     class FakeActivationGateway:
-        def __init__(self, *, store) -> None:
-            del store
+        def __init__(self, *, store, runtime_snapshot_store=None) -> None:
+            del store, runtime_snapshot_store
 
         def load_or_create_active_records(self, symbols):
             del symbols
@@ -844,8 +844,8 @@ def test_main_runtime_plan_command_reports_blocked_research_strategy(
             )
 
     class FakeActivationGateway:
-        def __init__(self, *, store) -> None:
-            del store
+        def __init__(self, *, store, runtime_snapshot_store=None) -> None:
+            del store, runtime_snapshot_store
 
         def load_or_create_active_records(self, symbols):
             del symbols
@@ -993,7 +993,7 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     monkeypatch.setattr(
         cli,
         "LocalActivationGateway",
-        lambda *, store: FakeRuntimeActivationGateway(activation, snapshot),
+        lambda **kwargs: FakeRuntimeActivationGateway(activation, snapshot),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1149,7 +1149,7 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
 def test_main_prepares_benchmark_closes_artifact(monkeypatch, tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\n" "ALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
         encoding="utf-8",
     )
     output_file = tmp_path / "benchmarks" / "spy-dividend.json"
@@ -1500,7 +1500,7 @@ def test_main_reports_launch_control_center_errors(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\n" "ALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
         encoding="utf-8",
     )
 

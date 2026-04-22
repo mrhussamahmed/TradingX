@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from tradingx.types import ApprovedWeightSnapshot
 
@@ -35,15 +37,15 @@ class ApprovedWeightSnapshotStore:
         if generated_at_utc.tzinfo is None:
             raise ValueError(f"generated_at_utc must be timezone-aware in {path}")
 
-        return ApprovedWeightSnapshot(
-            snapshot_id=str(payload["snapshot_id"]),
-            strategy_id=str(payload["strategy_id"]),
-            status=str(payload["status"]),
-            generated_at_utc=generated_at_utc.astimezone(UTC),
-            minimum_supporting_trades=int(str(payload["minimum_supporting_trades"])),
-            weights={
-                str(key): Decimal(str(value)) for key, value in weights_payload.items()
-            },
+        return approved_weight_snapshot_from_payload(
+            {
+                "snapshot_id": payload["snapshot_id"],
+                "strategy_id": payload["strategy_id"],
+                "status": payload["status"],
+                "generated_at_utc": generated_at_utc.astimezone(UTC),
+                "minimum_supporting_trades": payload["minimum_supporting_trades"],
+                "weights": weights_payload,
+            }
         )
 
     def _parse_yaml(self, path: Path) -> dict[str, object]:
@@ -81,7 +83,33 @@ class ApprovedWeightSnapshotStore:
         return key.strip(), value.strip()
 
 
+def approved_weight_snapshot_from_payload(
+    payload: Mapping[str, Any],
+) -> ApprovedWeightSnapshot:
+    generated_at_utc = payload["generated_at_utc"]
+    if not isinstance(generated_at_utc, datetime):
+        generated_at_utc = datetime.fromisoformat(str(generated_at_utc))
+    if generated_at_utc.tzinfo is None:
+        raise ValueError("generated_at_utc must be timezone-aware.")
+
+    weights_payload = payload["weights"]
+    if not isinstance(weights_payload, Mapping):
+        raise ValueError("weights section must be a mapping.")
+
+    return ApprovedWeightSnapshot(
+        snapshot_id=str(payload["snapshot_id"]),
+        strategy_id=str(payload["strategy_id"]),
+        status=str(payload["status"]),
+        generated_at_utc=generated_at_utc.astimezone(UTC),
+        minimum_supporting_trades=int(str(payload["minimum_supporting_trades"])),
+        weights={
+            str(key): Decimal(str(value)) for key, value in weights_payload.items()
+        },
+    )
+
+
 __all__ = (
+    "approved_weight_snapshot_from_payload",
     "ApprovedWeightSnapshotNotFoundError",
     "ApprovedWeightSnapshotStore",
     "default_approved_weight_snapshot_root",

@@ -421,7 +421,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         operator_store = FilesystemArtifactStore(
             config.runtime.artifact_root / "operator_platform"
         )
-        activation_gateway = LocalActivationGateway(store=operator_store)
+        runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
+        activation_gateway = LocalActivationGateway(
+            store=operator_store,
+            runtime_snapshot_store=runtime_store,
+        )
         activation, _snapshot = activation_gateway.load_or_create_active_records(
             symbols
         )
@@ -491,8 +495,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             operator_store = FilesystemArtifactStore(
                 config.runtime.artifact_root / "operator_platform"
             )
+            runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
             market_data_gateway = build_default_market_data_gateway(config)
-            activation_gateway = LocalActivationGateway(store=operator_store)
+            activation_gateway = LocalActivationGateway(
+                store=operator_store,
+                runtime_snapshot_store=runtime_store,
+            )
             activation, snapshot = activation_gateway.load_or_create_active_records(
                 symbols
             )

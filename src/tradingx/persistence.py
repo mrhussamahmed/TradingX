@@ -16,6 +16,7 @@ from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationRecord,
     BlueprintSleeveBinding,
+    BootstrapPositionAllocation,
     BotRuntimeState,
     ClosedTradeRecord,
     CPCVCohortWindowSummary,
@@ -41,15 +42,23 @@ from tradingx.types import (
     RecoveryDrillRecord,
     ReplaySlippageRecord,
     ReplaySlippageSummary,
+    ResidualPositionAllocation,
+    ResidualReserveSnapshot,
     RiskControlEvent,
     ServiceCycleSnapshot,
+    SessionOpenPortfolioStateRecord,
+    SleeveAttributionGapRecord,
+    SleeveBootstrapAllocationRecord,
     SleeveDailyAttributionRecord,
     SleeveDecompositionRecord,
+    SleeveLedgerPosition,
+    SleevePositionLedgerSnapshot,
     SleeveTargetWeights,
     StrategyActivationRecord,
     TradeIntent,
     ValidationReport,
 )
+from tradingx.weights import approved_weight_snapshot_from_payload
 
 
 def _serialize(value: Any) -> Any:
@@ -276,6 +285,15 @@ class FilesystemArtifactStore:
             snapshot,
         )
 
+    def load_approved_weight_snapshot_by_snapshot_id(
+        self,
+        *,
+        snapshot_id: str,
+    ) -> ApprovedWeightSnapshot:
+        path = self._path_for("model_weight_snapshots", f"{snapshot_id}.json")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return self._deserialize_approved_weight_snapshot(payload)
+
     def write_opportunity_selection_record(
         self,
         record: OpportunitySelectionRecord,
@@ -329,6 +347,30 @@ class FilesystemArtifactStore:
             "execution_lifecycles",
             f"{execution.execution_id}.json",
             execution,
+        )
+
+    def list_execution_lifecycle_records(
+        self,
+        *,
+        trading_day: str | None = None,
+    ) -> tuple[ExecutionLifecycleRecord, ...]:
+        category_dir = self._root_dir / "execution_lifecycles"
+        if not category_dir.exists():
+            return ()
+        records: list[ExecutionLifecycleRecord] = []
+        for path in sorted(category_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = self._deserialize_execution_lifecycle_record(payload)
+            if (
+                trading_day is not None
+                and record.filled_at_utc.date().isoformat() != trading_day
+            ):
+                continue
+            records.append(record)
+        return tuple(
+            sorted(
+                records, key=lambda record: (record.filled_at_utc, record.execution_id)
+            )
         )
 
     def write_closed_trade_record(self, closed_trade: ClosedTradeRecord) -> Path:
@@ -465,6 +507,56 @@ class FilesystemArtifactStore:
             record,
         )
 
+    def write_sleeve_bootstrap_allocation_record(
+        self,
+        record: SleeveBootstrapAllocationRecord,
+    ) -> Path:
+        return self._write_json(
+            "sleeve_bootstrap",
+            f"{record.ledger_genesis_id}.json",
+            record,
+        )
+
+    def write_sleeve_position_ledger_snapshot(
+        self,
+        record: SleevePositionLedgerSnapshot,
+    ) -> Path:
+        return self._write_json(
+            "sleeve_position_ledger",
+            f"{record.trading_day}__{record.snapshot_id}__{record.sleeve_id}.json",
+            record,
+        )
+
+    def write_residual_reserve_snapshot(
+        self,
+        record: ResidualReserveSnapshot,
+    ) -> Path:
+        return self._write_json(
+            "residual_reserve",
+            f"{record.trading_day}__{record.snapshot_id}.json",
+            record,
+        )
+
+    def write_session_open_portfolio_state_record(
+        self,
+        record: SessionOpenPortfolioStateRecord,
+    ) -> Path:
+        return self._write_json(
+            "session_open_portfolio_state",
+            f"{record.trading_day}.json",
+            record,
+        )
+
+    def write_sleeve_attribution_gap_record(
+        self,
+        record: SleeveAttributionGapRecord,
+    ) -> Path:
+        return self._write_json(
+            "sleeve_attribution_gaps",
+            f"{record.sleeve_id}__{record.trading_day}.json",
+            record,
+        )
+
     def write_sleeve_decomposition_record(
         self,
         record: SleeveDecompositionRecord,
@@ -592,6 +684,73 @@ class FilesystemArtifactStore:
         for path in sorted(category_dir.glob(f"{sleeve_id}__*.json")):
             payload = json.loads(path.read_text(encoding="utf-8"))
             records.append(self._deserialize_sleeve_daily_attribution_record(payload))
+        return tuple(records)
+
+    def latest_sleeve_bootstrap_allocation(
+        self,
+    ) -> SleeveBootstrapAllocationRecord | None:
+        category_dir = self._root_dir / "sleeve_bootstrap"
+        if not category_dir.exists():
+            return None
+        latest: SleeveBootstrapAllocationRecord | None = None
+        for path in sorted(category_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = self._deserialize_sleeve_bootstrap_allocation_record(payload)
+            if latest is None or record.recorded_at_utc > latest.recorded_at_utc:
+                latest = record
+        return latest
+
+    def latest_sleeve_position_ledger_snapshot(
+        self,
+        *,
+        sleeve_id: str,
+    ) -> SleevePositionLedgerSnapshot | None:
+        category_dir = self._root_dir / "sleeve_position_ledger"
+        if not category_dir.exists():
+            return None
+        latest: SleevePositionLedgerSnapshot | None = None
+        for path in sorted(category_dir.glob(f"*__{sleeve_id}.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = self._deserialize_sleeve_position_ledger_snapshot(payload)
+            if latest is None or record.recorded_at_utc > latest.recorded_at_utc:
+                latest = record
+        return latest
+
+    def latest_residual_reserve_snapshot(self) -> ResidualReserveSnapshot | None:
+        category_dir = self._root_dir / "residual_reserve"
+        if not category_dir.exists():
+            return None
+        latest: ResidualReserveSnapshot | None = None
+        for path in sorted(category_dir.glob("*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            record = self._deserialize_residual_reserve_snapshot(payload)
+            if latest is None or record.recorded_at_utc > latest.recorded_at_utc:
+                latest = record
+        return latest
+
+    def read_session_open_portfolio_state_record(
+        self,
+        *,
+        trading_day: str,
+    ) -> SessionOpenPortfolioStateRecord | None:
+        path = self._path_for("session_open_portfolio_state", f"{trading_day}.json")
+        if not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return self._deserialize_session_open_portfolio_state_record(payload)
+
+    def list_sleeve_attribution_gap_records(
+        self,
+        *,
+        sleeve_id: str,
+    ) -> tuple[SleeveAttributionGapRecord, ...]:
+        category_dir = self._root_dir / "sleeve_attribution_gaps"
+        if not category_dir.exists():
+            return ()
+        records: list[SleeveAttributionGapRecord] = []
+        for path in sorted(category_dir.glob(f"{sleeve_id}__*.json")):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(self._deserialize_sleeve_attribution_gap_record(payload))
         return tuple(records)
 
     def list_sleeve_decomposition_records(
@@ -736,6 +895,182 @@ class FilesystemArtifactStore:
             open_orders=tuple(str(value) for value in payload["open_orders"]),
         )
 
+    def _deserialize_approved_weight_snapshot(
+        self,
+        payload: dict[str, Any],
+    ) -> ApprovedWeightSnapshot:
+        return approved_weight_snapshot_from_payload(payload)
+
+    def _deserialize_execution_lifecycle_record(
+        self,
+        payload: dict[str, Any],
+    ) -> ExecutionLifecycleRecord:
+        return ExecutionLifecycleRecord(
+            execution_id=str(payload["execution_id"]),
+            intent_id=str(payload["intent_id"]),
+            symbol=str(payload["symbol"]),
+            side=str(payload["side"]),
+            reason_code=str(payload["reason_code"]),
+            reference_price=Decimal(str(payload["reference_price"])),
+            fill_price=Decimal(str(payload["fill_price"])),
+            filled_qty=Decimal(str(payload["filled_qty"])),
+            slippage_bps=Decimal(str(payload["slippage_bps"])),
+            submitted_at_utc=datetime.fromisoformat(str(payload["submitted_at_utc"])),
+            filled_at_utc=datetime.fromisoformat(str(payload["filled_at_utc"])),
+            recovered=bool(payload["recovered"]),
+            bid_price=(
+                Decimal(str(payload["bid_price"]))
+                if payload.get("bid_price") is not None
+                else None
+            ),
+            ask_price=(
+                Decimal(str(payload["ask_price"]))
+                if payload.get("ask_price") is not None
+                else None
+            ),
+            average_daily_volume_30d=(
+                Decimal(str(payload["average_daily_volume_30d"]))
+                if payload.get("average_daily_volume_30d") is not None
+                else None
+            ),
+            sleeve_attributions=tuple(
+                (str(entry[0]), Decimal(str(entry[1])))
+                for entry in payload.get("sleeve_attributions", ())
+            ),
+        )
+
+    def _deserialize_bootstrap_position_allocation(
+        self,
+        payload: dict[str, Any],
+    ) -> BootstrapPositionAllocation:
+        return BootstrapPositionAllocation(
+            sleeve_id=str(payload["sleeve_id"]),
+            symbol=str(payload["symbol"]),
+            quantity=Decimal(str(payload["quantity"])),
+            average_cost=Decimal(str(payload["average_cost"])),
+            market_value=Decimal(str(payload["market_value"])),
+            allocation_source=str(payload["allocation_source"]),
+            confidence=str(payload["confidence"]),
+            evidence_refs=tuple(str(value) for value in payload["evidence_refs"]),
+        )
+
+    def _deserialize_residual_position_allocation(
+        self,
+        payload: dict[str, Any],
+    ) -> ResidualPositionAllocation:
+        return ResidualPositionAllocation(
+            symbol=str(payload["symbol"]),
+            quantity=Decimal(str(payload["quantity"])),
+            average_cost=Decimal(str(payload["average_cost"])),
+            market_value=Decimal(str(payload["market_value"])),
+            reason=str(payload["reason"]),
+            evidence_refs=tuple(str(value) for value in payload["evidence_refs"]),
+        )
+
+    def _deserialize_sleeve_bootstrap_allocation_record(
+        self,
+        payload: dict[str, Any],
+    ) -> SleeveBootstrapAllocationRecord:
+        return SleeveBootstrapAllocationRecord(
+            bootstrap_id=str(payload["bootstrap_id"]),
+            ledger_genesis_id=str(payload["ledger_genesis_id"]),
+            bootstrapped_from_activation_id=str(
+                payload["bootstrapped_from_activation_id"]
+            ),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            position_allocations=tuple(
+                self._deserialize_bootstrap_position_allocation(entry)
+                for entry in payload["position_allocations"]
+            ),
+            residual_cash_balance=Decimal(str(payload["residual_cash_balance"])),
+            residual_positions=tuple(
+                self._deserialize_residual_position_allocation(entry)
+                for entry in payload["residual_positions"]
+            ),
+            notes=tuple(str(value) for value in payload["notes"]),
+        )
+
+    def _deserialize_sleeve_ledger_position(
+        self,
+        payload: dict[str, Any],
+    ) -> SleeveLedgerPosition:
+        return SleeveLedgerPosition(
+            sleeve_id=str(payload["sleeve_id"]),
+            symbol=str(payload["symbol"]),
+            quantity=Decimal(str(payload["quantity"])),
+            average_cost=Decimal(str(payload["average_cost"])),
+            realized_pnl_cumulative=Decimal(str(payload["realized_pnl_cumulative"])),
+        )
+
+    def _deserialize_sleeve_position_ledger_snapshot(
+        self,
+        payload: dict[str, Any],
+    ) -> SleevePositionLedgerSnapshot:
+        return SleevePositionLedgerSnapshot(
+            snapshot_id=str(payload["snapshot_id"]),
+            ledger_genesis_id=str(payload["ledger_genesis_id"]),
+            active_blueprint_activation_id=str(
+                payload["active_blueprint_activation_id"]
+            ),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            sleeve_id=str(payload["sleeve_id"]),
+            cash_balance=Decimal(str(payload["cash_balance"])),
+            positions=tuple(
+                self._deserialize_sleeve_ledger_position(entry)
+                for entry in payload["positions"]
+            ),
+            bootstrap_id=str(payload["bootstrap_id"]),
+        )
+
+    def _deserialize_residual_reserve_snapshot(
+        self,
+        payload: dict[str, Any],
+    ) -> ResidualReserveSnapshot:
+        return ResidualReserveSnapshot(
+            snapshot_id=str(payload["snapshot_id"]),
+            ledger_genesis_id=str(payload["ledger_genesis_id"]),
+            active_blueprint_activation_id=str(
+                payload["active_blueprint_activation_id"]
+            ),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            cash_balance=Decimal(str(payload["cash_balance"])),
+            positions=tuple(
+                self._deserialize_residual_position_allocation(entry)
+                for entry in payload["positions"]
+            ),
+            bootstrap_id=str(payload["bootstrap_id"]),
+        )
+
+    def _deserialize_session_open_portfolio_state_record(
+        self,
+        payload: dict[str, Any],
+    ) -> SessionOpenPortfolioStateRecord:
+        return SessionOpenPortfolioStateRecord(
+            record_id=str(payload["record_id"]),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            portfolio_state=self._deserialize_portfolio_state(
+                payload["portfolio_state"]
+            ),
+        )
+
+    def _deserialize_sleeve_attribution_gap_record(
+        self,
+        payload: dict[str, Any],
+    ) -> SleeveAttributionGapRecord:
+        return SleeveAttributionGapRecord(
+            gap_id=str(payload["gap_id"]),
+            sleeve_id=str(payload["sleeve_id"]),
+            trading_day=str(payload["trading_day"]),
+            recorded_at_utc=datetime.fromisoformat(str(payload["recorded_at_utc"])),
+            severity=str(payload["severity"]),
+            reason=str(payload["reason"]),
+            evidence_refs=tuple(str(value) for value in payload["evidence_refs"]),
+        )
+
     def _deserialize_sleeve_daily_attribution_record(
         self,
         payload: dict[str, Any],
@@ -755,6 +1090,36 @@ class FilesystemArtifactStore:
             per_symbol_close_weight=tuple(
                 (str(item[0]), Decimal(str(item[1])))
                 for item in payload["per_symbol_close_weight"]
+            ),
+            realized_pnl=(
+                Decimal(str(payload["realized_pnl"]))
+                if payload.get("realized_pnl") is not None
+                else None
+            ),
+            unrealized_pnl=(
+                Decimal(str(payload["unrealized_pnl"]))
+                if payload.get("unrealized_pnl") is not None
+                else None
+            ),
+            cash_balance=(
+                Decimal(str(payload["cash_balance"]))
+                if payload.get("cash_balance") is not None
+                else None
+            ),
+            calculation_mode=(
+                str(payload["calculation_mode"])
+                if payload.get("calculation_mode") is not None
+                else None
+            ),
+            bootstrap_confidence=(
+                str(payload["bootstrap_confidence"])
+                if payload.get("bootstrap_confidence") is not None
+                else None
+            ),
+            ledger_genesis_id=(
+                str(payload["ledger_genesis_id"])
+                if payload.get("ledger_genesis_id") is not None
+                else None
             ),
         )
 
@@ -919,6 +1284,11 @@ class FilesystemArtifactStore:
             "gate3_packages",
             "replay_slippage_records",
             "replay_slippage_summaries",
+            "sleeve_bootstrap",
+            "sleeve_position_ledger",
+            "residual_reserve",
+            "session_open_portfolio_state",
+            "sleeve_attribution_gaps",
             "sleeve_daily_attribution",
             "sleeve_decomposition",
         )

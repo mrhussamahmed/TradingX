@@ -1,8 +1,8 @@
 ---
 id: DESIGN-0019
 title: Tranche 2.1 Stage 2 sleeve position ledger attribution
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: active
 created: 2026-04-22
 last_amended: 2026-04-22
 supersedes: null
@@ -14,11 +14,12 @@ author_session: gpt-5-codex-2026-04-22
 
 ## Status
 
-Draft on 2026-04-22. Follow-on design after
+Active on 2026-04-22. Follow-on design after
 [DESIGN-0017](/docs/superpowers/specs/2026-04-22-tranche-2-1-multi-sleeve-live-runtime-wiring-design.md)
 Stage 1 merged at `699fce3` and after the tranche 2.2 Stage 1
-merge at `0a687ba`. Pending user review before implementation
-planning.
+merge at `0a687ba`. The Stage 1 ledger foundation described here is
+now the merged implementation target for the tranche-2.1 Stage 2
+follow-up branch.
 
 ## Purpose
 

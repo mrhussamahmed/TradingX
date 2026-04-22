@@ -77,6 +77,7 @@ class PaperTradingService:
         artifacts: FilesystemArtifactStore,
         metrics: StageMetrics,
         regular_hours_checker: Callable[[datetime], bool],
+        runtime_state_store: FilesystemArtifactStore | None = None,
         now_provider: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[int], None] | None = None,
         monotonic_fn: Callable[[], float] | None = None,
@@ -90,6 +91,7 @@ class PaperTradingService:
         self._loop_controller = loop_controller
         self._portfolio = portfolio
         self._artifacts = artifacts
+        self._runtime_state_store = runtime_state_store or artifacts
         self._metrics = metrics
         self._regular_hours_checker = regular_hours_checker
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
@@ -579,7 +581,7 @@ class PaperTradingService:
             blueprint_activation_id=active_blueprint.activation_id,
             per_sleeve_target_weights=plan.per_sleeve_target_weights,
         )
-        self._artifacts.write_sleeve_decomposition_record(record)
+        self._runtime_state_store.write_sleeve_decomposition_record(record)
 
     def _maybe_narrow_blueprint_after_structural_failures(
         self,
@@ -728,6 +730,7 @@ def build_default_paper_service(
     )
     activation_gateway = LocalActivationGateway(
         store=operator_store,
+        runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
     )
     operator_control_store = OperatorControlStore(config.runtime.data_root / "control")
@@ -735,6 +738,7 @@ def build_default_paper_service(
         market_data=market_data_gateway,
         activation_gateway=activation_gateway,
         artifact_store=paper_store,
+        runtime_state_store=runtime_store,
         operator_halt_store=operator_control_store,
         drift_alarm_gateway=ArtifactBackedDriftAlarmStateReader(store=runtime_store),
         trials_ledger=TrialsLedger(
@@ -745,6 +749,7 @@ def build_default_paper_service(
         loop_controller=build_default_paper_trading_controller(config),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         artifacts=paper_store,
+        runtime_state_store=runtime_store,
         metrics=StageMetrics(namespace=config.runtime.metrics_namespace),
         regular_hours_checker=AlpacaRegularHoursCalendar().is_open,
         portfolio_planner=ActivatedRuntimePlanner(
@@ -761,6 +766,7 @@ def build_runtime_host_paper_service(config: TradingConfig) -> PaperTradingServi
     operator_store = FilesystemArtifactStore(
         config.runtime.artifact_root / "operator_platform"
     )
+    runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
     market_data_gateway = build_default_market_data_gateway(config)
     return build_default_paper_service(
         config,
@@ -769,7 +775,10 @@ def build_runtime_host_paper_service(config: TradingConfig) -> PaperTradingServi
             warmup_service=HistoricalWarmupService(
                 market_data_gateway=market_data_gateway,
             ),
-            activation_gateway=LocalActivationGateway(store=operator_store),
+            activation_gateway=LocalActivationGateway(
+                store=operator_store,
+                runtime_snapshot_store=runtime_store,
+            ),
             operator_store=operator_store,
         ),
     )
