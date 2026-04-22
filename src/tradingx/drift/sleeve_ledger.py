@@ -630,7 +630,13 @@ def _apply_execution(
             evidence_refs=(execution.execution_id,),
         )
 
-    owner_ids = {owner_id for owner_id, _ in attrs}
+    normalized_fraction_by_owner: dict[str, Decimal] = {}
+    for owner_id, fraction in attrs:
+        normalized_fraction_by_owner[owner_id] = (
+            normalized_fraction_by_owner.get(owner_id, Decimal("0")) + fraction
+        )
+
+    owner_ids = set(normalized_fraction_by_owner)
     if RESIDUAL_RESERVE_OWNER_ID in owner_ids and len(owner_ids) > 1:
         return _gap_all_sleeves(
             sleeves=sleeves,
@@ -660,7 +666,16 @@ def _apply_execution(
             evidence_refs=(execution.execution_id,),
         )
 
-    for sleeve_id, fraction in attrs:
+    if execution.side not in {"buy", "sell", "reduce"}:
+        return _gap_all_sleeves(
+            sleeves=sleeves,
+            trading_day=trading_day,
+            recorded_at_utc=recorded_at_utc,
+            reason="unsupported_execution_side",
+            evidence_refs=(execution.execution_id,),
+        )
+
+    for sleeve_id in normalized_fraction_by_owner:
         if sleeve_id not in sleeves:
             return _gap_all_sleeves(
                 sleeves=sleeves,
@@ -669,6 +684,22 @@ def _apply_execution(
                 reason="unknown_owner_id",
                 evidence_refs=(execution.execution_id,),
             )
+
+    if execution.side in {"sell", "reduce"}:
+        for sleeve_id, fraction in normalized_fraction_by_owner.items():
+            attributed_quantity = execution.filled_qty * fraction
+            position = sleeves[sleeve_id].positions.get(execution.symbol)
+            available_quantity = Decimal("0") if position is None else position.quantity
+            if attributed_quantity > available_quantity + _ROUNDING_TOLERANCE:
+                return _gap_all_sleeves(
+                    sleeves=sleeves,
+                    trading_day=trading_day,
+                    recorded_at_utc=recorded_at_utc,
+                    reason="negative_position_violation",
+                    evidence_refs=(execution.execution_id,),
+                )
+
+    for sleeve_id, fraction in normalized_fraction_by_owner.items():
         attributed_quantity = execution.filled_qty * fraction
         notional = attributed_quantity * execution.fill_price
         sleeve = sleeves[sleeve_id]
@@ -692,18 +723,6 @@ def _apply_execution(
                 else execution.fill_price
             )
             continue
-        if execution.side not in {"sell", "reduce"}:
-            continue
-        if attributed_quantity > position.quantity + _ROUNDING_TOLERANCE:
-            return {
-                sleeve_id: _gap_record(
-                    sleeve_id=sleeve_id,
-                    trading_day=trading_day,
-                    recorded_at_utc=recorded_at_utc,
-                    reason="negative_position_violation",
-                    evidence_refs=(execution.execution_id,),
-                )
-            }
         realized = (execution.fill_price - position.average_cost) * attributed_quantity
         position.quantity = max(Decimal("0"), position.quantity - attributed_quantity)
         position.realized_pnl_cumulative += realized

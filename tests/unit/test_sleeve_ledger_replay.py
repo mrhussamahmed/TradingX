@@ -132,6 +132,38 @@ def _bootstrap_exact_history(
     return runtime_store, open_state, bootstrap
 
 
+def _bootstrap_blueprint_fallback(
+    tmp_path: Path,
+):
+    runtime_store = FilesystemArtifactStore(tmp_path / "runtime-fallback")
+    blueprint_path = tmp_path / "bp-fallback.yaml"
+    _write_blueprint(blueprint_path)
+    _write_snapshots(runtime_store)
+    open_state = PortfolioState(
+        as_of_utc=datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+        cash=Decimal("1000"),
+        equity=Decimal("2000"),
+        buying_power=Decimal("3000"),
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("10"),
+                average_entry_price=Decimal("100"),
+                market_value=Decimal("1000"),
+            ),
+        ),
+        open_orders=(),
+    )
+    bootstrap = build_bootstrap_allocation(
+        active_activation=_active_activation(blueprint_path),
+        snapshot_store=runtime_store,
+        open_portfolio_state=open_state,
+        historical_execution_records=(),
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+    )
+    return runtime_store, open_state, bootstrap
+
+
 def test_bootstrap_uses_exact_history_before_blueprint_fallback(tmp_path) -> None:
     runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
     blueprint_path = tmp_path / "bp.yaml"
@@ -334,3 +366,106 @@ def test_invalid_reserve_only_fraction_fails_closed_for_all_active_sleeves(
         "vol-target-v1",
     }
     assert {gap.reason for gap in result.gap_records} == {"fraction_sum_invalid"}
+
+
+def test_multi_owner_sell_failure_rolls_back_and_gaps_all_sleeves(tmp_path) -> None:
+    _, open_state, bootstrap = _bootstrap_blueprint_fallback(tmp_path)
+    close_state = PortfolioState(
+        as_of_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        cash=Decimal("1000"),
+        equity=Decimal("2000"),
+        buying_power=Decimal("3000"),
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("10"),
+                average_entry_price=Decimal("100"),
+                market_value=Decimal("1000"),
+            ),
+        ),
+        open_orders=(),
+    )
+
+    result = build_daily_ledger_result(
+        opening_snapshots=bootstrap.sleeve_snapshots,
+        opening_reserve_snapshot=bootstrap.residual_reserve_snapshot,
+        bootstrap_record=bootstrap.bootstrap_record,
+        execution_records=(
+            ExecutionLifecycleRecord(
+                execution_id="exec-partial-overdraw",
+                intent_id="intent-partial-overdraw",
+                symbol="SPY",
+                side="sell",
+                reason_code="exit",
+                reference_price=Decimal("100"),
+                fill_price=Decimal("100"),
+                filled_qty=Decimal("10"),
+                slippage_bps=Decimal("0"),
+                submitted_at_utc=datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
+                filled_at_utc=datetime(2026, 4, 22, 15, 1, tzinfo=UTC),
+                recovered=False,
+                sleeve_attributions=(
+                    ("trend-following-v1", Decimal("0.5")),
+                    ("vol-target-v1", Decimal("0.5")),
+                ),
+            ),
+        ),
+        open_portfolio_state=open_state,
+        close_portfolio_state=close_state,
+        trading_day="2026-04-22",
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        active_blueprint_activation_id="activation-1",
+    )
+
+    assert result.attribution_records == ()
+    assert {gap.sleeve_id for gap in result.gap_records} == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    assert {gap.reason for gap in result.gap_records} == {"negative_position_violation"}
+    closing_by_sleeve = {
+        snapshot.sleeve_id: snapshot for snapshot in result.sleeve_snapshots
+    }
+    assert closing_by_sleeve["trend-following-v1"].positions[0].quantity == Decimal("6")
+    assert closing_by_sleeve["vol-target-v1"].positions[0].quantity == Decimal("4")
+    assert result.residual_reserve_snapshot.cash_balance == Decimal("1000")
+
+
+def test_unsupported_sleeve_execution_side_fails_closed_for_all_sleeves(
+    tmp_path,
+) -> None:
+    _, open_state, bootstrap = _bootstrap_exact_history(tmp_path)
+    result = build_daily_ledger_result(
+        opening_snapshots=bootstrap.sleeve_snapshots,
+        opening_reserve_snapshot=bootstrap.residual_reserve_snapshot,
+        bootstrap_record=bootstrap.bootstrap_record,
+        execution_records=(
+            ExecutionLifecycleRecord(
+                execution_id="exec-hold",
+                intent_id="intent-hold",
+                symbol="SPY",
+                side="hold",
+                reason_code="malformed",
+                reference_price=Decimal("100"),
+                fill_price=Decimal("100"),
+                filled_qty=Decimal("1"),
+                slippage_bps=Decimal("0"),
+                submitted_at_utc=datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
+                filled_at_utc=datetime(2026, 4, 22, 15, 1, tzinfo=UTC),
+                recovered=False,
+                sleeve_attributions=(("trend-following-v1", Decimal("1")),),
+            ),
+        ),
+        open_portfolio_state=open_state,
+        close_portfolio_state=open_state,
+        trading_day="2026-04-22",
+        recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        active_blueprint_activation_id="activation-1",
+    )
+
+    assert result.attribution_records == ()
+    assert {gap.sleeve_id for gap in result.gap_records} == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    assert {gap.reason for gap in result.gap_records} == {"unsupported_execution_side"}
