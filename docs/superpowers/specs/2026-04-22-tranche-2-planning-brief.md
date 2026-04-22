@@ -149,11 +149,26 @@ and cannot be re-opened without a new BRIEF amendment.
 
 ### D1 — Activation authority unit
 
-**Resolved:** **Blueprint-as-a-unit.** The operator signs off
-on a `PortfolioBlueprint` (the 1.4 artifact) as the atomic
-activation unit. A blueprint names its constituent sleeves and
-the `ApprovedWeightSnapshot` each sleeve should use; approval
-of the blueprint implies approval of those snapshots.
+**Resolved:** **Blueprint-as-a-unit; the blueprint artifact
+carries the strategy bindings directly** (Codex round-2 P1 fix).
+The operator signs off on a single `PortfolioBlueprint` file
+that names its constituent sleeves **and** the strategy_id
+each sleeve is bound to. The 1.4 `SleeveRiskBudget` dataclass
+gains an additive `strategy_id: str | None = None` field
+(defaults to `sleeve_id` when omitted, preserving existing
+single-strategy deployments). Approval of the blueprint file
+is approval of those bindings — there is no separate bindings
+artifact to sign off on.
+
+Concretely: `PortfolioBlueprint.sleeve_budgets: tuple[SleeveRiskBudget, ...]`
+is the only artifact the operator reviews. Each `SleeveRiskBudget`
+now records `(sleeve_id, strategy_id, budget_fraction, max_corr)`.
+Activation reads the effective `strategy_id` (either the
+explicit field or `sleeve_id` as fallback), resolves it through
+`ApprovedWeightSnapshotStore.load_by_strategy_id(...)`, and
+captures the resulting `snapshot_id` on the activation record.
+The activation call site at W2 takes the blueprint alone — no
+companion bindings argument.
 
 **Per-sleeve overrides remain available** via the existing
 `OperatorControlStore.halt_sleeve(sleeve_id, reason)` action —
@@ -162,9 +177,16 @@ without tearing the whole blueprint down. That preserves
 operational flexibility while keeping activation authority
 cleanly scoped.
 
-**Rejected alternative:** per-sleeve activation with the
-blueprint layered on top. Would require two activation records
-per running blueprint and duplicate audit paths.
+**Rejected alternatives:**
+- Per-sleeve activation with the blueprint layered on top →
+  two activation records per running blueprint; duplicate
+  audit paths.
+- A separate `BlueprintActivationSpec` artifact that bundles
+  blueprint + bindings → reopens the authority boundary
+  (operator now signs off on two artifacts to activate one
+  thing); the round-1 draft's `sleeve_to_strategy_bindings`
+  activation argument was this pattern in disguise. The
+  shipped blueprint file IS the signed-off unit.
 
 ### D2 — Hard halt scope
 
@@ -186,28 +208,32 @@ ambiguous clearance semantics.
 
 **Resolved:** **Blueprint references N existing
 `ApprovedWeightSnapshot`s by `strategy_id`** (Codex round-1 P1
-fix). Each sleeve keeps its own `ApprovedWeightSnapshot` at
-the existing path
-[`config/strategy/weights/<strategy_id>.yaml`](/src/tradingx/weights.py:22);
-the blueprint composes them by recording `(sleeve_id,
-strategy_id)` pairs. Lookup is via the already-shipped
-`ApprovedWeightSnapshotStore.load(strategy_id=...)` —
-no new indexing artifact, no change to the committed-YAML
-storage contract. The existing offline operator-review workflow
-is untouched: the operator reviews and approves
-per-strategy YAML files; a blueprint is a pure composition
-artifact that bundles references to those files.
+fix + round-2 P2 API-naming fix). Each sleeve keeps its own
+`ApprovedWeightSnapshot` at the existing path
+[`config/strategy/weights/<strategy_id>.yaml`](/src/tradingx/weights.py:22).
+Per D1 above, the blueprint file carries the `(sleeve_id,
+strategy_id)` binding directly on each `SleeveRiskBudget` row
+— no new artifact. Lookup is via the already-shipped
+`ApprovedWeightSnapshotStore.load_by_strategy_id(strategy_id)`
+method — no new indexing artifact, no change to the
+committed-YAML storage contract. The existing offline
+operator-review workflow is untouched: the operator reviews
+and approves per-strategy YAML files; a blueprint is a pure
+composition artifact that bundles references to those files.
 
 **Audit capture of snapshot identity at activation time.**
 At the moment a blueprint activates, the gateway reads each
 bound strategy's current approved snapshot via
-`ApprovedWeightSnapshotStore.load(strategy_id)`, captures the
-resolved `ApprovedWeightSnapshot.snapshot_id`, and persists
-both `strategy_id` (for future lookup) and `captured_snapshot_id`
-(for audit/reproducibility) on the `BlueprintActivationRecord`.
-Subsequent snapshot updates to the same strategy_id do not
-retroactively rewrite active activation records — the captured
-snapshot_id pins what was approved when.
+`ApprovedWeightSnapshotStore.load_by_strategy_id(strategy_id)`,
+captures the resolved `ApprovedWeightSnapshot.snapshot_id`,
+and persists both `strategy_id` (for future lookup) and
+`captured_snapshot_id` (for audit/reproducibility) on the
+`BlueprintActivationRecord`. Subsequent snapshot updates to
+the same strategy_id do not retroactively rewrite active
+activation records — the captured snapshot_id pins what was
+approved when. The activation's identity (`activation_id`)
+changes whenever bindings OR captured snapshot identities
+change, which is what W6's regeneration trigger keys on.
 
 **Rejected alternatives:**
 - A new `PortfolioWeightSnapshot` type bundling multiple

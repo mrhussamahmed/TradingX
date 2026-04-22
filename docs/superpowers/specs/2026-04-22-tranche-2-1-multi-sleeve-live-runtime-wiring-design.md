@@ -193,7 +193,11 @@ When the blueprint narrows from two-sleeve to single-sleeve
   with `operator_visible=True`.
 - An `OperatorAlert(category="blueprint_narrowed", severity="warning")`
   whose summary names the removed sleeve and the trigger
-  (operator halt / drift critical / regime stressed).
+  (operator halt / critical drift alarm / trial-summary Sharpe
+  gate firing — the three structural conditions the shipped
+  `SleeveRuntimeController` actually terminates on; regime-
+  stressed exposure is explicitly NOT a narrowing trigger per
+  BRIEF-0002 D4, see W7).
 - A new `BlueprintActivationRecord` with the narrowed
   blueprint; the prior record transitions to `status="superseded"`.
 
@@ -278,8 +282,15 @@ for persisted payloads predating 2.1.
 
 ### Modified files
 
-- `src/tradingx/types.py` — three new dataclasses; four
-  fields on existing records (defaults preserve compat).
+- `src/tradingx/types.py` — three new dataclasses
+  (`SleeveTargetWeights`, `BlueprintActivationRecord`,
+  `SleeveDecompositionRecord`); `sleeve_attributions` /
+  entry/exit variants + `per_sleeve_target_weights` added to
+  existing records (defaults preserve compat).
+- `src/tradingx/portfolio/blueprint.py` — additive
+  `strategy_id: str | None = None` on `SleeveRiskBudget`;
+  helper `effective_strategy_id(budget)` co-located so every
+  consumer uses the same fallback rule (per D1 round-2 fix).
 - `src/tradingx/runtime_portfolio.py` — `RuntimePortfolioPlanner`
   emits sleeve decomposition when given a blueprint; the
   legacy single-strategy path still emits the aggregate only.
@@ -293,11 +304,12 @@ for persisted payloads predating 2.1.
 - `src/tradingx/service.py` — per-cycle call to the new
   `build_portfolio_cycle_target_weights` when a blueprint is
   active; persist the decomposition sidecar; tag intents with
-  `sleeve_id` from the decomposition.
+  `sleeve_attributions` from the decomposition.
 - `src/tradingx/persistence.py` — writers + readers for
   `BlueprintActivationRecord` and `SleeveDecompositionRecord`;
   update intent + execution + closed-trade writers to accept
-  the new `sleeve_id` field.
+  the new `sleeve_attributions` / `entry_sleeve_attributions`
+  / `exit_sleeve_attributions` fields.
 - `src/tradingx/drift/attribution.py` — when a
   `SleeveDecompositionRecord` exists for the session's
   trading day, prefer decomposition-based attribution over
@@ -417,39 +429,65 @@ to drift out of sync.
 - Modify: `src/tradingx/persistence.py` (writer + reader).
 - Create: `tests/unit/test_blueprint_activation.py`.
 
-**Contract (Codex round-1 P1 fix — bindings keyed by
-`strategy_id` to match the existing store).**
+**Contract (Codex round-1 P1 + round-2 P1 fixes). Blueprint
+is the signed-off unit; bindings are carried on the blueprint
+itself, not passed alongside at activation time.**
+
+Per BRIEF-0003 D1 (round-2 amendment), 1.4's `SleeveRiskBudget`
+gains an optional `strategy_id: str | None = None` field. When
+`None`, effective strategy_id falls back to `sleeve_id` —
+which matches both shipped sleeves today. Operators who want
+to bind a sleeve to a differently-named strategy YAML set the
+field explicitly in the blueprint file. This is the ONLY
+additive change to 1.4's shipped artifacts.
+
+```python
+# src/tradingx/portfolio/blueprint.py (additive field)
+
+@dataclass(frozen=True)
+class SleeveRiskBudget:
+    sleeve_id: str
+    budget_fraction_of_equity: Decimal
+    max_correlation_with_other_sleeves: Decimal
+    strategy_id: str | None = None  # NEW — defaults to sleeve_id
+
+
+def effective_strategy_id(budget: SleeveRiskBudget) -> str:
+    """Helper: use the explicit binding when provided, else
+    fall back to sleeve_id. Lives in blueprint.py so every
+    consumer uses the same resolution rule.
+    """
+    return budget.strategy_id or budget.sleeve_id
+```
 
 ```python
 # src/tradingx/types.py (addition)
 
 @dataclass(frozen=True)
 class BlueprintSleeveBinding:
-    """One row of a blueprint's activation bindings.
+    """Activation-time snapshot of a sleeve's binding.
 
-    Matches the shipped ApprovedWeightSnapshotStore at
-    src/tradingx/weights.py, which resolves approved weights
-    by strategy_id (one committed YAML per strategy). The
+    Captured when the blueprint activates. The strategy_id
+    equals effective_strategy_id(budget) at activation time.
     captured_snapshot_id is the ApprovedWeightSnapshot.snapshot_id
-    read at activation time — pins which snapshot was approved
-    when, so subsequent updates to the same strategy_id don't
-    retroactively rewrite the activation's audit trail.
+    read via ApprovedWeightSnapshotStore.load_by_strategy_id —
+    pins audit identity so subsequent YAML edits don't
+    retroactively rewrite the activation record.
     """
 
     sleeve_id: str
-    strategy_id: str          # lookup key for ApprovedWeightSnapshotStore
-    captured_snapshot_id: str  # audit-time snapshot identity
+    strategy_id: str
+    captured_snapshot_id: str
 
 
 @dataclass(frozen=True)
 class BlueprintActivationRecord:
     activation_id: str
     blueprint_id: str
-    # Constituent sleeves + each's bound strategy and captured
-    # snapshot identity at activation time. Preserves D3: the
-    # blueprint references N snapshots via the existing
-    # ApprovedWeightSnapshotStore lookup path; no new indexing
-    # artifact, no bundled snapshot type.
+    # Per-sleeve bindings captured at activation time from the
+    # blueprint's SleeveRiskBudget rows + the approved-weight
+    # store lookups. Preserves D3: no new indexing artifact,
+    # no bundled snapshot type, no separate bindings argument.
     sleeve_activation_bindings: tuple[BlueprintSleeveBinding, ...]
     status: str  # "active" | "superseded" | "halted"
     approved_at_utc: datetime
@@ -461,7 +499,8 @@ class BlueprintActivationRecord:
     supersedes_activation_id: str | None = None
 ```
 
-**`LocalActivationGateway` additions:**
+**`LocalActivationGateway` additions (blueprint alone — no
+bindings argument).**
 
 ```python
 class LocalActivationGateway:
@@ -471,28 +510,39 @@ class LocalActivationGateway:
         self,
         *,
         blueprint: PortfolioBlueprint,
-        sleeve_to_strategy_bindings: tuple[tuple[str, str], ...],
         operator_identifier: str,
         source_blueprint_path: Path,
     ) -> BlueprintActivationRecord:
         """Load the latest non-superseded blueprint record if
         present; otherwise create one.
 
-        Validation:
-        - Every sleeve in blueprint.sleeve_budgets MUST have a
-          matching (sleeve_id, strategy_id) entry in
-          sleeve_to_strategy_bindings.
-        - For each bound strategy_id, call
-          self._snapshot_store.load(strategy_id) via the
-          existing ApprovedWeightSnapshotStore contract. The
-          returned ApprovedWeightSnapshot.snapshot_id is
-          captured as captured_snapshot_id on the binding.
-        - If any strategy_id fails to resolve, raise
-          BlueprintActivationValidationError; no record
-          persisted.
+        The blueprint file is the atomic signed-off unit (D1);
+        no companion bindings argument.
 
-        The blueprint activates against the store's current
-        resolution; captured_snapshot_id pins reproducibility.
+        Activation procedure:
+        1. For each SleeveRiskBudget in blueprint.sleeve_budgets:
+           compute effective_strategy_id (explicit field, else
+           sleeve_id).
+        2. Call
+           self._snapshot_store.load_by_strategy_id(strategy_id)
+           for each bound strategy. If any lookup fails, raise
+           BlueprintActivationValidationError; no record
+           persisted.
+        3. Capture the resolved
+           ApprovedWeightSnapshot.snapshot_id as
+           captured_snapshot_id for each binding.
+        4. Persist the BlueprintActivationRecord with a new
+           activation_id. activation_id is a fresh uuid each
+           call, so any change to the binding set (new
+           strategy_id; new snapshot identity for the same
+           strategy_id after a YAML edit; new blueprint_id)
+           yields a distinct activation_id. W6's regeneration
+           trigger keys on this.
+
+        Idempotency: if the latest non-superseded record has
+        identical blueprint_id AND identical bindings
+        (including captured_snapshot_ids), return it unchanged
+        instead of writing a duplicate.
         """
 
     def get_active_blueprint_activation(
@@ -515,44 +565,53 @@ class LocalActivationGateway:
         """
 ```
 
-**Why `(sleeve_id, strategy_id)` and not `(sleeve_id, snapshot_id)`.**
-The shipped `ApprovedWeightSnapshotStore.load` at
-[weights.py:22](/src/tradingx/weights.py:22) resolves committed
-YAML files by `strategy_id`; there is no `snapshot_id`-keyed
-index. Using `strategy_id` as the binding key keeps the
-existing storage contract and operator-review workflow
-untouched (operators review and commit
-`config/strategy/weights/<strategy_id>.yaml`). Reproducibility
-is handled by capturing `snapshot_id` at activation time — the
-activation record is audit-immutable even if the underlying
-YAML is edited later.
+**Why `SleeveRiskBudget.strategy_id` and not a separate
+bindings artifact.** Per BRIEF-0003 D1 (round-2), the operator
+signs off on exactly one artifact — the blueprint file. Any
+"blueprint + bindings" composite would split the authority
+boundary across two artifacts and require the operator to
+co-sign both. Adding `strategy_id` to `SleeveRiskBudget` puts
+the binding on the same row as the budget, so the blueprint
+YAML the operator commits already contains the full activation
+contract. For the two shipped sleeves where
+`sleeve_id == strategy_id`, operators can omit the field and
+the fallback (`strategy_id = sleeve_id`) preserves existing
+deployments with zero migration.
 
-**For the two shipped sleeves today, `sleeve_id == strategy_id`
-(both equal `trend-following-v1` / `vol-target-v1`).** The
-two-field binding is redundant for the current deployment but
-keeps the design clean if a future sleeve were ever backed by
-a strategy whose approved-snapshot file lives under a
-different `strategy_id`.
+**Why `ApprovedWeightSnapshotStore.load_by_strategy_id` not
+`.load`.** The shipped store method name is
+`load_by_strategy_id` — see
+[weights.py:22](/src/tradingx/weights.py:22). The round-1 draft
+used `.load` as shorthand; that was a naming drift, not a new
+method. All spec references in 2.1 now match the shipped API.
 
 **Tests cover:**
 
-- Activating a fresh blueprint with bindings
-  `(("trend-following-v1", "trend-following-v1"),
-  ("vol-target-v1", "vol-target-v1"))` → record persisted
-  with status="active" and captured_snapshot_ids populated
-  from `ApprovedWeightSnapshotStore.load(strategy_id)` for
-  each binding.
-- Activating when already active with the same blueprint_id +
-  same bindings → returns the existing record unchanged
-  (idempotent).
+- Activating a fresh blueprint where both `SleeveRiskBudget`
+  rows omit `strategy_id` → effective strategy_id falls back
+  to sleeve_id for each; record persisted with
+  captured_snapshot_ids resolved via
+  `ApprovedWeightSnapshotStore.load_by_strategy_id`.
+- Activating a blueprint where one `SleeveRiskBudget.strategy_id`
+  is set explicitly (different from sleeve_id) → binding
+  honors the explicit value; lookup uses the explicit
+  strategy_id.
+- Idempotency: activating the same blueprint twice when no
+  YAML changes occurred → returns the existing record.
+- Re-activating after a YAML edit to a bound `strategy_id`
+  (same blueprint_id, same sleeve_id, but new
+  `ApprovedWeightSnapshot.snapshot_id` from the edit) →
+  **new** activation_id persisted, distinct from the prior
+  one, with captured_snapshot_id reflecting the new YAML.
+  This is the exact regression that W6's activation-change
+  trigger keys on.
 - Activating a blueprint whose bound strategy_id has no
   committed YAML → raises `BlueprintActivationValidationError`
-  and no record persisted. Exercised with a missing
-  `config/strategy/weights/<strategy_id>.yaml`.
+  and no record persisted.
 - Captured `snapshot_id` on the binding equals
-  `ApprovedWeightSnapshotStore.load(strategy_id).snapshot_id`
-  at activation time — regression test asserts the audit
-  pin holds even after a subsequent YAML edit.
+  `ApprovedWeightSnapshotStore.load_by_strategy_id(strategy_id).snapshot_id`
+  at activation time — audit pin holds even after subsequent
+  YAML edits.
 - `get_active_blueprint_activation` returns the latest active
   record; returns None after supersession with no replacement.
 - `supersede_active_blueprint` atomically writes the new
@@ -820,19 +879,45 @@ labeling could not have supported this report; fractions do.
   `force_rebuild` parameter to the writer helpers).
 - Create: `tests/unit/test_drift_artifact_regeneration.py`.
 
-**Activation-change detection.** The automation runner at
-`build_default_market_day_automation_runner` gains a small
-"last seen blueprint_id" state. On each runner build, compare
-the current `BlueprintActivationRecord.blueprint_id` to the
-recorded previous value (persisted at
-`{artifact_root}/drift/last_activation_blueprint.json`). If
-different, invoke:
+**Activation-change detection (Codex round-2 P1 fix).** The
+round-1 draft keyed regeneration on `blueprint_id`. That
+wouldn't cover the case where the *same* blueprint_id is
+re-activated after a `ApprovedWeightSnapshot` YAML edit — a
+legitimate change to the live reference basis would skip
+regeneration and leave the drift reference stale against the
+new snapshot identities. D3's `captured_snapshot_id` audit
+pin is load-bearing precisely because activations can differ
+without the blueprint_id changing.
 
-- `_load_or_build_reference_snapshot(..., force_rebuild=True)`
-  — rebuild the drift reference distribution against the
-  new blueprint's sleeve set.
-- `_ensure_backtest_reference_returns(..., force_rebuild=True)`
-  — regenerate per-sleeve backtest reference returns.
+The detector now keys on `activation_id` — which is freshly
+minted on every new `BlueprintActivationRecord` (W2 contract).
+Because activation_id changes whenever blueprint_id changes,
+whenever bindings change, OR whenever captured_snapshot_ids
+change, keying on it covers all three drift sources with one
+comparison.
+
+Persistence: `{artifact_root}/drift/last_activation.json`
+records `{"activation_id": "<uuid>"}`. On each runner build:
+
+```python
+last_seen_path = artifact_root / "drift" / "last_activation.json"
+current_activation = activation_gateway.get_active_blueprint_activation()
+
+if current_activation is not None:
+    current_id = current_activation.activation_id
+    last_seen_id = _read_last_seen_activation_id(last_seen_path)
+    if last_seen_id != current_id:
+        _load_or_build_reference_snapshot(..., force_rebuild=True)
+        _ensure_backtest_reference_returns(..., force_rebuild=True)
+        last_seen_path.write_text(
+            json.dumps({"activation_id": current_id}, indent=2),
+            encoding="utf-8",
+        )
+```
+
+Legacy single-strategy mode (no active blueprint) leaves the
+last_seen file untouched; artifact generation falls back to
+the 1.5 first-boot behavior.
 
 **Recalibration-trigger integration.** When
 `OperatorControlStore.recalibrate_drift_reference(snapshot_id)`
@@ -844,13 +929,25 @@ path), then deletes the pending file.
 
 **Tests cover:**
 
-- Build → blueprint_id==A → build-time generates reference
-  + backtest artifacts + writes last_activation.
-- Subsequent build → blueprint_id==A → no regeneration (idempotent).
-- Subsequent build → blueprint_id==B → regeneration triggered;
-  old artifacts overwritten; last_activation updated.
+- Build → activation_id==A1 (blueprint_id==X) → generates
+  reference + backtest artifacts + writes last_activation
+  with `{"activation_id": "A1"}`.
+- Subsequent build → activation_id==A1 → no regeneration
+  (idempotent).
+- Subsequent build → activation_id==A2 (blueprint_id==Y, new
+  blueprint) → regeneration triggered; last_activation updated
+  to A2.
+- **Round-2 regression:** Subsequent build →
+  activation_id==A3 (blueprint_id==X — SAME as A1 —
+  re-activated after a YAML edit produced a new
+  captured_snapshot_id for one of the bound strategies) →
+  regeneration triggered; last_activation updated to A3.
+  This is the case the blueprint_id-only detector would have
+  missed.
 - `recalibrate_drift_reference` called → pending file written
   → next build regenerates → pending file deleted.
+- Legacy single-strategy mode (no active blueprint) → falls
+  back to 1.5 first-boot generation; last_activation untouched.
 
 ### W7 — Single-sleeve fallback / rollback path
 
