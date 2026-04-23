@@ -51,7 +51,7 @@ true:
 |---|---|---|---|---|---|
 | 1 | Gate 4 live enablement development | Development | Yes | Current `main` only | Merged live-enable code behind fail-closed controls |
 | 2 | Gate 2 robustness evidence | Evidence | Yes | Current `main` only | Gate 2 validation report |
-| 3 | Gate 3 paper evidence | Evidence / calendar time | Almost — after one narrow report-path fix | Current `main` + a narrow Gate 3 two-sleeve reference fix | Gate 3 validation report + package |
+| 3 | Gate 3 paper evidence | Evidence / calendar time | Almost — after one small-but-real report-path fix tranche | Current `main` + a Gate 3 two-sleeve evidence-reader fix | Gate 3 validation report + package |
 | 4 | Gate 4 operational sign-off evidence | Operational evidence | No, final lane | Gates 0–3 passing evidence + Gate 4 code merged | Live-enablement checklist + sign-off package |
 
 ## Dependency graph
@@ -61,13 +61,15 @@ true:
   independently of Gate 4 coding.
 - **Gate 3 paper evidence** can begin operationally on the current
   two-sleeve paper runtime, but the governed report/package builder
-  still needs one narrow prerequisite fix: the shipped Gate 3 readiness
-  path defaults to the legacy single-strategy reference
-  `baseline-long-only-v1` in `src/tradingx/gate3.py`, and the CLI/web
-  entrypoints still call that path without overriding it. So the runtime
-  can keep accruing evidence now, but the formal Gate 3 report/package
-  lane should not be considered clean until that reference-path fix is
-  merged.
+  still needs one prerequisite fix tranche: the shipped Gate 3
+  readiness path both (a) defaults to the legacy single-strategy
+  reference `baseline-long-only-v1` in `src/tradingx/gate3.py`, and
+  (b) still aggregates whole-book `execution_lifecycles` and
+  `closed_trades` instead of building the per-sleeve live fill/notional
+  profile that the two-sleeve design expects. So the runtime can keep
+  accruing evidence now, but the formal Gate 3 report/package lane
+  should not be considered clean until that governed per-sleeve reader
+  fix is merged.
 - **Gate 4 operational sign-off evidence** must wait until:
   - Gate 2 evidence is complete,
   - Gate 3 evidence is complete,
@@ -244,10 +246,16 @@ constraint is runtime evidence accumulation, not coding.
 **Important correction:** on current `main`, the evidence accumulation
 can start immediately, but the formal Gate 3 report/package seam is not
 yet fully aligned with the two-sleeve runtime. The current
-`build_gate3_readiness_report(...)` default still derives expectations
-from `baseline-long-only-v1`, and the shipped CLI/web entrypoints call
-that path without overriding the candidate. Treat fixing that reference
-path as a narrow prerequisite for the governed Gate 3 evidence lane.
+`build_gate3_readiness_report(...)` path still:
+
+- defaults to `baseline-long-only-v1` for its reference metrics; and
+- aggregates the whole book's `execution_lifecycles` / `closed_trades`
+  instead of deriving per-sleeve live fill profiles from
+  `sleeve_attributions`, even though the two-sleeve design explicitly
+  requires that comparison model.
+
+Treat fixing that per-sleeve reader/report seam as a small-but-real
+prerequisite tranche for the governed Gate 3 evidence lane.
 
 ### Goal
 
@@ -262,9 +270,12 @@ artifacts.
    - at least 100 closed trades,
    whichever comes first.
 2. Patch the Gate 3 report/package path so it evaluates the real
-   two-sleeve runtime rather than the legacy single-strategy reference.
+   two-sleeve runtime rather than the legacy single-strategy reference
+   **and** uses per-sleeve live fill/notional profiles derived from
+   `sleeve_attributions`.
    Minimum scope:
    - `src/tradingx/gate3.py`
+   - `src/tradingx/execution.py`
    - `src/tradingx/__main__.py`
    - `src/tradingx/web/runtime.py`
 3. Preserve and review:
@@ -288,8 +299,11 @@ artifacts.
 
 ### Suggested task breakdown
 
-1. Apply the narrow Gate 3 reference-path fix so the governed
-   report/package builder points at the real two-sleeve runtime.
+1. Apply the Gate 3 two-sleeve package fix so the governed
+   report/package builder:
+   - points at the real two-sleeve runtime, and
+   - computes per-sleeve live fill/notional profiles from
+     `sleeve_attributions` rather than aggregating the whole book.
 2. Freeze the runtime configuration used for the Gate 3 evidence window.
 3. Run the paper session on that frozen configuration.
 4. Schedule regular evidence refreshes:
@@ -310,6 +324,9 @@ artifacts.
 - The evidence window uses the real multi-sleeve runtime.
 - The governed report/package path no longer depends on
   `baseline-long-only-v1` as its implicit reference.
+- The governed Gate 3 reader compares each sleeve against its own
+  backtest expectations using per-sleeve live fill/notional profiles,
+  not a whole-book aggregate.
 
 ---
 
@@ -379,7 +396,7 @@ go/no-go decision.
 ### Phase B — Merge the last required code
 
 4. Merge Gate 4 live-enablement code behind fail-closed controls.
-5. Merge the narrow Gate 3 reference-path fix if it did not already land
+5. Merge the Gate 3 two-sleeve package fix if it did not already land
    during the evidence lane.
 
 ### Phase C — Finish the evidence lanes
@@ -413,12 +430,12 @@ Those remain future-feature work after v1 is already live-ready.
 ## Bottom line
 
 For project completion, there is **one remaining major engineering
-lane**, **one narrow Gate 3 prerequisite fix**, and **three readiness
-lanes**:
+lane**, **one small-but-real Gate 3 prerequisite fix tranche**, and
+**three readiness lanes**:
 
 - build Gate 4 live enablement,
-- patch the Gate 3 report/package reference path to the real two-sleeve
-  runtime,
+- patch the Gate 3 report/package seam so it uses the real two-sleeve
+  runtime and per-sleeve live evidence,
 - produce Gate 2 evidence,
 - produce Gate 3 evidence,
 - package Gate 4 sign-off.
