@@ -1112,6 +1112,10 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
         is True
     )
     assert (
+        "live_disable_report"
+        not in control_posture.json()["data"]["live_control_layer_states"]
+    )
+    assert (
         control_posture.json()["data"]["governance_posture"][
             "operator_signoff_status"
         ]
@@ -1182,6 +1186,9 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
     )
     assert replay.status_code == 200
     assert replay.json()["data"]["replay_id"] == "replay-symbol-SPY"
+    latest_replay = client.get("/api/v1/replays/replay-symbol-latest")
+    assert latest_replay.status_code == 200
+    assert latest_replay.json()["data"]["replay_id"] == "replay-symbol-latest"
     missing_replay = client.get("/api/v1/replays/replay-symbol-XYZ")
     assert missing_replay.status_code == 404
 

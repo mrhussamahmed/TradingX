@@ -408,7 +408,6 @@ def create_app(
     def _control_posture_data() -> dict[str, object]:
         current_decision = resolve_broker_mode(config)
         live_capability = resolve_broker_mode(config, explicit_mode="live")
-        disable_report = config.live_disable_report()
         governance_posture = {
             "operator_signoff_required": True,
             "operator_signoff_status": "missing",
@@ -453,7 +452,6 @@ def create_app(
                 "write_signing_configured": config.web.write_signing_configured(),
                 "manual_kill_switch_active": config.runtime.manual_kill_switch_active,
                 "dry_run_active": config.runtime.dry_run,
-                "live_disable_report": disable_report,
             },
             "governance_posture": governance_posture,
             "market_data_posture": {
@@ -836,6 +834,15 @@ def create_app(
 
     @app.get("/api/v1/replays/{replay_id}")
     def get_v1_replay(replay_id: str) -> JSONResponse:
+        if replay_id == "replay-symbol-latest":
+            replay = read_model.build_replay_session()
+            if replay.replay_id == replay_id and replay.events:
+                return _object_response(replay)
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
+            )
         replay_focus = _parse_replay_focus(replay_id)
         if replay_focus == {"symbol": None, "cycle_id": None, "incident_id": None}:
             return _error_response(

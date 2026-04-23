@@ -138,6 +138,9 @@ Mitigation:
   4 checklist are modeled as satisfied
 - contract tests explicitly lock this behavior so the read-side contract
   cannot report live as allowed prematurely
+- the payload no longer embeds the raw legacy `live_disable_report`
+  object, avoiding a second contradictory live truth source inside the
+  canonical control-posture response
 
 ### Replay resource truthfulness
 
@@ -148,6 +151,9 @@ Mitigation:
   concrete events
 - the route no longer rewrites unrelated replay payloads under the
   caller's requested id
+- `replay-symbol-latest` is treated as a real canonical replay
+  identifier so investigation drill-downs do not return ids their own
+  detail route rejects
 
 ## Intentional Deferrals
 
