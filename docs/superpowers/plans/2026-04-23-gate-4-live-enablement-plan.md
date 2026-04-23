@@ -482,6 +482,14 @@ than widening `OperatorControlStore` for unrelated write-auth state.
   - duplicate signed POST short-circuiting to the stored response;
   - `/api/config/summary` never includes
     `TRADINGX_WEB_WRITE_SIGNING_SECRET` or any raw signing-secret value.
+- [ ] Add failing tests in one of:
+  - `tests/unit/test_config.py`, or
+  - `tests/unit/test_main.py`
+  proving that the direct safe-summary surfaces are also secret-free:
+  - `TradingConfig.to_safe_summary()` never includes the raw
+    `TRADINGX_WEB_WRITE_SIGNING_SECRET`; and/or
+  - the `config-summary` CLI command never prints the raw signing
+    secret.
 - [ ] Add failing frontend tests in `webapp/src/App.test.tsx` for:
   - write actions stay disabled until the operator unlocks the write
     secret locally;
@@ -500,6 +508,9 @@ than widening `OperatorControlStore` for unrelated write-auth state.
 - [ ] Keep `TradingConfig.to_safe_summary()` and all config-summary
   payloads secret-free. The server may expose only booleans / status
   fields such as “write signing configured”, never the secret itself.
+- [ ] Preserve that same no-secret rule across both delivery paths:
+  - direct `config.to_safe_summary()` / `config-summary`, and
+  - `/api/config/summary`.
 - [ ] Create `src/tradingx/web/security.py` with:
   - canonical request hashing
   - HMAC verification
