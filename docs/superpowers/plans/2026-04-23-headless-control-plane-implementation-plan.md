@@ -186,15 +186,18 @@ splitting the runtime process.
 **Work:**
 
 1. Add `/api/v1/control-posture`
-2. Add `/api/v1/command-sessions`
-3. Add `/api/v1/commands`
-4. Add `/api/v1/runtime`
-5. Add `/api/v1/incidents` and `/api/v1/events`
-6. Add `/api/v1/portfolio`, `/api/v1/portfolio/performance`,
+2. Add `/api/v1/runtime`
+3. Add `GET /api/v1/stream` as the canonical multiplexed SSE endpoint
+4. Add `/api/v1/incidents` and `/api/v1/events`
+5. Add `/api/v1/portfolio`, `/api/v1/portfolio/performance`,
    `/api/v1/portfolio/positions`, `/api/v1/portfolio/execution-quality`
-7. Add `/api/v1/validation/readiness` plus criterion/history surfaces
-8. Add `/api/v1/investigations`, `/api/v1/replays/{id}`, and
+6. Add `/api/v1/validation/readiness` plus criterion/history surfaces
+7. Add `/api/v1/investigations`, `/api/v1/replays/{id}`, and
    `/api/v1/documents`
+8. Add the internal control-plane scaffolding for `/api/v1/command-sessions`
+   and `/api/v1/commands`, but do **not** treat governed writes as
+   stable for frontend integration until Wave 3 hardens their signing,
+   session, and precondition semantics
 
 **Important rule:** in this wave, the APIs may still read from existing
 artifacts where necessary, but they must hide that behind canonical
@@ -202,9 +205,11 @@ contracts.
 
 **Exit criteria:**
 
-- frontend has a stable `/api/v1` surface to target
+- frontend has a stable **read-side** `/api/v1` surface to target
 - legacy routes remain functional
 - no new UI requirement depends on direct artifact parsing
+- governed write routes are explicitly marked provisional until Wave 3
+  completes
 
 ### Wave 2 — Postgres operational store and outbox/projection layer
 
@@ -228,18 +233,23 @@ contracts.
 5. Add projection checkpoints and projector worker/background runner
 6. Start dual-writing canonical command/session/audit/runtime summaries
    into Postgres
+7. Add an explicit bridge/backfill for legacy command, runtime, and
+   operator history so Command Center and Mission Control can span
+   pre-Postgres and post-Postgres periods during migration
 
 **Migration lock:**
 
 - legacy local audit artifacts may continue to exist, but `/api/v1`
   reads should pivot to Postgres as soon as their canonical projection
-  exists
+  exists and their historical backfill/bridge is in place
 
 **Exit criteria:**
 
 - command/session state no longer depends on local SQLite/file storage
 - projections exist for Mission Control, Command Center, and control
   posture
+- historical command/runtime/operator history is queryable through the
+  canonical read path without split-brain gaps
 
 ### Wave 3 — Signed command sessions and governed command model
 
@@ -259,13 +269,17 @@ contracts.
    - `X-TradingX-Signature`
 3. Implement mutation preconditions:
    - `target_resource_id`
+   - `target_resource_type`
    - `expected_resource_version`
    - `expected_state`
    - `requested_transition`
-4. Ensure all command-side mutations flow through `POST /api/v1/commands`
-5. Normalize `acknowledge_incident`, `create_replay`, and similar writes
+4. Promote `/api/v1/command-sessions` and `/api/v1/commands` from
+   provisional scaffolding to the stable governed write contract for
+   frontend integration
+5. Ensure all command-side mutations flow through `POST /api/v1/commands`
+6. Normalize `acknowledge_incident`, `create_replay`, and similar writes
    onto the command path
-6. Preserve compatibility with the existing Gate 4 local browser-signing
+7. Preserve compatibility with the existing Gate 4 local browser-signing
    flow while making the signing-material source session-based
 
 **Exit criteria:**
@@ -273,6 +287,8 @@ contracts.
 - no governed write path bypasses command sessions
 - last-writer-wins is not legal for safety-critical state
 - command history is durable and resumable across reconnects
+- `/api/v1/command-sessions` and `/api/v1/commands` are now stable for
+  frontend integration
 
 ### Wave 4 — Runtime worker split and lease fencing
 
@@ -378,6 +394,7 @@ Minimum verification by wave:
 ### Wave 1
 
 - contract tests for every new `/api/v1` route
+- SSE contract tests for `GET /api/v1/stream` topics and reconnect shape
 - API snapshot tests for critical payloads
 - no secret leakage through safe summaries
 
@@ -386,6 +403,8 @@ Minimum verification by wave:
 - migration tests
 - repository/integration tests against Postgres
 - outbox/projection consistency tests
+- history backfill/bridge tests proving legacy audit continuity across
+  pre- and post-Postgres data
 
 ### Wave 3
 
