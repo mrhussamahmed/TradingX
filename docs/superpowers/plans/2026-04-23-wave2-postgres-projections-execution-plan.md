@@ -614,12 +614,14 @@ to be immutable.
 - `portfolio_projection`: portfolio workspace, positions, performance,
   exposure, attribution, execution quality
 - `validation_projection`: readiness, candidate criteria, PBO/CPCV
-  report indexes
+  report indexes, and validation timeline events for readiness changes,
+  candidate decisions, report publication, and blocker changes
 - `investigation_projection`: replay indexes, replay events,
   investigation workspaces
 - `document_projection`: document index and revision references
-- `commanding_projection`: command/session/audit summaries only, with
-  stable write behavior deferred
+- `commanding_projection`: command/session/audit summaries and command
+  timeline events for the read side only, with stable write behavior
+  deferred
 
 ### Legacy source coverage
 
@@ -648,11 +650,14 @@ The bridge must cover at least:
 - operator-control state files and kill-switch markers
 - document/report files currently listed by Wave 1 read models
 
-Control-posture projection may evaluate live config/env facts directly at
-read time only if the evaluator is part of the Postgres-backed read model,
-emits a current source-status row, and participates in the same readiness
-checks as bridged legacy sources. It must not be hidden in `payload_json`
-or bypass the fail-closed posture blocker contract.
+Control-posture projection may evaluate live config/env facts as part of
+a read request only if that evaluation is implemented as a synchronous
+projection update before the response is built. It must upsert the
+current `control_posture_snapshot`, structured blocker rows, source
+status row, monotonic `resource_version`, and `state_fingerprint`; the
+API response must then read from that persisted versioned snapshot. It
+must not overlay unversioned live facts onto the response, hide them in
+`payload_json`, or bypass the fail-closed posture blocker contract.
 
 Each source adapter must expose:
 
@@ -852,7 +857,9 @@ Exit criteria:
    required mutable source family has advanced beyond the projected
    watermark.
 8. Add control-posture source tests proving live config/env facts are
-   present, fresh, and reflected in structured blockers.
+   present, fresh, reflected in structured blockers, and advance the
+   persisted `resource_version`/`state_fingerprint` before the API
+   response is built.
 
 Exit criteria:
 
@@ -1020,7 +1027,7 @@ Wave 2 is done when:
 8. `/api/v1/events` has complete timeline source-family coverage before
    it pivots to Postgres.
 9. Control-posture Postgres mode includes fresh live config/env facts and
-   structured blocker rows.
+   structured blocker rows on a persisted versioned snapshot.
 10. Provisional governed write routes remain hidden and non-integratable.
 11. Local development can run the Postgres-backed control-plane read side.
 12. Verification commands pass or documented Postgres-gated tests skip

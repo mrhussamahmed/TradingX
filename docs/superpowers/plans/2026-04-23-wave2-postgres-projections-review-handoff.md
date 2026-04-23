@@ -99,7 +99,9 @@ and prevents stale Postgres reads when readiness is false.
 move to Postgres until incidents, runtime, validation, command read-side
 history, and market-data posture event families are all projected and
 parity-tested, so the canonical timeline does not silently drop deferred
-families.
+families. The projector inventory now assigns validation timeline events
+to `validation_projection` and command timeline events to
+`commanding_projection` while keeping command writes deferred.
 
 ### Control posture stays fail-closed
 
@@ -111,7 +113,10 @@ not trapped only inside `payload_json`. Live config/env facts such as
 broker credential presence, config live enablement, live opt-in,
 write-signing configuration, dry-run state, and kill-switch state must be
 bridged or evaluated by the Postgres-backed read model with their own
-freshness source status.
+freshness source status. If those facts are evaluated during a read, the
+evaluation must persist a versioned `control_posture_snapshot`, blocker
+rows, source status, monotonic `resource_version`, and
+`state_fingerprint` before the API response is built.
 
 ### Wave 3 preconditions have storage hooks
 
@@ -155,6 +160,8 @@ Please challenge the plan on:
    corresponding domain remains explicitly on legacy reads.
 8. Whether a domain can be marked ready while one of its required source
    families is stale or missing.
+9. Whether read-time control-posture evaluation can bypass persisted
+   version/fingerprint updates.
 
 ## Known Deferrals
 
