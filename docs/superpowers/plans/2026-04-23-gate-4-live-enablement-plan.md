@@ -82,32 +82,38 @@ non-negotiable:
 3. **No direct `TradingClient(..., paper=False)` scatter.**
    Live/paper client selection must be centralized in one shared helper
    or factory. Every production entrypoint should consume that seam.
-4. **The web-auth boundary is the full POST surface.**
+4. **Market-data credential selection must follow the same mode policy.**
+   Generic live-capable entrypoints may not end up with live trading
+   clients while `build_default_market_data_gateway(...)` still quietly
+   depends on paper credentials. The branch must either make market-data
+   credential selection mode-aware too or fail closed explicitly; it may
+   not leave this as an accidental hidden prerequisite.
+5. **The web-auth boundary is the full POST surface.**
    This branch may not secure only one “future live toggle” route.
    Every shipped write endpoint in `src/tradingx/web/app.py` must pass
    through the same signature + idempotency guard.
-5. **The shipped browser client needs a real signing path.**
+6. **The shipped browser client needs a real signing path.**
    The current SPA in `webapp/src/api.ts` sends bare JSON POSTs. The
    implementation must therefore add an explicit browser-side signing
    flow; it may not “solve” this by bundling the signing secret into the
    frontend build.
-6. **Idempotency is request-fingerprint aware.**
+7. **Idempotency is request-fingerprint aware.**
    Exact duplicate signed POSTs should replay the stored first result.
    Same key + different request fingerprint must reject with conflict.
    This matters because `/api/config/proposals` returns
    `ConfigProposal`, not `WebActionResult`, so the idempotency store
    must preserve generic serialized JSON responses.
-7. **`live_disable_report()` keeps legacy keys stable.**
+8. **`live_disable_report()` keeps legacy keys stable.**
    Existing readmodels/alerts depend on `paper_only_mode`,
    `live_trading_enabled`, and `manual_kill_switch_active`.
    The report may grow richer, but those keys must stay valid.
-8. **Risk remains fail-closed.**
+9. **Risk remains fail-closed.**
    Requesting live mode without complete readiness must block with an
    explicit reason. It must not degrade to paper execution.
-9. **Do not overclaim Gate 4 sign-off in this branch.**
+10. **Do not overclaim Gate 4 sign-off in this branch.**
    Fresh drill windows, monitoring observation, and operator approval
    stay in the later evidence lane.
-10. **Do not spend this branch on naming cleanup.**
+11. **Do not spend this branch on naming cleanup.**
    Repo-wide renames of `PaperOnlyRiskEngine`,
    `AlpacaPaperExecutionGateway`, and similar compatibility names are
    out of scope unless a thin alias is required for clarity. The target
@@ -145,6 +151,7 @@ non-negotiable:
 
 - `.env.example`
 - `src/tradingx/config.py`
+- `src/tradingx/data.py`
 - `src/tradingx/live_enablement.py` (new)
 - `src/tradingx/risk.py`
 - `src/tradingx/controller.py`
@@ -162,6 +169,7 @@ non-negotiable:
 - `docs/INDEX.md`
 - `docs/operations/operator_manual.md`
 - `tests/unit/test_config.py`
+- `tests/unit/test_data.py` (new)
 - `tests/unit/test_live_enablement.py` (new)
 - `tests/unit/test_web_security.py` (new)
 - `tests/unit/test_risk.py`
@@ -197,6 +205,9 @@ with four moving parts:
    so generic entrypoints stop hardwiring
    `build_default_paper_service(...)` /
    `build_runtime_host_paper_service(...)` one layer up.
+   The same policy must cover market-data credentials, so generic live
+   entrypoints do not remain paper-bound through
+   `build_default_market_data_gateway(...)`.
 2. **Signed/idempotent web write guard**
    Add one shared FastAPI-side write authorizer that sits in front of
    every POST route and enforces:
@@ -229,6 +240,7 @@ opt-in and real environment opt-in.
 ### Files
 
 - `src/tradingx/config.py`
+- `src/tradingx/data.py`
 - `src/tradingx/live_enablement.py`
 - `src/tradingx/service.py`
 - `src/tradingx/automation.py`
@@ -237,6 +249,7 @@ opt-in and real environment opt-in.
 - `src/tradingx/__main__.py`
 - `src/tradingx/web/runtime.py`
 - `tests/unit/test_config.py`
+- `tests/unit/test_data.py`
 - `tests/unit/test_live_enablement.py`
 - `tests/unit/test_service.py`
 - `tests/unit/test_automation.py`
@@ -262,6 +275,9 @@ opt-in and real environment opt-in.
 - generic production entrypoints must route through a single helper in
   `src/tradingx/live_enablement.py`, not inline `TradingClient(...)`
   constructors.
+- generic production entrypoints must also obtain market-data gateways
+  through the same broker-mode decision, rather than always using paper
+  credentials behind `build_default_market_data_gateway(...)`.
 - generic production entrypoints that are currently paper-bound through
   `build_default_paper_service(...)` or
   `build_runtime_host_paper_service(...)` must gain a new mode-aware
@@ -279,6 +295,12 @@ opt-in and real environment opt-in.
   - `TRADINGX_BROKER_MODE=paper` keeps `broker_enabled=False`;
   - `TRADINGX_BROKER_MODE=live` sets `broker_enabled=True`;
   - `live_disable_report()` keeps legacy keys and adds explicit reasons.
+- [ ] Add failing tests in `tests/unit/test_data.py` for:
+  - requested paper mode keeps market data on paper credentials;
+  - requested live mode uses live credentials for market data when live
+    mode is otherwise allowed;
+  - requested live mode with missing live credentials fails closed
+    instead of silently sourcing market data from paper credentials.
 - [ ] Add failing tests in `tests/unit/test_live_enablement.py` for:
   - requested paper mode returns a paper client decision;
   - requested live mode with missing live credentials blocks with
@@ -307,6 +329,10 @@ opt-in and real environment opt-in.
   - `BrokerModeDecision`
   - `resolve_broker_mode(config, *, explicit_mode: str | None = None)`
   - `build_trading_client_for_mode(config, decision)`
+- [ ] In `src/tradingx/data.py`, add a matching mode-aware seam such as:
+  - `build_market_data_gateway_for_mode(config, decision)`
+  or equivalent helper that uses the same broker-mode/live-readiness
+  policy as the trading client path.
 - [ ] In `src/tradingx/service.py`, add a new generic, mode-aware
   service-builder seam such as:
   - `build_default_trading_service(config, *, broker_mode: str | None = None, opportunity_selector: ... = None)`
@@ -316,7 +342,9 @@ opt-in and real environment opt-in.
   that delegate to the new generic builders with `broker_mode="paper"`.
 - [ ] Replace generic production `TradingClient(..., paper=True)` call
   sites **and generic paper-service-builder callsites** with the shared
-  helper / new service-builder seam in:
+  helper / new service-builder seam, and replace generic paper-bound
+  market-data construction with the mode-aware data seam, in:
+  - `src/tradingx/data.py`
   - `src/tradingx/service.py`
   - `src/tradingx/automation.py`
   - `src/tradingx/supervisor.py`
@@ -326,7 +354,8 @@ opt-in and real environment opt-in.
 - [ ] Add tests proving the generic entrypoints no longer remain
   paper-bound through `build_default_paper_service(...)` /
   `build_runtime_host_paper_service(...)` one layer above client
-  construction.
+  construction or through `build_default_market_data_gateway(...)` one
+  layer above credential selection.
 - [ ] Keep explicit paper wrappers stable:
   - `paper-loop`
   - `paper-recover`
@@ -603,6 +632,7 @@ Use this during TDD:
 ```bash
 uv run pytest -q \
   tests/unit/test_config.py \
+  tests/unit/test_data.py \
   tests/unit/test_live_enablement.py \
   tests/unit/test_web_security.py \
   tests/unit/test_risk.py \
