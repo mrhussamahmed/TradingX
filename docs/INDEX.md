@@ -193,6 +193,7 @@ field (session lifecycle). This index tracks `status` only.
 | REPORT-0001 | Headless control plane Wave 1 adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-headless-control-plane-wave1-review-handoff.md` |
 | REPORT-0002 | Headless control plane Wave 2 planning adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-review-handoff.md` |
 | REPORT-0003 | Headless control plane Wave 2 implementation plan adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-implementation-review-handoff.md` |
+| REPORT-0004 | Headless control plane Wave 2 foundation implementation adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-foundation-review-handoff.md` |
 
 ### Task lists (TASKS-NNNN)
 

@@ -49,11 +49,85 @@ def _normalize_csv(value: str | None) -> tuple[str, ...]:
     return tuple(item.strip().upper() for item in normalized.split(",") if item.strip())
 
 
-def _normalize_broker_mode(value: str | None, *, default: str = "paper") -> str:
+def _normalize_choice(
+    value: str | None,
+    *,
+    allowed: set[str],
+    default: str,
+) -> str:
     normalized = _normalize_value(value).lower()
-    if normalized in {"paper", "live"}:
+    if normalized in allowed:
         return normalized
     return default
+
+
+def _normalize_broker_mode(value: str | None, *, default: str = "paper") -> str:
+    return _normalize_choice(value, allowed={"paper", "live"}, default=default)
+
+
+def _normalize_control_plane_store(
+    value: str | None,
+    *,
+    default: str = "legacy",
+) -> str:
+    return _normalize_choice(
+        value,
+        allowed={"legacy", "hybrid", "postgres"},
+        default=default,
+    )
+
+
+def _normalize_domain_store_override(value: str) -> str:
+    normalized = _normalize_value(value).lower()
+    if normalized in {"legacy", "postgres"}:
+        return normalized
+    raise ValueError(
+        "TRADINGX_CONTROL_PLANE_DOMAIN_STORES entries must use "
+        f"legacy or postgres overrides, got {value!r}."
+    )
+
+
+def _normalize_projection_mode(
+    value: str | None,
+    *,
+    default: str = "disabled",
+) -> str:
+    return _normalize_choice(
+        value,
+        allowed={"disabled", "inline", "runner"},
+        default=default,
+    )
+
+
+def _normalize_legacy_bridge_mode(
+    value: str | None,
+    *,
+    default: str = "disabled",
+) -> str:
+    return _normalize_choice(
+        value,
+        allowed={"disabled", "backfill", "tail"},
+        default=default,
+    )
+
+
+def _normalize_domain_stores(value: str | None) -> tuple[tuple[str, str], ...]:
+    normalized = _normalize_value(value)
+    if not normalized:
+        return ()
+    domain_stores: list[tuple[str, str]] = []
+    for item in normalized.split(","):
+        normalized_item = _normalize_value(item)
+        domain, separator, store = normalized_item.partition("=")
+        normalized_domain = _normalize_value(domain).lower()
+        if not separator or not normalized_domain:
+            raise ValueError(
+                "TRADINGX_CONTROL_PLANE_DOMAIN_STORES entries must be "
+                f"<domain>=legacy|postgres, got {normalized_item!r}."
+            )
+        normalized_store = _normalize_domain_store_override(store)
+        domain_stores.append((normalized_domain, normalized_store))
+    return tuple(domain_stores)
 
 
 def _empty_live_credentials() -> LiveCredentials:
@@ -139,6 +213,20 @@ class WebAppConfig:
 
 
 @dataclass(frozen=True)
+class ControlPlaneConfig:
+    postgres_dsn: str = ""
+    store: str = "legacy"
+    domain_stores: tuple[tuple[str, str], ...] = ()
+    postgres_required: bool = False
+    projection_mode: str = "disabled"
+    projection_batch_size: int = 250
+    legacy_bridge_mode: str = "disabled"
+    legacy_backfill_enabled: bool = False
+    legacy_backfill_batch_size: int = 500
+    projection_max_lag_seconds: int = 30
+
+
+@dataclass(frozen=True)
 class TradingConfig:
     paper_credentials: PaperCredentials
     live_credentials: LiveCredentials = field(default_factory=_empty_live_credentials)
@@ -147,6 +235,7 @@ class TradingConfig:
     alerting: AlertingConfig = field(default_factory=AlertingConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     web: WebAppConfig = field(default_factory=WebAppConfig)
+    control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
 
     @classmethod
     def from_sources(
@@ -274,6 +363,44 @@ class TradingConfig:
                     default=15,
                 ),
             ),
+            control_plane=ControlPlaneConfig(
+                postgres_dsn=_normalize_value(merged.get("TRADINGX_POSTGRES_DSN")),
+                store=_normalize_control_plane_store(
+                    merged.get("TRADINGX_CONTROL_PLANE_STORE"),
+                    default="legacy",
+                ),
+                domain_stores=_normalize_domain_stores(
+                    merged.get("TRADINGX_CONTROL_PLANE_DOMAIN_STORES")
+                ),
+                postgres_required=_normalize_bool(
+                    merged.get("TRADINGX_POSTGRES_REQUIRED"),
+                    default=False,
+                ),
+                projection_mode=_normalize_projection_mode(
+                    merged.get("TRADINGX_PROJECTION_MODE"),
+                    default="disabled",
+                ),
+                projection_batch_size=_normalize_int(
+                    merged.get("TRADINGX_PROJECTION_BATCH_SIZE"),
+                    default=250,
+                ),
+                legacy_bridge_mode=_normalize_legacy_bridge_mode(
+                    merged.get("TRADINGX_LEGACY_BRIDGE_MODE"),
+                    default="disabled",
+                ),
+                legacy_backfill_enabled=_normalize_bool(
+                    merged.get("TRADINGX_LEGACY_BACKFILL_ENABLED"),
+                    default=False,
+                ),
+                legacy_backfill_batch_size=_normalize_int(
+                    merged.get("TRADINGX_LEGACY_BACKFILL_BATCH_SIZE"),
+                    default=500,
+                ),
+                projection_max_lag_seconds=_normalize_int(
+                    merged.get("TRADINGX_PROJECTION_MAX_LAG_SECONDS"),
+                    default=30,
+                ),
+            ),
         )
 
     @classmethod
@@ -322,7 +449,11 @@ class TradingConfig:
             reasons.append("dry_run_enabled")
         return tuple(reasons)
 
-    def to_safe_summary(self) -> dict[str, str | bool | int | list[str]]:
+    def to_safe_summary(
+        self,
+    ) -> dict[str, str | bool | int | list[str] | dict[str, str]]:
+        from tradingx.persistence.postgres import redact_postgres_dsn
+
         live_disable_report = self.live_disable_report()
         return {
             "has_real_paper_credentials": self.has_real_paper_credentials(),
@@ -354,6 +485,27 @@ class TradingConfig:
             "live_control_broker_enabled": self.live_controls.broker_enabled,
             "live_control_layers_enabled": self.live_controls.all_layers_enabled(),
             "live_trading_enabled": bool(live_disable_report["live_trading_enabled"]),
+            "control_plane_store": self.control_plane.store,
+            "control_plane_domain_stores": dict(self.control_plane.domain_stores),
+            "control_plane_postgres_configured": bool(self.control_plane.postgres_dsn),
+            "control_plane_postgres_dsn_redacted": redact_postgres_dsn(
+                self.control_plane.postgres_dsn
+            ),
+            "control_plane_postgres_required": self.control_plane.postgres_required,
+            "control_plane_projection_mode": self.control_plane.projection_mode,
+            "control_plane_projection_batch_size": (
+                self.control_plane.projection_batch_size
+            ),
+            "control_plane_legacy_bridge_mode": self.control_plane.legacy_bridge_mode,
+            "control_plane_legacy_backfill_enabled": (
+                self.control_plane.legacy_backfill_enabled
+            ),
+            "control_plane_legacy_backfill_batch_size": (
+                self.control_plane.legacy_backfill_batch_size
+            ),
+            "control_plane_projection_max_lag_seconds": (
+                self.control_plane.projection_max_lag_seconds
+            ),
         }
 
     def live_disable_report(self) -> dict[str, bool | str | list[str]]:
