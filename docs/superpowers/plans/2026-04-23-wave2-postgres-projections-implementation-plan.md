@@ -52,8 +52,12 @@ hidden and provisional until Wave 3.
 7. Control-posture live config/env evaluation must persist a versioned
    `control_posture_snapshot`, structured blockers, source status,
    `resource_version`, and `state_fingerprint` before the API response
-   is built.
-8. Legacy local mode remains the default and must not require Postgres.
+   is built. If the effective posture is unchanged, the refresh must
+   reuse the existing version/fingerprint; versions advance only when the
+   effective posture changes.
+8. The existing `tradingx.persistence` import surface must remain
+   compatible while Postgres persistence code is introduced.
+9. Legacy local mode remains the default and must not require Postgres.
 
 ## Implementation Slices
 
@@ -92,23 +96,36 @@ Tasks:
 
 1. Add Postgres engine/session helpers with timeout settings and redacted
    DSN logging.
-2. Add Alembic configuration and an initial migration for the `access`,
+2. Resolve the current `src/tradingx/persistence.py` module/package
+   collision before adding submodules. Convert it into the package entry
+   point `src/tradingx/persistence/__init__.py`, preserve the existing
+   public exports there, and remove the standalone module shape so Python
+   cannot shadow the old import surface. Existing imports such as
+   `from tradingx.persistence import FilesystemArtifactStore` must keep
+   working.
+3. Add Alembic configuration and an initial migration for the `access`,
    `commanding`, `runtime`, `incidents`, `portfolio`, `validation`,
    `investigations`, `documents`, and `system` schemas.
-3. Include required constraints for outbox dedupe, source readiness, and
+4. Include required constraints for outbox dedupe, source readiness, and
    posture blockers.
-4. Add migration tests against `TRADINGX_TEST_POSTGRES_DSN`, with clear
+5. Add migration tests against `TRADINGX_TEST_POSTGRES_DSN`, with clear
    skips when the DSN is absent.
+6. Add namespace compatibility tests for existing `tradingx.persistence`
+   exports before and after the package conversion.
 
 Owned paths:
 
+- `src/tradingx/persistence.py`
+- `src/tradingx/persistence/__init__.py`
 - `src/tradingx/persistence/postgres.py`
 - `src/tradingx/persistence/migrations/`
+- `tests/unit/test_persistence_namespace.py`
 - `tests/integration/test_controlplane_postgres_store.py`
 
 Verification:
 
 ```bash
+uv run pytest tests/unit/test_persistence_namespace.py -q
 TRADINGX_TEST_POSTGRES_DSN=postgresql://tradingx:tradingx@127.0.0.1:5432/tradingx_test uv run pytest tests/integration/test_controlplane_postgres_store.py -q
 ```
 
@@ -221,7 +238,11 @@ Tasks:
 7. Implement `commanding_projection` for command/session/audit summaries
    and command timeline events only. Do not expose stable command writes.
 8. Ensure control-posture live fact evaluation persists versioned
-   snapshots and blocker rows before responses use them.
+   snapshots and blocker rows before responses use them, and that
+   no-op refreshes reuse the existing `resource_version` and
+   `state_fingerprint`.
+9. Add tests proving control-posture versions advance only when the
+   effective posture changes.
 
 Owned paths:
 
@@ -278,6 +299,9 @@ Tasks:
 1. Pivot domains only in the approved order from `PLAN-0013`.
 2. Keep governed write routes hidden from OpenAPI and returning `503`.
 3. Add Postgres-backed contract coverage for stable route families.
+   This must boot the real FastAPI app with the domain router and a
+   Postgres-backed read model; the existing fake-read-model contract
+   suite is not sufficient for this gate.
 4. Add `/api/v1/events` coverage proving runtime, validation, command
    read-side, incident, and market-data posture event families are
    present before Postgres routing is allowed.
@@ -291,12 +315,14 @@ Owned paths:
 - `src/tradingx/web/app.py`
 - `tests/contract/test_local_web_app_api_contract.py`
 - `tests/contract/test_controlplane_stream_parity.py`
+- `tests/integration/test_controlplane_postgres_web_app.py`
 
 Verification:
 
 ```bash
 uv run pytest tests/contract/test_local_web_app_api_contract.py -q
 uv run pytest tests/contract/test_controlplane_stream_parity.py -q
+TRADINGX_TEST_POSTGRES_DSN=postgresql://tradingx:tradingx@127.0.0.1:5432/tradingx_test uv run pytest tests/integration/test_controlplane_postgres_web_app.py -q
 ```
 
 ### Slice 8: Local Stack and Operator Notes
@@ -336,12 +362,14 @@ uv sync
 uv run ruff check src/tradingx tests
 uv run mypy src/tradingx
 uv run pytest tests/unit/test_postgres_config.py -q
+uv run pytest tests/unit/test_persistence_namespace.py -q
 uv run pytest tests/unit/test_controlplane_repositories.py -q
 uv run pytest tests/unit/test_controlplane_legacy_bridge.py -q
 uv run pytest tests/unit/test_controlplane_projectors.py -q
 uv run pytest tests/unit/test_controlplane_domain_router.py -q
 uv run pytest tests/contract/test_local_web_app_api_contract.py -q
 uv run pytest tests/contract/test_controlplane_stream_parity.py -q
+TRADINGX_TEST_POSTGRES_DSN=postgresql://tradingx:tradingx@127.0.0.1:5432/tradingx_test uv run pytest tests/integration/test_controlplane_postgres_web_app.py -q
 TRADINGX_TEST_POSTGRES_DSN=postgresql://tradingx:tradingx@127.0.0.1:5432/tradingx_test uv run pytest tests/integration/test_controlplane_postgres_store.py -q
 python3 scripts/check_index.py
 ```
@@ -375,10 +403,13 @@ Work can split after the migration contract is stable:
 The following stays sequential:
 
 - migrations before repositories
+- persistence namespace compatibility before adding
+  `tradingx.persistence.*` submodules
 - repository contracts before projectors
 - per-source readiness before route pivot
 - domain router before hybrid route mode
 - projectors before `/api/v1/events` Postgres pivot
+- real Postgres app/router tests before claiming route pivot coverage
 - stream parity before claiming Wave 2 done
 
 ## Adversarial Review Checklist
@@ -393,10 +424,16 @@ Reviewers should challenge:
 4. Whether `validation_projection` and `commanding_projection` own their
    timeline event families.
 5. Whether control-posture read-time evaluation can bypass persisted
-   version/fingerprint updates.
-6. Whether stream topics can drift from polling route sources.
-7. Whether legacy local mode still works without Postgres.
-8. Whether Postgres-gated tests can falsely pass without a DSN.
+   version/fingerprint updates or churn versions when posture is
+   unchanged.
+6. Whether the `tradingx.persistence` namespace migration preserves
+   existing imports while adding Postgres submodules.
+7. Whether Postgres-backed route coverage boots the real app/router with
+   a Postgres read model instead of only exercising fake-read-model
+   contract tests.
+8. Whether stream topics can drift from polling route sources.
+9. Whether legacy local mode still works without Postgres.
+10. Whether Postgres-gated tests can falsely pass without a DSN.
 
 ## Definition Of Ready For Implementation
 

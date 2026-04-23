@@ -72,7 +72,26 @@ events to `validation_projection` and command timeline events to
 Live config/env facts may be evaluated during a read only if the
 evaluation persists a versioned `control_posture_snapshot`, structured
 blockers, source status, monotonic `resource_version`, and
-`state_fingerprint` before the API response is built.
+`state_fingerprint` before the API response is built. No-op refreshes
+must reuse the existing version/fingerprint so GET or SSE polling cannot
+make future preconditions stale when the effective posture has not
+changed.
+
+### Persistence namespace remains compatible
+
+The current repo has `src/tradingx/persistence.py`. The implementation
+plan now requires converting that module into
+`src/tradingx/persistence/__init__.py` before adding
+`tradingx.persistence.*` submodules, plus tests proving existing imports
+such as `from tradingx.persistence import FilesystemArtifactStore`
+continue to work.
+
+### Real app Postgres routing is tested
+
+Postgres-backed route coverage must boot the real FastAPI app with the
+domain router and a Postgres-backed read model. The existing fake-read
+model contract harness remains useful for envelope compatibility, but it
+does not satisfy the Postgres route-wiring gate by itself.
 
 ### SSE follows polling sources
 
@@ -96,12 +115,18 @@ Please challenge the plan on:
 4. Whether `/api/v1/events` can still become partial or silently omit a
    required event family.
 5. Whether read-time control-posture evaluation can bypass persisted
-   version/fingerprint updates.
-6. Whether stream parity or explicit rejection is testable for every
+   version/fingerprint updates or churn versions when posture is
+   unchanged.
+6. Whether the `tradingx.persistence` namespace migration preserves
+   existing imports while adding Postgres submodules.
+7. Whether Postgres-backed route coverage boots the real app/router with
+   a Postgres read model instead of only exercising fake-read-model
+   contract tests.
+8. Whether stream parity or explicit rejection is testable for every
    architecture-declared topic that Wave 2 touches.
-7. Whether the verification plan catches Postgres tests that skip or pass
+9. Whether the verification plan catches Postgres tests that skip or pass
    without exercising a real DSN.
-8. Whether local legacy mode remains usable while Postgres mode is added.
+10. Whether local legacy mode remains usable while Postgres mode is added.
 
 ## Known Deferrals
 
