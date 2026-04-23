@@ -209,14 +209,6 @@ class WebWriteAuthorizer:
                 detail="Web write timestamp is invalid.",
             ) from exc
 
-        now_seconds = int(self._now_provider().timestamp())
-        max_age_seconds = self._config.web.write_max_age_seconds
-        if abs(now_seconds - timestamp_seconds) > max_age_seconds:
-            raise HTTPException(
-                status_code=403,
-                detail="Web write timestamp is stale.",
-            )
-
         body = await request.body()
         method = request.method.upper()
         path = request.url.path
@@ -249,6 +241,14 @@ class WebWriteAuthorizer:
             raise HTTPException(
                 status_code=409,
                 detail="Web write idempotency conflict.",
+            )
+
+        now_seconds = int(self._now_provider().timestamp())
+        max_age_seconds = self._config.web.write_max_age_seconds
+        if abs(now_seconds - timestamp_seconds) > max_age_seconds:
+            raise HTTPException(
+                status_code=403,
+                detail="Web write timestamp is stale.",
             )
 
         return (

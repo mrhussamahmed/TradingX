@@ -224,6 +224,61 @@ def test_web_write_authorizer_replays_exact_duplicate(tmp_path) -> None:
     assert json.loads(replay.body) == {"status": "accepted"}
 
 
+def test_web_write_authorizer_replays_exact_duplicate_after_timestamp_expires(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    store = WebWriteIdempotencyStore(
+        config.runtime.data_root / "control" / "web_write_idempotency"
+    )
+    initial_time = datetime(2026, 4, 23, 12, 0, tzinfo=UTC)
+    authorizer = WebWriteAuthorizer(
+        config=config,
+        idempotency_store=store,
+        now_provider=lambda: initial_time,
+    )
+    body = b"{}"
+    timestamp = str(int(initial_time.timestamp()))
+    signature = sign_web_write_request(
+        "super-secret",
+        method="POST",
+        path="/api/actions/service/stop",
+        timestamp=timestamp,
+        idempotency_key="idem-stale-replay",
+        body=body,
+    )
+    request = _make_request(
+        method="POST",
+        path="/api/actions/service/stop",
+        headers={
+            TIMESTAMP_HEADER: timestamp,
+            IDEMPOTENCY_HEADER: "idem-stale-replay",
+            SIGNATURE_HEADER: signature,
+        },
+        body=body,
+    )
+    initial_authorization, _ = asyncio.run(authorizer.authorize(request))
+    assert initial_authorization is not None
+    authorizer.store_response(
+        initial_authorization,
+        response_payload={"status": "accepted"},
+        status_code=200,
+    )
+
+    stale_authorizer = WebWriteAuthorizer(
+        config=config,
+        idempotency_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 12, 10, tzinfo=UTC),
+    )
+
+    authorization, replay = asyncio.run(stale_authorizer.authorize(request))
+
+    assert authorization is None
+    assert replay is not None
+    assert replay.status_code == 200
+    assert json.loads(replay.body) == {"status": "accepted"}
+
+
 def test_web_write_authorizer_rejects_conflicting_idempotency_key(tmp_path) -> None:
     config = _config(tmp_path)
     store = WebWriteIdempotencyStore(
