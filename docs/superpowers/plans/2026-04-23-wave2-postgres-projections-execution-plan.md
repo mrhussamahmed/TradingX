@@ -46,16 +46,17 @@ Wave 2 includes:
 3. Canonical tables for command/session summaries, runtime state,
    control posture snapshots, incidents, portfolio analytics,
    validation metadata, replay/investigation indexes, document indexes,
-   outbox events, and projection checkpoints.
+   outbox events, projection checkpoints, and per-source readiness.
 4. Repository interfaces and Postgres implementations for Wave 1 read
    routes.
 5. Deterministic legacy bridge/backfill from current artifacts,
-   operator-control files, and SQLite OMS journal data into canonical
-   tables.
+   operator-control files, live config/env posture inputs, weights,
+   baselines, and SQLite data into canonical tables.
 6. A projector runner that materializes canonical read models from
    source events and records checkpoints.
-7. `/api/v1` read-route pivoting to Postgres-backed read models when the
-   canonical projection exists and is healthy.
+7. `/api/v1` read-route and stream-topic pivoting to Postgres-backed read
+   models when every required source family exists, is fresh, and is
+   projected.
 8. Contract, unit, migration, backfill, and local-stack verification.
 
 Wave 2 does not include:
@@ -80,14 +81,16 @@ most likely to create implementation drift:
    and command-session lifecycle remain deferred as governed writes.
    Wave 2 may create storage for them but must not expose helper POSTs.
 3. **No split-brain history.** A route may pivot to Postgres only when
-   its current projection and historical bridge/backfill are both
-   available for that domain.
+   its current projection, historical bridge/backfill, and per-source
+   freshness checks are available for every required source family in
+   that domain.
 4. **No frontend artifact dependency.** The frontend-facing `/api/v1`
    contract must not require consumers to parse artifact-shaped payloads.
 5. **Control posture stays fail-closed.** Missing governance approval
    remains a first-class blocker in Postgres snapshots and API payloads.
-6. **SSE command topic stays absent.** `GET /api/v1/stream` must not
-   expose `commands` until the Wave 3 command lifecycle is stable.
+6. **SSE parity is source-aligned.** `GET /api/v1/stream` must not expose
+   `commands` until the Wave 3 command lifecycle is stable, and all other
+   stream topics must use the same domain/source router as polling reads.
 7. **Backfill is idempotent.** Re-running the bridge must not duplicate
    command, runtime, incident, portfolio, validation, replay, or document
    rows.
@@ -523,6 +526,17 @@ full object-store profile.
   - `lag_seconds`
   - `status`
   - `metadata_json`
+- `domain_projection_source_status`
+  - `domain_name`
+  - `source_family`
+  - `source_identity`
+  - `source_watermark`
+  - `projected_watermark`
+  - `lag_seconds`
+  - `is_mutable`
+  - `ready_for_postgres`
+  - `checked_at_utc`
+  - `metadata_json`
 - `domain_projection_status`
   - `domain_name` primary key
   - `target_store`
@@ -545,12 +559,23 @@ Required constraints and indexes:
 - unique `system.outbox_event(dedupe_key)`
 - `(aggregate_type, aggregate_id, occurred_at_utc)` on
   `system.outbox_event`
+- unique `(domain_name, source_family, source_identity)` on
+  `system.domain_projection_source_status`
+- `(domain_name, ready_for_postgres, lag_seconds)` on
+  `system.domain_projection_source_status`
 - `(domain_name, ready_for_postgres, checked_at_utc desc)` on
   `system.domain_projection_status`
 - unique `(posture_id, blocker_code)` on `runtime.control_posture_blocker`
 
 Outbox insertion must use database-level conflict handling against the
 unique dedupe key, not only in-process checks.
+
+`domain_projection_status` is a domain-level summary only. It must be
+derived from `domain_projection_source_status` rows and cannot mark a
+domain ready unless every required source family for that domain is
+present, fresh, and projected. This prevents a fresh source such as
+`data/journal.db` from masking a stalled artifact directory, config
+snapshot, baseline file, or operator-control input.
 
 Wave 2 may add `system.legacy_import_batch` as an implementation-support
 table for bridge auditability. If added, it must record source kind,
@@ -573,17 +598,18 @@ summary.
    writes in the batch succeed.
 
 The initial bridge is not sufficient by itself. Until canonical writers
-replace artifact/SQLite writers in later waves, Wave 2 must also run a
-continuous bridge in `tail` mode or an equivalent dual-write adapter for
-each pivoted domain. A domain is not eligible for Postgres reads unless
-its bridge and projector watermarks are within
-`TRADINGX_PROJECTION_MAX_LAG_SECONDS` or the source is explicitly known
+replace artifact/SQLite/config/environment writers in later waves, Wave 2
+must also run a continuous bridge in `tail` mode or an equivalent
+dual-write adapter for each pivoted domain. A domain is not eligible for
+Postgres reads unless every required source family for that domain has a
+healthy source row and its bridge/projector watermarks are within
+`TRADINGX_PROJECTION_MAX_LAG_SECONDS`, or the source is explicitly known
 to be immutable.
 
 ### Required projectors
 
 - `runtime_projection`: runtime snapshots, heartbeat history, control
-  posture snapshots
+  posture snapshots, and market-data posture timeline events
 - `incident_projection`: incidents and operator timeline events
 - `portfolio_projection`: portfolio workspace, positions, performance,
   exposure, attribution, execution quality
@@ -609,11 +635,24 @@ The bridge must cover at least:
   `artifacts/operator_platform`
 - portfolio baselines such as `artifacts/ops/paper_account_starting_state.json`
 - approved model weight snapshots under `config/strategy/weights`
+- live-control configuration and environment posture inputs, including
+  broker credential presence, config live enablement, live opt-in state,
+  write-signing configuration, dry-run state, and manual kill-switch
+  status
+- market-data posture inputs, including configured market-data mode,
+  effective runtime mode alignment, and any stale/degraded market-data
+  posture signals surfaced by Wave 1 read models
 - SQLite OMS journal events from `data/journal.db`
 - validation trial SQLite data under `data/validation` when used by the
   current Wave 1 read model
 - operator-control state files and kill-switch markers
 - document/report files currently listed by Wave 1 read models
+
+Control-posture projection may evaluate live config/env facts directly at
+read time only if the evaluator is part of the Postgres-backed read model,
+emits a current source-status row, and participates in the same readiness
+checks as bridged legacy sources. It must not be hidden in `payload_json`
+or bypass the fail-closed posture blocker contract.
 
 Each source adapter must expose:
 
@@ -639,36 +678,46 @@ The legacy bridge must support:
   sources until later waves replace those writers
 - `--dry-run`: source discovery and dedupe-key preview without writes
 
-Each source adapter must publish a source watermark. Each projector must
-publish a projection watermark. The domain readiness row is healthy only
-when:
+Each source adapter must publish a source watermark per
+`source_family`/`source_identity`. Each projector must publish a
+projection watermark for every source family it consumes. The domain
+readiness row is healthy only when:
 
 - the initial historical import completed for the domain
-- the continuous bridge or dual-write path is active for mutable sources
+- the continuous bridge or dual-write path is active for every mutable
+  source family
 - the outbox dedupe constraint is present
-- projector lag is within `TRADINGX_PROJECTION_MAX_LAG_SECONDS`
-- the latest projected source timestamp is not older than the latest
-  source watermark, except for immutable document/report sources
+- every required source family has a `domain_projection_source_status`
+  row
+- each source family's projector lag is within
+  `TRADINGX_PROJECTION_MAX_LAG_SECONDS`
+- no latest projected source timestamp is older than its latest source
+  watermark, except for immutable document/report sources
 
 ## `/api/v1` Pivot Plan
 
 Route pivoting must be domain-by-domain and guarded by tests:
 
 1. `documents`: pivot first because it is index-like and low risk.
-2. `incidents` and `events`: pivot after incident/timeline bridge is
-   proven idempotent.
+2. `incidents`: pivot after incident bridge/backfill is proven
+   idempotent.
 3. `runtime` and `runtime/heartbeats`: pivot after heartbeat freshness
    and stale-state tests pass.
 4. `control-posture`: pivot after governance blocker parity and
-   fail-closed tests pass.
+   fail-closed tests pass, including live config/env source status.
 5. `validation`: pivot after candidate/criterion tri-state and report
    history tests pass.
 6. `portfolio`: pivot after positions, P&L, benchmark, exposure,
    attribution, and execution-quality projections are populated.
-7. `investigations` and `replays`: pivot after list/detail id
+7. `commands` read side: store and test summaries, audit history, and
+   command timeline projections, but do not promote the route family to
+   stable or OpenAPI-visible until Wave 3.
+8. `events`: pivot only after all timeline source families needed by the
+   architecture are projected and parity-tested, including incidents,
+   runtime, validation, command read-side history, and market-data posture
+   events.
+9. `investigations` and `replays`: pivot after list/detail id
    consistency is tested.
-8. `commands` read side: store and test summaries, but do not promote
-   the route family to stable or OpenAPI-visible until Wave 3.
 
 ### Pivot mechanism
 
@@ -705,11 +754,15 @@ silently falling back for adjacent routes in the same domain.
 ### SSE parity
 
 `GET /api/v1/stream` must use the same domain router as polling reads.
-When `runtime`, `incidents`, `events`, or `control_posture` pivot to
-Postgres, their stream topics must pivot in the same change and pass the
-same readiness checks. Contract tests must prove that polling and stream
-payloads for a pivoted domain come from the same source family and that
-`commands` remains rejected as an unknown topic until Wave 3.
+When `runtime`, `incidents`, `events`, `control_posture`, `validation`,
+or `portfolio` pivot to Postgres, their stream topics must pivot in the
+same change and pass the same readiness checks. If a declared stream
+topic is not yet implemented in Wave 2, it must remain explicitly
+rejected or legacy-routed until the matching polling domain and
+source-family readiness checks can move with it. Contract tests must
+prove that polling and stream payloads for a pivoted domain come from the
+same source family and that `commands` remains rejected as an unknown
+topic until Wave 3.
 
 Every pivot must preserve the Wave 1 envelope:
 
@@ -767,38 +820,46 @@ Exit criteria:
 4. Add batch processing and checkpoint resume tests.
 5. Add failure tests proving partial batches do not advance the
    checkpoint.
+6. Add source-family readiness aggregation tests proving one fresh source
+   cannot mark a multi-source domain ready while another required source
+   is stale or missing.
 
 Exit criteria:
 
 - projectors are idempotent
 - projection checkpoints survive restart
 - projection failures are visible without corrupting read state
-- database-level outbox dedupe and domain readiness status are verified
+- database-level outbox dedupe, per-source readiness, and domain
+  readiness status are verified
 
 ### Workstream D: Legacy bridge and backfill
 
 1. Build source adapters for artifact directories, operator-control
-   files, config weight snapshots, ops baseline files, and SQLite journal
-   events.
+   files, config weight snapshots, ops baseline files, live config/env
+   posture inputs, and SQLite journal events.
 2. Define stable dedupe keys for each source kind.
 3. Add a bridge CLI:
    - `uv run python -m tradingx.controlplane.legacy_bridge --once`
    - `uv run python -m tradingx.controlplane.legacy_bridge --since 2026-04-23T00:00:00Z`
    - `uv run python -m tradingx.controlplane.legacy_bridge --tail`
    - `uv run python -m tradingx.controlplane.legacy_bridge --dry-run`
-4. Record bridge watermarks and update `domain_projection_status`.
+4. Record bridge watermarks in `domain_projection_source_status` and
+   update `domain_projection_status` only from the per-source aggregate.
 5. Add bridge tests with fixture artifacts.
 6. Add an idempotency test that runs the same backfill twice and proves
    row counts do not double.
-7. Add a stale-watermark test proving a domain cannot pivot when mutable
-   sources have advanced beyond the projected watermark.
+7. Add stale-watermark tests proving a domain cannot pivot when any
+   required mutable source family has advanced beyond the projected
+   watermark.
+8. Add control-posture source tests proving live config/env facts are
+   present, fresh, and reflected in structured blockers.
 
 Exit criteria:
 
 - historical command/runtime/operator history is queryable through the
   canonical read path
 - continuous bridge or dual-write freshness is healthy for every mutable
-  source behind a pivoted domain
+  source family behind a pivoted domain
 - read routes are not split between old and new history once pivoted
 
 ### Workstream E: API read-model pivot
@@ -810,8 +871,15 @@ Exit criteria:
    required-Postgres mode based on config.
 4. Pivot domains in the order listed above.
 5. Pivot matching `/api/v1/stream` topics with the same domain router.
-6. Add contract tests for legacy mode, hybrid mode, and Postgres mode.
-7. Assert provisional write routes remain hidden from OpenAPI and return
+6. Add event-route tests proving Postgres-backed `/api/v1/events`
+   includes the required runtime, validation, command read-side, incident,
+   and market-data posture families before the route can pivot.
+7. Add stream parity tests for `runtime`, `incidents`, `events`,
+   `control_posture`, `validation`, and `portfolio`; topics not
+   implemented in Wave 2 must remain explicitly rejected or legacy-routed
+   until their polling domain pivots.
+8. Add contract tests for legacy mode, hybrid mode, and Postgres mode.
+9. Assert provisional write routes remain hidden from OpenAPI and return
    `503` in both modes.
 
 Exit criteria:
@@ -821,6 +889,8 @@ Exit criteria:
 - per-domain route selection is explicit, test-covered, and reversible
 - `/api/v1/stream` remains read-topic only and stays source-parity aligned
   with its corresponding polling routes
+- `/api/v1/events` does not pivot until every required timeline source
+  family has fresh Postgres coverage
 
 ### Workstream F: Local dev stack
 
@@ -831,7 +901,7 @@ Exit criteria:
    - start Postgres
    - run migrations
    - run legacy bridge/backfill
-   - run legacy bridge tailer for mutable sources
+   - run legacy bridge tailer for mutable source families
    - run projectors
    - start web app in Postgres mode
 4. Keep the broader multi-service stack for Wave 6.
@@ -873,8 +943,10 @@ body showing:
 - bridge/backfill command used
 - bridge tail command or dual-write freshness proof used
 - projector command used
-- `/api/v1/control-posture` and `/api/v1/runtime` checked in Postgres
-  mode
+- per-source readiness status for at least one multi-source domain
+- `/api/v1/control-posture`, `/api/v1/runtime`, and `/api/v1/events`
+  checked in Postgres mode
+- stream parity spot-check for at least one pivoted polling domain
 
 ## Rollback Plan
 
@@ -898,7 +970,8 @@ fixes over destructive data rollback.
 1. Persistence dependencies, config, and migrations.
 2. Repository interfaces and Postgres repositories.
 3. Outbox, unique dedupe constraint, and projection checkpoints.
-4. Legacy bridge/backfill, continuous tailing, and source watermarks.
+4. Legacy bridge/backfill, continuous tailing, and per-source-family
+   watermarks.
 5. Projectors and domain readiness status.
 6. Domain-aware read router.
 7. Postgres-backed read model.
@@ -919,7 +992,7 @@ The following must stay sequential:
 
 - schema migration before repositories
 - repositories before projectors
-- bridge/backfill and continuous freshness before route pivot
+- bridge/backfill and per-source continuous freshness before route pivot
 - domain router before hybrid route pivot
 - route pivot before claiming Wave 2 exit criteria
 - stable command/session write APIs must wait for Wave 3
@@ -929,22 +1002,28 @@ The following must stay sequential:
 Wave 2 is done when:
 
 1. Postgres schemas and migrations exist for every Wave 2 domain.
-2. Outbox events, unique dedupe constraints, projection checkpoints, and
-   domain readiness rows exist and are tested.
+2. Outbox events, unique dedupe constraints, projection checkpoints,
+   per-source readiness rows, and domain readiness rows exist and are
+   tested.
 3. Legacy history backfill is idempotent and covers command, runtime,
    operator, validation, replay, portfolio, incident, and document
    sources relevant to `/api/v1`.
-4. Continuous bridge or dual-write freshness is healthy for mutable
-   legacy sources before any matching route pivots.
+4. Continuous bridge or dual-write freshness is healthy for every
+   required mutable legacy source family before any matching route
+   pivots.
 5. `/api/v1` read routes can serve from Postgres mode without changing
    the Wave 1 envelope.
 6. Route pivots only occur after the matching historical bridge,
-   continuous freshness, and domain readiness checks pass.
+   per-source continuous freshness, and domain readiness checks pass.
 7. Polling routes and `/api/v1/stream` topics use the same source family
    for every pivoted domain.
-8. Provisional governed write routes remain hidden and non-integratable.
-9. Local development can run the Postgres-backed control-plane read side.
-10. Verification commands pass or documented Postgres-gated tests skip
+8. `/api/v1/events` has complete timeline source-family coverage before
+   it pivots to Postgres.
+9. Control-posture Postgres mode includes fresh live config/env facts and
+   structured blocker rows.
+10. Provisional governed write routes remain hidden and non-integratable.
+11. Local development can run the Postgres-backed control-plane read side.
+12. Verification commands pass or documented Postgres-gated tests skip
    with a clear missing-DSN reason.
 
 ## Adversarial Review Checklist
@@ -952,12 +1031,13 @@ Wave 2 is done when:
 Reviewers should challenge:
 
 1. Whether any read route can pivot to Postgres before historical bridge
-   coverage and continuous freshness exist.
+   coverage and per-source continuous freshness exist.
 2. Whether any helper POST or write-like route sneaks into Wave 2.
 3. Whether `/api/v1/stream` exposes command data before Wave 3 or drifts
-   from the polling route source for a pivoted domain.
+   from the polling route source for a pivoted domain, including
+   validation and portfolio topics.
 4. Whether control-posture snapshots can contradict top-level
-   fail-closed truth.
+   fail-closed truth or omit live config/env source truth.
 5. Whether backfill dedupe keys are protected by a database constraint
    and remain stable across repeated runs and path changes.
 6. Whether the schema supports Wave 3 mutation preconditions, including
@@ -968,3 +1048,6 @@ Reviewers should challenge:
    frontend or mobile clients.
 9. Whether hybrid/per-domain routing is explicit enough to make rollback
    and staged migration safe.
+10. Whether `/api/v1/events` can pivot before all runtime, validation,
+    command read-side, incident, and market-data posture event families
+    are projected and parity-tested.

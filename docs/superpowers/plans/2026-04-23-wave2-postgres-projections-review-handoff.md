@@ -42,10 +42,12 @@ The plan schedules:
    documents, outbox events, and projection checkpoints.
 4. Postgres repository boundaries for Wave 1 read routes.
 5. Legacy bridge/backfill and continuous tailing from current artifact
-   directories, operator-control files, config weight snapshots, ops
-   baselines, and SQLite data.
+   directories, operator-control files, live config/env posture inputs,
+   market-data posture inputs, config weight snapshots, ops baselines,
+   and SQLite data.
 6. Outbox-driven projectors with unique dedupe constraints, checkpoint
-   resume behavior, and domain readiness watermarks.
+   resume behavior, per-source readiness rows, and domain readiness
+   aggregation.
 7. Domain-by-domain `/api/v1` read-route pivoting to Postgres mode
    through an explicit hybrid read router.
 8. Local Postgres dev support while preserving the current legacy local
@@ -67,16 +69,22 @@ The plan repeats the Wave 1 guardrail that `GET /api/v1/stream` must
 not expose a `commands` topic until the canonical command lifecycle is
 stable in Wave 3. It also requires stream topics to use the same
 per-domain source router as polling reads, so a domain cannot pivot its
-REST route to Postgres while realtime still emits legacy snapshots.
+REST route to Postgres while realtime still emits legacy snapshots. This
+now covers the architecture-declared `runtime`, `incidents`, `events`,
+`control_posture`, `validation`, and `portfolio` topics; topics not
+implemented in Wave 2 must remain explicitly rejected or legacy-routed
+until their polling domains can move with them.
 
 ### No split-brain history
 
 The plan requires each `/api/v1` route to pivot only after the current
 projection, matching historical bridge/backfill, continuous bridge or
-dual-write freshness, and domain readiness row all pass. The legacy
-bridge must be idempotent, and repeated or concurrent runs must not
-duplicate rows because `system.outbox_event(dedupe_key)` is now required
-to be unique at the database layer.
+dual-write freshness, and per-source readiness rows all pass. The
+domain-level readiness row is a derived summary and cannot go green when
+any required source family is stale or missing. The legacy bridge must be
+idempotent, and repeated or concurrent runs must not duplicate rows
+because `system.outbox_event(dedupe_key)` is now required to be unique at
+the database layer.
 
 ### Per-domain pivot mechanism
 
@@ -85,13 +93,25 @@ instead of relying on a binary legacy/Postgres app switch. This makes the
 documented pivot order executable, gives rollback a specific mechanism,
 and prevents stale Postgres reads when readiness is false.
 
+### Events pivot only after all timeline families exist
+
+`GET /api/v1/events` is intentionally late in the pivot order. It cannot
+move to Postgres until incidents, runtime, validation, command read-side
+history, and market-data posture event families are all projected and
+parity-tested, so the canonical timeline does not silently drop deferred
+families.
+
 ### Control posture stays fail-closed
 
 The plan requires missing governance approval to remain a first-class
 blocker in Postgres snapshots and API responses. It also calls out
 contradictory nested posture truth as an adversarial-review target.
 Control-posture blockers must be queryable as structured rows or arrays,
-not trapped only inside `payload_json`.
+not trapped only inside `payload_json`. Live config/env facts such as
+broker credential presence, config live enablement, live opt-in,
+write-signing configuration, dry-run state, and kill-switch state must be
+bridged or evaluated by the Postgres-backed read model with their own
+freshness source status.
 
 ### Wave 3 preconditions have storage hooks
 
@@ -120,10 +140,10 @@ Please challenge the plan on:
    mutation-precondition work without exposing writes early.
 2. Whether the route pivot order and hybrid router prevent historical or
    realtime split-brain in Command Center, Mission Control, validation,
-   replay, and portfolio views.
-3. Whether backfill dedupe, unique outbox constraints, continuous bridge
-   watermarks, and checkpoint rules are precise enough to make migration
-   idempotent.
+   replay, and portfolio views, especially for `/api/v1/events`.
+3. Whether backfill dedupe, unique outbox constraints, per-source
+   continuous bridge watermarks, and checkpoint rules are precise enough
+   to make migration idempotent.
 4. Whether Postgres mode can be tested locally and in CI without making
    all legacy-mode tests database-dependent.
 5. Whether any planned endpoint or projector could leak artifact-shaped
@@ -133,6 +153,8 @@ Please challenge the plan on:
    guardrails.
 7. Whether every current Wave 1 read-model source is bridged or the
    corresponding domain remains explicitly on legacy reads.
+8. Whether a domain can be marked ready while one of its required source
+   families is stale or missing.
 
 ## Known Deferrals
 
