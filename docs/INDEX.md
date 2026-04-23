@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.37
+version: 1.2.38
 status: active
 created: 2026-04-17
 last_amended: 2026-04-23
-supersedes: INDEX-0001@1.2.36
+supersedes: INDEX-0001@1.2.37
 superseded_by: null
 author_session: gpt-5-codex-2026-04-23
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.37  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.38  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -136,6 +136,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0019 | Tranche 2.1 Stage 2 sleeve position ledger attribution | 1.0.0 | active | `docs/superpowers/specs/2026-04-22-tranche-2-1-stage-2-sleeve-position-ledger-attribution-design.md` |
 | DESIGN-0020 | TradingX frontend UX and information architecture | 1.0.0 | active | `docs/architecture/TradingX_Frontend_Design.md` |
 | DESIGN-0021 | TradingX dashboard and design system | 1.0.0 | active | `docs/architecture/TradingX_Dashboard_And_Design_System.md` |
+| DESIGN-0022 | TradingX headless control plane architecture | 1.0.0 | draft | `docs/architecture/TradingX_Headless_Control_Plane_Architecture.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 
