@@ -103,17 +103,23 @@ non-negotiable:
    This matters because `/api/config/proposals` returns
    `ConfigProposal`, not `WebActionResult`, so the idempotency store
    must preserve generic serialized JSON responses.
-8. **`live_disable_report()` keeps legacy keys stable.**
+8. **No secret may leak through safe summaries or readmodels.**
+   Any server-side signing secret added to `TradingConfig` must be
+   treated like credentials: it may never appear in
+   `to_safe_summary()`, `/api/config/summary`, readmodels, or any other
+   GET response. Only non-sensitive status booleans / diagnostics are
+   allowed there.
+9. **`live_disable_report()` keeps legacy keys stable.**
    Existing readmodels/alerts depend on `paper_only_mode`,
    `live_trading_enabled`, and `manual_kill_switch_active`.
    The report may grow richer, but those keys must stay valid.
-9. **Risk remains fail-closed.**
+10. **Risk remains fail-closed.**
    Requesting live mode without complete readiness must block with an
    explicit reason. It must not degrade to paper execution.
-10. **Do not overclaim Gate 4 sign-off in this branch.**
+11. **Do not overclaim Gate 4 sign-off in this branch.**
    Fresh drill windows, monitoring observation, and operator approval
    stay in the later evidence lane.
-11. **Do not spend this branch on naming cleanup.**
+12. **Do not spend this branch on naming cleanup.**
    Repo-wide renames of `PaperOnlyRiskEngine`,
    `AlpacaPaperExecutionGateway`, and similar compatibility names are
    out of scope unless a thin alias is required for clarity. The target
@@ -417,6 +423,8 @@ should be:
   entering `TRADINGX_WEB_WRITE_SIGNING_SECRET` at runtime;
 - the SPA keeps that secret only in in-memory state or
   `sessionStorage`, never in source, bundle output, or committed config;
+- the server-side copy of that secret is treated as sensitive config and
+  must never appear in `to_safe_summary()` / `/api/config/summary`;
 - `webapp/src/api.ts` signs every POST request client-side with the same
   canonical string the server verifies;
 - GET requests remain unsigned;
@@ -471,14 +479,16 @@ than widening `OperatorControlStore` for unrelated write-auth state.
   - unsigned POST rejection;
   - missing idempotency-key rejection;
   - signed POST success on an existing route;
-  - duplicate signed POST short-circuiting to the stored response.
+  - duplicate signed POST short-circuiting to the stored response;
+  - `/api/config/summary` never includes
+    `TRADINGX_WEB_WRITE_SIGNING_SECRET` or any raw signing-secret value.
 - [ ] Add failing frontend tests in `webapp/src/App.test.tsx` for:
   - write actions stay disabled until the operator unlocks the write
     secret locally;
   - unlocked write actions attach timestamp, idempotency key, and
     signature headers via `webapp/src/api.ts`;
-  - the secret is never read from build-time config or rendered into the
-    DOM.
+  - the secret is never read from build-time config, fetched from
+    `/api/config/summary`, or rendered into the DOM.
 - [ ] Add failing contract tests in:
   - `tests/contract/test_local_web_app_api_contract.py`
   - `tests/contract/test_day0_web_surface.py`
@@ -487,6 +497,9 @@ than widening `OperatorControlStore` for unrelated write-auth state.
 - [ ] In `src/tradingx/config.py`, add web-write security settings:
   - `TRADINGX_WEB_WRITE_SIGNING_SECRET`
   - `TRADINGX_WEB_WRITE_MAX_AGE_SECONDS`
+- [ ] Keep `TradingConfig.to_safe_summary()` and all config-summary
+  payloads secret-free. The server may expose only booleans / status
+  fields such as “write signing configured”, never the secret itself.
 - [ ] Create `src/tradingx/web/security.py` with:
   - canonical request hashing
   - HMAC verification
