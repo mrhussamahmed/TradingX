@@ -73,9 +73,11 @@ Live config/env facts may be evaluated during a read only if the
 evaluation persists a versioned `control_posture_snapshot`, structured
 blockers, source status, monotonic `resource_version`, and
 `state_fingerprint` before the API response is built. No-op refreshes
-must reuse the existing version/fingerprint so GET or SSE polling cannot
-make future preconditions stale when the effective posture has not
-changed.
+must reuse the existing version/fingerprint only when the full canonical
+persisted snapshot fingerprint is unchanged, including blockers, live
+control-layer states, governance posture, market-data posture,
+fail-closed reasons, and top-level fields. Any change to that full
+snapshot advances the version/fingerprint.
 
 ### Persistence namespace remains compatible
 
@@ -115,7 +117,8 @@ Please challenge the plan on:
 4. Whether `/api/v1/events` can still become partial or silently omit a
    required event family.
 5. Whether read-time control-posture evaluation can bypass persisted
-   version/fingerprint updates or churn versions when posture is
+   version/fingerprint updates, miss changes to any canonical posture
+   field, or churn versions when the full snapshot fingerprint is
    unchanged.
 6. Whether the `tradingx.persistence` namespace migration preserves
    existing imports while adding Postgres submodules.

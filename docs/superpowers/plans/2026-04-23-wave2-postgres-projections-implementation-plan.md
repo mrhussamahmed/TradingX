@@ -52,9 +52,11 @@ hidden and provisional until Wave 3.
 7. Control-posture live config/env evaluation must persist a versioned
    `control_posture_snapshot`, structured blockers, source status,
    `resource_version`, and `state_fingerprint` before the API response
-   is built. If the effective posture is unchanged, the refresh must
-   reuse the existing version/fingerprint; versions advance only when the
-   effective posture changes.
+   is built. If the full canonical persisted snapshot fingerprint is
+   unchanged, including blockers, live control-layer states, governance
+   posture, market-data posture, fail-closed reasons, and top-level
+   fields, the refresh must reuse the existing version/fingerprint.
+   Versions advance whenever that full snapshot fingerprint changes.
 8. The existing `tradingx.persistence` import surface must remain
    compatible while Postgres persistence code is introduced.
 9. Legacy local mode remains the default and must not require Postgres.
@@ -241,8 +243,10 @@ Tasks:
    snapshots and blocker rows before responses use them, and that
    no-op refreshes reuse the existing `resource_version` and
    `state_fingerprint`.
-9. Add tests proving control-posture versions advance only when the
-   effective posture changes.
+9. Add tests proving control-posture versions advance when blockers,
+   live control-layer states, governance posture, market-data posture,
+   fail-closed reasons, or top-level fields change, and do not advance
+   when the full persisted snapshot fingerprint is unchanged.
 
 Owned paths:
 
@@ -424,7 +428,8 @@ Reviewers should challenge:
 4. Whether `validation_projection` and `commanding_projection` own their
    timeline event families.
 5. Whether control-posture read-time evaluation can bypass persisted
-   version/fingerprint updates or churn versions when posture is
+   version/fingerprint updates, miss changes to any canonical posture
+   field, or churn versions when the full snapshot fingerprint is
    unchanged.
 6. Whether the `tradingx.persistence` namespace migration preserves
    existing imports while adding Postgres submodules.
