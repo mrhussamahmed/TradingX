@@ -69,7 +69,11 @@ non-negotiable:
 8. **Reserve-cash threshold is concrete in code.** Use:
    `max(5% of broker equity, PortfolioConstructionConfig.min_trade_notional)`.
    For each reserve snapshot day, reconstruct broker equity as:
-   `sum(active-sleeve ending_equity for that trading_day) + residual reserve cash + residual reserve market_value`.
+   `sum(ending_equity for every SleeveDailyAttributionRecord written for that trading_day) + residual reserve cash + residual reserve market_value`.
+   Do **not** filter this by the latest active blueprint membership.
+   The reserve window can span narrowing or other activation changes, so
+   the authoritative sleeve set for a historical day is “all same-day
+   persisted sleeve attribution records,” not “today’s active sleeves.”
 9. **Incomplete equity reconstruction is a blocker.** If the runtime
    cannot reconstruct broker equity for a reserve snapshot day inside
    the window, the monitor stays pending rather than underestimating the
@@ -108,6 +112,7 @@ ledger bootstrap, replay, gap semantics, or runtime-state-root work.
 - `src/tradingx/persistence.py`
 - `src/tradingx/web/readmodels.py`
 - `tests/unit/test_drift_gateway.py`
+- `tests/unit/test_drift_gap_awareness.py`
 - `tests/unit/test_dashboard_two_sleeve_view.py`
 - `tests/integration/test_drift_end_to_end.py`
 
@@ -159,6 +164,18 @@ remaining DESIGN-0019 preconditions directly into the live gateway.
     `pnl::<sleeve_id>` to stay `pending`;
   - missing daily attribution needed to reconstruct broker equity for a
     reserve snapshot day forces `pnl::<sleeve_id>` to stay `pending`.
+- [ ] Add a **real store-backed** failing test slice in
+  `tests/unit/test_drift_gap_awareness.py` (or a sibling store-backed
+  drift-reader test) that writes:
+  - same-day `SleeveDailyAttributionRecord`s,
+  - `ResidualReserveSnapshot`s, and
+  - any needed `SleeveAttributionGapRecord`s
+  through `FilesystemArtifactStore`, then proves the
+  `StoreBackedAttributionRecordsReader` reserve-readiness helper:
+  - blocks on unresolved reserve positions;
+  - blocks on reserve cash above threshold;
+  - blocks when same-day equity reconstruction is incomplete; and
+  - succeeds when the window is clean.
 - [ ] Verify those tests fail against current `main`.
 - [ ] Add the smallest typed reserve reader in `src/tradingx/persistence.py`:
   `list_residual_reserve_snapshots() -> tuple[ResidualReserveSnapshot, ...]`.
@@ -168,9 +185,10 @@ remaining DESIGN-0019 preconditions directly into the live gateway.
   - inspect residual reserve snapshots whose `trading_day` falls inside
     `window_days`;
   - block if any snapshot still has unresolved reserve positions;
-  - reconstruct broker equity day-by-day from same-day
-    `SleeveDailyAttributionRecord.ending_equity` for the active sleeves
-    plus reserve cash and reserve market value;
+  - reconstruct broker equity day-by-day from **all**
+    same-day `SleeveDailyAttributionRecord.ending_equity` values plus
+    reserve cash and reserve market value, regardless of whether the
+    sleeve is still active today;
   - block if equity reconstruction is incomplete for any reserve
     snapshot day; and
   - block if reserve cash exceeds
