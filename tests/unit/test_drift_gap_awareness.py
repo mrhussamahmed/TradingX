@@ -8,7 +8,12 @@ from tradingx.drift.gateway import StoreBackedAttributionRecordsReader
 from tradingx.drift.live_returns_source import SleeveDailyReturnsReader
 from tradingx.drift.pnl_divergence import compute_live_vs_backtest_pnl_divergence
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.types import SleeveAttributionGapRecord, SleeveDailyAttributionRecord
+from tradingx.types import (
+    ResidualPositionAllocation,
+    ResidualReserveSnapshot,
+    SleeveAttributionGapRecord,
+    SleeveDailyAttributionRecord,
+)
 
 
 def _record(day: str, value: str) -> SleeveDailyAttributionRecord:
@@ -22,6 +27,54 @@ def _record(day: str, value: str) -> SleeveDailyAttributionRecord:
         daily_return=Decimal(value),
         per_symbol_open_weight=(("SPY", Decimal("1")),),
         per_symbol_close_weight=(("SPY", Decimal("1")),),
+    )
+
+
+def _record_for_sleeve(
+    *,
+    sleeve_id: str,
+    day: str,
+    ending_equity: str,
+    daily_return: str,
+) -> SleeveDailyAttributionRecord:
+    return SleeveDailyAttributionRecord(
+        attribution_id=f"{sleeve_id}__{day}",
+        sleeve_id=sleeve_id,
+        trading_day=day,
+        recorded_at_utc=datetime.fromisoformat(f"{day}T20:00:00+00:00"),
+        starting_equity=Decimal("100"),
+        ending_equity=Decimal(ending_equity),
+        daily_return=Decimal(daily_return),
+        per_symbol_open_weight=(("SPY", Decimal("1")),),
+        per_symbol_close_weight=(("SPY", Decimal("1")),),
+    )
+
+
+def _reserve_snapshot(
+    *,
+    day: str,
+    cash_balance: str,
+    positions: tuple[tuple[str, str, str, str], ...] = (),
+) -> ResidualReserveSnapshot:
+    return ResidualReserveSnapshot(
+        snapshot_id=f"reserve-{day}",
+        ledger_genesis_id="ledger-1",
+        active_blueprint_activation_id="activation-1",
+        trading_day=day,
+        recorded_at_utc=datetime.fromisoformat(f"{day}T20:00:00+00:00"),
+        cash_balance=Decimal(cash_balance),
+        positions=tuple(
+            ResidualPositionAllocation(
+                symbol=symbol,
+                quantity=Decimal(quantity),
+                average_cost=Decimal(average_cost),
+                market_value=Decimal(market_value),
+                reason="bootstrap",
+                evidence_refs=(),
+            )
+            for symbol, quantity, average_cost, market_value in positions
+        ),
+        bootstrap_id="bootstrap-1",
     )
 
 
@@ -78,3 +131,134 @@ def test_pnl_divergence_stays_pending_when_gap_flagged() -> None:
     )
 
     assert verdict.severity == "pending"
+
+
+def test_store_backed_reader_blocks_pnl_activation_on_unresolved_reserve_positions(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="trend-following-v1",
+            day="2026-04-22",
+            ending_equity="500",
+            daily_return="0.01",
+        )
+    )
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="vol-target-v1",
+            day="2026-04-22",
+            ending_equity="400",
+            daily_return="0.01",
+        )
+    )
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="10",
+            positions=(("QQQ", "1", "100", "105"),),
+        )
+    )
+
+    reader = StoreBackedAttributionRecordsReader(
+        operator_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 20, 0, tzinfo=UTC),
+    )
+
+    assert "unresolved reserve positions" in str(
+        reader.pnl_activation_blocker(window_days=60)
+    )
+
+
+def test_store_backed_reader_blocks_pnl_activation_on_reserve_cash_threshold(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="trend-following-v1",
+            day="2026-04-22",
+            ending_equity="400",
+            daily_return="0.01",
+        )
+    )
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="vol-target-v1",
+            day="2026-04-22",
+            ending_equity="400",
+            daily_return="0.01",
+        )
+    )
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="60",
+        )
+    )
+
+    reader = StoreBackedAttributionRecordsReader(
+        operator_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 20, 0, tzinfo=UTC),
+    )
+
+    assert "reserve cash above activation threshold" in str(
+        reader.pnl_activation_blocker(window_days=60)
+    )
+
+
+def test_store_backed_reader_blocks_when_equity_reconstruction_is_incomplete(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="10",
+        )
+    )
+
+    reader = StoreBackedAttributionRecordsReader(
+        operator_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 20, 0, tzinfo=UTC),
+    )
+
+    assert "incomplete equity reconstruction" in str(
+        reader.pnl_activation_blocker(window_days=60)
+    )
+
+
+def test_store_backed_reader_allows_pnl_activation_when_reserve_window_is_clean(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="trend-following-v1",
+            day="2026-04-22",
+            ending_equity="500",
+            daily_return="0.01",
+        )
+    )
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="vol-target-v1",
+            day="2026-04-22",
+            ending_equity="500",
+            daily_return="0.01",
+        )
+    )
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="20",
+        )
+    )
+
+    reader = StoreBackedAttributionRecordsReader(
+        operator_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 20, 0, tzinfo=UTC),
+    )
+
+    assert reader.pnl_activation_blocker(window_days=60) is None

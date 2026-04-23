@@ -21,6 +21,7 @@ from tradingx.drift.psi import compute_population_stability_index
 from tradingx.drift.reference import ReferenceDistributionSnapshot
 from tradingx.features.volatility import forecast_volatility
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio_construction import PortfolioConstructionConfig
 from tradingx.risk_free import load_treasury_yield_cache
 from tradingx.signals.trend import generate_trend_signal
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
@@ -273,8 +274,10 @@ class StoreBackedAttributionRecordsReader:
         self,
         *,
         operator_store: FilesystemArtifactStore,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._store = operator_store
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
 
     def records_for_sleeve(
         self,
@@ -283,7 +286,7 @@ class StoreBackedAttributionRecordsReader:
         window_days: int,
     ) -> tuple[SleeveDailyAttributionRecord, ...]:
         records = self._store.list_sleeve_daily_attribution_records(sleeve_id=sleeve_id)
-        window_start = (datetime.now(UTC) - timedelta(days=window_days)).date()
+        window_start = (self._now_provider() - timedelta(days=window_days)).date()
         return tuple(
             record
             for record in records
@@ -291,13 +294,67 @@ class StoreBackedAttributionRecordsReader:
         )
 
     def has_gap_for_sleeve(self, sleeve_id: str, *, window_days: int) -> bool:
-        window_start = (datetime.now(UTC) - timedelta(days=window_days)).date()
+        window_start = (self._now_provider() - timedelta(days=window_days)).date()
         return any(
             date.fromisoformat(record.trading_day) >= window_start
             for record in self._store.list_sleeve_attribution_gap_records(
                 sleeve_id=sleeve_id
             )
         )
+
+    def pnl_activation_blocker(self, *, window_days: int) -> str | None:
+        window_start = (self._now_provider() - timedelta(days=window_days)).date()
+        min_trade_notional = PortfolioConstructionConfig().min_trade_notional
+        reserve_snapshots = tuple(
+            snapshot
+            for snapshot in self._store.list_residual_reserve_snapshots()
+            if date.fromisoformat(snapshot.trading_day) >= window_start
+        )
+        for snapshot in reserve_snapshots:
+            has_residual_position = any(
+                position.quantity != Decimal("0") for position in snapshot.positions
+            )
+            if has_residual_position:
+                return (
+                    "pending: unresolved reserve positions remain on "
+                    f"{snapshot.trading_day}"
+                )
+            if self._store.list_sleeve_attribution_gap_records(
+                trading_day=snapshot.trading_day
+            ):
+                return (
+                    "pending: equity reconstruction blocked by gap records on "
+                    f"{snapshot.trading_day}"
+                )
+            day_records = self._store.list_sleeve_daily_attribution_records(
+                trading_day=snapshot.trading_day
+            )
+            if not day_records:
+                return (
+                    "pending: incomplete equity reconstruction on "
+                    f"{snapshot.trading_day}"
+                )
+            broker_equity = (
+                sum(
+                    (record.ending_equity for record in day_records),
+                    start=Decimal("0"),
+                )
+                + snapshot.cash_balance
+                + sum(
+                    (position.market_value for position in snapshot.positions),
+                    start=Decimal("0"),
+                )
+            )
+            threshold = max(
+                broker_equity * Decimal("0.05"),
+                min_trade_notional,
+            )
+            if snapshot.cash_balance > threshold:
+                return (
+                    "pending: reserve cash above activation threshold on "
+                    f"{snapshot.trading_day}"
+                )
+        return None
 
 
 class ArtifactBacktestReferenceReturnsReader:
@@ -541,7 +598,24 @@ class DriftAlarmGateway:
             "has_gap_for_sleeve",
             lambda sleeve_id, *, window_days: False,
         )
+        pnl_activation_blocker = getattr(
+            self._attribution_reader,
+            "pnl_activation_blocker",
+            lambda *, window_days: None,
+        )
         for sleeve_id in self._blueprint.signal_monitor_sleeve_ids:
+            activation_blocker = pnl_activation_blocker(
+                window_days=self._blueprint.pnl_divergence_rolling_window_days,
+            )
+            if activation_blocker is not None:
+                verdicts.append(
+                    _pending_verdict(
+                        monitor_id=f"pnl::{sleeve_id}",
+                        sleeve_id=sleeve_id,
+                        details=activation_blocker,
+                    )
+                )
+                continue
             has_gap = has_gap_for_sleeve(
                 sleeve_id,
                 window_days=self._blueprint.pnl_divergence_rolling_window_days,
@@ -605,16 +679,35 @@ class ArtifactBackedDriftAlarmStateReader:
         self._store = store
 
     def has_alarm(self, *, sleeve_id: str) -> bool:
-        records = self._store.list_drift_monitor_verdict_records()
-        if not records:
-            return False
-        latest_recorded_at = max(record.recorded_at_utc for record in records)
-        latest_batch = tuple(
-            record for record in records if record.recorded_at_utc == latest_recorded_at
-        )
+        latest_batch = self._latest_batch()
         return any(
             record.severity == "critical" and record.sleeve_id == sleeve_id
             for record in latest_batch
+        )
+
+    def latest_severity_by_sleeve(self) -> dict[str, str]:
+        precedence = {
+            "info": 0,
+            "pending": 1,
+            "warning": 2,
+            "critical": 3,
+        }
+        by_sleeve: dict[str, str] = {}
+        for record in self._latest_batch():
+            if record.sleeve_id is None:
+                continue
+            current = by_sleeve.get(record.sleeve_id)
+            if current is None or precedence[record.severity] > precedence[current]:
+                by_sleeve[record.sleeve_id] = record.severity
+        return by_sleeve
+
+    def _latest_batch(self) -> tuple[DriftMonitorVerdictRecord, ...]:
+        records = self._store.list_drift_monitor_verdict_records()
+        if not records:
+            return ()
+        latest_recorded_at = max(record.recorded_at_utc for record in records)
+        return tuple(
+            record for record in records if record.recorded_at_utc == latest_recorded_at
         )
 
 

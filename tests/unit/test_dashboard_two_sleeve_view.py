@@ -10,6 +10,7 @@ from tradingx.types import (
     BlueprintActivationRecord,
     BlueprintSleeveBinding,
     BotRuntimeState,
+    DriftMonitorVerdictRecord,
     OperatorAlert,
     ServiceCycleSnapshot,
     SleeveDailyAttributionRecord,
@@ -140,15 +141,53 @@ def test_dashboard_shows_active_blueprint_and_per_sleeve_rows(tmp_path) -> None:
             per_symbol_close_weight=(("SPY", Decimal("0.1")),),
         )
     )
-    runtime_store.write_operator_alert(
-        OperatorAlert(
-            alert_id="drift-1",
+    recorded_at = datetime(2026, 4, 22, 20, 0, tzinfo=UTC)
+    runtime_store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-1",
+            monitor_id="ks::trend-following-v1",
+            sleeve_id="trend-following-v1",
+            severity="info",
+            metric_value=Decimal("0.50"),
+            threshold_value=Decimal("0.05"),
+            details="ks healthy",
+            recorded_at_utc=recorded_at,
+        )
+    )
+    runtime_store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-2",
+            monitor_id="pnl::trend-following-v1",
+            sleeve_id="trend-following-v1",
             severity="critical",
-            category="portfolio_drift_alarm",
-            summary="ks::trend-following-v1 CRITICAL: divergence detected",
-            evidence_refs=(),
-            delivery_targets=("operator_dashboard",),
-            sent_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+            metric_value=Decimal("0.08"),
+            threshold_value=Decimal("0.04"),
+            details="pnl drift critical",
+            recorded_at_utc=recorded_at,
+        )
+    )
+    runtime_store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-3",
+            monitor_id="ks::vol-target-v1",
+            sleeve_id="vol-target-v1",
+            severity="info",
+            metric_value=Decimal("0.50"),
+            threshold_value=Decimal("0.05"),
+            details="ks healthy",
+            recorded_at_utc=recorded_at,
+        )
+    )
+    runtime_store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-4",
+            monitor_id="pnl::vol-target-v1",
+            sleeve_id="vol-target-v1",
+            severity="pending",
+            metric_value=None,
+            threshold_value=None,
+            details="reserve blocker",
+            recorded_at_utc=recorded_at,
         )
     )
 
@@ -170,6 +209,61 @@ def test_dashboard_preserves_legacy_layout_without_blueprint(tmp_path) -> None:
 
     assert snapshot.strategy_panel.active_blueprint_id is None
     assert snapshot.strategy_panel.constituent_sleeve_ids == ()
+
+
+def test_dashboard_uses_latest_verdict_batch_for_info_severity(tmp_path) -> None:
+    _write_minimal_cycle(tmp_path)
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    runtime_store = FilesystemArtifactStore(tmp_path / "artifacts")
+    operator_store.write_blueprint_activation_record(
+        BlueprintActivationRecord(
+            activation_id="activation-1",
+            blueprint_id="bp-default-v1",
+            sleeve_activation_bindings=(
+                BlueprintSleeveBinding(
+                    sleeve_id="trend-following-v1",
+                    strategy_id="trend-following-v1",
+                    captured_snapshot_id="snap-trend",
+                ),
+            ),
+            status="active",
+            approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+            approved_by="operator:test",
+            source_blueprint_path=Path("bp-default.yaml"),
+        )
+    )
+    runtime_store.write_sleeve_daily_attribution_record(
+        SleeveDailyAttributionRecord(
+            attribution_id="trend-following-v1__2026-04-22",
+            sleeve_id="trend-following-v1",
+            trading_day="2026-04-22",
+            recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+            starting_equity=Decimal("50000"),
+            ending_equity=Decimal("50500"),
+            daily_return=Decimal("0.01"),
+            per_symbol_open_weight=(("SPY", Decimal("0.5")),),
+            per_symbol_close_weight=(("SPY", Decimal("0.5")),),
+        )
+    )
+    runtime_store.write_drift_monitor_verdict_record(
+        DriftMonitorVerdictRecord(
+            verdict_id="verdict-1",
+            monitor_id="pnl::trend-following-v1",
+            sleeve_id="trend-following-v1",
+            severity="info",
+            metric_value=Decimal("0.01"),
+            threshold_value=Decimal("0.04"),
+            details="healthy",
+            recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
+        )
+    )
+
+    snapshot = _read_model(tmp_path).build_portfolio_workspace_snapshot()
+    rows = {row.strategy_id: row for row in snapshot.strategy_panel.strategies}
+
+    assert rows["trend-following-v1"].drift_severity == "info"
 
 
 def test_dashboard_surfaces_narrowing_notice(tmp_path) -> None:

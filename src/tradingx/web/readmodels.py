@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from tradingx.config import TradingConfig
+from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
@@ -1231,18 +1232,9 @@ class LocalWebReadModel:
 
     def _latest_drift_severity_by_sleeve(self) -> dict[str, str]:
         store = FilesystemArtifactStore(self._config.runtime.artifact_root)
-        payloads = store.list_artifact_payloads("operator_alerts")
-        by_sleeve: dict[str, str] = {}
-        pattern = re.compile(r"^[a-z_]+::(?P<sleeve_id>[^ ]+) (?P<severity>[A-Z]+):")
-        for payload in payloads:
-            if str(payload.get("category", "")) != "portfolio_drift_alarm":
-                continue
-            summary = str(payload.get("summary", ""))
-            match = pattern.match(summary)
-            if match is None:
-                continue
-            by_sleeve[match.group("sleeve_id")] = match.group("severity").lower()
-        return by_sleeve
+        return ArtifactBackedDriftAlarmStateReader(
+            store=store
+        ).latest_severity_by_sleeve()
 
     def _closed_trade_count_by_sleeve(
         self,

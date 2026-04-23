@@ -1,13 +1,37 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import pandas as pd
 
 from tradingx.drift.blueprint import DriftMonitorBlueprint
 from tradingx.drift.gateway import DRIFT_ALARM_CONTROL_TYPE, DriftAlarmGateway
 from tradingx.drift.reference import build_reference_distribution_snapshot
-from tradingx.types import OperatorAlert, RiskControlEvent
+from tradingx.types import OperatorAlert, RiskControlEvent, SleeveDailyAttributionRecord
+
+
+def _daily_attribution_record(
+    *,
+    sleeve_id: str,
+    trading_day: date,
+) -> SleeveDailyAttributionRecord:
+    return SleeveDailyAttributionRecord(
+        attribution_id=f"{sleeve_id}__{trading_day.isoformat()}",
+        sleeve_id=sleeve_id,
+        trading_day=trading_day.isoformat(),
+        recorded_at_utc=datetime.combine(
+            trading_day,
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
+        + timedelta(hours=20),
+        starting_equity=Decimal("100"),
+        ending_equity=Decimal("101"),
+        daily_return=Decimal("0.01"),
+        per_symbol_open_weight=(("SPY", Decimal("1")),),
+        per_symbol_close_weight=(("SPY", Decimal("1")),),
+    )
 
 
 def test_drift_alarm_gateway_end_to_end_produces_expected_verdicts() -> None:
@@ -45,13 +69,24 @@ def test_drift_alarm_gateway_end_to_end_produces_expected_verdicts() -> None:
 
     class _AttributionReader:
         def records_for_sleeve(self, sleeve_id, *, window_days):
+            del window_days
+            start = date(2026, 3, 1)
+            return tuple(
+                _daily_attribution_record(
+                    sleeve_id=sleeve_id,
+                    trading_day=start + timedelta(days=offset),
+                )
+                for offset in range(35)
+            )
+
+        def has_gap_for_sleeve(self, sleeve_id, *, window_days):
             del sleeve_id, window_days
-            return ()
+            return False
 
     class _ReferenceReturnsReader:
         def returns_for_sleeve(self, sleeve_id):
             del sleeve_id
-            return ()
+            return tuple(Decimal("0.01") for _ in range(35))
 
     risk_events: list[RiskControlEvent] = []
     alerts: list[OperatorAlert] = []
@@ -95,6 +130,22 @@ def test_drift_alarm_gateway_end_to_end_produces_expected_verdicts() -> None:
             verdict for verdict in verdicts if verdict.monitor_id == "ks::vol-target-v1"
         ).severity
         == "critical"
+    )
+    assert (
+        next(
+            verdict
+            for verdict in verdicts
+            if verdict.monitor_id == "pnl::trend-following-v1"
+        ).severity
+        == "info"
+    )
+    assert (
+        next(
+            verdict
+            for verdict in verdicts
+            if verdict.monitor_id == "pnl::vol-target-v1"
+        ).severity
+        == "info"
     )
     assert gateway.has_alarm(sleeve_id="trend-following-v1") is True
     assert gateway.has_alarm(sleeve_id="vol-target-v1") is True

@@ -675,13 +675,23 @@ class FilesystemArtifactStore:
     def list_sleeve_daily_attribution_records(
         self,
         *,
-        sleeve_id: str,
+        sleeve_id: str | None = None,
+        trading_day: str | None = None,
     ) -> tuple[SleeveDailyAttributionRecord, ...]:
         category_dir = self._root_dir / "sleeve_daily_attribution"
         if not category_dir.exists():
             return ()
         records: list[SleeveDailyAttributionRecord] = []
-        for path in sorted(category_dir.glob(f"{sleeve_id}__*.json")):
+        pattern = (
+            f"{sleeve_id}__{trading_day}.json"
+            if sleeve_id is not None and trading_day is not None
+            else (
+                f"{sleeve_id}__*.json"
+                if sleeve_id is not None
+                else f"*__{trading_day}.json" if trading_day is not None else "*.json"
+            )
+        )
+        for path in sorted(category_dir.glob(pattern)):
             payload = json.loads(path.read_text(encoding="utf-8"))
             records.append(self._deserialize_sleeve_daily_attribution_record(payload))
         return tuple(records)
@@ -757,6 +767,21 @@ class FilesystemArtifactStore:
                 latest = record
         return latest
 
+    def list_residual_reserve_snapshots(
+        self,
+        *,
+        trading_day: str | None = None,
+    ) -> tuple[ResidualReserveSnapshot, ...]:
+        category_dir = self._root_dir / "residual_reserve"
+        if not category_dir.exists():
+            return ()
+        records: list[ResidualReserveSnapshot] = []
+        pattern = f"{trading_day}__*.json" if trading_day is not None else "*.json"
+        for path in sorted(category_dir.glob(pattern)):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            records.append(self._deserialize_residual_reserve_snapshot(payload))
+        return tuple(records)
+
     def read_session_open_portfolio_state_record(
         self,
         *,
@@ -771,13 +796,23 @@ class FilesystemArtifactStore:
     def list_sleeve_attribution_gap_records(
         self,
         *,
-        sleeve_id: str,
+        sleeve_id: str | None = None,
+        trading_day: str | None = None,
     ) -> tuple[SleeveAttributionGapRecord, ...]:
         category_dir = self._root_dir / "sleeve_attribution_gaps"
         if not category_dir.exists():
             return ()
         records: list[SleeveAttributionGapRecord] = []
-        for path in sorted(category_dir.glob(f"{sleeve_id}__*.json")):
+        pattern = (
+            f"{sleeve_id}__{trading_day}.json"
+            if sleeve_id is not None and trading_day is not None
+            else (
+                f"{sleeve_id}__*.json"
+                if sleeve_id is not None
+                else f"*__{trading_day}.json" if trading_day is not None else "*.json"
+            )
+        )
+        for path in sorted(category_dir.glob(pattern)):
             payload = json.loads(path.read_text(encoding="utf-8"))
             records.append(self._deserialize_sleeve_attribution_gap_record(payload))
         return tuple(records)
