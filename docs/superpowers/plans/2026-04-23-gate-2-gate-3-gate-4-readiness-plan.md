@@ -51,7 +51,7 @@ true:
 |---|---|---|---|---|---|
 | 1 | Gate 4 live enablement development | Development | Yes | Current `main` only | Merged live-enable code behind fail-closed controls |
 | 2 | Gate 2 robustness evidence | Evidence | Yes | Current `main` only | Gate 2 validation report |
-| 3 | Gate 3 paper evidence | Evidence / calendar time | Yes | Current `main` only | Gate 3 validation report + package |
+| 3 | Gate 3 paper evidence | Evidence / calendar time | Almost — after one narrow report-path fix | Current `main` + a narrow Gate 3 two-sleeve reference fix | Gate 3 validation report + package |
 | 4 | Gate 4 operational sign-off evidence | Operational evidence | No, final lane | Gates 0–3 passing evidence + Gate 4 code merged | Live-enablement checklist + sign-off package |
 
 ## Dependency graph
@@ -59,14 +59,27 @@ true:
 - **Gate 4 live enablement development** can begin immediately.
 - **Gate 2 robustness evidence** can begin immediately and can complete
   independently of Gate 4 coding.
-- **Gate 3 paper evidence** can begin immediately on the current
-  two-sleeve paper runtime and will mostly be limited by calendar time.
+- **Gate 3 paper evidence** can begin operationally on the current
+  two-sleeve paper runtime, but the governed report/package builder
+  still needs one narrow prerequisite fix: the shipped Gate 3 readiness
+  path defaults to the legacy single-strategy reference
+  `baseline-long-only-v1` in `src/tradingx/gate3.py`, and the CLI/web
+  entrypoints still call that path without overriding it. So the runtime
+  can keep accruing evidence now, but the formal Gate 3 report/package
+  lane should not be considered clean until that reference-path fix is
+  merged.
 - **Gate 4 operational sign-off evidence** must wait until:
   - Gate 2 evidence is complete,
   - Gate 3 evidence is complete,
   - Gate 4 live enablement code is merged, and
   - fresh preflight checks (SMTP, kill switch, monitoring) are run
     inside the required time window.
+- **The 7-day monitoring-confirmation clock should start as soon as the
+  post-merge Gate 4 code path is in its final intended posture**, not at
+  the very end of the sign-off lane. Checklist assembly and operator
+  approval stay final, but the observation window should overlap the
+  post-merge evidence period instead of adding an extra idle week to the
+  critical path.
 
 So the practical order is:
 
@@ -84,9 +97,11 @@ explicit up front:
    not smuggle in new feature work unless a real blocker is found.
 2. **Gate 4 code must stay fail-closed.** Landing live-enable code does
    not mean turning live trading on. Default behavior remains disabled.
-3. **Web/operator write paths need real authentication semantics before
-   any live-control flag is accepted.** `write_mode_enabled` alone is not
-   sufficient for Gate 4.
+3. **Web/operator write paths need real authentication semantics across
+   the full write surface before any live-control flag is accepted.**
+   `write_mode_enabled` alone is not sufficient for Gate 4, and the
+   requirement applies to web write endpoints broadly, not only a future
+   live-toggle endpoint.
 4. **Do not reopen strategy development.** New sleeves, Kelly sizing,
    options, meta-labeling, and other future-feature items are out of
    scope for this master plan.
@@ -128,10 +143,12 @@ until operator sign-off happens later.
    - Preserve the current behavior where orders are blocked unless every
      layer is explicitly enabled.
 
-3. **Secure write path for live-affecting web actions**
-   - Add request signing for web write endpoints.
-   - Add idempotency-key handling for live-affecting requests.
-   - Make replayed or unsigned requests fail closed.
+3. **Secure write path for the full web write surface**
+   - Add request signing for web write endpoints broadly.
+   - Add idempotency-key handling across the write surface so replayed
+     POST actions fail closed.
+   - Do not scope this only to a future live-toggle path; the Gate 4
+     boundary is the current write surface in `src/tradingx/web/app.py`.
 
 4. **Live-mode preflight / readiness checks**
    - Verify credentials, broker mode, kill switch state, monitoring
@@ -142,6 +159,7 @@ until operator sign-off happens later.
    - Add focused unit/integration tests for:
      - unsigned request rejection,
      - duplicate idempotency-key handling,
+     - broad write-surface enforcement rather than one special endpoint,
      - fail-closed live-control enablement,
      - paper/live client selection,
      - blocked live activation when preflight is incomplete.
@@ -162,8 +180,8 @@ until operator sign-off happens later.
 
 1. Write a dedicated Gate 4 live-enablement design/implementation plan.
 2. Add the live-mode configuration and broker-selection seams.
-3. Add request signing + idempotency-key enforcement to live-affecting
-   write endpoints.
+3. Add request signing + idempotency-key enforcement across the web
+   write surface.
 4. Add preflight checks and explicit blocked reasons.
 5. Add tests for fail-closed behavior.
 6. Merge the code while keeping live mode disabled by default.
@@ -223,6 +241,14 @@ using the existing validation machinery.
 **Why this is priority 3:** it is required for Gate 4, but the main
 constraint is runtime evidence accumulation, not coding.
 
+**Important correction:** on current `main`, the evidence accumulation
+can start immediately, but the formal Gate 3 report/package seam is not
+yet fully aligned with the two-sleeve runtime. The current
+`build_gate3_readiness_report(...)` default still derives expectations
+from `baseline-long-only-v1`, and the shipped CLI/web entrypoints call
+that path without overriding the candidate. Treat fixing that reference
+path as a narrow prerequisite for the governed Gate 3 evidence lane.
+
 ### Goal
 
 Accumulate the required paper-trading evidence under the now-merged
@@ -235,7 +261,13 @@ artifacts.
    - at least 180 calendar days, or
    - at least 100 closed trades,
    whichever comes first.
-2. Preserve and review:
+2. Patch the Gate 3 report/package path so it evaluates the real
+   two-sleeve runtime rather than the legacy single-strategy reference.
+   Minimum scope:
+   - `src/tradingx/gate3.py`
+   - `src/tradingx/__main__.py`
+   - `src/tradingx/web/runtime.py`
+3. Preserve and review:
    - paper-trading logs,
    - reconciliations,
    - drift verdicts,
@@ -243,9 +275,9 @@ artifacts.
    - recovery drills,
    - alert drills,
    - incident acknowledgements.
-3. Ensure the evidence is gathered under the real two-sleeve runtime
+4. Ensure the evidence is gathered under the real two-sleeve runtime
    architecture, not the older single-active-sleeve assumption.
-4. Produce the Gate 3 validation report and package.
+5. Produce the Gate 3 validation report and package.
 
 ### Primary sources already in repo
 
@@ -256,16 +288,18 @@ artifacts.
 
 ### Suggested task breakdown
 
-1. Freeze the runtime configuration used for the Gate 3 evidence window.
-2. Run the paper session on that frozen configuration.
-3. Schedule regular evidence refreshes:
+1. Apply the narrow Gate 3 reference-path fix so the governed
+   report/package builder points at the real two-sleeve runtime.
+2. Freeze the runtime configuration used for the Gate 3 evidence window.
+3. Run the paper session on that frozen configuration.
+4. Schedule regular evidence refreshes:
    - replay-slippage
    - drift summaries
    - Gate 3 readiness rollups
-4. Execute required restart/recovery drills.
-5. Execute the required SMTP emergency round trip.
-6. Generate the Gate 3 validation report.
-7. Generate the Gate 3 evidence package.
+5. Execute required restart/recovery drills.
+6. Execute the required SMTP emergency round trip.
+7. Generate the Gate 3 validation report.
+8. Generate the Gate 3 evidence package.
 
 ### Exit criteria
 
@@ -274,6 +308,8 @@ artifacts.
 - The report/package are built from persisted artifacts, not operator
   memory.
 - The evidence window uses the real multi-sleeve runtime.
+- The governed report/package path no longer depends on
+  `baseline-long-only-v1` as its implicit reference.
 
 ---
 
@@ -308,14 +344,16 @@ go/no-go decision.
 ### Suggested task breakdown
 
 1. Create a Gate 4 checklist artifact if one does not already exist.
-2. Populate it from the passing Gate 0–3 evidence and fresh preflight
-   checks.
-3. Run the live-paper kill-switch drill inside the required time window.
-4. Run a fresh SMTP round trip inside the required time window.
-5. Confirm monitoring stability over the required time window.
-6. Record capital allocation and final blocked/allowed live-control
+2. As soon as the merged Gate 4 code path reaches its final intended
+   posture, start the 7-day monitoring-confirmation window.
+3. Populate the checklist from the passing Gate 0–3 evidence and fresh
+   preflight checks.
+4. Run the live-paper kill-switch drill inside the required time window.
+5. Run a fresh SMTP round trip inside the required time window.
+6. Confirm monitoring stability over the required time window.
+7. Record capital allocation and final blocked/allowed live-control
    state.
-7. Produce the final Gate 4 validation package for operator sign-off.
+8. Produce the final Gate 4 validation package for operator sign-off.
 
 ### Exit criteria
 
@@ -335,23 +373,28 @@ go/no-go decision.
 1. Open the **Gate 4 live enablement development** spec/plan and begin
    implementation.
 2. Start **Gate 2 robustness evidence** using the existing harness.
-3. Start **Gate 3 paper evidence** on the current merged runtime.
+3. Start runtime-level **Gate 3 paper evidence** accumulation on the
+   current merged runtime.
 
 ### Phase B — Merge the last required code
 
 4. Merge Gate 4 live-enablement code behind fail-closed controls.
+5. Merge the narrow Gate 3 reference-path fix if it did not already land
+   during the evidence lane.
 
 ### Phase C — Finish the evidence lanes
 
-5. Finish the Gate 2 validation report.
-6. Let Gate 3 evidence mature until its pass criteria are satisfied.
-7. Generate the Gate 3 report/package.
+6. Start the Gate 4 monitoring-confirmation clock as soon as the merged
+   Gate 4 posture is final.
+7. Finish the Gate 2 validation report.
+8. Let Gate 3 evidence mature until its pass criteria are satisfied.
+9. Generate the Gate 3 report/package.
 
 ### Phase D — Final live decision package
 
-8. Run the fresh Gate 4 preflight checks.
-9. Build the Gate 4 checklist/package.
-10. Obtain operator sign-off.
+10. Run the fresh Gate 4 preflight checks.
+11. Build the Gate 4 checklist/package.
+12. Obtain operator sign-off.
 
 ## Explicitly out of scope
 
@@ -369,10 +412,13 @@ Those remain future-feature work after v1 is already live-ready.
 
 ## Bottom line
 
-For project completion, there is **one remaining engineering lane** and
-**three readiness lanes**:
+For project completion, there is **one remaining major engineering
+lane**, **one narrow Gate 3 prerequisite fix**, and **three readiness
+lanes**:
 
 - build Gate 4 live enablement,
+- patch the Gate 3 report/package reference path to the real two-sleeve
+  runtime,
 - produce Gate 2 evidence,
 - produce Gate 3 evidence,
 - package Gate 4 sign-off.
