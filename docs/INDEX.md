@@ -184,6 +184,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0011 | TradingX operator platform redesign implementation plan | 1.0.0 | active | `specs/011-operator-platform-redesign/plan.md` |
 | PLAN-0012 | TradingX runtime intelligence implementation plan | 1.0.0 | active | `specs/012-runtime-intelligence/plan.md` |
 | PLAN-0013 | Headless control plane Wave 2 Postgres projections execution plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-execution-plan.md` |
+| PLAN-0014 | Headless control plane Wave 2 Postgres projections implementation plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-implementation-plan.md` |
 
 ### Review reports (REPORT-NNNN)
 
@@ -191,6 +192,7 @@ field (session lifecycle). This index tracks `status` only.
 | -------- | ----- | ------- | ------ | ---- |
 | REPORT-0001 | Headless control plane Wave 1 adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-headless-control-plane-wave1-review-handoff.md` |
 | REPORT-0002 | Headless control plane Wave 2 planning adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-review-handoff.md` |
+| REPORT-0003 | Headless control plane Wave 2 implementation plan adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-implementation-review-handoff.md` |
 
 ### Task lists (TASKS-NNNN)
 
