@@ -80,7 +80,6 @@ Current supported topics:
 - `runtime`
 - `incidents`
 - `events`
-- `commands`
 
 Current behavior is intentionally a snapshot-style SSE scaffold rather
 than a long-lived production fanout service. The route validates topic
@@ -111,6 +110,8 @@ Mitigation:
 - no frontend-facing stable write contract is exposed yet
 - legacy write routes remain in place, but the new `/api/v1` write paths
   are clearly non-integratable until Wave 3
+- the stable SSE seam does **not** expose a `commands` topic while the
+  canonical command model is still provisional
 
 ### Realtime API omission
 
@@ -126,6 +127,27 @@ Mitigation:
 - Wave 1 routes are adapters over the current read model rather than
   direct artifact parsing from the frontend
 - the compatibility seam accepts both dict and dataclass payloads
+
+### Governance fail-closed drift
+
+Mitigation:
+
+- `GET /api/v1/control-posture` now always treats missing governance
+  approval as a first-class fail-closed blocker
+- `live_allowed` remains `false` until governance sign-off and the Gate
+  4 checklist are modeled as satisfied
+- contract tests explicitly lock this behavior so the read-side contract
+  cannot report live as allowed prematurely
+
+### Replay resource truthfulness
+
+Mitigation:
+
+- `GET /api/v1/replays/{replay_id}` now returns `404` unless the
+  requested id resolves to the exact replay and that replay contains
+  concrete events
+- the route no longer rewrites unrelated replay payloads under the
+  caller's requested id
 
 ## Intentional Deferrals
 

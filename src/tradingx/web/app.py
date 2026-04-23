@@ -409,11 +409,30 @@ def create_app(
         current_decision = resolve_broker_mode(config)
         live_capability = resolve_broker_mode(config, explicit_mode="live")
         disable_report = config.live_disable_report()
-        blockers = tuple(live_capability.disable_reasons)
+        governance_posture = {
+            "operator_signoff_required": True,
+            "operator_signoff_status": "missing",
+            "gate4_checklist_status": "missing",
+            "approved_by": None,
+            "approved_at": None,
+        }
+        governance_blockers = (
+            "operator_signoff_missing",
+            "gate4_checklist_missing",
+        )
+        blockers = tuple(
+            dict.fromkeys((*live_capability.disable_reasons, *governance_blockers))
+        )
+        live_allowed = len(blockers) == 0
+        effective_mode = (
+            "live"
+            if current_decision.requested_mode == "live" and live_allowed
+            else "paper"
+        )
         return {
             "requested_mode": current_decision.requested_mode,
-            "effective_mode": current_decision.effective_mode,
-            "live_allowed": live_capability.live_allowed,
+            "effective_mode": effective_mode,
+            "live_allowed": live_allowed,
             "explicit_blockers": [
                 {
                     "code": reason,
@@ -436,15 +455,9 @@ def create_app(
                 "dry_run_active": config.runtime.dry_run,
                 "live_disable_report": disable_report,
             },
-            "governance_posture": {
-                "operator_signoff_required": False,
-                "operator_signoff_status": "not_required",
-                "gate4_checklist_status": "not_started",
-                "approved_by": None,
-                "approved_at": None,
-            },
+            "governance_posture": governance_posture,
             "market_data_posture": {
-                "mode": current_decision.effective_mode,
+                "mode": effective_mode,
                 "aligned_with_effective_mode": True,
                 "status": "nominal" if not blockers else "fail_closed",
             },
@@ -630,9 +643,6 @@ def create_app(
         if topic == "events":
             generated_at = datetime.now(UTC)
             return {"items": read_model.list_timeline_events()}, generated_at
-        if topic == "commands":
-            snapshot = read_model.build_command_center_snapshot()
-            return snapshot, snapshot.generated_at_utc
         raise ValueError(topic)
 
     @app.get("/api/v1/control-posture")
@@ -661,7 +671,6 @@ def create_app(
             "runtime",
             "incidents",
             "events",
-            "commands",
         }
         unknown_topics = sorted(set(requested_topics) - allowed_topics)
         if unknown_topics:
@@ -828,15 +837,18 @@ def create_app(
     @app.get("/api/v1/replays/{replay_id}")
     def get_v1_replay(replay_id: str) -> JSONResponse:
         replay_focus = _parse_replay_focus(replay_id)
+        if replay_focus == {"symbol": None, "cycle_id": None, "incident_id": None}:
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
+            )
         replay = read_model.build_replay_session(**replay_focus)
-        if replay.replay_id != replay_id:
-            replay = ReplaySession(
-                replay_id=replay_id,
-                focus_type=replay.focus_type,
-                focus_value=replay.focus_value,
-                headline=replay.headline,
-                events=replay.events,
-                summary=replay.summary,
+        if replay.replay_id != replay_id or not replay.events:
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
             )
         return _object_response(replay)
 
@@ -1326,6 +1338,8 @@ _LIVE_BLOCKER_MESSAGES = {
     "web_write_signing_unconfigured": "Signed web writes are not configured.",
     "manual_kill_switch_active": "The manual kill switch is active.",
     "dry_run_enabled": "Dry-run mode is still active.",
+    "operator_signoff_missing": "Operator sign-off has not been recorded.",
+    "gate4_checklist_missing": "The Gate 4 approval checklist is not complete.",
 }
 
 

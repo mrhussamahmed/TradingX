@@ -234,8 +234,37 @@ class FakeReadModel:
         cycle_id: str | None = None,
         incident_id: str | None = None,
     ) -> tuple[object, ...]:
-        del symbol, cycle_id, incident_id
-        return ()
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        events = (
+            {
+                "event_id": "event-1",
+                "event_type": "service_cycle",
+                "symbol": "SPY",
+                "severity": "info",
+                "headline": "Evaluation cycle completed",
+                "details": "TradingX completed a paper evaluation cycle.",
+                "occurred_at_utc": timestamp,
+                "artifact_path": "artifacts/paper_loop/service_cycles/cycle-1.json",
+                "related_ids": ("cycle-1", "incident-alert-1"),
+            },
+        )
+        filtered = events
+        if symbol is not None:
+            filtered = tuple(event for event in filtered if event["symbol"] == symbol)
+        if cycle_id is not None:
+            filtered = tuple(
+                event
+                for event in filtered
+                if cycle_id in event["related_ids"] or event["event_id"] == cycle_id
+            )
+        if incident_id is not None:
+            filtered = tuple(
+                event
+                for event in filtered
+                if incident_id in event["related_ids"]
+                or event["event_id"] == incident_id
+            )
+        return filtered
 
     def list_incidents(self) -> tuple[IncidentRecord, ...]:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
@@ -623,12 +652,23 @@ class FakeReadModel:
         cycle_id: str | None = None,
         incident_id: str | None = None,
     ) -> ReplaySession:
+        focus_type = "symbol"
+        focus_value = symbol or cycle_id or incident_id or "latest"
+        if cycle_id is not None:
+            focus_type = "service_cycle"
+        elif incident_id is not None:
+            focus_type = "incident"
+        events = self.list_timeline_events(
+            symbol=symbol,
+            cycle_id=cycle_id,
+            incident_id=incident_id,
+        )
         return ReplaySession(
-            replay_id="replay-1",
-            focus_type="symbol",
-            focus_value=symbol or cycle_id or incident_id or "SPY",
+            replay_id=f"replay-{focus_type}-{focus_value}",
+            focus_type=focus_type,
+            focus_value=focus_value,
             headline="Replay",
-            events=(),
+            events=events,
             summary="Replay ready.",
         )
 
@@ -1063,14 +1103,23 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
 
     assert control_posture.status_code == 200
     assert control_posture.json()["data"]["requested_mode"] == "live"
-    assert control_posture.json()["data"]["effective_mode"] == "live"
-    assert control_posture.json()["data"]["live_allowed"] is True
+    assert control_posture.json()["data"]["effective_mode"] == "paper"
+    assert control_posture.json()["data"]["live_allowed"] is False
     assert (
         control_posture.json()["data"]["live_control_layer_states"][
             "write_signing_configured"
         ]
         is True
     )
+    assert (
+        control_posture.json()["data"]["governance_posture"][
+            "operator_signoff_status"
+        ]
+        == "missing"
+    )
+    assert "operator_signoff_missing" in control_posture.json()["data"][
+        "fail_closed_reasons"
+    ]
     assert "market_data_posture" in control_posture.json()["data"]
 
     assert runtime.status_code == 200
@@ -1089,7 +1138,7 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
     assert incidents.status_code == 200
     assert incidents.json()["data"]["items"][0]["incident_id"] == "incident-alert-1"
     assert events.status_code == 200
-    assert events.json()["data"]["items"] == []
+    assert events.json()["data"]["items"][0]["event_id"] == "event-1"
 
     assert portfolio.status_code == 200
     assert portfolio.json()["data"]["data_state"] == "partial"
@@ -1129,10 +1178,12 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
     assert investigations.status_code == 200
     assert (
         investigations.json()["data"]["items"][0]["investigation_id"]
-        == "replay-1"
+        == "replay-symbol-latest"
     )
     assert replay.status_code == 200
     assert replay.json()["data"]["replay_id"] == "replay-symbol-SPY"
+    missing_replay = client.get("/api/v1/replays/replay-symbol-XYZ")
+    assert missing_replay.status_code == 404
 
     assert documents.status_code == 200
     assert documents.json()["data"]["items"][0]["doc_id"] == "STATE"
@@ -1150,7 +1201,7 @@ def test_wave1_v1_stream_exposes_topic_scoped_sse_snapshots() -> None:
     client = TestClient(app)
 
     response = client.get("/api/v1/stream?topics=runtime,control_posture")
-    invalid = client.get("/api/v1/stream?topics=runtime,unknown_topic")
+    invalid = client.get("/api/v1/stream?topics=runtime,commands")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -1158,6 +1209,7 @@ def test_wave1_v1_stream_exposes_topic_scoped_sse_snapshots() -> None:
     assert "event: control_posture" in response.text
     assert invalid.status_code == 400
     assert "unknown_topics" in invalid.text
+    assert "commands" in invalid.text
 
 
 def test_wave1_provisional_governed_write_routes_stay_hidden_from_openapi() -> None:
