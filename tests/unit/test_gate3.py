@@ -102,6 +102,23 @@ def test_gate3_readiness_report_uses_governed_two_sleeve_evidence(tmp_path) -> N
             pnl=pnl,
             sleeve_attributions=sleeve_attributions,
         )
+    paper_store.write_execution_lifecycle_record(
+        execution=ExecutionLifecycleRecord(
+            execution_id="reserve-liquidation-1",
+            intent_id="reserve-liquidation-1",
+            symbol="SPY",
+            side="sell",
+            reason_code="residual_reserve_liquidation",
+            reference_price=Decimal("600.00"),
+            fill_price=Decimal("600.00"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("4"),
+            submitted_at_utc=start + timedelta(days=101),
+            filled_at_utc=start + timedelta(days=101),
+            recovered=False,
+            sleeve_attributions=(("__residual_reserve__", Decimal("1")),),
+        )
+    )
 
     paper_store.write_recovery_drill_record(
         recovery_drill=RecoveryDrillRecord(
@@ -195,9 +212,12 @@ def test_gate3_readiness_report_uses_governed_two_sleeve_evidence(tmp_path) -> N
     )
     assert "trend-following-v1" in slippage_criterion.observed_value
     assert "vol-target-v1" in slippage_criterion.observed_value
+    assert "__residual_reserve__" not in slippage_criterion.observed_value
     assert "notional" in slippage_criterion.details
     assert "trend-following-v1" in hit_rate_criterion.details
     assert "vol-target-v1" in sharpe_criterion.details
+    assert "__residual_reserve__" not in hit_rate_criterion.details
+    assert "__residual_reserve__" not in sharpe_criterion.details
     assert package.status == "pending"
     assert "replay_slippage_divergence" in package.criteria_statuses
 
@@ -295,3 +315,72 @@ def test_gate3_readiness_report_uses_latest_replay_slippage_summary(tmp_path) ->
 
     assert criterion_statuses["replay_slippage_divergence"] == "pass"
     assert observed_values["replay_slippage_divergence"] == "1.5x"
+
+
+def test_gate3_governed_duration_ignores_legacy_pre_sleeve_history(tmp_path) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 1, 1, 14, 30, tzinfo=UTC)
+    sleeve_attributions = (
+        ("trend-following-v1", Decimal("0.6")),
+        ("vol-target-v1", Decimal("0.4")),
+    )
+
+    for index in range(98):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index % 2 == 0 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+        )
+
+    for index in range(98, 100):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index == 98 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+            sleeve_attributions=sleeve_attributions,
+        )
+
+    for candidate_id in ("trend-following-v1", "vol-target-v1"):
+        validation_store.write_evaluation_evidence(
+            EvaluationEvidencePack(
+                evidence_pack_id=f"{candidate_id}-reference",
+                candidate_id=candidate_id,
+                window_start_utc=start,
+                window_end_utc=start + timedelta(days=100),
+                benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+                candidate_metrics={
+                    "sharpe_ratio": Decimal("0.10"),
+                    "hit_rate": Decimal("0.50"),
+                },
+                adversarial_checks=("none",),
+                recommendation="keep",
+                assumptions=("reference expectation for Gate 3",),
+            )
+        )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+
+    duration_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "duration_or_trade_count"
+    )
+
+    assert report.closed_trade_count == 2
+    assert report.calendar_days_observed == 2
+    assert duration_criterion.status == "pending"
+    assert duration_criterion.observed_value == "2 trades / 2 days"

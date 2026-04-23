@@ -24,6 +24,7 @@ GATE3_SLIPPAGE_MULTIPLIER = Decimal("1.5")
 GATE3_HIT_RATE_DRIFT = Decimal("0.20")
 GATE3_REALIZED_SHARPE_MULTIPLIER = Decimal("0.5")
 LEGACY_GATE3_CANDIDATE_ID = "baseline-long-only-v1"
+RESIDUAL_RESERVE_OWNER_ID = "__residual_reserve__"
 # source: legacy Stage 1 backtest slippage reference carried forward for
 # Gate 3 readiness until candidate-specific slippage assumptions are
 # persisted alongside evaluation evidence.
@@ -186,6 +187,20 @@ def _parse_attributions(
     return tuple(result)
 
 
+def _is_governed_owner_id(owner_id: str) -> bool:
+    return owner_id != RESIDUAL_RESERVE_OWNER_ID
+
+
+def _governed_attributions(
+    entries: object,
+) -> tuple[tuple[str, Decimal], ...]:
+    return tuple(
+        (owner_id, fraction)
+        for owner_id, fraction in _parse_attributions(entries)
+        if _is_governed_owner_id(owner_id)
+    )
+
+
 def _governed_sleeve_ids(
     execution_records: tuple[ExecutionLifecycleRecord, ...],
     closed_trade_payloads: list[dict[str, object]],
@@ -193,14 +208,14 @@ def _governed_sleeve_ids(
     ordered: list[str] = []
     seen: set[str] = set()
     for record in execution_records:
-        for sleeve_id, fraction in _parse_attributions(record.sleeve_attributions):
+        for sleeve_id, fraction in _governed_attributions(record.sleeve_attributions):
             if fraction <= Decimal("0") or sleeve_id in seen:
                 continue
             seen.add(sleeve_id)
             ordered.append(sleeve_id)
     for payload in closed_trade_payloads:
         for field in ("entry_sleeve_attributions", "exit_sleeve_attributions"):
-            for sleeve_id, _fraction in _parse_attributions(payload.get(field, ())):
+            for sleeve_id, _fraction in _governed_attributions(payload.get(field, ())):
                 if sleeve_id in seen:
                     continue
                 seen.add(sleeve_id)
@@ -217,7 +232,7 @@ def _mean_absolute_slippage_by_sleeve(
         fill_notional = record.filled_qty * record.fill_price
         if fill_notional <= Decimal("0"):
             continue
-        for sleeve_id, fraction in _parse_attributions(record.sleeve_attributions):
+        for sleeve_id, fraction in _governed_attributions(record.sleeve_attributions):
             sleeve_notional = fill_notional * fraction
             if sleeve_notional <= Decimal("0"):
                 continue
@@ -242,13 +257,13 @@ def _mean_absolute_slippage_by_sleeve(
 def _trade_weights_by_sleeve(payload: dict[str, object]) -> dict[str, Decimal]:
     entry_map = {
         sleeve_id: fraction
-        for sleeve_id, fraction in _parse_attributions(
+        for sleeve_id, fraction in _governed_attributions(
             payload.get("entry_sleeve_attributions", ())
         )
     }
     exit_map = {
         sleeve_id: fraction
-        for sleeve_id, fraction in _parse_attributions(
+        for sleeve_id, fraction in _governed_attributions(
             payload.get("exit_sleeve_attributions", ())
         )
     }
@@ -393,6 +408,69 @@ def _expected_hit_rate(
     return reference_by_sleeve[sleeve_id].get("hit_rate") or reference_by_sleeve[
         sleeve_id
     ].get("win_rate")
+
+
+def _governed_execution_records(
+    execution_records: tuple[ExecutionLifecycleRecord, ...],
+) -> tuple[ExecutionLifecycleRecord, ...]:
+    return tuple(
+        record
+        for record in execution_records
+        if _governed_attributions(record.sleeve_attributions)
+    )
+
+
+def _governed_closed_trade_payloads(
+    closed_trade_payloads: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return [
+        payload
+        for payload in closed_trade_payloads
+        if _trade_weights_by_sleeve(payload)
+    ]
+
+
+def _governed_start_at(
+    execution_records: tuple[ExecutionLifecycleRecord, ...],
+    closed_trade_payloads: list[dict[str, object]],
+) -> datetime | None:
+    timestamps: list[datetime] = [record.filled_at_utc for record in execution_records]
+    for payload in closed_trade_payloads:
+        opened_at = str(payload.get("opened_at_utc", "")).strip()
+        closed_at = str(payload.get("closed_at_utc", "")).strip()
+        if opened_at:
+            timestamps.append(datetime.fromisoformat(opened_at))
+        elif closed_at:
+            timestamps.append(datetime.fromisoformat(closed_at))
+    if not timestamps:
+        return None
+    return min(timestamps)
+
+
+def _service_cycles_since(
+    service_cycles: list[dict[str, object]],
+    start_at: datetime | None,
+) -> list[dict[str, object]]:
+    if start_at is None:
+        return []
+    filtered: list[dict[str, object]] = []
+    for payload in service_cycles:
+        completed_at = str(payload.get("completed_at_utc", "")).strip()
+        if not completed_at:
+            continue
+        if datetime.fromisoformat(completed_at) >= start_at:
+            filtered.append(payload)
+    return filtered
+
+
+def _governed_notional_by_sleeve(
+    execution_records: tuple[ExecutionLifecycleRecord, ...],
+) -> dict[str, Decimal]:
+    return {
+        sleeve_id: notional
+        for sleeve_id, notional in sum_per_sleeve_notional(execution_records).items()
+        if _is_governed_owner_id(sleeve_id)
+    }
 
 
 def _build_shared_criteria(
@@ -598,7 +676,7 @@ def _build_governed_gate3_report(
     calendar_days: int,
 ) -> Gate3ReadinessReport:
     slippage_limit = GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS * GATE3_SLIPPAGE_MULTIPLIER
-    sleeve_notionals = sum_per_sleeve_notional(execution_records)
+    sleeve_notionals = _governed_notional_by_sleeve(execution_records)
     mean_slippage_by_sleeve = _mean_absolute_slippage_by_sleeve(execution_records)
     hit_rate_by_sleeve = _weighted_hit_rate_by_sleeve(closed_trade_payloads)
     sharpe_by_sleeve = _weighted_sharpe_by_sleeve(closed_trade_payloads)
@@ -800,7 +878,44 @@ def build_gate3_readiness_report(
         and str(payload.get("status", "")) == "failed"
         for payload in alert_payloads
     )
-
+    sleeve_ids = _governed_sleeve_ids(execution_records, closed_trade_payloads)
+    if sleeve_ids:
+        governed_execution_records = _governed_execution_records(execution_records)
+        governed_closed_trade_payloads = _governed_closed_trade_payloads(
+            closed_trade_payloads
+        )
+        governed_start_at = _governed_start_at(
+            governed_execution_records,
+            governed_closed_trade_payloads,
+        )
+        governed_service_cycles = _service_cycles_since(
+            service_cycles,
+            governed_start_at,
+        )
+        closed_trade_count = len(governed_closed_trade_payloads)
+        calendar_days = _calendar_days_observed(
+            governed_closed_trade_payloads,
+            governed_service_cycles,
+        )
+        shared_criteria = _build_shared_criteria(
+            closed_trade_count=closed_trade_count,
+            calendar_days=calendar_days,
+            p1_bug_count=p1_bug_count,
+            recovery_completed=recovery_completed,
+            recovery_failed=recovery_failed,
+            smtp_completed=smtp_completed,
+            smtp_failed=smtp_failed,
+            replay_summary=replay_summary,
+        )
+        return _build_governed_gate3_report(
+            execution_records=governed_execution_records,
+            closed_trade_payloads=governed_closed_trade_payloads,
+            validation_store=validation_store,
+            shared_criteria=shared_criteria,
+            sleeve_ids=sleeve_ids,
+            closed_trade_count=closed_trade_count,
+            calendar_days=calendar_days,
+        )
     shared_criteria = _build_shared_criteria(
         closed_trade_count=closed_trade_count,
         calendar_days=calendar_days,
@@ -811,17 +926,6 @@ def build_gate3_readiness_report(
         smtp_failed=smtp_failed,
         replay_summary=replay_summary,
     )
-    sleeve_ids = _governed_sleeve_ids(execution_records, closed_trade_payloads)
-    if sleeve_ids:
-        return _build_governed_gate3_report(
-            execution_records=execution_records,
-            closed_trade_payloads=closed_trade_payloads,
-            validation_store=validation_store,
-            shared_criteria=shared_criteria,
-            sleeve_ids=sleeve_ids,
-            closed_trade_count=closed_trade_count,
-            calendar_days=calendar_days,
-        )
     return _build_legacy_gate3_report(
         execution_records=execution_records,
         closed_trade_payloads=closed_trade_payloads,
