@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.38
+version: 1.2.39
 status: active
 created: 2026-04-17
 last_amended: 2026-04-23
-supersedes: INDEX-0001@1.2.37
+supersedes: INDEX-0001@1.2.38
 superseded_by: null
 author_session: gpt-5-codex-2026-04-23
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.38  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.39  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -183,6 +183,12 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0010 | TradingX operator control plane implementation plan | 1.0.0 | active | `specs/010-operator-control-plane/plan.md` |
 | PLAN-0011 | TradingX operator platform redesign implementation plan | 1.0.0 | active | `specs/011-operator-platform-redesign/plan.md` |
 | PLAN-0012 | TradingX runtime intelligence implementation plan | 1.0.0 | active | `specs/012-runtime-intelligence/plan.md` |
+
+### Review reports (REPORT-NNNN)
+
+| id       | title | version | status | path |
+| -------- | ----- | ------- | ------ | ---- |
+| REPORT-0001 | Headless control plane Wave 1 adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-headless-control-plane-wave1-review-handoff.md` |
 
 ### Task lists (TASKS-NNNN)
 
