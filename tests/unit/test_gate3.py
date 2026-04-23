@@ -22,6 +22,7 @@ def _write_execution_pair(
     opened_at: datetime,
     closed_at: datetime,
     pnl: Decimal,
+    sleeve_attributions: tuple[tuple[str, Decimal], ...] = (),
 ) -> None:
     entry_fill = Decimal("500.00") + Decimal(index)
     exit_fill = entry_fill + pnl
@@ -39,6 +40,7 @@ def _write_execution_pair(
             submitted_at_utc=opened_at,
             filled_at_utc=opened_at,
             recovered=False,
+            sleeve_attributions=sleeve_attributions,
         )
     )
     store.write_execution_lifecycle_record(
@@ -55,6 +57,7 @@ def _write_execution_pair(
             submitted_at_utc=closed_at,
             filled_at_utc=closed_at,
             recovered=False,
+            sleeve_attributions=sleeve_attributions,
         )
     )
     store.write_closed_trade_record(
@@ -72,14 +75,20 @@ def _write_execution_pair(
             return_pct=(pnl / entry_fill),
             outcome="win" if pnl > 0 else "loss",
             holding_period_seconds=int((closed_at - opened_at).total_seconds()),
+            entry_sleeve_attributions=sleeve_attributions,
+            exit_sleeve_attributions=sleeve_attributions,
         )
     )
 
 
-def test_gate3_readiness_report_rolls_up_trade_and_drill_evidence(tmp_path) -> None:
+def test_gate3_readiness_report_uses_governed_two_sleeve_evidence(tmp_path) -> None:
     paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
     validation_store = FilesystemArtifactStore(tmp_path / "validation")
     start = datetime(2025, 10, 1, 14, 30, tzinfo=UTC)
+    sleeve_attributions = (
+        ("trend-following-v1", Decimal("0.6")),
+        ("vol-target-v1", Decimal("0.4")),
+    )
 
     for index in range(100):
         opened_at = start + timedelta(days=index)
@@ -91,6 +100,7 @@ def test_gate3_readiness_report_rolls_up_trade_and_drill_evidence(tmp_path) -> N
             opened_at=opened_at,
             closed_at=closed_at,
             pnl=pnl,
+            sleeve_attributions=sleeve_attributions,
         )
 
     paper_store.write_recovery_drill_record(
@@ -116,8 +126,24 @@ def test_gate3_readiness_report_rolls_up_trade_and_drill_evidence(tmp_path) -> N
     )
     validation_store.write_evaluation_evidence(
         EvaluationEvidencePack(
-            evidence_pack_id="baseline-reference",
-            candidate_id="baseline-long-only-v1",
+            evidence_pack_id="trend-reference",
+            candidate_id="trend-following-v1",
+            window_start_utc=start,
+            window_end_utc=start + timedelta(days=100),
+            benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+            candidate_metrics={
+                "sharpe_ratio": Decimal("1.4"),
+                "hit_rate": Decimal("0.60"),
+            },
+            adversarial_checks=("none",),
+            recommendation="keep",
+            assumptions=("reference expectation for Gate 3",),
+        )
+    )
+    validation_store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="vol-reference",
+            candidate_id="vol-target-v1",
             window_start_utc=start,
             window_end_utc=start + timedelta(days=100),
             benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
@@ -152,8 +178,88 @@ def test_gate3_readiness_report_rolls_up_trade_and_drill_evidence(tmp_path) -> N
     assert criterion_statuses["recovery_drill"] == "pass"
     assert criterion_statuses["smtp_alert_drill"] == "pass"
     assert criterion_statuses["replay_slippage_divergence"] == "pending"
+    slippage_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "realized_slippage"
+    )
+    hit_rate_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "hit_rate_alignment"
+    )
+    sharpe_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "realized_sharpe"
+    )
+    assert "trend-following-v1" in slippage_criterion.observed_value
+    assert "vol-target-v1" in slippage_criterion.observed_value
+    assert "notional" in slippage_criterion.details
+    assert "trend-following-v1" in hit_rate_criterion.details
+    assert "vol-target-v1" in sharpe_criterion.details
     assert package.status == "pending"
     assert "replay_slippage_divergence" in package.criteria_statuses
+
+
+def test_gate3_readiness_report_falls_back_to_legacy_single_strategy_mode(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+
+    for index in range(20):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index % 2 == 0 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+        )
+
+    validation_store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="baseline-reference",
+            candidate_id="baseline-long-only-v1",
+            window_start_utc=start,
+            window_end_utc=start + timedelta(days=20),
+            benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+            candidate_metrics={
+                "sharpe_ratio": Decimal("0.1"),
+                "hit_rate": Decimal("0.50"),
+            },
+            adversarial_checks=("none",),
+            recommendation="keep",
+            assumptions=("reference expectation for Gate 3",),
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+
+    realized_slippage = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "realized_slippage"
+    )
+    hit_rate = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "hit_rate_alignment"
+    )
+
+    assert realized_slippage.status == "pass"
+    assert realized_slippage.observed_value == "5 bps"
+    assert "validation base cost assumption" in realized_slippage.details
+    assert hit_rate.status == "pass"
+    assert hit_rate.observed_value == "0.5000"
+    assert "active strategy" in hit_rate.details
 
 
 def test_gate3_readiness_report_uses_latest_replay_slippage_summary(tmp_path) -> None:
