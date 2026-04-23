@@ -30,6 +30,7 @@ from tradingx.types import (
     DriftMonitorVerdictRecord,
     OperatorAlert,
     ReplaySlippageRecord,
+    ResidualReserveSnapshot,
     RiskControlEvent,
     SleeveDailyAttributionRecord,
     StrategyCandidate,
@@ -305,10 +306,16 @@ class StoreBackedAttributionRecordsReader:
     def pnl_activation_blocker(self, *, window_days: int) -> str | None:
         window_start = (self._now_provider() - timedelta(days=window_days)).date()
         min_trade_notional = PortfolioConstructionConfig().min_trade_notional
+        latest_snapshot_by_day: dict[str, ResidualReserveSnapshot] = {}
+        for snapshot in self._store.list_residual_reserve_snapshots():
+            if date.fromisoformat(snapshot.trading_day) < window_start:
+                continue
+            current = latest_snapshot_by_day.get(snapshot.trading_day)
+            if current is None or snapshot.recorded_at_utc > current.recorded_at_utc:
+                latest_snapshot_by_day[snapshot.trading_day] = snapshot
         reserve_snapshots = tuple(
-            snapshot
-            for snapshot in self._store.list_residual_reserve_snapshots()
-            if date.fromisoformat(snapshot.trading_day) >= window_start
+            latest_snapshot_by_day[trading_day]
+            for trading_day in sorted(latest_snapshot_by_day)
         )
         for snapshot in reserve_snapshots:
             has_residual_position = any(

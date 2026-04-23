@@ -55,13 +55,16 @@ def _reserve_snapshot(
     day: str,
     cash_balance: str,
     positions: tuple[tuple[str, str, str, str], ...] = (),
+    snapshot_id: str | None = None,
+    recorded_at_utc: datetime | None = None,
 ) -> ResidualReserveSnapshot:
     return ResidualReserveSnapshot(
-        snapshot_id=f"reserve-{day}",
+        snapshot_id=snapshot_id or f"reserve-{day}",
         ledger_genesis_id="ledger-1",
         active_blueprint_activation_id="activation-1",
         trading_day=day,
-        recorded_at_utc=datetime.fromisoformat(f"{day}T20:00:00+00:00"),
+        recorded_at_utc=recorded_at_utc
+        or datetime.fromisoformat(f"{day}T20:00:00+00:00"),
         cash_balance=Decimal(cash_balance),
         positions=tuple(
             ResidualPositionAllocation(
@@ -253,6 +256,53 @@ def test_store_backed_reader_allows_pnl_activation_when_reserve_window_is_clean(
         _reserve_snapshot(
             day="2026-04-22",
             cash_balance="20",
+        )
+    )
+
+    reader = StoreBackedAttributionRecordsReader(
+        operator_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 20, 0, tzinfo=UTC),
+    )
+
+    assert reader.pnl_activation_blocker(window_days=60) is None
+
+
+def test_store_backed_reader_uses_latest_reserve_snapshot_per_trading_day(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="trend-following-v1",
+            day="2026-04-22",
+            ending_equity="500",
+            daily_return="0.01",
+        )
+    )
+    store.write_sleeve_daily_attribution_record(
+        _record_for_sleeve(
+            sleeve_id="vol-target-v1",
+            day="2026-04-22",
+            ending_equity="500",
+            daily_return="0.01",
+        )
+    )
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="80",
+            positions=(("QQQ", "1", "100", "105"),),
+            snapshot_id="bootstrap-ledger-1__reserve",
+            recorded_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        )
+    )
+    store.write_residual_reserve_snapshot(
+        _reserve_snapshot(
+            day="2026-04-22",
+            cash_balance="20",
+            positions=(),
+            snapshot_id="close-ledger-1__reserve__2026-04-22",
+            recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
         )
     )
 
