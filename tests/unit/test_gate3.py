@@ -12,6 +12,8 @@ from tradingx.types import (
     ExecutionLifecycleRecord,
     RecoveryDrillRecord,
     ReplaySlippageSummary,
+    ServiceCycleSnapshot,
+    ServiceSymbolResult,
 )
 
 
@@ -384,3 +386,114 @@ def test_gate3_governed_duration_ignores_legacy_pre_sleeve_history(tmp_path) -> 
     assert report.calendar_days_observed == 2
     assert duration_criterion.status == "pending"
     assert duration_criterion.observed_value == "2 trades / 2 days"
+
+
+def test_gate3_governed_duration_uses_first_governed_artifact_timestamp(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    legacy_opened_at = datetime(2026, 1, 1, 14, 30, tzinfo=UTC)
+    governed_closed_at = legacy_opened_at + timedelta(days=179, minutes=30)
+    sleeve_attributions = (
+        ("trend-following-v1", Decimal("0.6")),
+        ("vol-target-v1", Decimal("0.4")),
+    )
+
+    paper_store.write_closed_trade_record(
+        closed_trade=ClosedTradeRecord(
+            trade_id="mixed-transition-trade",
+            symbol="SPY",
+            entry_intent_id="legacy-entry",
+            exit_intent_id="governed-exit",
+            opened_at_utc=legacy_opened_at,
+            closed_at_utc=governed_closed_at,
+            quantity=Decimal("1"),
+            entry_price=Decimal("500.00"),
+            exit_price=Decimal("505.00"),
+            gross_pnl=Decimal("5.00"),
+            return_pct=Decimal("0.01"),
+            outcome="win",
+            holding_period_seconds=int(
+                (governed_closed_at - legacy_opened_at).total_seconds()
+            ),
+            exit_sleeve_attributions=sleeve_attributions,
+        )
+    )
+    paper_store.write_execution_lifecycle_record(
+        execution=ExecutionLifecycleRecord(
+            execution_id="governed-exit-fill",
+            intent_id="governed-exit",
+            symbol="SPY",
+            side="sell",
+            reason_code="target_weight_exit",
+            reference_price=Decimal("505.25"),
+            fill_price=Decimal("505.00"),
+            filled_qty=Decimal("1"),
+            slippage_bps=Decimal("5"),
+            submitted_at_utc=governed_closed_at,
+            filled_at_utc=governed_closed_at,
+            recovered=False,
+            sleeve_attributions=sleeve_attributions,
+        )
+    )
+
+    for day_index in range(180):
+        cycle_time = legacy_opened_at + timedelta(days=day_index)
+        paper_store.write_service_cycle_snapshot(
+            ServiceCycleSnapshot(
+                cycle_id=f"cycle-{day_index}",
+                started_at_utc=cycle_time,
+                completed_at_utc=cycle_time,
+                cycle_status="completed",
+                symbols=("SPY",),
+                symbol_results=(
+                    ServiceSymbolResult(
+                        symbol="SPY",
+                        terminal_state="completed",
+                        reason_code="cycle_complete",
+                        recovered=False,
+                    ),
+                ),
+                blocked_trade_count=0,
+                reconciliation_failure_count=0,
+                open_position_symbols=(),
+                cash=Decimal("10000"),
+                equity=Decimal("10000"),
+                buying_power=Decimal("20000"),
+            )
+        )
+
+    for candidate_id in ("trend-following-v1", "vol-target-v1"):
+        validation_store.write_evaluation_evidence(
+            EvaluationEvidencePack(
+                evidence_pack_id=f"{candidate_id}-mixed-transition-reference",
+                candidate_id=candidate_id,
+                window_start_utc=legacy_opened_at,
+                window_end_utc=governed_closed_at,
+                benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+                candidate_metrics={
+                    "sharpe_ratio": Decimal("0.10"),
+                    "hit_rate": Decimal("0.50"),
+                },
+                adversarial_checks=("none",),
+                recommendation="keep",
+                assumptions=("reference expectation for Gate 3",),
+            )
+        )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+
+    duration_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "duration_or_trade_count"
+    )
+
+    assert report.closed_trade_count == 1
+    assert report.calendar_days_observed == 1
+    assert duration_criterion.status == "pending"
+    assert duration_criterion.observed_value == "1 trades / 1 days"

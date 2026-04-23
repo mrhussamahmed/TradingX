@@ -430,18 +430,26 @@ def _governed_closed_trade_payloads(
     ]
 
 
+def _governed_trade_timestamps(payload: dict[str, object]) -> tuple[datetime, ...]:
+    timestamps: list[datetime] = []
+    if _governed_attributions(payload.get("entry_sleeve_attributions", ())):
+        opened_at = str(payload.get("opened_at_utc", "")).strip()
+        if opened_at:
+            timestamps.append(datetime.fromisoformat(opened_at))
+    if _governed_attributions(payload.get("exit_sleeve_attributions", ())):
+        closed_at = str(payload.get("closed_at_utc", "")).strip()
+        if closed_at:
+            timestamps.append(datetime.fromisoformat(closed_at))
+    return tuple(timestamps)
+
+
 def _governed_start_at(
     execution_records: tuple[ExecutionLifecycleRecord, ...],
     closed_trade_payloads: list[dict[str, object]],
 ) -> datetime | None:
     timestamps: list[datetime] = [record.filled_at_utc for record in execution_records]
     for payload in closed_trade_payloads:
-        opened_at = str(payload.get("opened_at_utc", "")).strip()
-        closed_at = str(payload.get("closed_at_utc", "")).strip()
-        if opened_at:
-            timestamps.append(datetime.fromisoformat(opened_at))
-        elif closed_at:
-            timestamps.append(datetime.fromisoformat(closed_at))
+        timestamps.extend(_governed_trade_timestamps(payload))
     if not timestamps:
         return None
     return min(timestamps)
