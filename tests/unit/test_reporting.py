@@ -159,3 +159,114 @@ def test_build_gate_decision_brief_combines_validation_and_paper_evidence(
         "validation_reports/gate-1-20260417T180000Z.json",
         "evaluation_evidence/evaluation-1.json",
     )
+
+
+def test_build_gate_decision_brief_derives_null_criterion_status_from_passed(
+    tmp_path: Path,
+) -> None:
+    reporting = importlib.import_module("tradingx.reporting")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    timestamp = datetime(2026, 4, 23, 12, 0, tzinfo=UTC)
+
+    validation_store.write_validation_report(
+        ValidationReport(
+            report_id="gate-1-20260423T120000Z",
+            gate_id="1",
+            generated_at_utc=timestamp,
+            status="fail",
+            benchmark_symbol="SPY",
+            window_start_utc=datetime(2023, 1, 1, tzinfo=UTC),
+            window_end_utc=timestamp,
+            candidate_results=(
+                ValidationCandidateResult(
+                    candidate_id="trend-following-v1",
+                    gate_id="1",
+                    status="fail",
+                    evidence_pack_id="evaluation-1",
+                    criteria=(
+                        ValidationCriterionResult(
+                            criterion_id="benchmark_edge",
+                            passed=True,
+                            threshold="Sharpe >= 1.0",
+                            details="Passed benchmark edge.",
+                        ),
+                        ValidationCriterionResult(
+                            criterion_id="max_drawdown",
+                            passed=False,
+                            threshold="Max drawdown <= 15%",
+                            details="Drawdown exceeded threshold.",
+                        ),
+                    ),
+                    summary="Gate 1 criteria failed.",
+                ),
+            ),
+            summary="Gate 1 failed for trend-following-v1.",
+            assumptions=(),
+            evidence_refs=(),
+        )
+    )
+
+    stored_report_path = (
+        tmp_path / "validation" / "validation_reports" / "gate-1-20260423T120000Z.json"
+    )
+    stored_payload = stored_report_path.read_text(encoding="utf-8")
+    assert '"status": null' in stored_payload
+
+    brief = reporting.build_gate_decision_brief(
+        validation_store=validation_store,
+        paper_store=paper_store,
+        gate_id="1",
+    )
+
+    assert brief.candidate_summaries[0].failed_criteria == ("max_drawdown",)
+
+
+def test_build_gate_decision_brief_excludes_pending_criterion_from_failed_criteria(
+    tmp_path: Path,
+) -> None:
+    reporting = importlib.import_module("tradingx.reporting")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    timestamp = datetime(2026, 4, 23, 12, 30, tzinfo=UTC)
+
+    validation_store.write_validation_report(
+        ValidationReport(
+            report_id="gate-1-20260423T123000Z",
+            gate_id="1",
+            generated_at_utc=timestamp,
+            status="pending",
+            benchmark_symbol="SPY",
+            window_start_utc=datetime(2023, 1, 1, tzinfo=UTC),
+            window_end_utc=timestamp,
+            candidate_results=(
+                ValidationCandidateResult(
+                    candidate_id="trend-following-v1",
+                    gate_id="1",
+                    status="pending",
+                    evidence_pack_id="evaluation-1",
+                    criteria=(
+                        ValidationCriterionResult(
+                            criterion_id="pbo_overfitting",
+                            passed=False,
+                            threshold="PBO <= 0.30",
+                            details="Pending until cohort matures.",
+                            status="pending",
+                        ),
+                    ),
+                    summary="Gate 1 evidence is incomplete.",
+                ),
+            ),
+            summary="Gate 1 pending for trend-following-v1.",
+            assumptions=(),
+            evidence_refs=(),
+        )
+    )
+
+    brief = reporting.build_gate_decision_brief(
+        validation_store=validation_store,
+        paper_store=paper_store,
+        gate_id="1",
+    )
+
+    assert brief.candidate_summaries[0].failed_criteria == ()

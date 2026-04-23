@@ -1,13 +1,13 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.2.1
+version: 1.3.0
 status: active
 created: 2026-04-17
-last_amended: 2026-04-21
-supersedes: GATES-0001@1.2.0
+last_amended: 2026-04-23
+supersedes: GATES-0001@1.2.1
 superseded_by: null
-author_session: codex-gpt-5
+author_session: gpt-5-codex-2026-04-23
 ---
 
 # Stage 1 acceptance gates
@@ -85,6 +85,18 @@ reframed gate logic in
   of out-of-sample data with metrics remaining within 30% of the
   in-sample profile on Sharpe, CAGR, and MaxDD
   (`|metric_OOS - metric_IS| / max(|metric_IS|, 0.3) <= 0.30`).
+- `pbo_overfitting`: evaluation-level PBO from the current CPCV cohort
+  must be <= 0.30 once the Stage 2 readiness gates clear. Readiness
+  means:
+  - at least one CPCV cohort is mature enough that
+    `earliest_recorded_at_utc <= now - 182 days`
+  - the current evaluation's `cohort_window_id` has
+    `strategy_config_count >= 50`
+  - the current evaluation's `cohort_window_id` has exactly 45 CPCV
+    paths (`C(10, 2)`)
+  Before those readiness gates clear, `pbo_overfitting` remains
+  `pending` rather than failed. Once a PBO payload exists for the
+  Gate 1 run, the criterion becomes a hard pass/fail gate.
 - `marginal_portfolio_contribution`: for each sleeve-backed candidate,
   adding the candidate to the reference book of mandatory sleeve-backed
   candidates must strictly improve portfolio Sharpe AND Calmar AND not
@@ -105,12 +117,6 @@ reframed gate logic in
 - North-star Sharpe (>= 1.3): not currently recorded on evidence
   packs. Scheduled to ship alongside the DSR wiring as
   preference-ranking data among surviving candidates. Not pass/fail.
-
-**Deferred to tranche 2 hardening**
-
-- Combinatorial Purged Cross-Validation (CPCV) replacing
-  purged/embargoed k-fold as the validation topology.
-- Probability of Backtest Overfitting (PBO) as a hard gate.
 
 **Benchmark comparison**
 
@@ -197,5 +203,7 @@ SPY and AGG closes sourced through `AlpacaMarketDataGateway`.
 - [ADR-0022](/docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md)
   — Gate 1 reframe with benchmark-stack criteria and robustness
   (supersedes ADR-0020)
+- [ADR-0024](/docs/adrs/ADR-0024-gate1-pbo-activation.md) —
+  Gate 1 PBO activation from CPCV cohort readiness
 - [SPEC-0013](/docs/superpowers/specs/2026-04-20-capital-growth-landscape-design.md)
   — Capital growth landscape

@@ -235,6 +235,7 @@ class ValidationCriterionResult:
     passed: bool
     threshold: str
     details: str
+    status: str | None = None
 
 
 @dataclass(frozen=True)

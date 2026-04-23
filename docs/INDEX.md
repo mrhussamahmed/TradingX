@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.34
+version: 1.2.35
 status: active
 created: 2026-04-17
-last_amended: 2026-04-22
-supersedes: INDEX-0001@1.2.33
+last_amended: 2026-04-23
+supersedes: INDEX-0001@1.2.34
 superseded_by: null
-author_session: gpt-5-codex-2026-04-22
+author_session: gpt-5-codex-2026-04-23
 ---
 
 # Artifact index
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.34  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.35  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -108,6 +108,7 @@ field (session lifecycle). This index tracks `status` only.
 | ADR-0020 | Tighten Gate 1 statistical criteria around deflated Sharpe and overfitting controls | 1.0.1 | superseded | `docs/adrs/ADR-0020-gate1-statistical-criteria.md` |
 | ADR-0021 | Adopt three-tier benchmark stack in place of SPY-only benchmarking | 1.0.0 | active | `docs/adrs/ADR-0021-benchmark-stack.md` |
 | ADR-0022 | Reframe Gate 1 from standalone sleeve Sharpe to benchmark-stack criteria and robustness | 1.0.0 | active | `docs/adrs/ADR-0022-gate1-reframe-benchmark-stack-and-robustness.md` |
+| ADR-0024 | Activate Gate 1 PBO from CPCV cohort readiness | 1.0.0 | active | `docs/adrs/ADR-0024-gate1-pbo-activation.md` |
 
 ### Design documents
 
@@ -259,7 +260,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| GATES-0001 | Stage 1 acceptance gates | 1.2.1 | active | `docs/validation/acceptance_gates.md` |
+| GATES-0001 | Stage 1 acceptance gates | 1.3.0 | active | `docs/validation/acceptance_gates.md` |
 
 ### Session handovers (SESS-*)
 

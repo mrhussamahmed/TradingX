@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import subprocess
 import time
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,13 @@ from tradingx.execution import (
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
+from tradingx.pbo import (
+    DEFAULT_MIN_COHORT_SIZE,
+    InsufficientCPCVCohortError,
+    MixedCohortWindowError,
+    cohort_window_id_for,
+    compute_pbo,
+)
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.policy import (
     PolicySnapshot,
@@ -59,6 +67,7 @@ from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BenchmarkStackPayload,
     ClosedTradeRecord,
+    CPCVCohortWindowSummary,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
     GateAssessment,
@@ -72,7 +81,13 @@ from tradingx.types import (
     TradeIntent,
     TradingLoopResult,
 )
-from tradingx.validation import _run_cpcv_for_candidate, build_gate_report
+from tradingx.validation import (
+    _CPCV_CONFIG_FINGERPRINT,
+    _CPCV_N_GROUPS,
+    _CPCV_TEST_GROUP_COUNT,
+    _run_cpcv_for_candidate,
+    build_gate_report,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1501,6 +1516,11 @@ class GateValidationController:
                         gate_id,
                         candidate.candidate_id,
                     )
+        gate1_pbo_payload = self._gate1_pbo_activation_payload(
+            gate_id=gate_id,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+        )
         report = build_gate_report(
             gate_id=gate_id,
             bars_by_symbol=bars_by_symbol,
@@ -1508,6 +1528,7 @@ class GateValidationController:
             benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
+            gate1_pbo_payload=gate1_pbo_payload,
             trials_ledger=self._trials_ledger,
         )
         report_path = self._artifacts.write_validation_report(report)
@@ -1526,6 +1547,125 @@ class GateValidationController:
             gate_assessment=assessment,
             artifact_paths=(report_path, assessment_path),
         )
+
+    def _gate1_pbo_activation_payload(
+        self,
+        *,
+        gate_id: str,
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+    ) -> tuple[Decimal, str] | None:
+        if gate_id != "1":
+            return None
+
+        summaries = self._artifacts.list_cpcv_cohort_windows()
+        current_cohort_window_id = cohort_window_id_for(
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            cpcv_config_fingerprint=_CPCV_CONFIG_FINGERPRINT,
+        )
+        maturity_cutoff = datetime.now(UTC) - timedelta(days=182)
+        if not any(
+            summary.earliest_recorded_at_utc <= maturity_cutoff for summary in summaries
+        ):
+            LOGGER.info(
+                "criterion: pbo_cohort_insufficient gate_id=%s "
+                "cohort_window_id=%s reason=no_mature_cohort",
+                gate_id,
+                current_cohort_window_id,
+            )
+            return None
+
+        current_summary = next(
+            (
+                summary
+                for summary in summaries
+                if summary.cohort_window_id == current_cohort_window_id
+            ),
+            None,
+        )
+        if not self._current_cohort_is_ready(
+            current_summary=current_summary,
+            current_cohort_window_id=current_cohort_window_id,
+            gate_id=gate_id,
+        ):
+            return None
+
+        records = self._artifacts.list_cpcv_trial_records(
+            cohort_window_id=current_cohort_window_id
+        )
+        run_timestamp = datetime.now(UTC)
+        run_nonce = f"{time.time_ns():x}"[-8:]
+        evaluation_id = (
+            f"gate1-{run_timestamp.strftime('%Y%m%dT%H%M%S.%fZ')}-"
+            f"{run_nonce}-{current_cohort_window_id}"
+        )
+        try:
+            report = compute_pbo(
+                cpcv_records=records,
+                evaluation_id=evaluation_id,
+                generated_at_utc=run_timestamp,
+            )
+        except InsufficientCPCVCohortError:
+            LOGGER.info(
+                "criterion: pbo_cohort_insufficient gate_id=%s "
+                "cohort_window_id=%s reason=compute_pbo_insufficient",
+                gate_id,
+                current_cohort_window_id,
+            )
+            return None
+        except MixedCohortWindowError:
+            LOGGER.exception(
+                "criterion: pbo_cohort_integrity_failed gate_id=%s "
+                "cohort_window_id=%s",
+                gate_id,
+                current_cohort_window_id,
+            )
+            raise
+
+        self._artifacts.write_pbo_report(report)
+        self._metrics.record_evidence_artifact("pbo_report")
+        return (report.pbo_value, report.report_id)
+
+    def _current_cohort_is_ready(
+        self,
+        *,
+        current_summary: CPCVCohortWindowSummary | None,
+        current_cohort_window_id: str,
+        gate_id: str,
+    ) -> bool:
+        required_path_count = math.comb(_CPCV_N_GROUPS, _CPCV_TEST_GROUP_COUNT)
+        if current_summary is None:
+            LOGGER.info(
+                "criterion: pbo_cohort_insufficient gate_id=%s "
+                "cohort_window_id=%s reason=current_cohort_missing",
+                gate_id,
+                current_cohort_window_id,
+            )
+            return False
+        if current_summary.strategy_config_count < DEFAULT_MIN_COHORT_SIZE:
+            LOGGER.info(
+                "criterion: pbo_cohort_insufficient gate_id=%s "
+                "cohort_window_id=%s reason=current_cohort_too_small "
+                "strategy_config_count=%s required=%s",
+                gate_id,
+                current_cohort_window_id,
+                current_summary.strategy_config_count,
+                DEFAULT_MIN_COHORT_SIZE,
+            )
+            return False
+        if current_summary.path_count != required_path_count:
+            LOGGER.info(
+                "criterion: pbo_cohort_insufficient gate_id=%s "
+                "cohort_window_id=%s reason=current_cohort_incomplete "
+                "path_count=%s required=%s",
+                gate_id,
+                current_cohort_window_id,
+                current_summary.path_count,
+                required_path_count,
+            )
+            return False
+        return True
 
 
 def build_default_controller(config: TradingConfig) -> RoundTripController:

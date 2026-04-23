@@ -38,6 +38,13 @@ def _required_operator_action(gate_id: str, status: str) -> str:
     return f"Do not advance; address failed criteria and regenerate Gate {gate_id}."
 
 
+def _criterion_payload_status(payload: dict[str, object]) -> str:
+    raw_status = payload.get("status")
+    if raw_status in {"pass", "fail", "pending"}:
+        return str(raw_status)
+    return "pass" if bool(payload.get("passed")) else "fail"
+
+
 def build_gate_decision_brief(
     *,
     validation_store: FilesystemArtifactStore,
@@ -119,7 +126,7 @@ def build_gate_decision_brief(
                     list[dict[str, object]],
                     candidate.get("criteria", []),
                 )
-                if not bool(criterion.get("passed"))
+                if _criterion_payload_status(criterion) == "fail"
             ),
             summary=str(candidate["summary"]),
         )

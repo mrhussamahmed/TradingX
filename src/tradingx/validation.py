@@ -66,6 +66,10 @@ _CPCV_LABEL_HORIZON_DAYS = 1
 _CPCV_N_GROUPS = 10
 _CPCV_TEST_GROUP_COUNT = 2
 _CPCV_EMBARGO_DAYS = 5
+_CPCV_CONFIG_FINGERPRINT = (
+    f"N={_CPCV_N_GROUPS},k={_CPCV_TEST_GROUP_COUNT},"
+    f"h={_CPCV_EMBARGO_DAYS},L={_CPCV_LABEL_HORIZON_DAYS}"
+)
 
 
 def _to_float_sequence(values: Sequence[Decimal]) -> tuple[float, ...]:
@@ -309,6 +313,7 @@ def _build_gate1_candidate_result_pass1(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext,
+    gate1_pbo_payload: tuple[Decimal, str] | None = None,
     trials_ledger: TrialsLedger | None = None,
 ) -> tuple[ValidationCandidateResult, EvaluationEvidencePack]:
     evidence_pack = evaluate_candidate(
@@ -321,6 +326,12 @@ def _build_gate1_candidate_result_pass1(
         annualized_cost_drag_bps=annualized_cost_drag_bps,
         trials_ledger=trials_ledger,
     )
+    if gate1_pbo_payload is not None:
+        evidence_pack = replace(
+            evidence_pack,
+            pbo_value=gate1_pbo_payload[0],
+            pbo_report_id=gate1_pbo_payload[1],
+        )
     adversarial_statuses = set(evidence_pack.adversarial_checks)
 
     out_of_sample_passed = False
@@ -340,6 +351,32 @@ def _build_gate1_candidate_result_pass1(
             "window plus 756 out-of-sample trading days."
         )
 
+    if gate1_pbo_payload is None:
+        pbo_criterion = ValidationCriterionResult(
+            criterion_id="pbo_overfitting",
+            passed=False,
+            threshold="PBO <= 0.30 once the CPCV cohort is mature enough",
+            details=(
+                "Pending: the CPCV/PBO hard gate is active, but the current "
+                "cohort does not yet satisfy the Stage 2 readiness gates."
+            ),
+            status="pending",
+        )
+    else:
+        pbo_value, _ = gate1_pbo_payload
+        pbo_passed = pbo_value <= Decimal("0.30")
+        pbo_criterion = ValidationCriterionResult(
+            criterion_id="pbo_overfitting",
+            passed=pbo_passed,
+            threshold="PBO <= 0.30",
+            details=(
+                f"PBO={pbo_value:.3f} "
+                + ("meets" if pbo_passed else "exceeds")
+                + " the <= 0.30 threshold."
+            ),
+            status="pass" if pbo_passed else "fail",
+        )
+
     criteria = evaluate_gate1_benchmark_criteria(
         candidate_returns=candidate_returns,
         benchmark_stack_payload=benchmark_stack_payload,
@@ -353,10 +390,14 @@ def _build_gate1_candidate_result_pass1(
             ),
             details=out_of_sample_details,
         ),
+        pbo_criterion,
     )
-    if not history_complete:
+    criterion_statuses = {
+        _criterion_effective_status(criterion) for criterion in criteria
+    }
+    if not history_complete or "pending" in criterion_statuses:
         status = "pending"
-    elif all(criterion.passed for criterion in criteria):
+    elif criterion_statuses == {"pass"}:
         status = "pass"
     else:
         status = "fail"
@@ -400,6 +441,7 @@ def _build_gate1_candidate_result(
     window_start_utc: datetime,
     window_end_utc: datetime,
     adversarial_context: AdversarialCheckContext,
+    gate1_pbo_payload: tuple[Decimal, str] | None = None,
     trials_ledger: TrialsLedger | None = None,
 ) -> ValidationCandidateResult:
     result, _ = _build_gate1_candidate_result_pass1(
@@ -410,6 +452,7 @@ def _build_gate1_candidate_result(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         adversarial_context=adversarial_context,
+        gate1_pbo_payload=gate1_pbo_payload,
         trials_ledger=trials_ledger,
     )
     return result
@@ -775,8 +818,14 @@ def _candidate_with_parameter_overrides(
     return replace(candidate, parameter_set=merged_parameter_set)
 
 
-def _criterion_status(criterion: ValidationCriterionResult) -> str:
+def _criterion_effective_status(criterion: ValidationCriterionResult) -> str:
+    if criterion.status in {"pass", "fail", "pending"}:
+        return criterion.status
     return "pass" if criterion.passed else "fail"
+
+
+def _criterion_status(criterion: ValidationCriterionResult) -> str:
+    return _criterion_effective_status(criterion)
 
 
 def _reconcile_gate1_status(pass1_status: str, marginal_status: str) -> str:
@@ -899,6 +948,12 @@ def _apply_marginal_pass_to_gate1_result(
         marginal_calmar_delta=marginal_calmar_delta,
         marginal_cdar_delta=marginal_cdar_delta,
     )
+    if pass1_pack.pbo_value is not None or pass1_pack.pbo_report_id is not None:
+        pass2_pack = replace(
+            pass2_pack,
+            pbo_value=pass1_pack.pbo_value,
+            pbo_report_id=pass1_pack.pbo_report_id,
+        )
     combined_criteria = pass1_result.criteria + (marginal_criterion,)
     final_status = _reconcile_gate1_status(
         pass1_result.status,
@@ -934,6 +989,7 @@ def build_gate_report(
     benchmark_stack_payload: BenchmarkStackPayload,
     window_start_utc: datetime,
     window_end_utc: datetime,
+    gate1_pbo_payload: tuple[Decimal, str] | None = None,
     trials_ledger: TrialsLedger | None = None,
 ) -> ValidationReport:
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
@@ -1000,6 +1056,7 @@ def build_gate_report(
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
+                gate1_pbo_payload=gate1_pbo_payload,
                 trials_ledger=trials_ledger,
             )
             pass1_results[candidate.candidate_id] = result

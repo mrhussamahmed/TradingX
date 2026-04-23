@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pandas as pd
 
 from tradingx.controller import GateValidationController
-from tradingx.pbo import cohort_window_id_for, compute_pbo
+from tradingx.pbo import cohort_window_id_for
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     BenchmarkStackPayload,
@@ -77,6 +77,7 @@ def _synthetic_record(
     strategy_config_id: str,
     cpcv_path_id: str,
     out_of_sample_sharpe: Decimal,
+    recorded_at_utc: datetime,
 ) -> CPCVTrialRecord:
     candidate_id, _, config_fingerprint = strategy_config_id.partition("::")
     return CPCVTrialRecord(
@@ -99,29 +100,60 @@ def _synthetic_record(
         in_sample_n_trades=1,
         out_of_sample_n_trades=1,
         git_sha="seeded",
-        recorded_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+        recorded_at_utc=recorded_at_utc,
     )
 
 
-def test_cpcv_pipeline_persists_records_and_supports_standalone_pbo(tmp_path) -> None:
+def _criterion_status(candidate_result, criterion_id: str) -> str:  # type: ignore[no-untyped-def]
+    criterion = next(
+        entry
+        for entry in candidate_result.criteria
+        if entry.criterion_id == criterion_id
+    )
+    return criterion.status or ("pass" if criterion.passed else "fail")
+
+
+def test_cpcv_pipeline_activates_pbo_and_writes_one_report_per_run(tmp_path) -> None:
     store = FilesystemArtifactStore(tmp_path)
     window_start_utc = datetime(2023, 1, 3, tzinfo=UTC)
     window_end_utc = datetime(2023, 6, 19, tzinfo=UTC)
-    cohort_window_id = cohort_window_id_for(
+    current_cohort_window_id = cohort_window_id_for(
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         cpcv_config_fingerprint="N=10,k=2,h=5,L=1",
     )
+    mature_window_start_utc = datetime(2022, 1, 3, tzinfo=UTC)
+    mature_window_end_utc = datetime(2022, 6, 20, tzinfo=UTC)
+    mature_cohort_window_id = cohort_window_id_for(
+        window_start_utc=mature_window_start_utc,
+        window_end_utc=mature_window_end_utc,
+        cpcv_config_fingerprint="N=10,k=2,h=5,L=1",
+    )
     seeded_rng = random.Random(2026)
+    mature_recorded_at_utc = datetime.now(UTC) - timedelta(days=200)
+    current_recorded_at_utc = datetime.now(UTC) - timedelta(days=1)
+    for strategy_index in range(50):
+        strategy_config_id = f"mature-{strategy_index:02d}::cfg-{strategy_index:02d}"
+        for path_index in range(45):
+            store.write_cpcv_trial_record(
+                _synthetic_record(
+                    cohort_window_id=mature_cohort_window_id,
+                    strategy_config_id=strategy_config_id,
+                    cpcv_path_id=f"path-{path_index:04d}",
+                    out_of_sample_sharpe=Decimal(str(seeded_rng.gauss(0.0, 1.0))),
+                    recorded_at_utc=mature_recorded_at_utc,
+                )
+            )
     for strategy_index in range(60):
         strategy_config_id = f"synthetic-{strategy_index:02d}::cfg-{strategy_index:02d}"
         for path_index in range(45):
             store.write_cpcv_trial_record(
                 _synthetic_record(
-                    cohort_window_id=cohort_window_id,
+                    cohort_window_id=current_cohort_window_id,
                     strategy_config_id=strategy_config_id,
                     cpcv_path_id=f"path-{path_index:04d}",
                     out_of_sample_sharpe=Decimal(str(seeded_rng.gauss(0.0, 1.0))),
+                    recorded_at_utc=current_recorded_at_utc,
                 )
             )
 
@@ -136,20 +168,30 @@ def test_cpcv_pipeline_persists_records_and_supports_standalone_pbo(tmp_path) ->
         window_end_utc=window_end_utc,
         universe=("SPY", "QQQ"),
     )
-
-    records = store.list_cpcv_trial_records(cohort_window_id=cohort_window_id)
-    summaries = store.list_cpcv_cohort_windows()
-    report = compute_pbo(
-        cpcv_records=records,
-        min_cohort_size=50,
-        min_paths=20,
-        random_seed=2026,
+    rerun_result = controller.generate_gate_report(
+        gate_id="1",
+        benchmark_stack_payload=_benchmark_stack_payload(periods=200),
+        window_start_utc=window_start_utc,
+        window_end_utc=window_end_utc,
+        universe=("SPY", "QQQ"),
     )
 
+    records = store.list_cpcv_trial_records(cohort_window_id=current_cohort_window_id)
+    summaries = store.list_cpcv_cohort_windows()
+    pbo_reports = sorted((tmp_path / "pbo_reports").glob("*.json"))
+
     assert result.report.gate_id == "1"
+    assert rerun_result.report.gate_id == "1"
     assert len(records) == 2790
-    assert summaries[-1].cohort_window_id == cohort_window_id
+    assert summaries[-1].cohort_window_id == current_cohort_window_id
     assert summaries[-1].strategy_config_count >= 62
-    assert not (tmp_path / "pbo_reports").exists()
-    assert report.cohort_window_id == cohort_window_id
-    assert report.n_paths == 45
+    assert len(pbo_reports) == 2
+    assert pbo_reports[0].name != pbo_reports[1].name
+    assert all(
+        _criterion_status(candidate_result, "pbo_overfitting") in {"pass", "fail"}
+        for candidate_result in result.report.candidate_results
+    )
+    assert all(
+        _criterion_status(candidate_result, "pbo_overfitting") in {"pass", "fail"}
+        for candidate_result in rerun_result.report.candidate_results
+    )
