@@ -62,25 +62,30 @@ them as non-negotiable:
    per-candidate. The activation computes PBO once from the current
    cohort window and fans the same `(pbo_value, pbo_report_id)` into
    that Gate 1 batch.
+5. **Keep the audit trail per run, not per window.** Rerunning the same
+   validation window must produce a new `PBOReport`, not overwrite the
+   old file. The activation payload therefore needs a per-run
+   `evaluation_id`, not a stable “window-only” id.
 5. **The current registry shape must not create permanent pending
    candidates.** `build_mandatory_candidate_registry(...)` still
    includes the non-sleeve `mean-reversion-v1` candidate. Because PBO is
    evaluation-level, the activation payload must be attached to the
    whole Gate 1 batch, not only to sleeve-backed candidates, or the
    baseline candidate will remain structurally pending forever.
-6. **No partial writes on insufficient cohort.** If readiness gates do
-   not clear, or `compute_pbo(...)` still raises
-   `InsufficientCPCVCohortError` / `MixedCohortWindowError`, the run
-   writes no `PBOReport` and Gate 1 remains `pending` on criterion 7.
+7. **Different error classes keep different meanings.**
+   `InsufficientCPCVCohortError` remains a normal low-readiness pending
+   path. `MixedCohortWindowError` remains a hard integrity failure,
+   because `list_cpcv_trial_records(cohort_window_id=...)` should never
+   legitimately return mixed-cohort data.
 7. **`evaluate_candidate(...)` should stay untouched unless blocked.**
    The narrow path is to keep `evaluation.py` pure and apply the
    activation payload inside `validation.py` via `replace(...)` on the
    `EvaluationEvidencePack`.
-8. **Criterion 7 pending is a status rule, not a fake pass/fail.**
+8. **Criterion 7 pending is a real third state.**
    When `pbo_value is None`, the criterion details should say
-   “pending / insufficient cohort,” and the surrounding Gate 1 status
-   logic should keep the candidate `pending` rather than counting the
-   criterion as an ordinary failure.
+   “pending / insufficient cohort,” and the result model must carry that
+   as a real criterion state rather than smuggling it through
+   `passed=False`.
 9. **Acceptance-gates doc update and ADR land in the same commit as the
    code flip.** This is an activation event, not a loose follow-up.
 10. **No threshold retuning in this branch.** The hard gate is still
@@ -117,15 +122,20 @@ matrix construction.
 ## Modified files
 
 - `src/tradingx/controller.py`
+- `src/tradingx/types.py`
 - `src/tradingx/validation.py`
+- `src/tradingx/reporting.py`
+- `docs/INDEX.md`
 - `docs/validation/acceptance_gates.md`
-- `docs/adrs/ADR-0023-gate1-pbo-activation.md`
+- `docs/adrs/ADR-NNNN-gate1-pbo-activation.md`
 - `tests/unit/test_controller_generate_gate_report_cpcv.py`
+- `tests/unit/test_reporting.py`
 - `tests/unit/test_validation_gate1_pbo_activation.py`
 - `tests/integration/test_cpcv_pbo_pipeline.py`
 
-No `INDEX.md` change is needed. Plan files under
-`docs/superpowers/plans/` are not frontmatter-indexed.
+The implementation must allocate the next free ADR number at execution
+time and add the corresponding row to `docs/INDEX.md`. Only plan files
+under `docs/superpowers/plans/` are exempt from frontmatter indexing.
 
 ## Implementation shape
 
@@ -139,7 +149,8 @@ moving parts:
    writes the `PBOReport`.
 2. **Validation-layer criterion flip**
    `build_gate_report(...)` stays store-free and receives one optional
-   evaluation-level PBO payload for the run.
+   evaluation-level PBO payload for the run, while the result model
+   grows a real criterion-level `pending` state.
 3. **Documentation / regression lock**
    The branch updates the acceptance-gates text and adds the activation
    ADR in the same commit as the code, with tests that pin the pending,
@@ -172,9 +183,12 @@ actually satisfied.
     run PBO-pending and writes no `PBOReport`;
   - a mature historical cohort plus an undersized current cohort keeps
     the run PBO-pending and writes no `PBOReport`;
-  - if `compute_pbo(...)` raises on the current cohort despite the
-    summary checks, the controller logs the insufficiency and writes no
-    partial `PBOReport`.
+  - if `compute_pbo(...)` raises `InsufficientCPCVCohortError` on the
+    current cohort despite the summary checks, the controller logs the
+    insufficiency and writes no partial `PBOReport`;
+  - if `compute_pbo(...)` raises `MixedCohortWindowError`, the
+    controller does **not** downgrade it to a pending result; the run
+    fails loudly as an integrity error.
 - [ ] Add one integration-style failing test in
   `tests/integration/test_cpcv_pbo_pipeline.py` that:
   - seeds a mature historical cohort;
@@ -197,15 +211,18 @@ actually satisfied.
   - persists the returned `PBOReport`; and
   - returns one evaluation-level payload:
     `(pbo_value, pbo_report_id)`.
-- [ ] Use a deterministic explicit `evaluation_id` for the activation
-  run rather than relying on `compute_pbo(...)`’s fallback. Recommended
-  shape:
-  `gate1-{window_end_utc:%Y%m%dT%H%M%SZ}-{cohort_window_id}`.
-  This keeps reruns for the same window stable and makes the report easy
-  to audit.
-- [ ] If readiness fails, or `compute_pbo(...)` raises an
-  insufficiency/mixed-cohort error, log one info-level
+- [ ] Use an explicit **per-run** `evaluation_id` for the activation
+  call rather than relying on `compute_pbo(...)`’s fallback and rather
+  than reusing a stable per-window id. Recommended shape:
+  `gate1-{run_timestamp:%Y%m%dT%H%M%SZ}-{cohort_window_id}`.
+  That preserves one `PBOReport` per Gate 1 run while keeping the
+  current cohort window obvious in the artifact name.
+- [ ] If readiness fails, or `compute_pbo(...)` raises
+  `InsufficientCPCVCohortError`, log one info-level
   `criterion: pbo_cohort_insufficient` event and return `None`.
+- [ ] If `compute_pbo(...)` raises `MixedCohortWindowError`, let the run
+  fail loudly (or re-raise after logging at exception level). Do not
+  convert this into a pending result.
 - [ ] Thread the resulting payload into `build_gate_report(...)`.
 - [ ] Re-run the Task 1 test slice until green.
 
@@ -225,7 +242,10 @@ pending/pass/fail path without widening the blast radius of
 
 ### Files
 
+- `src/tradingx/types.py`
 - `src/tradingx/validation.py`
+- `src/tradingx/reporting.py`
+- `tests/unit/test_reporting.py`
 - `tests/unit/test_validation_gate1_pbo_activation.py`
 - `tests/integration/test_cpcv_pbo_pipeline.py`
 
@@ -247,7 +267,19 @@ pending/pass/fail path without widening the blast radius of
   - the non-sleeve `mean-reversion-v1` candidate receives the same
     evaluation-level PBO payload as the sleeve-backed candidates, rather
     than remaining structurally pending.
+- [ ] Add failing tests in `tests/unit/test_reporting.py` for:
+  - a criterion with status `pending` does **not** appear in
+    `failed_criteria`;
+  - a criterion with status `fail` still does.
 - [ ] Verify the tests fail against current `main`.
+- [ ] In `src/tradingx/types.py`, widen `ValidationCriterionResult`
+  additively so it can carry a real tri-state outcome, for example:
+
+  ```python
+  status: str = "pass"  # "pass" | "fail" | "pending"
+  ```
+
+  Existing callers continue to serialize/deserialize cleanly.
 - [ ] In `src/tradingx/validation.py`, widen `build_gate_report(...)`
   with one optional argument:
 
@@ -264,10 +296,16 @@ pending/pass/fail path without widening the blast radius of
   - pending: no activation payload / insufficient cohort;
   - pass: `pbo_value <= 0.30`;
   - fail: `pbo_value > 0.30`.
+- [ ] Update `_criterion_status(...)` and the surrounding Gate 1 status
+  logic to read the explicit criterion status instead of assuming that
+  `passed=False` always means failure.
 - [ ] Update the surrounding Gate 1 status logic so `gate1_pbo_payload
   is None` behaves like the current insufficient-history path:
   criterion 7 is shown as pending and the candidate status is `pending`,
   not ordinary `fail`.
+- [ ] Update `src/tradingx/reporting.py::build_gate_decision_brief(...)`
+  so `failed_criteria` includes only criteria with status `fail`, not
+  criteria whose status is `pending`.
 - [ ] Keep `_reconcile_gate1_status(...)` semantics unchanged: once
   pass-1 is `pending`, the final result remains `pending`.
 - [ ] Re-run the Task 2 test slice until green.
@@ -287,8 +325,9 @@ real integration coverage.
 
 ### Files
 
+- `docs/INDEX.md`
 - `docs/validation/acceptance_gates.md`
-- `docs/adrs/ADR-0023-gate1-pbo-activation.md`
+- `docs/adrs/ADR-NNNN-gate1-pbo-activation.md`
 - `tests/integration/test_cpcv_pbo_pipeline.py`
 
 ### TDD steps
@@ -308,13 +347,18 @@ real integration coverage.
   CPCV/PBO under “Deferred to tranche 2 hardening.” Replace that text
   with the active criterion-7 rule and cite DESIGN-0018 plus the new
   ADR.
-- [ ] Add `docs/adrs/ADR-0023-gate1-pbo-activation.md` in the same
-  branch. It must record:
+- [ ] Add the activation ADR under the **next free ADR number** in the
+  same branch. It must record:
   - the activating commit / date;
   - the current `cohort_window_id`;
   - the mature-cohort evidence that satisfied gate 3;
   - the current-cohort size/path evidence that satisfied gate 4; and
   - the first activated `pbo_value` / `pbo_report_id`.
+- [ ] In that ADR, explicitly note the evaluation-level fan-out
+  semantics: the Gate 1 batch, including the current non-sleeve
+  baseline candidate, receives the same run-level PBO payload.
+- [ ] Add the matching `docs/INDEX.md` row for the new ADR so
+  `scripts/check_index.py` remains green.
 - [ ] Re-run the integration slice until green.
 
 ### Lock
