@@ -89,8 +89,9 @@ them as non-negotiable:
 9. **Tri-state compatibility must be explicit.** Existing constructors
    and persisted validation-report payloads only carry `passed`. Any new
    `ValidationCriterionResult.status` field must therefore be optional,
-   and every reader must derive missing status from `passed` instead of
-   treating the absence of `status` as an implicit `"pass"`.
+   and every reader must derive status from `passed` whenever `status`
+   is missing **or null** instead of treating the absence of `status` as
+   an implicit `"pass"`.
 10. **Acceptance-gates doc update and ADR land in the same commit as the
    code flip.** This is an activation event, not a loose follow-up.
 11. **No threshold retuning in this branch.** The hard gate is still
@@ -291,8 +292,13 @@ pending/pass/fail path without widening the blast radius of
 - [ ] Add an explicit compatibility rule and test coverage for it:
   - writers in new code should emit both `passed` and `status`;
   - readers must prefer `status` when present; and
-  - when `status` is missing, readers must derive
+  - when `status` is missing **or null**, readers must derive
     `"pass"` / `"fail"` from `passed`.
+- [ ] Pin the repo’s actual legacy serialized form in tests: a
+  `ValidationCriterionResult(...)` constructed without `status` and
+  written through the generic `asdict(...)` persistence path must round
+  trip as JSON with `"status": null`, and readers must still derive the
+  correct effective status from `passed`.
 - [ ] In `src/tradingx/validation.py`, widen `build_gate_report(...)`
   with one optional argument:
 
