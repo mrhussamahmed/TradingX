@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from tradingx.config import TradingConfig
+from tradingx.live_enablement import resolve_broker_mode
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BotRuntimeState,
@@ -310,6 +313,594 @@ def create_app(
                 status_code=response.status_code,
             )
         return response
+
+    def _envelope(
+        data: object,
+        *,
+        generated_at: datetime | None = None,
+        request_id: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "request_id": request_id or _new_request_id(),
+            "generated_at": _serialize(generated_at or datetime.now(UTC)),
+            "data": _serialize(data),
+        }
+
+    def _object_response(
+        data: object,
+        *,
+        generated_at: datetime | None = None,
+        status_code: int = 200,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_envelope(data, generated_at=generated_at),
+            status_code=status_code,
+        )
+
+    def _list_response(
+        items: object,
+        *,
+        generated_at: datetime | None = None,
+        next_cursor: str | None = None,
+        status_code: int = 200,
+    ) -> JSONResponse:
+        return _object_response(
+            {
+                "items": items,
+                "next_cursor": next_cursor,
+            },
+            generated_at=generated_at,
+            status_code=status_code,
+        )
+
+    def _error_response(
+        *,
+        status_code: int,
+        code: str,
+        message: str,
+    ) -> JSONResponse:
+        return _object_response(
+            {
+                "error": {
+                    "code": code,
+                    "message": message,
+                }
+            },
+            status_code=status_code,
+        )
+
+    def _provisional_response(route_name: str) -> JSONResponse:
+        response = _object_response(
+            {
+                "stability": "provisional",
+                "frontend_integration_allowed": False,
+                "route": route_name,
+                "message": (
+                    "This governed write surface is intentionally provisional in "
+                    "Wave 1 and must not be used for frontend integration until "
+                    "Wave 3 hardens command sessions, signatures, and mutation "
+                    "preconditions."
+                ),
+            },
+            status_code=503,
+        )
+        response.headers["X-TradingX-Stability"] = "provisional"
+        return response
+
+    def _generated_at_hint(value: object) -> datetime | None:
+        if isinstance(value, dict):
+            generated_at = value.get("generated_at_utc")
+            if isinstance(generated_at, datetime):
+                return generated_at
+        try:
+            generated_at = value.generated_at_utc  # type: ignore[attr-defined]
+        except AttributeError:
+            return None
+        if isinstance(generated_at, datetime):
+            return generated_at
+        return None
+
+    def _snapshot_field(snapshot: object, field_name: str) -> object:
+        if isinstance(snapshot, dict):
+            return snapshot[field_name]
+        return getattr(snapshot, field_name)
+
+    def _control_posture_data() -> dict[str, object]:
+        current_decision = resolve_broker_mode(config)
+        live_capability = resolve_broker_mode(config, explicit_mode="live")
+        governance_posture = {
+            "operator_signoff_required": True,
+            "operator_signoff_status": "missing",
+            "gate4_checklist_status": "missing",
+            "approved_by": None,
+            "approved_at": None,
+        }
+        governance_blockers = (
+            "operator_signoff_missing",
+            "gate4_checklist_missing",
+        )
+        blockers = tuple(
+            dict.fromkeys((*live_capability.disable_reasons, *governance_blockers))
+        )
+        live_allowed = len(blockers) == 0
+        effective_mode = (
+            "live"
+            if current_decision.requested_mode == "live" and live_allowed
+            else "paper"
+        )
+        return {
+            "requested_mode": current_decision.requested_mode,
+            "effective_mode": effective_mode,
+            "live_allowed": live_allowed,
+            "explicit_blockers": [
+                {
+                    "code": reason,
+                    "severity": "hard_block",
+                    "message": _LIVE_BLOCKER_MESSAGES.get(
+                        reason,
+                        reason.replace("_", " ").capitalize() + ".",
+                    ),
+                }
+                for reason in blockers
+            ],
+            "live_control_layer_states": {
+                "broker_credentials_present": config.has_real_live_credentials(),
+                "config_live_enabled": config.live_controls.config_enabled,
+                "env_live_opt_in_enabled": config.live_controls.env_enabled,
+                "code_live_enabled": config.live_controls.code_enabled,
+                "broker_mode_live_requested": config.broker_mode == "live",
+                "write_signing_configured": config.web.write_signing_configured(),
+                "manual_kill_switch_active": config.runtime.manual_kill_switch_active,
+                "dry_run_active": config.runtime.dry_run,
+            },
+            "governance_posture": governance_posture,
+            "market_data_posture": {
+                "mode": effective_mode,
+                "aligned_with_effective_mode": True,
+                "status": "nominal" if not blockers else "fail_closed",
+            },
+            "fail_closed_reasons": list(blockers),
+        }
+
+    def _runtime_freshness(
+        *,
+        runtime_state: BotRuntimeState,
+        heartbeat: RuntimeHeartbeatSnapshot,
+    ) -> dict[str, object]:
+        if runtime_state.status in {"halted", "error", "stopping"}:
+            status = "blocked"
+        elif heartbeat.last_evaluation_at_utc is None:
+            status = "pending"
+        elif heartbeat.next_evaluation_at_utc is None:
+            status = "idle"
+        else:
+            elapsed = (
+                datetime.now(UTC) - heartbeat.last_evaluation_at_utc
+            ).total_seconds()
+            status = (
+                "fresh"
+                if elapsed <= max(heartbeat.cadence_seconds * 2, 1)
+                else "stale"
+            )
+        return {
+            "status": status,
+            "last_evaluation_at": heartbeat.last_evaluation_at_utc,
+            "next_evaluation_at": heartbeat.next_evaluation_at_utc,
+            "cadence_seconds": heartbeat.cadence_seconds,
+        }
+
+    def _runtime_data() -> tuple[dict[str, object], datetime]:
+        runtime_state = read_model.get_runtime_host_state()
+        heartbeat = read_model.build_runtime_heartbeat_snapshot()
+        activation = read_model.get_latest_strategy_activation()
+        model_snapshot = read_model.get_latest_model_weight_snapshot()
+        selection = read_model.get_latest_opportunity_selection()
+        generated_at = heartbeat.last_evaluation_at_utc
+        if generated_at is None and selection is not None:
+            generated_at = selection.generated_at_utc
+        if generated_at is None:
+            generated_at = runtime_state.updated_at_utc
+        return (
+            {
+                "lifecycle_state": runtime_state.status,
+                "current_activity": {
+                    "state": heartbeat.heartbeat_state,
+                    "summary": heartbeat.heartbeat_summary,
+                    "tone": heartbeat.heartbeat_tone,
+                },
+                "current_evaluation_state": {
+                    "decision": heartbeat.last_decision,
+                    "reason": heartbeat.decision_reason,
+                    "score_explanation": heartbeat.score_explanation,
+                },
+                "next_planned_action": {
+                    "action": (
+                        "evaluate_universe"
+                        if heartbeat.next_evaluation_at_utc is not None
+                        else "operator_intervention"
+                    ),
+                    "scheduled_for": heartbeat.next_evaluation_at_utc,
+                    "detail": heartbeat.heartbeat_summary,
+                },
+                "current_universe": list(runtime_state.active_symbols),
+                "active_strategy": {
+                    "strategy_id": runtime_state.active_strategy_id,
+                    "activation": activation,
+                },
+                "active_model_snapshot": model_snapshot,
+                "latest_selection": selection,
+                "heartbeat_freshness": _runtime_freshness(
+                    runtime_state=runtime_state,
+                    heartbeat=heartbeat,
+                ),
+                "runtime_state": runtime_state,
+                "heartbeat": heartbeat,
+            },
+            generated_at,
+        )
+
+    def _runtime_heartbeat_history() -> tuple[dict[str, object], ...]:
+        heartbeat = read_model.build_runtime_heartbeat_snapshot()
+        return (
+            {
+                "heartbeat_state": heartbeat.heartbeat_state,
+                "heartbeat_summary": heartbeat.heartbeat_summary,
+                "heartbeat_tone": heartbeat.heartbeat_tone,
+                "recorded_at_utc": heartbeat.last_evaluation_at_utc,
+                "next_evaluation_at_utc": heartbeat.next_evaluation_at_utc,
+                "decision": heartbeat.last_decision,
+            },
+        )
+
+    def _candidate_criteria_payload(candidate_id: str) -> dict[str, object]:
+        validation_reports = read_model.list_evidence("validation_reports")
+        criteria_rows: list[dict[str, object]] = []
+        evidence_refs: list[str] = []
+        for report in validation_reports:
+            for candidate in list(report.get("candidate_results", ())):
+                if str(candidate.get("candidate_id", "")).strip() != candidate_id:
+                    continue
+                evidence_pack_id = str(candidate.get("evidence_pack_id", "")).strip()
+                if evidence_pack_id:
+                    evidence_refs.append(evidence_pack_id)
+                for criterion in list(candidate.get("criteria", ())):
+                    raw_status = criterion.get("status")
+                    effective_status = (
+                        str(raw_status)
+                        if raw_status in {"pass", "fail", "pending"}
+                        else ("pass" if bool(criterion.get("passed")) else "fail")
+                    )
+                    criteria_rows.append(
+                        {
+                            "criterion_id": str(criterion.get("criterion_id", "")),
+                            "status": raw_status,
+                            "effective_status": effective_status,
+                            "passed": bool(criterion.get("passed", False)),
+                            "threshold": str(criterion.get("threshold", "")),
+                            "details": str(criterion.get("details", "")),
+                            "evidence_refs": list(report.get("evidence_refs", ()))
+                            or ([evidence_pack_id] if evidence_pack_id else []),
+                        }
+                    )
+        research_snapshot = read_model.build_research_snapshot()
+        candidate_summary = next(
+            (
+                summary
+                for summary in research_snapshot.candidate_summaries
+                if summary.candidate_id == candidate_id
+            ),
+            None,
+        )
+        readiness_blockers = [
+            {
+                "criterion_id": row["criterion_id"],
+                "details": row["details"],
+            }
+            for row in criteria_rows
+            if row["effective_status"] == "pending"
+        ]
+        return {
+            "candidate_id": candidate_id,
+            "candidate_summary": candidate_summary,
+            "criteria": criteria_rows,
+            "readiness_blockers": readiness_blockers,
+            "evidence_refs": evidence_refs,
+        }
+
+    def _parse_replay_focus(replay_id: str) -> dict[str, str | None]:
+        for prefix, field_name in (
+            ("replay-symbol-", "symbol"),
+            ("replay-service_cycle-", "cycle_id"),
+            ("replay-incident-", "incident_id"),
+        ):
+            if replay_id.startswith(prefix):
+                return {
+                    "symbol": (
+                        replay_id[len(prefix) :] if field_name == "symbol" else None
+                    ),
+                    "cycle_id": (
+                        replay_id[len(prefix) :] if field_name == "cycle_id" else None
+                    ),
+                    "incident_id": (
+                        replay_id[len(prefix) :]
+                        if field_name == "incident_id"
+                        else None
+                    ),
+                }
+        return {"symbol": None, "cycle_id": None, "incident_id": None}
+
+    def _stream_payload_for_topic(topic: str) -> tuple[object, datetime]:
+        if topic == "control_posture":
+            generated_at = datetime.now(UTC)
+            return _control_posture_data(), generated_at
+        if topic == "runtime":
+            return _runtime_data()
+        if topic == "incidents":
+            generated_at = datetime.now(UTC)
+            return {"items": read_model.list_incidents()}, generated_at
+        if topic == "events":
+            generated_at = datetime.now(UTC)
+            return {"items": read_model.list_timeline_events()}, generated_at
+        raise ValueError(topic)
+
+    @app.get("/api/v1/control-posture")
+    def get_v1_control_posture() -> JSONResponse:
+        return _object_response(_control_posture_data())
+
+    @app.get("/api/v1/runtime")
+    def get_v1_runtime() -> JSONResponse:
+        payload, generated_at = _runtime_data()
+        return _object_response(payload, generated_at=generated_at)
+
+    @app.get("/api/v1/runtime/heartbeats")
+    def get_v1_runtime_heartbeats(
+        cursor: str | None = None,
+    ) -> JSONResponse:
+        del cursor
+        return _list_response(_runtime_heartbeat_history())
+
+    @app.get("/api/v1/stream")
+    def get_v1_stream(topics: str = "control_posture,runtime") -> StreamingResponse:
+        requested_topics = tuple(
+            dict.fromkeys(topic.strip() for topic in topics.split(",") if topic.strip())
+        )
+        allowed_topics = {
+            "control_posture",
+            "runtime",
+            "incidents",
+            "events",
+        }
+        unknown_topics = sorted(set(requested_topics) - allowed_topics)
+        if unknown_topics:
+            error_payload = _envelope(
+                {
+                    "error": {
+                        "code": "unknown_topics",
+                        "message": "Unknown realtime topics requested.",
+                        "topics": unknown_topics,
+                    }
+                }
+            )
+            return StreamingResponse(
+                iter(
+                    [
+                        "event: error\n"
+                        f"data: {json.dumps(_serialize(error_payload))}\n\n"
+                    ]
+                ),
+                status_code=400,
+                media_type="text/event-stream",
+            )
+
+        def _event_stream() -> Any:
+            for topic in requested_topics or ("control_posture", "runtime"):
+                payload, generated_at = _stream_payload_for_topic(topic)
+                event_payload = _envelope(
+                    {
+                        "topic": topic,
+                        "data": payload,
+                    },
+                    generated_at=generated_at,
+                )
+                yield (
+                    f"event: {topic}\n"
+                    f"data: {json.dumps(_serialize(event_payload))}\n\n"
+                )
+
+        return StreamingResponse(
+            _event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-TradingX-Stream-Mode": "snapshot-sse",
+            },
+        )
+
+    @app.get("/api/v1/incidents")
+    def get_v1_incidents(cursor: str | None = None) -> JSONResponse:
+        del cursor
+        return _list_response(read_model.list_incidents())
+
+    @app.get("/api/v1/events")
+    def get_v1_events(
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+        cursor: str | None = None,
+    ) -> JSONResponse:
+        del cursor
+        return _list_response(
+            read_model.list_timeline_events(
+                symbol=symbol,
+                cycle_id=cycle_id,
+                incident_id=incident_id,
+            )
+        )
+
+    @app.get("/api/v1/portfolio")
+    def get_v1_portfolio() -> JSONResponse:
+        snapshot = read_model.build_portfolio_workspace_snapshot()
+        return _object_response(snapshot, generated_at=_generated_at_hint(snapshot))
+
+    @app.get("/api/v1/portfolio/positions")
+    def get_v1_portfolio_positions() -> JSONResponse:
+        snapshot = read_model.build_portfolio_workspace_snapshot()
+        return _object_response(
+            _snapshot_field(snapshot, "positions_panel"),
+            generated_at=_generated_at_hint(snapshot),
+        )
+
+    @app.get("/api/v1/portfolio/performance")
+    def get_v1_portfolio_performance(
+        symbol: str | None = None,
+        group: str | None = None,
+        time_range: str | None = None,
+        benchmark: str | None = None,
+        portfolio_slice: str | None = None,
+    ) -> JSONResponse:
+        snapshot = read_model.build_performance_analytics_snapshot()
+        return _object_response(
+            {
+                "filters": {
+                    "symbol": symbol,
+                    "group": group,
+                    "time_range": time_range,
+                    "benchmark": benchmark,
+                    "portfolio_slice": portfolio_slice,
+                },
+                "snapshot": snapshot,
+            }
+        )
+
+    @app.get("/api/v1/portfolio/execution-quality")
+    def get_v1_portfolio_execution_quality() -> JSONResponse:
+        snapshot = read_model.build_portfolio_workspace_snapshot()
+        return _object_response(
+            _snapshot_field(snapshot, "execution_panel"),
+            generated_at=_generated_at_hint(snapshot),
+        )
+
+    @app.get("/api/v1/validation/readiness")
+    def get_v1_validation_readiness() -> JSONResponse:
+        readiness = read_model.build_gate3_readiness()
+        promotion_package = read_model.get_latest_gate3_promotion_package()
+        replay_slippage = read_model.get_latest_replay_slippage_summary()
+        return _object_response(
+            {
+                "readiness": readiness,
+                "latest_promotion_package": promotion_package,
+                "latest_replay_slippage": replay_slippage,
+            },
+            generated_at=readiness.generated_at_utc,
+        )
+
+    @app.get("/api/v1/validation/candidates/{candidate_id}/criteria")
+    def get_v1_validation_candidate_criteria(candidate_id: str) -> JSONResponse:
+        payload = _candidate_criteria_payload(candidate_id)
+        return _object_response(payload)
+
+    @app.get("/api/v1/validation/reports")
+    def get_v1_validation_reports(cursor: str | None = None) -> JSONResponse:
+        del cursor
+        return _object_response(
+            {
+                "reports": read_model.list_evidence("validation_reports"),
+                "decision_briefs": read_model.list_evidence("gate_assessments"),
+                "next_cursor": None,
+            }
+        )
+
+    @app.get("/api/v1/validation/pbo-reports")
+    def get_v1_validation_pbo_reports(cursor: str | None = None) -> JSONResponse:
+        del cursor
+        return _list_response(read_model.list_evidence("pbo_reports"))
+
+    @app.get("/api/v1/investigations")
+    def get_v1_investigations(cursor: str | None = None) -> JSONResponse:
+        del cursor
+        latest_replay = read_model.build_replay_session()
+        return _list_response(
+            (
+                {
+                    "investigation_id": latest_replay.replay_id,
+                    "headline": latest_replay.headline,
+                    "focus_type": latest_replay.focus_type,
+                    "focus_value": latest_replay.focus_value,
+                    "summary": latest_replay.summary,
+                    "event_count": len(latest_replay.events),
+                },
+            )
+        )
+
+    @app.get("/api/v1/replays/{replay_id}")
+    def get_v1_replay(replay_id: str) -> JSONResponse:
+        if replay_id == "replay-symbol-latest":
+            replay = read_model.build_replay_session()
+            if replay.replay_id == replay_id and replay.events:
+                return _object_response(replay)
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
+            )
+        replay_focus = _parse_replay_focus(replay_id)
+        if replay_focus == {"symbol": None, "cycle_id": None, "incident_id": None}:
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
+            )
+        replay = read_model.build_replay_session(**replay_focus)
+        if replay.replay_id != replay_id or not replay.events:
+            return _error_response(
+                status_code=404,
+                code="replay_not_found",
+                message=f"Replay '{replay_id}' was not found.",
+            )
+        return _object_response(replay)
+
+    @app.get("/api/v1/documents")
+    def get_v1_documents(cursor: str | None = None) -> JSONResponse:
+        del cursor
+        return _list_response(read_model.list_documents())
+
+    @app.get("/api/v1/documents/{document_id}")
+    def get_v1_document(document_id: str) -> JSONResponse:
+        document = next(
+            (
+                record
+                for record in read_model.list_documents()
+                if record.doc_id == document_id
+            ),
+            None,
+        )
+        if document is None:
+            return _error_response(
+                status_code=404,
+                code="document_not_found",
+                message=f"Document '{document_id}' was not found.",
+            )
+        return _object_response(
+            {
+                "document_id": document.doc_id,
+                "title": document.title,
+                "kind": document.kind,
+                "preview": document.preview,
+                "retrieval_ref": str(document.path),
+            }
+        )
+
+    @app.get("/api/v1/commands", include_in_schema=False)
+    def get_v1_commands_provisional() -> JSONResponse:
+        return _provisional_response("/api/v1/commands")
+
+    @app.post("/api/v1/commands", include_in_schema=False)
+    def post_v1_commands_provisional() -> JSONResponse:
+        return _provisional_response("/api/v1/commands")
+
+    @app.post("/api/v1/command-sessions", include_in_schema=False)
+    def post_v1_command_sessions_provisional() -> JSONResponse:
+        return _provisional_response("/api/v1/command-sessions")
 
     @app.get("/api/overview")
     def get_overview() -> JSONResponse:
@@ -743,6 +1334,24 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _serialize(item) for key, item in value.items()}
     return value
+
+
+_LIVE_BLOCKER_MESSAGES = {
+    "broker_mode_not_live": "Broker mode is not currently set to live.",
+    "missing_live_credentials": "Live broker credentials are not configured.",
+    "config_layer_disabled": "The live-trading config layer remains disabled.",
+    "env_layer_disabled": "The live-trading environment opt-in remains disabled.",
+    "code_layer_disabled": "The live-trading code guard remains disabled.",
+    "web_write_signing_unconfigured": "Signed web writes are not configured.",
+    "manual_kill_switch_active": "The manual kill switch is active.",
+    "dry_run_enabled": "Dry-run mode is still active.",
+    "operator_signoff_missing": "Operator sign-off has not been recorded.",
+    "gate4_checklist_missing": "The Gate 4 approval checklist is not complete.",
+}
+
+
+def _new_request_id() -> str:
+    return f"req_{uuid4().hex}"
 
 
 __all__ = ("create_app", "run_web_app")

@@ -123,6 +123,73 @@ class FakeReadModel:
         )
 
     def list_evidence(self, category: str) -> list[dict[str, object]]:
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        if category == "validation_reports":
+            return [
+                {
+                    "report_id": "validation-report-1",
+                    "gate_id": "1",
+                    "generated_at_utc": timestamp,
+                    "status": "pending",
+                    "benchmark_symbol": "SPY",
+                    "window_start_utc": timestamp,
+                    "window_end_utc": timestamp,
+                    "summary": "Candidate still waiting on CPCV maturity.",
+                    "assumptions": ["paper only"],
+                    "evidence_refs": [
+                        "artifacts/validation/validation_reports/gate-1.json"
+                    ],
+                    "candidate_results": [
+                        {
+                            "candidate_id": "trend-following-v1",
+                            "gate_id": "1",
+                            "status": "pending",
+                            "evidence_pack_id": "evaluation-pack-1",
+                            "summary": "Awaiting CPCV maturity.",
+                            "criteria": [
+                                {
+                                    "criterion_id": "pbo_overfitting",
+                                    "passed": False,
+                                    "status": "pending",
+                                    "threshold": "pbo <= 0.2",
+                                    "details": "CPCV cohort has not matured yet.",
+                                },
+                                {
+                                    "criterion_id": "cost_drag",
+                                    "passed": True,
+                                    "status": None,
+                                    "threshold": "drag <= 25bps",
+                                    "details": "Annualized cost drag is acceptable.",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        if category == "gate_assessments":
+            return [
+                {
+                    "gate_id": "1",
+                    "status": "pending",
+                    "decision_summary": "Do not promote yet.",
+                    "recorded_at_utc": timestamp,
+                    "required_operator_action": "Wait for CPCV maturity.",
+                    "evidence_refs": [
+                        "artifacts/validation/gate_assessments/gate-1.json"
+                    ],
+                }
+            ]
+        if category == "pbo_reports":
+            return [
+                {
+                    "report_id": "pbo-report-1",
+                    "evaluation_id": "evaluation-pack-1",
+                    "cohort_window_id": "cohort-1",
+                    "pbo_value": "0.18",
+                    "generated_at_utc": timestamp,
+                    "metric_name": "out_of_sample_sharpe",
+                }
+            ]
         return [{"category": category, "summary": "ok"}]
 
     def list_config_proposals(self) -> tuple[ConfigProposal, ...]:
@@ -159,6 +226,45 @@ class FakeReadModel:
                 {"incident_id": "incident-alert-1", "severity": "warning"},
             ),
         )
+
+    def list_timeline_events(
+        self,
+        *,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> tuple[object, ...]:
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        events = (
+            {
+                "event_id": "event-1",
+                "event_type": "service_cycle",
+                "symbol": "SPY",
+                "severity": "info",
+                "headline": "Evaluation cycle completed",
+                "details": "TradingX completed a paper evaluation cycle.",
+                "occurred_at_utc": timestamp,
+                "artifact_path": "artifacts/paper_loop/service_cycles/cycle-1.json",
+                "related_ids": ("cycle-1", "incident-alert-1"),
+            },
+        )
+        filtered = events
+        if symbol is not None:
+            filtered = tuple(event for event in filtered if event["symbol"] == symbol)
+        if cycle_id is not None:
+            filtered = tuple(
+                event
+                for event in filtered
+                if cycle_id in event["related_ids"] or event["event_id"] == cycle_id
+            )
+        if incident_id is not None:
+            filtered = tuple(
+                event
+                for event in filtered
+                if incident_id in event["related_ids"]
+                or event["event_id"] == incident_id
+            )
+        return filtered
 
     def list_incidents(self) -> tuple[IncidentRecord, ...]:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
@@ -546,12 +652,23 @@ class FakeReadModel:
         cycle_id: str | None = None,
         incident_id: str | None = None,
     ) -> ReplaySession:
+        focus_type = "symbol"
+        focus_value = symbol or cycle_id or incident_id or "latest"
+        if cycle_id is not None:
+            focus_type = "service_cycle"
+        elif incident_id is not None:
+            focus_type = "incident"
+        events = self.list_timeline_events(
+            symbol=symbol,
+            cycle_id=cycle_id,
+            incident_id=incident_id,
+        )
         return ReplaySession(
-            replay_id="replay-1",
-            focus_type="symbol",
-            focus_value=symbol or cycle_id or incident_id or "SPY",
+            replay_id=f"replay-{focus_type}-{focus_value}",
+            focus_type=focus_type,
+            focus_value=focus_value,
             headline="Replay",
-            events=(),
+            events=events,
             summary="Replay ready.",
         )
 
@@ -943,6 +1060,186 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert runtime_model.json()["snapshot_id"] == "snapshot-1"
     assert runtime_selection.status_code == 200
     assert runtime_selection.json()["selected_symbol"] == "SPY"
+
+
+def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() -> None:
+    app = create_app(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_BROKER_MODE": "live",
+                "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+                "TRADINGX_ENABLE_LIVE_TRADING": "true",
+                "ALPACA_LIVE_API_KEY": "live-key",
+                "ALPACA_LIVE_API_SECRET": "live-secret",
+                "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret",
+            }
+        ),
+        read_model=FakeReadModel(),
+        action_runner=FakeActionRunner(),
+    )
+    client = TestClient(app)
+
+    control_posture = client.get("/api/v1/control-posture")
+    runtime = client.get("/api/v1/runtime")
+    runtime_heartbeats = client.get("/api/v1/runtime/heartbeats")
+    incidents = client.get("/api/v1/incidents")
+    events = client.get("/api/v1/events")
+    portfolio = client.get("/api/v1/portfolio")
+    portfolio_positions = client.get("/api/v1/portfolio/positions")
+    portfolio_performance = client.get(
+        "/api/v1/portfolio/performance?symbol=SPY&benchmark=SPY"
+    )
+    portfolio_execution = client.get("/api/v1/portfolio/execution-quality")
+    validation_readiness = client.get("/api/v1/validation/readiness")
+    candidate_criteria = client.get(
+        "/api/v1/validation/candidates/trend-following-v1/criteria"
+    )
+    validation_reports = client.get("/api/v1/validation/reports")
+    pbo_reports = client.get("/api/v1/validation/pbo-reports")
+    investigations = client.get("/api/v1/investigations")
+    replay = client.get("/api/v1/replays/replay-symbol-SPY")
+    documents = client.get("/api/v1/documents")
+    document = client.get("/api/v1/documents/STATE")
+
+    assert control_posture.status_code == 200
+    assert control_posture.json()["data"]["requested_mode"] == "live"
+    assert control_posture.json()["data"]["effective_mode"] == "paper"
+    assert control_posture.json()["data"]["live_allowed"] is False
+    assert (
+        control_posture.json()["data"]["live_control_layer_states"][
+            "write_signing_configured"
+        ]
+        is True
+    )
+    assert (
+        "live_disable_report"
+        not in control_posture.json()["data"]["live_control_layer_states"]
+    )
+    assert (
+        control_posture.json()["data"]["governance_posture"][
+            "operator_signoff_status"
+        ]
+        == "missing"
+    )
+    assert "operator_signoff_missing" in control_posture.json()["data"][
+        "fail_closed_reasons"
+    ]
+    assert "market_data_posture" in control_posture.json()["data"]
+
+    assert runtime.status_code == 200
+    assert runtime.json()["data"]["lifecycle_state"] == "trading_ready"
+    assert (
+        runtime.json()["data"]["current_activity"]["state"]
+        == "Waiting for next evaluation"
+    )
+    assert runtime.json()["data"]["heartbeat_freshness"]["status"] in {
+        "fresh",
+        "stale",
+    }
+
+    assert runtime_heartbeats.status_code == 200
+    assert runtime_heartbeats.json()["data"]["items"][0]["decision"] == "No trade"
+    assert incidents.status_code == 200
+    assert incidents.json()["data"]["items"][0]["incident_id"] == "incident-alert-1"
+    assert events.status_code == 200
+    assert events.json()["data"]["items"][0]["event_id"] == "event-1"
+
+    assert portfolio.status_code == 200
+    assert portfolio.json()["data"]["data_state"] == "partial"
+    assert portfolio_positions.status_code == 200
+    assert portfolio_positions.json()["data"]["headline"] == "No open positions"
+    assert portfolio_performance.status_code == 200
+    assert portfolio_performance.json()["data"]["filters"]["symbol"] == "SPY"
+    assert portfolio_execution.status_code == 200
+    assert portfolio_execution.json()["data"]["headline"] == "Execution journal is available"
+
+    assert validation_readiness.status_code == 200
+    assert validation_readiness.json()["data"]["readiness"]["status"] == "pending"
+    assert (
+        validation_readiness.json()["data"]["latest_promotion_package"]["package_id"]
+        == "gate3-package-1"
+    )
+    assert candidate_criteria.status_code == 200
+    assert candidate_criteria.json()["data"]["candidate_id"] == "trend-following-v1"
+    criteria_rows = candidate_criteria.json()["data"]["criteria"]
+    assert criteria_rows[0]["effective_status"] == "pending"
+    assert criteria_rows[1]["effective_status"] == "pass"
+    assert (
+        candidate_criteria.json()["data"]["readiness_blockers"][0]["criterion_id"]
+        == "pbo_overfitting"
+    )
+    assert validation_reports.status_code == 200
+    assert (
+        validation_reports.json()["data"]["reports"][0]["report_id"]
+        == "validation-report-1"
+    )
+    assert (
+        validation_reports.json()["data"]["decision_briefs"][0]["gate_id"] == "1"
+    )
+    assert pbo_reports.status_code == 200
+    assert pbo_reports.json()["data"]["items"][0]["report_id"] == "pbo-report-1"
+
+    assert investigations.status_code == 200
+    assert (
+        investigations.json()["data"]["items"][0]["investigation_id"]
+        == "replay-symbol-latest"
+    )
+    assert replay.status_code == 200
+    assert replay.json()["data"]["replay_id"] == "replay-symbol-SPY"
+    latest_replay = client.get("/api/v1/replays/replay-symbol-latest")
+    assert latest_replay.status_code == 200
+    assert latest_replay.json()["data"]["replay_id"] == "replay-symbol-latest"
+    missing_replay = client.get("/api/v1/replays/replay-symbol-XYZ")
+    assert missing_replay.status_code == 404
+
+    assert documents.status_code == 200
+    assert documents.json()["data"]["items"][0]["doc_id"] == "STATE"
+    assert document.status_code == 200
+    assert document.json()["data"]["document_id"] == "STATE"
+    assert document.json()["data"]["retrieval_ref"] == "docs/handover/STATE.md"
+
+
+def test_wave1_v1_stream_exposes_topic_scoped_sse_snapshots() -> None:
+    app = create_app(
+        config=TradingConfig.from_mapping({}),
+        read_model=FakeReadModel(),
+        action_runner=FakeActionRunner(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/v1/stream?topics=runtime,control_posture")
+    invalid = client.get("/api/v1/stream?topics=runtime,commands")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: runtime" in response.text
+    assert "event: control_posture" in response.text
+    assert invalid.status_code == 400
+    assert "unknown_topics" in invalid.text
+    assert "commands" in invalid.text
+
+
+def test_wave1_provisional_governed_write_routes_stay_hidden_from_openapi() -> None:
+    app = create_app(
+        config=TradingConfig.from_mapping({}),
+        read_model=FakeReadModel(),
+        action_runner=FakeActionRunner(),
+    )
+    client = TestClient(app)
+
+    openapi = client.get("/openapi.json")
+    get_commands = client.get("/api/v1/commands")
+    post_commands = client.post("/api/v1/commands")
+    post_sessions = client.post("/api/v1/command-sessions")
+
+    assert openapi.status_code == 200
+    assert "/api/v1/commands" not in openapi.json()["paths"]
+    assert "/api/v1/command-sessions" not in openapi.json()["paths"]
+    assert get_commands.status_code == 503
+    assert get_commands.headers["x-tradingx-stability"] == "provisional"
+    assert get_commands.json()["data"]["frontend_integration_allowed"] is False
+    assert post_commands.status_code == 503
+    assert post_sessions.status_code == 503
 
 
 def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> None:
