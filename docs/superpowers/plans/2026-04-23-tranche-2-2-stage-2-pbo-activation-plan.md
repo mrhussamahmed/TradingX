@@ -64,8 +64,8 @@ them as non-negotiable:
    that Gate 1 batch.
 5. **Keep the audit trail per run, not per window.** Rerunning the same
    validation window must produce a new `PBOReport`, not overwrite the
-   old file. The activation payload therefore needs a per-run
-   `evaluation_id`, not a stable “window-only” id.
+   old file. The activation payload therefore needs a truly unique
+   per-run `evaluation_id`, not a stable “window-only” id.
 5. **The current registry shape must not create permanent pending
    candidates.** `build_mandatory_candidate_registry(...)` still
    includes the non-sleeve `mean-reversion-v1` candidate. Because PBO is
@@ -86,9 +86,14 @@ them as non-negotiable:
    “pending / insufficient cohort,” and the result model must carry that
    as a real criterion state rather than smuggling it through
    `passed=False`.
-9. **Acceptance-gates doc update and ADR land in the same commit as the
+9. **Tri-state compatibility must be explicit.** Existing constructors
+   and persisted validation-report payloads only carry `passed`. Any new
+   `ValidationCriterionResult.status` field must therefore be optional,
+   and every reader must derive missing status from `passed` instead of
+   treating the absence of `status` as an implicit `"pass"`.
+10. **Acceptance-gates doc update and ADR land in the same commit as the
    code flip.** This is an activation event, not a loose follow-up.
-10. **No threshold retuning in this branch.** The hard gate is still
+11. **No threshold retuning in this branch.** The hard gate is still
     `pbo_value <= Decimal("0.30")` from DESIGN-0018.
 
 ## Scope
@@ -125,6 +130,7 @@ matrix construction.
 - `src/tradingx/types.py`
 - `src/tradingx/validation.py`
 - `src/tradingx/reporting.py`
+- `src/tradingx/persistence.py`
 - `docs/INDEX.md`
 - `docs/validation/acceptance_gates.md`
 - `docs/adrs/ADR-NNNN-gate1-pbo-activation.md`
@@ -213,10 +219,11 @@ actually satisfied.
     `(pbo_value, pbo_report_id)`.
 - [ ] Use an explicit **per-run** `evaluation_id` for the activation
   call rather than relying on `compute_pbo(...)`’s fallback and rather
-  than reusing a stable per-window id. Recommended shape:
-  `gate1-{run_timestamp:%Y%m%dT%H%M%SZ}-{cohort_window_id}`.
-  That preserves one `PBOReport` per Gate 1 run while keeping the
-  current cohort window obvious in the artifact name.
+  than reusing a stable per-window id. It must include a truly unique
+  run component, not just second-precision time. Recommended shape:
+  `gate1-{run_timestamp:%Y%m%dT%H%M%S.%fZ}-{run_nonce}-{cohort_window_id}`.
+  A short nonce is acceptable here because the report id is an audit
+  artifact, not a deterministic cohort key.
 - [ ] If readiness fails, or `compute_pbo(...)` raises
   `InsufficientCPCVCohortError`, log one info-level
   `criterion: pbo_cohort_insufficient` event and return `None`.
@@ -245,6 +252,7 @@ pending/pass/fail path without widening the blast radius of
 - `src/tradingx/types.py`
 - `src/tradingx/validation.py`
 - `src/tradingx/reporting.py`
+- `src/tradingx/persistence.py`
 - `tests/unit/test_reporting.py`
 - `tests/unit/test_validation_gate1_pbo_activation.py`
 - `tests/integration/test_cpcv_pbo_pipeline.py`
@@ -276,10 +284,15 @@ pending/pass/fail path without widening the blast radius of
   additively so it can carry a real tri-state outcome, for example:
 
   ```python
-  status: str = "pass"  # "pass" | "fail" | "pending"
+  status: str | None = None  # None means: derive from passed
   ```
 
   Existing callers continue to serialize/deserialize cleanly.
+- [ ] Add an explicit compatibility rule and test coverage for it:
+  - writers in new code should emit both `passed` and `status`;
+  - readers must prefer `status` when present; and
+  - when `status` is missing, readers must derive
+    `"pass"` / `"fail"` from `passed`.
 - [ ] In `src/tradingx/validation.py`, widen `build_gate_report(...)`
   with one optional argument:
 
@@ -299,6 +312,10 @@ pending/pass/fail path without widening the blast radius of
 - [ ] Update `_criterion_status(...)` and the surrounding Gate 1 status
   logic to read the explicit criterion status instead of assuming that
   `passed=False` always means failure.
+- [ ] Update any raw-payload readers used by this branch — especially
+  `src/tradingx/reporting.py` and any persistence helpers they rely on —
+  so historical validation-report payloads with only `passed` remain
+  correct.
 - [ ] Update the surrounding Gate 1 status logic so `gate1_pbo_payload
   is None` behaves like the current insufficient-history path:
   criterion 7 is shown as pending and the candidate status is `pending`,
@@ -374,6 +391,7 @@ Run the narrow slices first, then the full repo checks:
 
 ```bash
 uv run pytest tests/unit/test_controller_generate_gate_report_cpcv.py \
+              tests/unit/test_reporting.py \
               tests/unit/test_validation_gate1_pbo_activation.py \
               tests/integration/test_cpcv_pbo_pipeline.py -v
 uv run ruff check src/tradingx tests
