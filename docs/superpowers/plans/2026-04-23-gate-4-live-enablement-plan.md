@@ -86,23 +86,28 @@ non-negotiable:
    This branch may not secure only one “future live toggle” route.
    Every shipped write endpoint in `src/tradingx/web/app.py` must pass
    through the same signature + idempotency guard.
-5. **Idempotency is request-fingerprint aware.**
+5. **The shipped browser client needs a real signing path.**
+   The current SPA in `webapp/src/api.ts` sends bare JSON POSTs. The
+   implementation must therefore add an explicit browser-side signing
+   flow; it may not “solve” this by bundling the signing secret into the
+   frontend build.
+6. **Idempotency is request-fingerprint aware.**
    Exact duplicate signed POSTs should replay the stored first result.
    Same key + different request fingerprint must reject with conflict.
    This matters because `/api/config/proposals` returns
    `ConfigProposal`, not `WebActionResult`, so the idempotency store
    must preserve generic serialized JSON responses.
-6. **`live_disable_report()` keeps legacy keys stable.**
+7. **`live_disable_report()` keeps legacy keys stable.**
    Existing readmodels/alerts depend on `paper_only_mode`,
    `live_trading_enabled`, and `manual_kill_switch_active`.
    The report may grow richer, but those keys must stay valid.
-7. **Risk remains fail-closed.**
+8. **Risk remains fail-closed.**
    Requesting live mode without complete readiness must block with an
    explicit reason. It must not degrade to paper execution.
-8. **Do not overclaim Gate 4 sign-off in this branch.**
+9. **Do not overclaim Gate 4 sign-off in this branch.**
    Fresh drill windows, monitoring observation, and operator approval
    stay in the later evidence lane.
-9. **Do not spend this branch on naming cleanup.**
+10. **Do not spend this branch on naming cleanup.**
    Repo-wide renames of `PaperOnlyRiskEngine`,
    `AlpacaPaperExecutionGateway`, and similar compatibility names are
    out of scope unless a thin alias is required for clarity. The target
@@ -150,6 +155,9 @@ non-negotiable:
 - `src/tradingx/web/app.py`
 - `src/tradingx/web/runtime.py`
 - `src/tradingx/web/security.py` (new)
+- `webapp/src/api.ts`
+- `webapp/src/App.tsx`
+- `webapp/src/types.ts`
 - `docs/adrs/ADR-NNNN-gate4-live-enablement-control-plane.md`
 - `docs/INDEX.md`
 - `docs/operations/operator_manual.md`
@@ -165,6 +173,7 @@ non-negotiable:
 - `tests/unit/test_web_runtime.py`
 - `tests/contract/test_local_web_app_api_contract.py`
 - `tests/contract/test_day0_web_surface.py`
+- `webapp/src/App.test.tsx`
 
 Only plan files under `docs/superpowers/plans/` are exempt from
 frontmatter indexing. The implementation branch must allocate the next
@@ -184,6 +193,10 @@ with four moving parts:
    - whether live should be blocked with explicit reasons.
    Every generic production entrypoint should use that helper instead of
    constructing `TradingClient(..., paper=True)` inline.
+   This also requires a new **generic mode-aware service-builder seam**
+   so generic entrypoints stop hardwiring
+   `build_default_paper_service(...)` /
+   `build_runtime_host_paper_service(...)` one layer up.
 2. **Signed/idempotent web write guard**
    Add one shared FastAPI-side write authorizer that sits in front of
    every POST route and enforces:
@@ -192,6 +205,9 @@ with four moving parts:
    - request timestamp within the allowed skew window,
    - idempotency key present, and
    - duplicate semantics based on request fingerprint.
+   Pair that with an explicit SPA signing flow so the shipped browser
+   client can continue to use write actions without exposing the signing
+   secret in the build output.
 3. **Fail-closed live readiness reporting**
    Extend `live-disable-status` and the web config summary so the
    operator can see exactly which layer is still preventing live mode.
@@ -246,6 +262,11 @@ opt-in and real environment opt-in.
 - generic production entrypoints must route through a single helper in
   `src/tradingx/live_enablement.py`, not inline `TradingClient(...)`
   constructors.
+- generic production entrypoints that are currently paper-bound through
+  `build_default_paper_service(...)` or
+  `build_runtime_host_paper_service(...)` must gain a new mode-aware
+  service-builder seam instead of silently changing those explicit paper
+  wrappers.
 - explicitly paper-named paths remain paper-only wrappers.
 
 ### TDD steps
@@ -286,14 +307,26 @@ opt-in and real environment opt-in.
   - `BrokerModeDecision`
   - `resolve_broker_mode(config, *, explicit_mode: str | None = None)`
   - `build_trading_client_for_mode(config, decision)`
+- [ ] In `src/tradingx/service.py`, add a new generic, mode-aware
+  service-builder seam such as:
+  - `build_default_trading_service(config, *, broker_mode: str | None = None, opportunity_selector: ... = None)`
+  - `build_runtime_host_trading_service(config, *, broker_mode: str | None = None)`
+  while keeping `build_default_paper_service(...)` and
+  `build_runtime_host_paper_service(...)` as explicit paper wrappers
+  that delegate to the new generic builders with `broker_mode="paper"`.
 - [ ] Replace generic production `TradingClient(..., paper=True)` call
-  sites with the shared helper in:
+  sites **and generic paper-service-builder callsites** with the shared
+  helper / new service-builder seam in:
   - `src/tradingx/service.py`
   - `src/tradingx/automation.py`
   - `src/tradingx/supervisor.py`
   - `src/tradingx/controller.py`
   - `src/tradingx/__main__.py`
   - `src/tradingx/web/runtime.py`
+- [ ] Add tests proving the generic entrypoints no longer remain
+  paper-bound through `build_default_paper_service(...)` /
+  `build_runtime_host_paper_service(...)` one layer above client
+  construction.
 - [ ] Keep explicit paper wrappers stable:
   - `paper-loop`
   - `paper-recover`
@@ -320,11 +353,15 @@ shared signed/idempotent authorizer for all FastAPI write endpoints.
 - `src/tradingx/config.py`
 - `src/tradingx/web/security.py`
 - `src/tradingx/web/app.py`
+- `webapp/src/api.ts`
+- `webapp/src/App.tsx`
+- `webapp/src/types.ts`
 - `tests/unit/test_config.py`
 - `tests/unit/test_web_security.py`
 - `tests/unit/test_web_app.py`
 - `tests/contract/test_local_web_app_api_contract.py`
 - `tests/contract/test_day0_web_surface.py`
+- `webapp/src/App.test.tsx`
 
 ### Required behavior
 
@@ -340,6 +377,26 @@ shared signed/idempotent authorizer for all FastAPI write endpoints.
 - missing/invalid signature, missing idempotency key, or stale
   timestamp returns reject/forbidden rather than falling through to the
   action runner.
+
+### Browser client architecture
+
+The shipped browser SPA must remain usable after this branch. To avoid
+putting the signing secret in the bundle, the browser-side contract
+should be:
+
+- the operator manually unlocks web writes inside the local SPA by
+  entering `TRADINGX_WEB_WRITE_SIGNING_SECRET` at runtime;
+- the SPA keeps that secret only in in-memory state or
+  `sessionStorage`, never in source, bundle output, or committed config;
+- `webapp/src/api.ts` signs every POST request client-side with the same
+  canonical string the server verifies;
+- GET requests remain unsigned;
+- when the SPA has no unlocked secret, write actions stay disabled in
+  the UI with an explicit “writes locked” state rather than emitting
+  broken unsigned POSTs.
+
+This preserves the acceptance-gate requirement for signed web writes
+without bundling the secret or weakening the server-side verifier.
 
 ### Concrete protocol
 
@@ -386,6 +443,13 @@ than widening `OperatorControlStore` for unrelated write-auth state.
   - missing idempotency-key rejection;
   - signed POST success on an existing route;
   - duplicate signed POST short-circuiting to the stored response.
+- [ ] Add failing frontend tests in `webapp/src/App.test.tsx` for:
+  - write actions stay disabled until the operator unlocks the write
+    secret locally;
+  - unlocked write actions attach timestamp, idempotency key, and
+    signature headers via `webapp/src/api.ts`;
+  - the secret is never read from build-time config or rendered into the
+    DOM.
 - [ ] Add failing contract tests in:
   - `tests/contract/test_local_web_app_api_contract.py`
   - `tests/contract/test_day0_web_surface.py`
@@ -401,6 +465,12 @@ than widening `OperatorControlStore` for unrelated write-auth state.
   - duplicate / conflict decision helpers
 - [ ] Update `create_app(...)` in `src/tradingx/web/app.py` to route
   every POST through one shared authorization helper.
+- [ ] Update the shipped SPA in:
+  - `webapp/src/api.ts`
+  - `webapp/src/App.tsx`
+  - `webapp/src/types.ts`
+  so browser writes follow the runtime-unlocked signing flow described
+  above.
 - [ ] Preserve existing `write_mode_enabled` semantics as the first gate;
   do not remove it.
 - [ ] Re-run the Task 2 slice until green.
@@ -544,6 +614,7 @@ uv run pytest -q \
   tests/unit/test_web_runtime.py \
   tests/contract/test_local_web_app_api_contract.py \
   tests/contract/test_day0_web_surface.py
+(cd webapp && npm test -- src/App.test.tsx)
 ```
 
 ### Full branch verification
@@ -554,6 +625,8 @@ Before review, all of these must pass:
 uv run ruff check src/tradingx tests
 uv run mypy src/tradingx
 uv run pytest -q --deselect tests/contract/test_weight_snapshot_origin.py
+(cd webapp && npm test)
+(cd webapp && npm run build)
 python3 scripts/check_index.py
 ./scripts/validate
 ```
