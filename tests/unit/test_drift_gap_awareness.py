@@ -293,7 +293,7 @@ def test_store_backed_reader_uses_latest_reserve_snapshot_per_trading_day(
             cash_balance="80",
             positions=(("QQQ", "1", "100", "105"),),
             snapshot_id="bootstrap-ledger-1__reserve",
-            recorded_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+            recorded_at_utc=datetime(2026, 4, 22, 20, 0, tzinfo=UTC),
         )
     )
     store.write_residual_reserve_snapshot(

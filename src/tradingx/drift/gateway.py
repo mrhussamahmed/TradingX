@@ -311,7 +311,9 @@ class StoreBackedAttributionRecordsReader:
             if date.fromisoformat(snapshot.trading_day) < window_start:
                 continue
             current = latest_snapshot_by_day.get(snapshot.trading_day)
-            if current is None or snapshot.recorded_at_utc > current.recorded_at_utc:
+            if current is None or _reserve_snapshot_ordering_key(
+                snapshot
+            ) > _reserve_snapshot_ordering_key(current):
                 latest_snapshot_by_day[snapshot.trading_day] = snapshot
         reserve_snapshots = tuple(
             latest_snapshot_by_day[trading_day]
@@ -755,6 +757,17 @@ def _pending_verdict(
         metric_value=None,
         threshold_value=None,
         details=details,
+    )
+
+
+def _reserve_snapshot_ordering_key(
+    snapshot: ResidualReserveSnapshot,
+) -> tuple[datetime, int, str]:
+    snapshot_kind_rank = 1 if snapshot.snapshot_id.startswith("close-") else 0
+    return (
+        snapshot.recorded_at_utc,
+        snapshot_kind_rank,
+        snapshot.snapshot_id,
     )
 
 
