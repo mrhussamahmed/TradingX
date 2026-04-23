@@ -1,13 +1,13 @@
 ---
 id: RUNBOOK-0003
 title: TradingX operator manual
-version: 1.4.1
+version: 1.4.2
 status: active
 created: 2026-04-18
-last_amended: 2026-04-19
-supersedes: RUNBOOK-0003@1.4.0
+last_amended: 2026-04-23
+supersedes: RUNBOOK-0003@1.4.1
 superseded_by: null
-author_session: SESS-2026-04-19-027
+author_session: gpt-5-codex-2026-04-23
 ---
 
 # TradingX Operator Manual
@@ -46,9 +46,9 @@ not updated in the same session, that session is incomplete.
 TradingX is currently operated under these boundaries:
 
 - paper trading only
-- live trading stays disabled
+- live trading stays fail-closed until Gate 4 operator sign-off
 - local-only website and controls
-- write actions are disabled by default in the website
+- website write actions require local unlock plus signed/idempotent POSTs
 - regular-hours enforcement remains active in the trading workflow
 
 Do not add live credentials or attempt live trading from this manual.
@@ -131,12 +131,16 @@ ALPACA_PAPER_ACCOUNT_ID=your-paper-account-id
 
 Common optional settings:
 
+- `TRADINGX_BROKER_MODE`
+- `TRADINGX_LIVE_CONFIG_ENABLED`
 - `TRADINGX_SYMBOL_UNIVERSE`
 - `TRADINGX_SERVICE_INTERVAL_SECONDS`
 - `TRADINGX_SCHEDULER_POLL_SECONDS`
 - `TRADINGX_LOG_MAX_BYTES`
 - `TRADINGX_LOG_RETENTION_FILES`
 - `TRADINGX_WEB_WRITE_MODE_ENABLED`
+- `TRADINGX_WEB_WRITE_SIGNING_SECRET`
+- `TRADINGX_WEB_WRITE_MAX_AGE_SECONDS`
 - `TRADINGX_TELEGRAM_*`
 - `TRADINGX_SMTP_*`
 
@@ -169,8 +173,11 @@ uv run tradingx live-disable-status --env-file .env
 What to confirm:
 
 - paper credentials are detected
-- live trading is still disabled
+- requested broker mode is correct
+- live trading is still disabled unless every live-control layer is
+  intentionally enabled
 - symbol universe and intervals look correct
+- `web_write_signing_configured` is accurate
 
 ## Main ways to operate TradingX
 
@@ -637,8 +644,13 @@ Run:
 Before running:
 
 - confirm `.env` is correct
-- confirm live trading is still disabled
+- confirm the requested broker mode is `paper` unless you are
+  deliberately testing Gate 4 readiness
+- confirm live trading is still disabled unless every live-control layer
+  was intentionally enabled
 - confirm website write mode is only enabled when intentionally needed
+- confirm the website signing secret is configured before attempting any
+  browser-side write action
 
 While running:
 

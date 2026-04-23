@@ -22,12 +22,20 @@ from tradingx.controller import (
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
-from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
+from tradingx.data import (
+    AlpacaRegularHoursCalendar,
+    build_default_market_data_gateway,
+    build_market_data_gateway_for_mode,
+)
 from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.journal import SqliteOmsJournal
 from tradingx.launcher import ControlCenterLaunchError, launch_control_center
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
@@ -47,7 +55,7 @@ from tradingx.runtime_portfolio import (
 from tradingx.scheduler import build_default_market_day_scheduler
 from tradingx.service import (
     build_default_paper_service,
-    build_runtime_host_paper_service,
+    build_runtime_host_trading_service,
 )
 from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.supervisor import build_default_operator_supervisor
@@ -418,6 +426,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.symbols
             else config.runtime.symbol_universe
         )
+        decision = resolve_broker_mode(config)
         operator_store = FilesystemArtifactStore(
             config.runtime.artifact_root / "operator_platform"
         )
@@ -430,14 +439,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             symbols
         )
         planner = RuntimePortfolioPlanner(
-            market_data=build_default_market_data_gateway(config),
+            market_data=build_market_data_gateway_for_mode(
+                config,
+                broker_mode=decision.requested_mode,
+            ),
             activation_gateway=activation_gateway,
         )
-        trading_client = TradingClient(
-            config.paper_credentials.api_key,
-            config.paper_credentials.api_secret,
-            paper=True,
-        )
+        trading_client = build_trading_client_for_mode(config, decision)
         portfolio_state = AlpacaPortfolioGateway(
             trading_client=trading_client
         ).get_portfolio_state()
@@ -492,11 +500,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         def _start_runtime() -> tuple[int, dict[str, Any]]:
+            decision = resolve_broker_mode(config)
             operator_store = FilesystemArtifactStore(
                 config.runtime.artifact_root / "operator_platform"
             )
             runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
-            market_data_gateway = build_default_market_data_gateway(config)
+            market_data_gateway = build_market_data_gateway_for_mode(
+                config,
+                broker_mode=decision.requested_mode,
+            )
             activation_gateway = LocalActivationGateway(
                 store=operator_store,
                 runtime_snapshot_store=runtime_store,
@@ -513,11 +525,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 required_bar_count=30,
             )
             warmup_path = operator_store.write_historical_warmup_record(warmup)
-            trading_client = TradingClient(
-                config.paper_credentials.api_key,
-                config.paper_credentials.api_secret,
-                paper=True,
-            )
+            trading_client = build_trading_client_for_mode(config, decision)
             portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
             selection = RuntimeOpportunityPlanner(
                 market_data_gateway=market_data_gateway,
@@ -559,7 +567,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_state_path = operator_store.write_runtime_host_state(runtime_state)
             runtime_service_result: Any | None = None
             if warmup_complete:
-                runtime_service_result = build_runtime_host_paper_service(config).run(
+                runtime_service_result = build_runtime_host_trading_service(config).run(
                     symbols=symbols,
                     quantity=Decimal(args.quantity),
                     interval_seconds=(

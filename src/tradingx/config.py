@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -49,11 +49,29 @@ def _normalize_csv(value: str | None) -> tuple[str, ...]:
     return tuple(item.strip().upper() for item in normalized.split(",") if item.strip())
 
 
+def _normalize_broker_mode(value: str | None, *, default: str = "paper") -> str:
+    normalized = _normalize_value(value).lower()
+    if normalized in {"paper", "live"}:
+        return normalized
+    return default
+
+
+def _empty_live_credentials() -> LiveCredentials:
+    return LiveCredentials(api_key="", api_secret="")
+
+
 @dataclass(frozen=True)
 class PaperCredentials:
     api_key: str
     api_secret: str
     account_id: str
+
+
+@dataclass(frozen=True)
+class LiveCredentials:
+    api_key: str
+    api_secret: str
+    account_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -112,110 +130,147 @@ class WebAppConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     write_mode_enabled: bool = False
+    write_signing_secret: str = ""
+    write_max_age_seconds: int = 300
     refresh_interval_seconds: int = 15
+
+    def write_signing_configured(self) -> bool:
+        return not _is_placeholder(self.write_signing_secret)
 
 
 @dataclass(frozen=True)
 class TradingConfig:
     paper_credentials: PaperCredentials
-    live_controls: LiveTradingControls
-    alerting: AlertingConfig
-    runtime: RuntimeConfig
-    web: WebAppConfig
+    live_credentials: LiveCredentials = field(default_factory=_empty_live_credentials)
+    broker_mode: str = "paper"
+    live_controls: LiveTradingControls = field(default_factory=LiveTradingControls)
+    alerting: AlertingConfig = field(default_factory=AlertingConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    web: WebAppConfig = field(default_factory=WebAppConfig)
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, str | None]) -> TradingConfig:
+    def from_sources(
+        cls,
+        file_values: Mapping[str, str | None],
+        env_values: Mapping[str, str | None],
+    ) -> TradingConfig:
+        merged: dict[str, str | None] = {**file_values, **env_values}
+        broker_mode = _normalize_broker_mode(merged.get("TRADINGX_BROKER_MODE"))
         return cls(
             paper_credentials=PaperCredentials(
-                api_key=_normalize_value(values.get("ALPACA_PAPER_API_KEY")),
-                api_secret=_normalize_value(values.get("ALPACA_PAPER_API_SECRET")),
-                account_id=_normalize_value(values.get("ALPACA_PAPER_ACCOUNT_ID")),
+                api_key=_normalize_value(merged.get("ALPACA_PAPER_API_KEY")),
+                api_secret=_normalize_value(merged.get("ALPACA_PAPER_API_SECRET")),
+                account_id=_normalize_value(merged.get("ALPACA_PAPER_ACCOUNT_ID")),
             ),
-            live_controls=LiveTradingControls(),
+            live_credentials=LiveCredentials(
+                api_key=_normalize_value(merged.get("ALPACA_LIVE_API_KEY")),
+                api_secret=_normalize_value(merged.get("ALPACA_LIVE_API_SECRET")),
+                account_id=_normalize_value(merged.get("ALPACA_LIVE_ACCOUNT_ID")),
+            ),
+            broker_mode=broker_mode,
+            live_controls=LiveTradingControls(
+                config_enabled=_normalize_bool(
+                    file_values.get("TRADINGX_LIVE_CONFIG_ENABLED"),
+                    default=False,
+                ),
+                env_enabled=_normalize_bool(
+                    env_values.get("TRADINGX_ENABLE_LIVE_TRADING"),
+                    default=False,
+                ),
+                code_enabled=True,
+                broker_enabled=broker_mode == "live",
+            ),
             alerting=AlertingConfig(
                 telegram_bot_token=_normalize_value(
-                    values.get("TRADINGX_TELEGRAM_BOT_TOKEN")
+                    merged.get("TRADINGX_TELEGRAM_BOT_TOKEN")
                 ),
                 telegram_chat_id=_normalize_value(
-                    values.get("TRADINGX_TELEGRAM_CHAT_ID")
+                    merged.get("TRADINGX_TELEGRAM_CHAT_ID")
                 ),
-                smtp_host=_normalize_value(values.get("TRADINGX_SMTP_HOST")),
+                smtp_host=_normalize_value(merged.get("TRADINGX_SMTP_HOST")),
                 smtp_port=_normalize_int(
-                    values.get("TRADINGX_SMTP_PORT"),
+                    merged.get("TRADINGX_SMTP_PORT"),
                     default=587,
                 ),
-                smtp_username=_normalize_value(values.get("TRADINGX_SMTP_USERNAME")),
-                smtp_password=_normalize_value(values.get("TRADINGX_SMTP_PASSWORD")),
+                smtp_username=_normalize_value(merged.get("TRADINGX_SMTP_USERNAME")),
+                smtp_password=_normalize_value(merged.get("TRADINGX_SMTP_PASSWORD")),
                 smtp_from_email=_normalize_value(
-                    values.get("TRADINGX_SMTP_FROM_EMAIL")
+                    merged.get("TRADINGX_SMTP_FROM_EMAIL")
                 ),
-                smtp_to_email=_normalize_value(values.get("TRADINGX_SMTP_TO_EMAIL")),
+                smtp_to_email=_normalize_value(merged.get("TRADINGX_SMTP_TO_EMAIL")),
                 smtp_use_starttls=_normalize_bool(
-                    values.get("TRADINGX_SMTP_USE_STARTTLS"),
+                    merged.get("TRADINGX_SMTP_USE_STARTTLS"),
                     default=True,
                 ),
             ),
             runtime=RuntimeConfig(
                 artifact_root=Path(
-                    _normalize_value(values.get("TRADINGX_ARTIFACT_ROOT"))
+                    _normalize_value(merged.get("TRADINGX_ARTIFACT_ROOT"))
                     or "artifacts"
                 ),
                 data_root=Path(
-                    _normalize_value(values.get("TRADINGX_DATA_ROOT")) or "data"
+                    _normalize_value(merged.get("TRADINGX_DATA_ROOT")) or "data"
                 ),
                 metrics_namespace=(
-                    _normalize_value(values.get("TRADINGX_METRICS_NAMESPACE"))
+                    _normalize_value(merged.get("TRADINGX_METRICS_NAMESPACE"))
                     or "tradingx"
                 ),
                 enforce_regular_hours=_normalize_bool(
-                    values.get("TRADINGX_ENFORCE_REGULAR_HOURS"),
+                    merged.get("TRADINGX_ENFORCE_REGULAR_HOURS"),
                     default=True,
                 ),
                 command_timeout_seconds=_normalize_int(
-                    values.get("TRADINGX_COMMAND_TIMEOUT_SECONDS"),
+                    merged.get("TRADINGX_COMMAND_TIMEOUT_SECONDS"),
                     default=30,
                 ),
                 manual_kill_switch_active=_normalize_bool(
-                    values.get("TRADINGX_MANUAL_KILL_SWITCH"),
+                    merged.get("TRADINGX_MANUAL_KILL_SWITCH"),
                     default=False,
                 ),
                 service_interval_seconds=_normalize_int(
-                    values.get("TRADINGX_SERVICE_INTERVAL_SECONDS"),
+                    merged.get("TRADINGX_SERVICE_INTERVAL_SECONDS"),
                     default=300,
                 ),
                 scheduler_poll_seconds=_normalize_int(
-                    values.get("TRADINGX_SCHEDULER_POLL_SECONDS"),
+                    merged.get("TRADINGX_SCHEDULER_POLL_SECONDS"),
                     default=60,
                 ),
                 log_max_bytes=_normalize_int(
-                    values.get("TRADINGX_LOG_MAX_BYTES"),
+                    merged.get("TRADINGX_LOG_MAX_BYTES"),
                     default=100 * 1024 * 1024,
                 ),
                 log_retention_files=_normalize_int(
-                    values.get("TRADINGX_LOG_RETENTION_FILES"),
+                    merged.get("TRADINGX_LOG_RETENTION_FILES"),
                     default=30,
                 ),
                 symbol_universe=(
-                    _normalize_csv(values.get("TRADINGX_SYMBOL_UNIVERSE"))
+                    _normalize_csv(merged.get("TRADINGX_SYMBOL_UNIVERSE"))
                     or CANONICAL_STAGE1_UNIVERSE
                 ),
                 dry_run=_normalize_bool(
-                    values.get("TRADINGX_DRY_RUN"),
+                    merged.get("TRADINGX_DRY_RUN"),
                     default=False,
                 ),
             ),
             web=WebAppConfig(
-                host=_normalize_value(values.get("TRADINGX_WEB_HOST")) or "127.0.0.1",
+                host=_normalize_value(merged.get("TRADINGX_WEB_HOST")) or "127.0.0.1",
                 port=_normalize_int(
-                    values.get("TRADINGX_WEB_PORT"),
+                    merged.get("TRADINGX_WEB_PORT"),
                     default=8765,
                 ),
                 write_mode_enabled=_normalize_bool(
-                    values.get("TRADINGX_WEB_WRITE_MODE_ENABLED"),
+                    merged.get("TRADINGX_WEB_WRITE_MODE_ENABLED"),
                     default=False,
                 ),
+                write_signing_secret=_normalize_value(
+                    merged.get("TRADINGX_WEB_WRITE_SIGNING_SECRET")
+                ),
+                write_max_age_seconds=_normalize_int(
+                    merged.get("TRADINGX_WEB_WRITE_MAX_AGE_SECONDS"),
+                    default=300,
+                ),
                 refresh_interval_seconds=_normalize_int(
-                    values.get("TRADINGX_WEB_REFRESH_INTERVAL_SECONDS"),
+                    merged.get("TRADINGX_WEB_REFRESH_INTERVAL_SECONDS"),
                     default=15,
                 ),
             ),
@@ -224,16 +279,54 @@ class TradingConfig:
     @classmethod
     def from_env_file(cls, path: Path) -> TradingConfig:
         file_values = dotenv_values(path)
-        return cls.from_mapping({**file_values, **os.environ})
+        return cls.from_sources(file_values, os.environ)
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, str | None]) -> TradingConfig:
+        return cls.from_sources(values, values)
 
     def has_real_paper_credentials(self) -> bool:
         return not _is_placeholder(
             self.paper_credentials.api_key
         ) and not _is_placeholder(self.paper_credentials.api_secret)
 
+    def has_real_live_credentials(self) -> bool:
+        return not _is_placeholder(
+            self.live_credentials.api_key
+        ) and not _is_placeholder(self.live_credentials.api_secret)
+
+    def live_block_reasons(
+        self,
+        *,
+        requested_broker_mode: str | None = None,
+    ) -> tuple[str, ...]:
+        broker_mode = _normalize_broker_mode(
+            requested_broker_mode or self.broker_mode,
+        )
+        reasons: list[str] = []
+        if broker_mode != "live":
+            reasons.append("broker_mode_not_live")
+        if not self.has_real_live_credentials():
+            reasons.append("missing_live_credentials")
+        if not self.live_controls.config_enabled:
+            reasons.append("config_layer_disabled")
+        if not self.live_controls.env_enabled:
+            reasons.append("env_layer_disabled")
+        if not self.live_controls.code_enabled:
+            reasons.append("code_layer_disabled")
+        if not self.web.write_signing_configured():
+            reasons.append("web_write_signing_unconfigured")
+        if self.runtime.manual_kill_switch_active:
+            reasons.append("manual_kill_switch_active")
+        if self.runtime.dry_run:
+            reasons.append("dry_run_enabled")
+        return tuple(reasons)
+
     def to_safe_summary(self) -> dict[str, str | bool | int | list[str]]:
+        live_disable_report = self.live_disable_report()
         return {
             "has_real_paper_credentials": self.has_real_paper_credentials(),
+            "has_real_live_credentials": self.has_real_live_credentials(),
             "artifact_root": str(self.runtime.artifact_root),
             "data_root": str(self.runtime.data_root),
             "metrics_namespace": self.runtime.metrics_namespace,
@@ -249,15 +342,34 @@ class TradingConfig:
             "web_host": self.web.host,
             "web_port": self.web.port,
             "web_write_mode_enabled": self.web.write_mode_enabled,
+            "web_write_signing_configured": self.web.write_signing_configured(),
+            "web_write_max_age_seconds": self.web.write_max_age_seconds,
             "web_refresh_interval_seconds": self.web.refresh_interval_seconds,
             "telegram_alerts_enabled": self.alerting.telegram_enabled(),
             "smtp_alerts_enabled": self.alerting.smtp_enabled(),
-            "live_trading_enabled": self.live_controls.all_layers_enabled(),
+            "requested_broker_mode": self.broker_mode,
+            "live_control_config_enabled": self.live_controls.config_enabled,
+            "live_control_env_enabled": self.live_controls.env_enabled,
+            "live_control_code_enabled": self.live_controls.code_enabled,
+            "live_control_broker_enabled": self.live_controls.broker_enabled,
+            "live_control_layers_enabled": self.live_controls.all_layers_enabled(),
+            "live_trading_enabled": bool(live_disable_report["live_trading_enabled"]),
         }
 
-    def live_disable_report(self) -> dict[str, bool]:
+    def live_disable_report(self) -> dict[str, bool | str | list[str]]:
+        disable_reasons = list(self.live_block_reasons())
+        live_trading_enabled = len(disable_reasons) == 0
         return {
-            "paper_only_mode": True,
-            "live_trading_enabled": self.live_controls.all_layers_enabled(),
+            "paper_only_mode": not live_trading_enabled,
+            "live_trading_enabled": live_trading_enabled,
             "manual_kill_switch_active": self.runtime.manual_kill_switch_active,
+            "requested_broker_mode": self.broker_mode,
+            "has_real_paper_credentials": self.has_real_paper_credentials(),
+            "has_real_live_credentials": self.has_real_live_credentials(),
+            "web_write_signing_configured": self.web.write_signing_configured(),
+            "live_control_config_enabled": self.live_controls.config_enabled,
+            "live_control_env_enabled": self.live_controls.env_enabled,
+            "live_control_code_enabled": self.live_controls.code_enabled,
+            "live_control_broker_enabled": self.live_controls.broker_enabled,
+            "disable_reasons": disable_reasons,
         }

@@ -17,9 +17,13 @@ from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest
 
 from tradingx.config import TradingConfig
-from tradingx.data import AlpacaMarketDataGateway
+from tradingx.data import AlpacaMarketDataGateway, build_market_data_gateway_for_mode
 from tradingx.execution import AlpacaPaperExecutionGateway
 from tradingx.journal import SqliteOmsJournal
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.operator_control import (
     OperatorControlState,
     OperatorControlStore,
@@ -666,14 +670,11 @@ def build_default_operator_supervisor(
         config.runtime.data_root / "snapshots"
     )
     journal = SqliteOmsJournal(config.runtime.data_root / "journal.db")
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
-    )
-    market_data_gateway = AlpacaMarketDataGateway.from_credentials(
-        api_key=config.paper_credentials.api_key,
-        api_secret=config.paper_credentials.api_secret,
+    decision = resolve_broker_mode(config)
+    trading_client = build_trading_client_for_mode(config, decision)
+    market_data_gateway = build_market_data_gateway_for_mode(
+        config,
+        broker_mode=decision.requested_mode,
     )
     supervisor = OperatorSupervisor(
         control_store=control_store,

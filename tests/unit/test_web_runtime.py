@@ -219,6 +219,24 @@ def test_local_service_manager_stops_running_service() -> None:
     assert result.status == "accepted"
 
 
+def test_local_service_manager_default_builder_uses_generic_service_builder(
+    monkeypatch,
+) -> None:
+    fake_service = FakePaperService()
+    captured: list[object] = []
+
+    monkeypatch.setattr(
+        web_runtime,
+        "build_default_trading_service",
+        lambda config: captured.append(config) or fake_service,
+    )
+
+    manager = LocalServiceManager(config=TradingConfig.from_mapping({}))
+
+    assert manager._service_builder() is fake_service
+    assert len(captured) == 1
+
+
 def test_build_default_local_web_components_shares_runtime_service_manager(
     monkeypatch, tmp_path
 ) -> None:
@@ -250,11 +268,15 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
         "LocalRuntimeHostManager",
         RecordingRuntimeHostManager,
     )
-    monkeypatch.setattr(web_runtime, "TradingClient", lambda *args, **kwargs: object())
     monkeypatch.setattr(
         web_runtime,
-        "build_default_market_data_gateway",
-        lambda config: object(),
+        "build_trading_client_for_mode",
+        lambda config, decision: object(),
+    )
+    monkeypatch.setattr(
+        web_runtime,
+        "build_market_data_gateway_for_mode",
+        lambda config, *, broker_mode=None: object(),
     )
     monkeypatch.setattr(
         web_runtime,

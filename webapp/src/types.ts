@@ -258,6 +258,8 @@ export type DailySessionDigest = {
 export type ConfigSummary = {
   config: {
     web_write_mode_enabled: boolean
+    web_write_signing_configured: boolean
+    web_write_max_age_seconds: number
     symbol_universe: string[]
     service_interval_seconds: number
     web_refresh_interval_seconds: number

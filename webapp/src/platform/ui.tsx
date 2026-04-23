@@ -53,12 +53,14 @@ export function ActionButton(props: {
   label: string
   onClick: () => void
   variant?: 'primary' | 'secondary' | 'ghost'
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       className={cx('action-button', props.variant ?? 'secondary')}
       onClick={props.onClick}
+      disabled={props.disabled}
     >
       {props.label}
     </button>

@@ -9,8 +9,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
-from alpaca.trading.client import TradingClient
-
 from tradingx.activation import LocalActivationGateway
 from tradingx.alerts import (
     OperatorAlertDispatcher,
@@ -28,9 +26,13 @@ from tradingx.controller import (
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
 )
-from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
+from tradingx.data import AlpacaRegularHoursCalendar, build_market_data_gateway_for_mode
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
@@ -41,8 +43,8 @@ from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.scheduler import MarketDayScheduler, build_default_market_day_scheduler
 from tradingx.service import (
     PaperTradingService,
-    build_default_paper_service,
-    build_runtime_host_paper_service,
+    build_default_trading_service,
+    build_runtime_host_trading_service,
 )
 from tradingx.types import (
     AlertDrillRecord,
@@ -98,7 +100,7 @@ class LocalServiceManager:
     ) -> None:
         self._config = config
         self._service_builder = service_builder or (
-            lambda: build_default_paper_service(config)
+            lambda: build_default_trading_service(config)
         )
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -479,7 +481,11 @@ class LocalWebActionRunner:
         window_start: str,
         window_end: str,
     ) -> WebActionResult:
-        market_data_gateway = build_default_market_data_gateway(self._config)
+        decision = resolve_broker_mode(self._config)
+        market_data_gateway = build_market_data_gateway_for_mode(
+            self._config,
+            broker_mode=decision.requested_mode,
+        )
         risk_free_series = build_default_risk_free_series(self._config)
         stack = build_default_benchmark_stack(
             self._config,
@@ -957,17 +963,17 @@ def build_default_local_web_components(
     repo_root = Path(__file__).resolve().parents[3]
     service_manager = LocalServiceManager(
         config=config,
-        service_builder=lambda: build_runtime_host_paper_service(config),
+        service_builder=lambda: build_runtime_host_trading_service(config),
     )
     scheduler_manager = LocalSchedulerManager(config=config)
     operator_store_root = config.runtime.artifact_root / "operator_platform"
     runtime_store_root = config.runtime.artifact_root
-    market_data_gateway = build_default_market_data_gateway(config)
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
+    decision = resolve_broker_mode(config)
+    market_data_gateway = build_market_data_gateway_for_mode(
+        config,
+        broker_mode=decision.requested_mode,
     )
+    trading_client = build_trading_client_for_mode(config, decision)
     activation_gateway = LocalActivationGateway(
         store=FilesystemArtifactStore(operator_store_root),
         runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),

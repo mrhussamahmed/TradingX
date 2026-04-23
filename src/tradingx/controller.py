@@ -26,6 +26,7 @@ from tradingx.data import (
     AlpacaMarketDataGateway,
     AlpacaRegularHoursCalendar,
     build_default_market_data_gateway,
+    build_market_data_gateway_for_mode,
 )
 from tradingx.execution import (
     AlpacaPaperExecutionGateway,
@@ -33,6 +34,10 @@ from tradingx.execution import (
     classify_order_rejection_reason,
 )
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.pbo import (
@@ -1688,10 +1693,19 @@ def build_default_controller(config: TradingConfig) -> RoundTripController:
 def build_default_paper_trading_controller(
     config: TradingConfig,
 ) -> PaperTradingLoopController:
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
+    return build_default_trading_loop_controller(config, broker_mode="paper")
+
+
+def build_default_trading_loop_controller(
+    config: TradingConfig,
+    *,
+    broker_mode: str | None = None,
+) -> PaperTradingLoopController:
+    decision = resolve_broker_mode(config, explicit_mode=broker_mode)
+    trading_client = build_trading_client_for_mode(config, decision)
+    market_data_gateway = build_market_data_gateway_for_mode(
+        config,
+        broker_mode=decision.requested_mode,
     )
     policy_snapshot = build_week1_policy_snapshot(
         generated_at_utc=datetime.now(UTC),
@@ -1700,10 +1714,7 @@ def build_default_paper_trading_controller(
         dry_run=config.runtime.dry_run,
     )
     return PaperTradingLoopController(
-        market_data=AlpacaMarketDataGateway.from_credentials(
-            api_key=config.paper_credentials.api_key,
-            api_secret=config.paper_credentials.api_secret,
-        ),
+        market_data=market_data_gateway,
         execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),

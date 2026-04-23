@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,6 +40,48 @@ from tradingx.types import (
     WebServiceState,
 )
 from tradingx.web.app import create_app
+from tradingx.web.security import (
+    IDEMPOTENCY_HEADER,
+    SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
+    sign_web_write_request,
+)
+
+
+def _signed_post(
+    client: TestClient,
+    path: str,
+    *,
+    payload: object | None = None,
+    idempotency_key: str | None = None,
+) -> object:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+    actual_idempotency_key = (
+        idempotency_key
+        or "idem-"
+        + hashlib.sha256(
+            f"{path}:{body.decode('utf-8', errors='ignore')}".encode()
+        ).hexdigest()[:16]
+    )
+    timestamp = str(int(datetime.now(UTC).timestamp()))
+    signature = sign_web_write_request(
+        "super-secret",
+        method="POST",
+        path=path,
+        timestamp=timestamp,
+        idempotency_key=actual_idempotency_key,
+        body=body,
+    )
+    headers = {
+        TIMESTAMP_HEADER: timestamp,
+        IDEMPOTENCY_HEADER: actual_idempotency_key,
+        SIGNATURE_HEADER: signature,
+    }
+    if payload is None:
+        return client.post(path, headers=headers)
+    return client.post(
+        path, data=body, headers={**headers, "Content-Type": "application/json"}
+    )
 
 
 class FakeReadModel:
@@ -906,6 +950,7 @@ def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> Non
         config=TradingConfig.from_mapping(
             {
                 "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+                "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret",
             }
         ),
         read_model=FakeReadModel(),
@@ -914,7 +959,7 @@ def test_replay_slippage_endpoints_return_summary_and_accept_generation() -> Non
     client = TestClient(app)
 
     summary = client.get("/api/platform/gate3/replay-slippage/latest")
-    action = client.post("/api/actions/replay-slippage/generate")
+    action = _signed_post(client, "/api/actions/replay-slippage/generate")
 
     assert summary.status_code == 200
     assert summary.json()["summary_id"] == "replay-summary-1"
@@ -943,50 +988,61 @@ def test_local_web_app_blocks_mutations_when_write_mode_is_disabled() -> None:
 
 def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> None:
     app = create_app(
-        config=TradingConfig.from_mapping({"TRADINGX_WEB_WRITE_MODE_ENABLED": "true"}),
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+                "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret",
+            }
+        ),
         read_model=FakeReadModel(),
         action_runner=FakeActionRunner(),
     )
     client = TestClient(app)
 
-    action = client.post(
+    action = _signed_post(
+        client,
         "/api/actions/paper-loop",
-        json={"symbol": "SPY", "quantity": "1"},
+        payload={"symbol": "SPY", "quantity": "1"},
     )
-    service_start = client.post(
+    service_start = _signed_post(
+        client,
         "/api/actions/service/start",
-        json={
+        payload={
             "symbols": ["SPY", "QQQ"],
             "quantity": "1",
             "interval_seconds": 300,
             "max_cycles": 1,
         },
     )
-    service_stop = client.post("/api/actions/service/stop")
-    runtime_start = client.post(
+    service_stop = _signed_post(client, "/api/actions/service/stop")
+    runtime_start = _signed_post(
+        client,
         "/api/actions/runtime-host/start",
-        json={
+        payload={
             "symbols": ["SPY", "QQQ"],
             "quantity": "1",
             "interval_seconds": 300,
             "max_cycles": 1,
         },
     )
-    runtime_stop = client.post("/api/actions/runtime-host/stop")
-    recover = client.post(
+    runtime_stop = _signed_post(client, "/api/actions/runtime-host/stop")
+    recover = _signed_post(
+        client,
         "/api/actions/recover",
-        json={"symbol": "SPY"},
+        payload={"symbol": "SPY"},
     )
-    benchmark = client.post(
+    benchmark = _signed_post(
+        client,
         "/api/actions/prepare-benchmark",
-        json={
+        payload={
             "window_start": "2023-01-01",
             "window_end": "2026-04-17",
         },
     )
-    gate = client.post(
+    gate = _signed_post(
+        client,
         "/api/actions/gate-report",
-        json={
+        payload={
             "gate": "1",
             "benchmark_stack_file": (
                 "artifacts/validation/benchmark_stacks/"
@@ -997,41 +1053,49 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
             "universe": ["SPY", "QQQ"],
         },
     )
-    decision = client.post(
+    decision = _signed_post(
+        client,
         "/api/actions/decision-report",
-        json={"gate": "1"},
+        payload={"gate": "1"},
     )
-    proposal = client.post(
+    proposal = _signed_post(
+        client,
         "/api/config/proposals",
-        json={
+        payload={
             "target_area": "runtime",
             "proposed_values": {"TRADINGX_SYMBOL_UNIVERSE": ["SPY", "QQQ"]},
             "rationale": "Expand the universe for the next paper session.",
         },
     )
-    preopen = client.post("/api/actions/session/preopen")
-    heartbeat = client.post("/api/actions/session/heartbeat")
-    close_result = client.post("/api/actions/session/close")
-    market_day = client.post(
+    preopen = _signed_post(client, "/api/actions/session/preopen")
+    heartbeat = _signed_post(client, "/api/actions/session/heartbeat")
+    close_result = _signed_post(client, "/api/actions/session/close")
+    market_day = _signed_post(
+        client,
         "/api/actions/session/market-day",
-        json={
+        payload={
             "symbols": ["SPY", "QQQ"],
             "quantity": "1",
             "interval_seconds": 300,
             "max_heartbeats": 2,
         },
     )
-    gate3_report = client.post("/api/actions/gate3/report")
-    gate3_package = client.post("/api/actions/gate3/package")
-    recovery_drill = client.post(
+    gate3_report = _signed_post(client, "/api/actions/gate3/report")
+    gate3_package = _signed_post(client, "/api/actions/gate3/package")
+    recovery_drill = _signed_post(
+        client,
         "/api/actions/recovery-drill",
-        json={"symbol": "SPY"},
+        payload={"symbol": "SPY"},
     )
-    alert_drill = client.post(
+    alert_drill = _signed_post(
+        client,
         "/api/actions/alert-drill",
-        json={"channel": "smtp"},
+        payload={"channel": "smtp"},
     )
-    acknowledge = client.post("/api/actions/incidents/incident-alert-1/acknowledge")
+    acknowledge = _signed_post(
+        client,
+        "/api/actions/incidents/incident-alert-1/acknowledge",
+    )
 
     assert action.status_code == 200
     assert action.json()["status"] == "completed"

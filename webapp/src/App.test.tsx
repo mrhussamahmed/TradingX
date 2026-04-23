@@ -52,6 +52,8 @@ const commandCenterPayload = {
 const configSummaryPayload = {
   config: {
     web_write_mode_enabled: true,
+    web_write_signing_configured: true,
+    web_write_max_age_seconds: 300,
     symbol_universe: ['SPY', 'QQQ', 'IWM'],
     service_interval_seconds: 180,
     web_refresh_interval_seconds: 15,
@@ -622,6 +624,7 @@ function mockFetch() {
 describe('App', () => {
   afterEach(() => {
     cleanup()
+    window.sessionStorage.clear()
     vi.unstubAllGlobals()
   })
 
@@ -714,13 +717,24 @@ describe('App', () => {
     await screen.findByText('TradingX Operator Platform')
     await screen.findAllByText('QQQ')
 
-    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeDisabled()
+    await user.type(screen.getByLabelText('Local signing secret'), 'super-secret')
+    await user.click(screen.getByRole('button', { name: 'Unlock Writes' }))
+
+    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: 'Start Bot' }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/actions/runtime-host/start',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'X-TradingX-Timestamp': expect.any(String),
+            'X-TradingX-Idempotency-Key': expect.any(String),
+            'X-TradingX-Signature': expect.any(String),
+          }),
+        }),
       )
     })
 
@@ -735,6 +749,7 @@ describe('App', () => {
       interval_seconds: 180,
       max_cycles: null,
     })
+    expect((runtimeStartInit?.headers as Record<string, string>)['X-TradingX-Signature']).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Research' }))
 
@@ -743,5 +758,29 @@ describe('App', () => {
     expect(screen.getByText('Evidence Library')).toBeInTheDocument()
     expect(screen.getByText('Gate 1 report')).toBeInTheDocument()
     expect(screen.getAllByText('SPY replay')[0]).toBeInTheDocument()
+  })
+
+  it('keeps write actions locked until a local secret is entered and never sources it from config summary', async () => {
+    mockFetch()
+    const user = userEvent.setup()
+
+    render(<App />)
+
+    await screen.findByText('TradingX Operator Platform')
+    await screen.findByText('Writes locked')
+
+    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeDisabled()
+    expect(
+      screen.getAllByText(
+        'Enter the local signing secret to unlock write actions in this browser session.',
+      ).length,
+    ).toBeGreaterThan(0)
+    expect(document.body.textContent).not.toContain('super-secret')
+
+    await user.type(screen.getByLabelText('Local signing secret'), 'super-secret')
+    await user.click(screen.getByRole('button', { name: 'Unlock Writes' }))
+
+    expect(screen.getByRole('button', { name: 'Start Bot' })).toBeEnabled()
+    expect(document.body.textContent).not.toContain('super-secret')
   })
 })

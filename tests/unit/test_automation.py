@@ -5,7 +5,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from tradingx import automation as automation_module
 from tradingx.automation import MarketDayAutomationRunner
+from tradingx.config import TradingConfig
+from tradingx.live_enablement import BrokerModeDecision
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     Gate3PromotionPackage,
@@ -405,3 +408,101 @@ def test_automation_close_without_preopen_refreshes_drift_but_skips_attribution(
 
     assert drift_gateway.refresh_call_count == 1
     assert attribution_recorder.record_session_call_count == 0
+
+
+def test_build_default_market_day_automation_runner_uses_generic_service_builder(
+    monkeypatch, tmp_path
+) -> None:
+    helper_calls: dict[str, object] = {}
+    fake_service = FakePaperService()
+
+    monkeypatch.setattr(
+        automation_module,
+        "resolve_broker_mode",
+        lambda config: BrokerModeDecision(
+            requested_mode="live",
+            effective_mode="live",
+            live_requested=True,
+            live_allowed=True,
+            disable_reasons=(),
+        ),
+    )
+
+    def fake_build_trading_client(config, decision):
+        del config
+        helper_calls["client_mode"] = decision.requested_mode
+        return object()
+
+    def fake_build_market_data(config, *, broker_mode=None):
+        del config
+        helper_calls["market_data_mode"] = broker_mode
+        return object()
+
+    class FakeRuntimeRegistry:
+        def can_resolve(self, strategy_id: str) -> bool:
+            del strategy_id
+            return True
+
+    monkeypatch.setattr(
+        automation_module,
+        "build_trading_client_for_mode",
+        fake_build_trading_client,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "build_market_data_gateway_for_mode",
+        fake_build_market_data,
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "build_default_runtime_registry",
+        lambda market_data_gateway: FakeRuntimeRegistry(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "LocalActivationGateway",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "_resolve_drift_reference_snapshot",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "DriftAlarmGateway",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "SleeveAttributionRecorder",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "AlpacaPortfolioGateway",
+        lambda trading_client: object(),
+    )
+    monkeypatch.setattr(
+        automation_module,
+        "build_default_trading_service",
+        lambda config: fake_service,
+    )
+
+    runner = automation_module.build_default_market_day_automation_runner(
+        TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "ALPACA_LIVE_API_KEY": "pk-live",
+                "ALPACA_LIVE_API_SECRET": "sk-live",
+                "TRADINGX_BROKER_MODE": "live",
+            }
+        )
+    )
+
+    assert runner._service_builder() is fake_service
+    assert helper_calls == {
+        "client_mode": "live",
+        "market_data_mode": "live",
+    }

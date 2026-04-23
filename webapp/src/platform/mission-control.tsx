@@ -38,6 +38,8 @@ export function MissionControlWorkspace(props: {
   runtimeActivation: StrategyActivationRecord | null
   runtimeModel: ModelWeightSnapshot | null
   runtimeSelection: OpportunitySelectionRecord | null
+  writesEnabled: boolean
+  writeLockDetail: string
   onRunPaperLoop: () => void
   onStartBot: () => void
   onStopBot: () => void
@@ -300,20 +302,58 @@ export function MissionControlWorkspace(props: {
 
       <Panel title="Operator Actions" eyebrow="Safe controls">
         <div className="action-row">
-          <ActionButton label="Start Bot" variant="primary" onClick={props.onStartBot} />
-          <ActionButton label="Pause Bot" variant="secondary" onClick={props.onStopBot} />
-          <ActionButton label="Run One Cycle" variant="secondary" onClick={props.onRunPaperLoop} />
-          <ActionButton label="Recover" variant="ghost" onClick={props.onRecover} />
+          <ActionButton
+            label="Start Bot"
+            variant="primary"
+            onClick={props.onStartBot}
+            disabled={!props.writesEnabled}
+          />
+          <ActionButton
+            label="Pause Bot"
+            variant="secondary"
+            onClick={props.onStopBot}
+            disabled={!props.writesEnabled}
+          />
+          <ActionButton
+            label="Run One Cycle"
+            variant="secondary"
+            onClick={props.onRunPaperLoop}
+            disabled={!props.writesEnabled}
+          />
+          <ActionButton
+            label="Recover"
+            variant="ghost"
+            onClick={props.onRecover}
+            disabled={!props.writesEnabled}
+          />
         </div>
         <p className="panel-supporting-text">
           <strong>Start Bot</strong> keeps the runtime host running until you pause it. <strong>Run One Cycle</strong>{' '}
           submits one bounded paper cycle for quick verification.
         </p>
         <div className="action-row">
-          <ActionButton label="Session Pre-Open" variant="secondary" onClick={props.onSessionPreopen} />
-          <ActionButton label="Session Heartbeat" variant="secondary" onClick={props.onSessionHeartbeat} />
-          <ActionButton label="Session Close" variant="ghost" onClick={props.onSessionClose} />
+          <ActionButton
+            label="Session Pre-Open"
+            variant="secondary"
+            onClick={props.onSessionPreopen}
+            disabled={!props.writesEnabled}
+          />
+          <ActionButton
+            label="Session Heartbeat"
+            variant="secondary"
+            onClick={props.onSessionHeartbeat}
+            disabled={!props.writesEnabled}
+          />
+          <ActionButton
+            label="Session Close"
+            variant="ghost"
+            onClick={props.onSessionClose}
+            disabled={!props.writesEnabled}
+          />
         </div>
+        {!props.writesEnabled ? (
+          <p className="panel-supporting-text">{props.writeLockDetail}</p>
+        ) : null}
       </Panel>
 
       <Panel title="Watchlist & Exposure" eyebrow="Market footprint">

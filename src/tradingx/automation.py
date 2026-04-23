@@ -11,11 +11,10 @@ from pathlib import Path
 from typing import Protocol
 
 import pandas as pd  # type: ignore[import-untyped]
-from alpaca.trading.client import TradingClient
 
 from tradingx.activation import LocalActivationGateway
 from tradingx.config import TradingConfig
-from tradingx.data import build_default_market_data_gateway
+from tradingx.data import build_market_data_gateway_for_mode
 from tradingx.drift.attribution import SleeveAttributionRecorder
 from tradingx.drift.backtest_reference import (
     artifact_path as backtest_reference_artifact_path,
@@ -40,13 +39,17 @@ from tradingx.drift.reference import (
     write_reference_distribution_snapshot,
 )
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH
 from tradingx.runtime_host import PortfolioGatewayProtocol
 from tradingx.runtime_strategy_registry import build_default_runtime_registry
-from tradingx.service import PaperTradingService, build_default_paper_service
+from tradingx.service import PaperTradingService, build_default_trading_service
 from tradingx.sleeves.base import build_sleeve_from_candidate
 from tradingx.sleeves.evaluation import simulate_sleeve_returns
 from tradingx.strategy import build_mandatory_candidate_registry
@@ -882,7 +885,11 @@ def build_default_market_day_automation_runner(
     def now_provider() -> datetime:
         return datetime.now(UTC)
 
-    market_data_gateway = build_default_market_data_gateway(config)
+    decision = resolve_broker_mode(config)
+    market_data_gateway = build_market_data_gateway_for_mode(
+        config,
+        broker_mode=decision.requested_mode,
+    )
     runtime_registry = build_default_runtime_registry(
         market_data_gateway=market_data_gateway
     )
@@ -891,11 +898,7 @@ def build_default_market_day_automation_runner(
         runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
     )
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
-    )
+    trading_client = build_trading_client_for_mode(config, decision)
     portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
     blueprint = DriftMonitorBlueprint(blueprint_id="drift-default-v1")
     treasury_cache_path = (
@@ -950,7 +953,7 @@ def build_default_market_day_automation_runner(
         validation_store=validation_store,
         operator_store=operator_store,
         runtime_store=runtime_store,
-        service_builder=lambda: build_default_paper_service(config),
+        service_builder=lambda: build_default_trading_service(config),
         portfolio_gateway=portfolio_gateway,
         drift_alarm_gateway=drift_alarm_gateway,
         attribution_recorder=attribution_recorder,

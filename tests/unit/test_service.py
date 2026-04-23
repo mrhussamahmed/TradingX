@@ -6,6 +6,9 @@ from pathlib import Path
 
 from prometheus_client import CollectorRegistry
 
+from tradingx import service as service_module
+from tradingx.config import TradingConfig
+from tradingx.live_enablement import BrokerModeDecision
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.persistence import FilesystemArtifactStore
@@ -898,3 +901,96 @@ def test_paper_trading_service_fails_closed_when_planner_returns_none(
     assert loop_controller.calls == []
     assert loop_controller.intent_calls == []
     assert result.last_cycle.cycle_status == "recovery_required"
+
+
+def test_build_default_trading_service_uses_mode_aware_helpers(
+    monkeypatch, tmp_path
+) -> None:
+    helper_calls: dict[str, object] = {}
+
+    def fake_resolve_broker_mode(config, *, explicit_mode=None):
+        del config
+        helper_calls["explicit_mode"] = explicit_mode
+        return BrokerModeDecision(
+            requested_mode="live",
+            effective_mode="live",
+            live_requested=True,
+            live_allowed=True,
+            disable_reasons=(),
+        )
+
+    def fake_build_trading_client(config, decision):
+        del config
+        helper_calls["client_mode"] = decision.requested_mode
+        return object()
+
+    def fake_build_market_data_gateway(config, *, broker_mode=None):
+        del config
+        helper_calls["market_data_mode"] = broker_mode
+        return object()
+
+    class FakeRuntimeRegistry:
+        def can_resolve(self, strategy_id: str) -> bool:
+            del strategy_id
+            return True
+
+    monkeypatch.setattr(service_module, "resolve_broker_mode", fake_resolve_broker_mode)
+    monkeypatch.setattr(
+        service_module,
+        "build_trading_client_for_mode",
+        fake_build_trading_client,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "build_market_data_gateway_for_mode",
+        fake_build_market_data_gateway,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "build_default_trading_loop_controller",
+        lambda config, *, broker_mode=None: ("loop", broker_mode),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "build_default_runtime_registry",
+        lambda **kwargs: FakeRuntimeRegistry(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "LocalActivationGateway",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "RuntimePortfolioPlanner",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "ActivatedRuntimePlanner",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "AlpacaPortfolioGateway",
+        lambda trading_client: ("portfolio", trading_client),
+    )
+
+    service = service_module.build_default_trading_service(
+        TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "ALPACA_LIVE_API_KEY": "pk-live",
+                "ALPACA_LIVE_API_SECRET": "sk-live",
+                "TRADINGX_BROKER_MODE": "live",
+            }
+        )
+    )
+
+    assert isinstance(service, PaperTradingService)
+    assert helper_calls == {
+        "explicit_mode": None,
+        "client_mode": "live",
+        "market_data_mode": "live",
+    }

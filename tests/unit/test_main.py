@@ -473,6 +473,7 @@ def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file.write_text(
         "ALPACA_PAPER_API_KEY=pk-paper\n"
         "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_WEB_WRITE_SIGNING_SECRET=super-secret\n"
         f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
@@ -484,6 +485,8 @@ def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     assert payload["has_real_paper_credentials"] is True
     assert payload["artifact_root"] == "artifacts"
     assert "api_key" not in payload
+    assert "super-secret" not in json.dumps(payload, sort_keys=True)
+    assert payload["web_write_signing_configured"] is True
 
 
 def test_main_runs_paper_roundtrip_command(monkeypatch, tmp_path, capsys) -> None:
@@ -769,7 +772,16 @@ def test_main_runtime_plan_command_writes_plan_artifact(
                 ),
             )
 
-    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "build_trading_client_for_mode",
+        lambda config, decision: object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_market_data_gateway_for_mode",
+        lambda config, *, broker_mode=None: object(),
+    )
     monkeypatch.setattr(
         cli,
         "AlpacaPortfolioGateway",
@@ -871,7 +883,16 @@ def test_main_runtime_plan_command_reports_blocked_research_strategy(
                 ),
             )
 
-    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "build_trading_client_for_mode",
+        lambda config, decision: object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_market_data_gateway_for_mode",
+        lambda config, *, broker_mode=None: object(),
+    )
     monkeypatch.setattr(
         cli,
         "AlpacaPortfolioGateway",
@@ -986,8 +1007,8 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
 
     monkeypatch.setattr(
         cli,
-        "build_default_market_data_gateway",
-        lambda config: object(),
+        "build_market_data_gateway_for_mode",
+        lambda config, *, broker_mode=None: object(),
         raising=False,
     )
     monkeypatch.setattr(
@@ -1002,7 +1023,11 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
         lambda market_data_gateway: FakeRuntimeWarmupService(warmup),
         raising=False,
     )
-    monkeypatch.setattr(cli, "TradingClient", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "build_trading_client_for_mode",
+        lambda config, decision: object(),
+    )
     monkeypatch.setattr(
         cli,
         "AlpacaPortfolioGateway",
@@ -1017,7 +1042,7 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     )
     monkeypatch.setattr(
         cli,
-        "build_runtime_host_paper_service",
+        "build_runtime_host_trading_service",
         lambda config: fake_service,
         raising=False,
     )

@@ -7,14 +7,21 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol, cast
 
-from alpaca.trading.client import TradingClient
-
 from tradingx.activation import LocalActivationGateway
 from tradingx.config import TradingConfig
-from tradingx.controller import build_default_paper_trading_controller
-from tradingx.data import AlpacaRegularHoursCalendar, build_default_market_data_gateway
+from tradingx.controller import (
+    build_default_trading_loop_controller,
+)
+from tradingx.data import (
+    AlpacaRegularHoursCalendar,
+    build_market_data_gateway_for_mode,
+)
 from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
 from tradingx.historical import HistoricalWarmupService
+from tradingx.live_enablement import (
+    build_trading_client_for_mode,
+    resolve_broker_mode,
+)
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
@@ -713,17 +720,30 @@ def build_default_paper_service(
     *,
     opportunity_selector: LiveOpportunitySelector | None = None,
 ) -> PaperTradingService:
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
+    return build_default_trading_service(
+        config,
+        broker_mode="paper",
+        opportunity_selector=opportunity_selector,
     )
+
+
+def build_default_trading_service(
+    config: TradingConfig,
+    *,
+    broker_mode: str | None = None,
+    opportunity_selector: LiveOpportunitySelector | None = None,
+) -> PaperTradingService:
+    decision = resolve_broker_mode(config, explicit_mode=broker_mode)
+    trading_client = build_trading_client_for_mode(config, decision)
     operator_store = FilesystemArtifactStore(
         config.runtime.artifact_root / "operator_platform"
     )
     paper_store = FilesystemArtifactStore(config.runtime.artifact_root / "paper_loop")
     runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
-    market_data_gateway = build_default_market_data_gateway(config)
+    market_data_gateway = build_market_data_gateway_for_mode(
+        config,
+        broker_mode=decision.requested_mode,
+    )
     runtime_registry = build_default_runtime_registry(
         market_data_gateway=market_data_gateway,
         baseline_selector=opportunity_selector,
@@ -746,7 +766,10 @@ def build_default_paper_service(
         ),
     )
     return PaperTradingService(
-        loop_controller=build_default_paper_trading_controller(config),
+        loop_controller=build_default_trading_loop_controller(
+            config,
+            broker_mode=decision.requested_mode,
+        ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         artifacts=paper_store,
         runtime_state_store=runtime_store,
@@ -763,13 +786,26 @@ def build_default_paper_service(
 
 
 def build_runtime_host_paper_service(config: TradingConfig) -> PaperTradingService:
+    return build_runtime_host_trading_service(config, broker_mode="paper")
+
+
+def build_runtime_host_trading_service(
+    config: TradingConfig,
+    *,
+    broker_mode: str | None = None,
+) -> PaperTradingService:
     operator_store = FilesystemArtifactStore(
         config.runtime.artifact_root / "operator_platform"
     )
     runtime_store = FilesystemArtifactStore(config.runtime.artifact_root)
-    market_data_gateway = build_default_market_data_gateway(config)
-    return build_default_paper_service(
+    decision = resolve_broker_mode(config, explicit_mode=broker_mode)
+    market_data_gateway = build_market_data_gateway_for_mode(
         config,
+        broker_mode=decision.requested_mode,
+    )
+    return build_default_trading_service(
+        config,
+        broker_mode=decision.requested_mode,
         opportunity_selector=LiveOpportunitySelector(
             market_data_gateway=market_data_gateway,
             warmup_service=HistoricalWarmupService(
@@ -786,6 +822,8 @@ def build_runtime_host_paper_service(config: TradingConfig) -> PaperTradingServi
 
 __all__ = (
     "PaperTradingService",
+    "build_default_trading_service",
     "build_default_paper_service",
+    "build_runtime_host_trading_service",
     "build_runtime_host_paper_service",
 )

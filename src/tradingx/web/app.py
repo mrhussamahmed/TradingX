@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -38,6 +39,7 @@ from tradingx.types import (
     StrategyActivationRecord,
     WebActionResult,
 )
+from tradingx.web.security import WebWriteAuthorizer, WebWriteIdempotencyStore
 
 
 class ReadModelProtocol(Protocol):
@@ -280,10 +282,34 @@ def create_app(
 ) -> FastAPI:
     app = FastAPI(title="TradingX Local Control Web App")
     static_dir = _repo_root() / "webapp" / "dist"
+    write_authorizer = WebWriteAuthorizer(
+        config=config,
+        idempotency_store=WebWriteIdempotencyStore(
+            config.runtime.data_root / "control" / "web_write_idempotency"
+        ),
+        now_provider=lambda: datetime.now(UTC),
+    )
     if static_dir.exists():
         assets_dir = static_dir / "assets"
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    async def _run_authorized_write(
+        request: Request,
+        action: Callable[[], object],
+    ) -> JSONResponse:
+        authorization, replay_response = await write_authorizer.authorize(request)
+        if replay_response is not None:
+            return replay_response
+        payload = _serialize(action())
+        response = JSONResponse(content=payload)
+        if authorization is not None:
+            write_authorizer.store_response(
+                authorization,
+                response_payload=payload,
+                status_code=response.status_code,
+            )
+        return response
 
     @app.get("/api/overview")
     def get_overview() -> JSONResponse:
@@ -466,198 +492,209 @@ def create_app(
         return JSONResponse(content=_serialize(read_model.list_config_proposals()))
 
     @app.post("/api/actions/service/start")
-    def post_service_start(payload: ServiceStartRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.start_service(
-                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
-                    quantity=payload.quantity,
-                    interval_seconds=payload.interval_seconds,
-                    max_cycles=payload.max_cycles,
-                )
-            )
+    async def post_service_start(
+        request: Request,
+        payload: ServiceStartRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.start_service(
+                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                quantity=payload.quantity,
+                interval_seconds=payload.interval_seconds,
+                max_cycles=payload.max_cycles,
+            ),
         )
 
     @app.post("/api/actions/service/stop")
-    def post_service_stop() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.stop_service()))
+    async def post_service_stop(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.stop_service)
 
     @app.post("/api/actions/runtime-host/start")
-    def post_runtime_host_start(payload: RuntimeHostStartRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.start_runtime_host(
-                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
-                    quantity=payload.quantity,
-                    interval_seconds=payload.interval_seconds,
-                    max_cycles=payload.max_cycles,
-                )
-            )
+    async def post_runtime_host_start(
+        request: Request,
+        payload: RuntimeHostStartRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.start_runtime_host(
+                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                quantity=payload.quantity,
+                interval_seconds=payload.interval_seconds,
+                max_cycles=payload.max_cycles,
+            ),
         )
 
     @app.post("/api/actions/runtime-host/stop")
-    def post_runtime_host_stop() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.stop_runtime_host()))
+    async def post_runtime_host_stop(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.stop_runtime_host)
 
     @app.post("/api/actions/scheduler/start")
-    def post_scheduler_start(payload: SchedulerStartRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.start_market_scheduler(
-                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
-                    quantity=payload.quantity,
-                    interval_seconds=payload.interval_seconds,
-                    poll_interval_seconds=payload.poll_interval_seconds,
-                    max_scheduled_days=payload.max_scheduled_days,
-                )
-            )
+    async def post_scheduler_start(
+        request: Request,
+        payload: SchedulerStartRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.start_market_scheduler(
+                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                quantity=payload.quantity,
+                interval_seconds=payload.interval_seconds,
+                poll_interval_seconds=payload.poll_interval_seconds,
+                max_scheduled_days=payload.max_scheduled_days,
+            ),
         )
 
     @app.post("/api/actions/scheduler/stop")
-    def post_scheduler_stop() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.stop_market_scheduler()))
+    async def post_scheduler_stop(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.stop_market_scheduler)
 
     @app.post("/api/actions/paper-loop")
-    def post_paper_loop(payload: PaperLoopRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.run_paper_loop(
-                    symbol=payload.symbol,
-                    quantity=payload.quantity,
-                )
-            )
+    async def post_paper_loop(
+        request: Request,
+        payload: PaperLoopRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.run_paper_loop(
+                symbol=payload.symbol,
+                quantity=payload.quantity,
+            ),
         )
 
     @app.post("/api/actions/recover")
-    def post_recover(payload: RecoverRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(action_runner.run_paper_recover(symbol=payload.symbol))
+    async def post_recover(request: Request, payload: RecoverRequest) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.run_paper_recover(symbol=payload.symbol),
         )
 
     @app.post("/api/actions/prepare-benchmark")
-    def post_prepare_benchmark(payload: PrepareBenchmarkRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.prepare_benchmark(
-                    window_start=payload.window_start,
-                    window_end=payload.window_end,
-                )
-            )
+    async def post_prepare_benchmark(
+        request: Request,
+        payload: PrepareBenchmarkRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.prepare_benchmark(
+                window_start=payload.window_start,
+                window_end=payload.window_end,
+            ),
         )
 
     @app.post("/api/actions/gate-report")
-    def post_gate_report(payload: GateReportRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.generate_gate_report(
-                    gate=payload.gate,
-                    benchmark_stack_file=payload.benchmark_stack_file,
-                    window_start=payload.window_start,
-                    window_end=payload.window_end,
-                    universe=tuple(symbol.upper() for symbol in payload.universe),
-                )
-            )
+    async def post_gate_report(
+        request: Request,
+        payload: GateReportRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.generate_gate_report(
+                gate=payload.gate,
+                benchmark_stack_file=payload.benchmark_stack_file,
+                window_start=payload.window_start,
+                window_end=payload.window_end,
+                universe=tuple(symbol.upper() for symbol in payload.universe),
+            ),
         )
 
     @app.post("/api/actions/decision-report")
-    def post_decision_report(payload: DecisionReportRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.generate_decision_report(gate=payload.gate)
-            )
+    async def post_decision_report(
+        request: Request,
+        payload: DecisionReportRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.generate_decision_report(gate=payload.gate),
         )
 
     @app.post("/api/actions/session/preopen")
-    def post_session_preopen() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.run_session_preopen()))
+    async def post_session_preopen(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.run_session_preopen)
 
     @app.post("/api/actions/session/heartbeat")
-    def post_session_heartbeat() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.run_session_heartbeat()))
+    async def post_session_heartbeat(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.run_session_heartbeat)
 
     @app.post("/api/actions/session/close")
-    def post_session_close() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.run_session_close()))
+    async def post_session_close(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.run_session_close)
 
     @app.post("/api/actions/session/market-day")
-    def post_market_day(payload: MarketDayRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.run_market_day(
-                    symbols=tuple(symbol.upper() for symbol in payload.symbols),
-                    quantity=payload.quantity,
-                    interval_seconds=payload.interval_seconds,
-                    max_heartbeats=payload.max_heartbeats,
-                )
-            )
+    async def post_market_day(
+        request: Request,
+        payload: MarketDayRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.run_market_day(
+                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+                quantity=payload.quantity,
+                interval_seconds=payload.interval_seconds,
+                max_heartbeats=payload.max_heartbeats,
+            ),
         )
 
     @app.post("/api/actions/recovery-drill")
-    def post_recovery_drill(payload: RecoverRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(action_runner.run_recovery_drill(symbol=payload.symbol))
+    async def post_recovery_drill(
+        request: Request,
+        payload: RecoverRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.run_recovery_drill(symbol=payload.symbol),
         )
 
     @app.post("/api/actions/alert-drill")
-    def post_alert_drill(payload: AlertDrillRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(action_runner.run_alert_drill(channel=payload.channel))
+    async def post_alert_drill(
+        request: Request,
+        payload: AlertDrillRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.run_alert_drill(channel=payload.channel),
         )
 
     @app.post("/api/actions/gate3/report")
-    def post_gate3_report() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.generate_gate3_report()))
+    async def post_gate3_report(request: Request) -> JSONResponse:
+        return await _run_authorized_write(request, action_runner.generate_gate3_report)
 
     @app.post("/api/actions/gate3/package")
-    def post_gate3_package() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(content=_serialize(action_runner.generate_gate3_package()))
+    async def post_gate3_package(request: Request) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            action_runner.generate_gate3_package,
+        )
 
     @app.post("/api/actions/replay-slippage/generate")
-    def post_replay_slippage_report() -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(action_runner.generate_replay_slippage_report())
+    async def post_replay_slippage_report(request: Request) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            action_runner.generate_replay_slippage_report,
         )
 
     @app.post("/api/actions/incidents/{incident_id}/acknowledge")
-    def post_incident_acknowledge(incident_id: str) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.acknowledge_incident(incident_id=incident_id)
-            )
+    async def post_incident_acknowledge(
+        incident_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.acknowledge_incident(incident_id=incident_id),
         )
 
     @app.post("/api/config/proposals")
-    def post_config_proposal(payload: ConfigProposalRequest) -> JSONResponse:
-        _ensure_write_mode(config)
-        return JSONResponse(
-            content=_serialize(
-                action_runner.create_config_proposal(
-                    target_area=payload.target_area,
-                    proposed_values=payload.proposed_values,
-                    rationale=payload.rationale,
-                )
-            )
+    async def post_config_proposal(
+        request: Request,
+        payload: ConfigProposalRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.create_config_proposal(
+                target_area=payload.target_area,
+                proposed_values=payload.proposed_values,
+                rationale=payload.rationale,
+            ),
         )
 
     @app.get("/{full_path:path}", response_model=None)
@@ -684,11 +721,6 @@ def run_web_app(config: TradingConfig, *, host: str, port: int) -> None:
         host=host,
         port=port,
     )
-
-
-def _ensure_write_mode(config: TradingConfig) -> None:
-    if not config.web.write_mode_enabled:
-        raise HTTPException(status_code=403, detail="Web write mode is disabled.")
 
 
 def _repo_root() -> Path:

@@ -5,11 +5,15 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 
 import './App.css'
 import {
+  areWebWritesUnlocked,
+  lockWebWrites,
+  unlockWebWrites,
   getCommandCenter,
   getConfigSummary,
   getDocuments,
@@ -112,6 +116,8 @@ const defaultCommandCenter: CommandCenterSnapshot = {
 const defaultConfigSummary: ConfigSummary = {
   config: {
     web_write_mode_enabled: false,
+    web_write_signing_configured: false,
+    web_write_max_age_seconds: 300,
     symbol_universe: [],
     service_interval_seconds: 300,
     web_refresh_interval_seconds: 15,
@@ -260,11 +266,23 @@ function App() {
   const [pageError, setPageError] = useState('')
   const [isBooting, setIsBooting] = useState(true)
   const [actionFeed, setActionFeed] = useState<ActionResult[]>([])
+  const [writesUnlocked, setWritesUnlocked] = useState(() => areWebWritesUnlocked())
+  const [writeUnlockError, setWriteUnlockError] = useState('')
+  const writeUnlockInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeSymbols = useMemo(
     () => commandCenter.watchlist.map((item) => item.symbol),
     [commandCenter.watchlist],
   )
+  const writesConfigured = Boolean(configSummary.config.web_write_signing_configured)
+  const writesEnabled = configSummary.config.web_write_mode_enabled && writesUnlocked
+  const writeLockDetail = !configSummary.config.web_write_mode_enabled
+    ? 'Write mode is disabled on the server.'
+    : !writesConfigured
+      ? 'Server-side write signing is not configured.'
+      : !writesUnlocked
+        ? 'Enter the local signing secret to unlock write actions in this browser session.'
+        : 'Signed write actions are unlocked for this browser session.'
 
   const refreshWorkspace = useCallback(async () => {
     try {
@@ -392,6 +410,39 @@ function App() {
     }
   }
 
+  function handleUnlockWrites() {
+    const secret = writeUnlockInputRef.current?.value.trim() ?? ''
+    if (!secret) {
+      setWriteUnlockError('Enter the local signing secret to unlock writes.')
+      return
+    }
+    unlockWebWrites(secret)
+    if (writeUnlockInputRef.current) {
+      writeUnlockInputRef.current.value = ''
+    }
+    setWritesUnlocked(true)
+    setWriteUnlockError('')
+    pushAction({
+      action_type: 'web_write_unlock',
+      status: 'completed',
+      message: 'Web writes unlocked for this browser session.',
+    })
+  }
+
+  function handleLockWrites() {
+    lockWebWrites()
+    if (writeUnlockInputRef.current) {
+      writeUnlockInputRef.current.value = ''
+    }
+    setWritesUnlocked(false)
+    setWriteUnlockError('')
+    pushAction({
+      action_type: 'web_write_lock',
+      status: 'completed',
+      message: 'Web writes locked for this browser session.',
+    })
+  }
+
   return (
     <main className="operator-app">
       <div className="operator-background" aria-hidden="true" />
@@ -415,8 +466,14 @@ function App() {
             tone="info"
           />
           <StatusBadge
-            label={configSummary.config.web_write_mode_enabled ? 'Write mode on' : 'Read only'}
-            tone={configSummary.config.web_write_mode_enabled ? 'good' : 'neutral'}
+            label={
+              writesEnabled
+                ? 'Writes unlocked'
+                : configSummary.config.web_write_mode_enabled
+                  ? 'Writes locked'
+                  : 'Read only'
+            }
+            tone={writesEnabled ? 'good' : 'neutral'}
           />
           <span className="timestamp-label">
             Updated {formatTimestamp(portfolio.generated_at_utc || commandCenter.generated_at_utc)}
@@ -497,6 +554,44 @@ function App() {
               </article>
               <article className="list-card compact">
                 <div className="list-card-header">
+                  <strong>Web writes</strong>
+                  <span>{writesEnabled ? 'Unlocked' : 'Locked'}</span>
+                </div>
+                <p>{writeLockDetail}</p>
+                <div className="stack-list">
+                  <label className="field-label" htmlFor="write-signing-secret">
+                    Local signing secret
+                  </label>
+                  <input
+                    id="write-signing-secret"
+                    ref={writeUnlockInputRef}
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Enter local signing secret"
+                    disabled={!configSummary.config.web_write_mode_enabled || !writesConfigured}
+                  />
+                  <div className="action-row">
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      onClick={handleUnlockWrites}
+                      disabled={!configSummary.config.web_write_mode_enabled || !writesConfigured}
+                    >
+                      Unlock Writes
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button ghost"
+                      onClick={handleLockWrites}
+                    >
+                      Lock Writes
+                    </button>
+                  </div>
+                  {writeUnlockError ? <p className="panel-supporting-text">{writeUnlockError}</p> : null}
+                </div>
+              </article>
+              <article className="list-card compact">
+                <div className="list-card-header">
                   <strong>Kill switch</strong>
                   <span>{configSummary.live_disable_report.manual_kill_switch_active ? 'Active' : 'Inactive'}</span>
                 </div>
@@ -523,6 +618,8 @@ function App() {
                 runtimeActivation={runtimeActivation}
                 runtimeModel={runtimeModel}
                 runtimeSelection={runtimeSelection}
+                writesEnabled={writesEnabled}
+                writeLockDetail={writeLockDetail}
                 onRunPaperLoop={() => runAction(() => postPaperLoop({ symbol: 'SPY', quantity: '1' }))}
                 onStartBot={() =>
                   runAction(() =>

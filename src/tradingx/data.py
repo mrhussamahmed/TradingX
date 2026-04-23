@@ -302,8 +302,37 @@ class AlpacaRegularHoursCalendar:
         return tuple(session_label.date() for session_label in sessions)
 
 
-def build_default_market_data_gateway(config: TradingConfig) -> AlpacaMarketDataGateway:
+def build_market_data_gateway_for_mode(
+    config: TradingConfig,
+    *,
+    broker_mode: str | None = None,
+) -> AlpacaMarketDataGateway:
+    requested_mode = (broker_mode or config.broker_mode).strip().lower() or "paper"
+    if requested_mode == "live":
+        if not config.has_real_live_credentials():
+            raise RuntimeError(
+                "Live market data requested while live mode is disabled: "
+                "missing_live_credentials"
+            )
+        return AlpacaMarketDataGateway.from_credentials(
+            api_key=config.live_credentials.api_key,
+            api_secret=config.live_credentials.api_secret,
+        )
     return AlpacaMarketDataGateway.from_credentials(
         api_key=config.paper_credentials.api_key,
         api_secret=config.paper_credentials.api_secret,
     )
+
+
+def build_default_market_data_gateway(config: TradingConfig) -> AlpacaMarketDataGateway:
+    return build_market_data_gateway_for_mode(config)
+
+
+__all__ = (
+    "AlpacaMarketDataGateway",
+    "AlpacaRegularHoursCalendar",
+    "RegularSessionWindow",
+    "build_default_market_data_gateway",
+    "build_market_data_gateway_for_mode",
+    "close_to_close_returns",
+)

@@ -3,7 +3,11 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 
+from tradingx import supervisor as supervisor_module
+from tradingx.config import TradingConfig
+from tradingx.live_enablement import BrokerModeDecision
 from tradingx.operator_control import OperatorControlStore
 from tradingx.supervisor import MultiprocessingChildHandle, OperatorSupervisor
 
@@ -316,3 +320,84 @@ def test_operator_supervisor_waits_for_restart_cooldown(tmp_path) -> None:
 
     supervisor.run_once()
     assert len(factory.children) == 2
+
+
+def test_build_default_operator_supervisor_uses_mode_aware_helpers(
+    monkeypatch, tmp_path
+) -> None:
+    helper_calls: dict[str, object] = {}
+
+    class RecordingSupervisor:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "resolve_broker_mode",
+        lambda config: BrokerModeDecision(
+            requested_mode="live",
+            effective_mode="live",
+            live_requested=True,
+            live_allowed=True,
+            disable_reasons=(),
+        ),
+    )
+
+    def fake_build_trading_client(config, decision):
+        del config
+        helper_calls["client_mode"] = decision.requested_mode
+        return object()
+
+    def fake_build_market_data(config, *, broker_mode=None):
+        del config
+        helper_calls["market_data_mode"] = broker_mode
+        return object()
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "build_trading_client_for_mode",
+        fake_build_trading_client,
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "build_market_data_gateway_for_mode",
+        fake_build_market_data,
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "MultiprocessingChildFactory",
+        lambda **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "AlpacaPaperBrokerOperator",
+        lambda trading_client, market_data: (trading_client, market_data),
+    )
+    monkeypatch.setattr(
+        supervisor_module,
+        "OperatorSupervisor",
+        RecordingSupervisor,
+    )
+
+    supervisor = supervisor_module.build_default_operator_supervisor(
+        TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+                "ALPACA_LIVE_API_KEY": "pk-live",
+                "ALPACA_LIVE_API_SECRET": "sk-live",
+                "TRADINGX_BROKER_MODE": "live",
+            }
+        ),
+        env_file=tmp_path / ".env",
+        symbols=("SPY",),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        poll_interval_seconds=30,
+    )
+
+    assert helper_calls == {
+        "client_mode": "live",
+        "market_data_mode": "live",
+    }
+    assert isinstance(supervisor, RecordingSupervisor)

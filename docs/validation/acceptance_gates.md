@@ -1,11 +1,11 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.3.0
+version: 1.3.1
 status: active
 created: 2026-04-17
 last_amended: 2026-04-23
-supersedes: GATES-0001@1.2.1
+supersedes: GATES-0001@1.3.0
 superseded_by: null
 author_session: gpt-5-codex-2026-04-23
 ---
@@ -186,8 +186,9 @@ SPY and AGG closes sourced through `AlpacaMarketDataGateway`.
   decision.
 - Web write endpoints require request signing plus idempotency keys before
   any live-control environment variable is accepted.
-- Live-control flags remain fail-closed in code until Gate 4-specific
-  enablement work lands.
+- Live-enable code remains fail-closed unless the broker mode, config
+  layer, process-env layer, write-signing control, and operator
+  sign-off posture are all intentionally satisfied.
 
 **Primary evidence**
 
@@ -205,5 +206,7 @@ SPY and AGG closes sourced through `AlpacaMarketDataGateway`.
   (supersedes ADR-0020)
 - [ADR-0024](/docs/adrs/ADR-0024-gate1-pbo-activation.md) —
   Gate 1 PBO activation from CPCV cohort readiness
+- [ADR-0025](/docs/adrs/ADR-0025-gate4-live-enablement-control-plane.md) —
+  Gate 4 live-enablement control plane and signed web writes
 - [SPEC-0013](/docs/superpowers/specs/2026-04-20-capital-growth-landscape-design.md)
   — Capital growth landscape
