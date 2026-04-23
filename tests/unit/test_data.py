@@ -79,3 +79,17 @@ def test_market_data_gateway_fails_closed_for_live_mode_without_live_credentials
 
     with pytest.raises(RuntimeError, match="missing_live_credentials"):
         build_market_data_gateway_for_mode(config, broker_mode="live")
+
+
+def test_market_data_gateway_fails_closed_for_incomplete_live_controls() -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="env_layer_disabled"):
+        build_market_data_gateway_for_mode(config, broker_mode="live")

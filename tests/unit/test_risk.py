@@ -28,6 +28,25 @@ def make_engine() -> PaperOnlyRiskEngine:
     )
 
 
+def make_live_ready_engine() -> PaperOnlyRiskEngine:
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_PAPER_API_KEY": "pk-paper",
+            "ALPACA_PAPER_API_SECRET": "sk-paper",
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+        }
+    )
+    return PaperOnlyRiskEngine(
+        config,
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC),
+    )
+
+
 def make_context(**overrides: object) -> PreTradeRiskContext:
     values: dict[str, object] = {
         "symbol": "SPY",
@@ -67,6 +86,12 @@ def test_allows_paper_order_for_positive_quantity() -> None:
     engine = make_engine()
 
     engine.assert_order_allowed(make_context(), is_live_order=False)
+
+
+def test_allows_live_orders_when_live_controls_are_satisfied() -> None:
+    engine = make_live_ready_engine()
+
+    engine.assert_order_allowed(make_context(), is_live_order=True)
 
 
 def test_rejects_stale_market_data() -> None:

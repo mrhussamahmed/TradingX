@@ -17,6 +17,7 @@ from alpaca.data.requests import (
 from alpaca.data.timeframe import TimeFrame
 
 from tradingx.config import TradingConfig
+from tradingx.live_enablement import LiveModeDisabledError, resolve_broker_mode
 from tradingx.types import BenchmarkCloseSeries, LatestQuote, MarketSnapshot
 
 
@@ -307,13 +308,10 @@ def build_market_data_gateway_for_mode(
     *,
     broker_mode: str | None = None,
 ) -> AlpacaMarketDataGateway:
-    requested_mode = (broker_mode or config.broker_mode).strip().lower() or "paper"
-    if requested_mode == "live":
-        if not config.has_real_live_credentials():
-            raise RuntimeError(
-                "Live market data requested while live mode is disabled: "
-                "missing_live_credentials"
-            )
+    decision = resolve_broker_mode(config, explicit_mode=broker_mode)
+    if decision.live_requested and not decision.live_allowed:
+        raise LiveModeDisabledError(decision.disable_reasons)
+    if decision.effective_mode == "live":
         return AlpacaMarketDataGateway.from_credentials(
             api_key=config.live_credentials.api_key,
             api_secret=config.live_credentials.api_secret,

@@ -292,6 +292,7 @@ class PaperTradingLoopController:
         operator_control_store: OperatorControlStore | None = None,
         runtime_logger: StructuredRuntimeLogger | None = None,
         universe_symbols: tuple[str, ...] | None = None,
+        live_order_mode: bool = False,
     ) -> None:
         self._market_data = market_data
         self._execution = execution
@@ -315,6 +316,7 @@ class PaperTradingLoopController:
         self._default_universe_snapshot_id = _universe_snapshot_id(
             universe_symbols or ()
         )
+        self._live_order_mode = live_order_mode
         self._session_start_equity: Decimal | None = None
         self._policy_path: Path | None = None
         if self._policy_store is not None and self._policy_snapshot is not None:
@@ -600,6 +602,7 @@ class PaperTradingLoopController:
             market_snapshot,
             portfolio_state,
             broker_state_timestamp=portfolio_state.as_of_utc,
+            is_live_order=self._live_order_mode,
         )
         decision_path = self._write_decision_snapshot(
             trade_intent=trade_intent,
@@ -1737,6 +1740,7 @@ def build_default_trading_loop_controller(
         ),
         runtime_logger=build_default_runtime_logger(config, component="controller"),
         universe_symbols=config.runtime.symbol_universe,
+        live_order_mode=decision.effective_mode == "live",
     )
 
 

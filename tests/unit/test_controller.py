@@ -260,8 +260,28 @@ class FakeLoopRiskEngine:
         portfolio_state,
         *,
         broker_state_timestamp,
+        is_live_order=False,
     ) -> RiskDecision:
         del intent, market_snapshot, portfolio_state, broker_state_timestamp
+        del is_live_order
+        return RiskDecision(decision="approved", control_code="passed", event=None)
+
+
+class CapturingLoopRiskEngine(FakeLoopRiskEngine):
+    def __init__(self) -> None:
+        self.last_is_live_order = None
+
+    def evaluate_trade_intent(
+        self,
+        intent,
+        market_snapshot,
+        portfolio_state,
+        *,
+        broker_state_timestamp,
+        is_live_order=False,
+    ) -> RiskDecision:
+        del intent, market_snapshot, portfolio_state, broker_state_timestamp
+        self.last_is_live_order = is_live_order
         return RiskDecision(decision="approved", control_code="passed", event=None)
 
 
@@ -423,6 +443,41 @@ def test_paper_trading_loop_controller_dry_run_persists_snapshot_and_journal(
     assert [row.event_type for row in journal_rows] == ["intent", "simulated"]
     assert journal_rows[-1].payload["reference_price"] == "600.10"
     assert journal_rows[-1].payload["would_submit_limit_price"] == "600.70"
+
+
+def test_paper_trading_loop_controller_passes_live_order_mode_to_risk(
+    tmp_path: Path,
+) -> None:
+    risk = CapturingLoopRiskEngine()
+    controller = PaperTradingLoopController(
+        market_data=FrozenMarketData(),
+        execution=FakeExecution(),
+        portfolio=FakePortfolio(),
+        risk=risk,
+        strategy=DeterministicBaselineStrategy(),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+        live_order_mode=True,
+    )
+
+    controller.execute_trade_intent(
+        TradeIntent(
+            intent_id="intent-live-1",
+            candidate_id="baseline-long-only-v1",
+            symbol="SPY",
+            side="buy",
+            quantity=Decimal("1"),
+            reason_code="baseline_long_entry",
+            generated_at_utc=datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+        ),
+        market_snapshot=FrozenMarketData().get_market_snapshot("SPY"),
+        portfolio_state=FakePortfolio().get_portfolio_state(),
+        default_quantity=Decimal("1"),
+    )
+
+    assert risk.last_is_live_order is True
 
 
 def test_paper_trading_loop_controller_uses_deterministic_client_order_id(

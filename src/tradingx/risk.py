@@ -132,7 +132,7 @@ class PaperOnlyRiskEngine:
             return "non_positive_quantity"
         if not context.symbol.strip().isupper():
             return "invalid_symbol"
-        if is_live_order or self._config.live_controls.all_layers_enabled():
+        if is_live_order and self._live_order_blocked():
             return "live_mode_disabled"
         if context.average_daily_volume_30d < MINIMUM_AVERAGE_DAILY_VOLUME:
             return "liquidity_filter"
@@ -153,6 +153,9 @@ class PaperOnlyRiskEngine:
         if context.kill_switch_active or self._config.runtime.manual_kill_switch_active:
             return "kill_switch"
         return None
+
+    def _live_order_blocked(self) -> bool:
+        return bool(self._config.live_block_reasons(requested_broker_mode="live"))
 
     def _current_position_quantity(
         self,

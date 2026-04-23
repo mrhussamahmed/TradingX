@@ -65,8 +65,10 @@ class _ApprovedRiskEngine:
         portfolio_state: PortfolioState,
         *,
         broker_state_timestamp: datetime,
+        is_live_order: bool = False,
     ) -> Any:
         del intent, market_snapshot, portfolio_state, broker_state_timestamp
+        del is_live_order
         return type(
             "RiskDecisionStub",
             (),

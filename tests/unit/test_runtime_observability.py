@@ -106,8 +106,10 @@ class FakeLoopRiskEngine:
         portfolio_state,
         *,
         broker_state_timestamp,
+        is_live_order=False,
     ):
         del market_snapshot, portfolio_state, broker_state_timestamp
+        del is_live_order
         return type(
             "RiskResult",
             (),
