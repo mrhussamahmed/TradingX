@@ -158,6 +158,18 @@ class PostgresProjectionStateRepository:
 
         return self._write("append outbox event", append)
 
+    def get_outbox_event_id_by_dedupe_key(self, dedupe_key: str) -> str | None:
+        rows = self._query(
+            "get outbox event by dedupe key",
+            """
+            SELECT outbox_event_id
+            FROM system.outbox_event
+            WHERE dedupe_key = :dedupe_key
+            """,
+            {"dedupe_key": dedupe_key},
+        )
+        return str(rows[0]["outbox_event_id"]) if rows else None
+
     def load_projection_checkpoint(
         self,
         projection_name: str,

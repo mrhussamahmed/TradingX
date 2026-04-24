@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.43
+version: 1.2.44
 status: active
 created: 2026-04-17
 last_amended: 2026-04-24
-supersedes: INDEX-0001@1.2.42
+supersedes: INDEX-0001@1.2.43
 superseded_by: null
 author_session: codex-gpt-5-2026-04-24
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.43  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.44  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -188,6 +188,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0015 | Headless control plane Wave 2 Postgres connection and migrations slice plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-connection-migrations-slice-plan.md` |
 | PLAN-0016 | Headless control plane Wave 2 Postgres repository contracts plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-repository-contracts-plan.md` |
 | PLAN-0017 | Headless control plane Wave 2 Postgres outbox checkpoint and readiness plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-outbox-checkpoint-readiness-plan.md` |
+| PLAN-0018 | Headless control plane Wave 2 Postgres legacy bridge and tailer plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-legacy-bridge-tailer-plan.md` |
 
 ### Review reports (REPORT-NNNN)
 
@@ -199,6 +200,7 @@ field (session lifecycle). This index tracks `status` only.
 | REPORT-0004 | Headless control plane Wave 2 foundation implementation adversarial review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-23-wave2-postgres-projections-foundation-review-handoff.md` |
 | REPORT-0005 | Headless control plane Wave 2 Postgres connection and migrations plan review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-connection-migrations-review-handoff.md` |
 | REPORT-0006 | Headless control plane Wave 2 Postgres repository contracts implementation plan review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-repository-contracts-review-handoff.md` |
+| REPORT-0007 | Headless control plane Wave 2 Postgres legacy bridge and tailer plan review handoff | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-legacy-bridge-tailer-review-handoff.md` |
 
 ### Task lists (TASKS-NNNN)
 

@@ -165,6 +165,7 @@ def _app_config(tmp_path: Path, **overrides: str) -> TradingConfig:
 
 
 def _make_postgres_construction_fail(monkeypatch) -> None:
+    from tradingx.controlplane import legacy_bridge
     from tradingx.persistence import postgres as postgres_helpers
     from tradingx.persistence.repositories import postgres as repository_postgres
     from tradingx.persistence.repositories import (
@@ -186,6 +187,9 @@ def _make_postgres_construction_fail(monkeypatch) -> None:
         "__init__",
         fail,
     )
+    monkeypatch.setattr(legacy_bridge.LegacyBridge, "__init__", fail)
+    monkeypatch.setattr(legacy_bridge.JsonArtifactSourceAdapter, "__init__", fail)
+    monkeypatch.setattr(legacy_bridge.SqliteOmsJournalSourceAdapter, "__init__", fail)
 
 
 def _patch_default_component_dependencies(monkeypatch) -> None:
