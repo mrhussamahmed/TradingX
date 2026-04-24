@@ -1,0 +1,1 @@
+"""TradingX Postgres migration revisions."""
