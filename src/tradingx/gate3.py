@@ -9,7 +9,10 @@ from decimal import Decimal
 
 from tradingx.execution import sum_per_sleeve_notional
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.replay_slippage import REPLAY_SLIPPAGE_DIVERGENCE_LIMIT
+from tradingx.replay_slippage import (
+    REPLAY_DIVERGENCE_NOISE_FLOOR_BPS,
+    REPLAY_SLIPPAGE_DIVERGENCE_LIMIT,
+)
 from tradingx.types import (
     ExecutionLifecycleRecord,
     Gate3CriterionSnapshot,
@@ -142,16 +145,8 @@ def _required_operator_action(status: str) -> str:
 
 def _latest_replay_slippage_summary(
     validation_store: FilesystemArtifactStore,
-    *,
-    start_at: datetime | None = None,
 ) -> ReplaySlippageSummary | None:
     payloads = validation_store.list_artifact_payloads("replay_slippage_summaries")
-    if start_at is not None:
-        payloads = _payloads_since(
-            payloads,
-            start_at,
-            timestamp_fields=("generated_at_utc",),
-        )
     if not payloads:
         return None
     latest = max(payloads, key=lambda payload: str(payload.get("generated_at_utc", "")))
@@ -170,6 +165,87 @@ def _latest_replay_slippage_summary(
         generated_at_utc=datetime.fromisoformat(
             str(latest.get("generated_at_utc", ""))
         ),
+    )
+
+
+def _mean_decimal(values: list[Decimal]) -> Decimal:
+    return sum(values) / Decimal(len(values))
+
+
+def _replay_divergence_ratio(paper_bps: Decimal, replay_bps: Decimal) -> Decimal:
+    larger = max(abs(paper_bps), abs(replay_bps))
+    smaller = min(abs(paper_bps), abs(replay_bps))
+    return larger / max(smaller, REPLAY_DIVERGENCE_NOISE_FLOOR_BPS)
+
+
+def _latest_governed_replay_slippage_summary(
+    validation_store: FilesystemArtifactStore,
+    *,
+    governed_execution_ids: frozenset[str],
+    start_at: datetime | None,
+) -> ReplaySlippageSummary | None:
+    if start_at is None or not governed_execution_ids:
+        return None
+    summary_payloads = _payloads_since(
+        validation_store.list_artifact_payloads("replay_slippage_summaries"),
+        start_at,
+        timestamp_fields=("generated_at_utc",),
+    )
+    if not summary_payloads:
+        return None
+    latest_summary = max(
+        summary_payloads,
+        key=lambda payload: str(payload.get("generated_at_utc", "")),
+    )
+    latest_generated_at = datetime.fromisoformat(
+        str(latest_summary.get("generated_at_utc", ""))
+    )
+    latest_replay_records = [
+        payload
+        for payload in validation_store.list_artifact_payloads(
+            "replay_slippage_records"
+        )
+        if str(payload.get("execution_id", "")) in governed_execution_ids
+        and str(payload.get("generated_at_utc", "")).strip()
+        and datetime.fromisoformat(str(payload.get("generated_at_utc", "")))
+        == latest_generated_at
+    ]
+    if not latest_replay_records:
+        return None
+    paper_values = [
+        abs(value)
+        for payload in latest_replay_records
+        if (value := _safe_decimal(payload.get("paper_slippage_bps", ""))) is not None
+    ]
+    replay_values = [
+        abs(value)
+        for payload in latest_replay_records
+        if (value := _safe_decimal(payload.get("simulated_slippage_bps", "")))
+        is not None
+    ]
+    if not paper_values or len(paper_values) != len(replay_values):
+        return None
+    paper_mean = _mean_decimal(paper_values)
+    replay_mean = _mean_decimal(replay_values)
+    divergence_ratio = _replay_divergence_ratio(paper_mean, replay_mean)
+    status = "pass" if divergence_ratio <= REPLAY_SLIPPAGE_DIVERGENCE_LIMIT else "fail"
+    details = (
+        "Replay-simulator governed execution slippage stays within the allowed bound."
+        if status == "pass"
+        else (
+            "Replay-simulator governed execution slippage diverges too far "
+            "from paper fills."
+        )
+    )
+    return ReplaySlippageSummary(
+        summary_id=str(latest_summary.get("summary_id", "")),
+        matched_execution_count=len(latest_replay_records),
+        paper_mean_absolute_slippage_bps=paper_mean,
+        replay_mean_absolute_slippage_bps=replay_mean,
+        divergence_ratio=divergence_ratio,
+        status=status,
+        details=details,
+        generated_at_utc=latest_generated_at,
     )
 
 
@@ -963,8 +1039,11 @@ def build_gate3_readiness_report(
             recovery_failed=recovery_failed,
             smtp_completed=smtp_completed,
             smtp_failed=smtp_failed,
-            replay_summary=_latest_replay_slippage_summary(
+            replay_summary=_latest_governed_replay_slippage_summary(
                 validation_store,
+                governed_execution_ids=frozenset(
+                    record.execution_id for record in governed_execution_records
+                ),
                 start_at=governed_start_at,
             ),
         )
