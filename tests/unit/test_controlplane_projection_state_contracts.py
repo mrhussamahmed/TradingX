@@ -304,6 +304,30 @@ def test_blocked_report_uses_priority_projection_status_and_metadata() -> None:
     )
 
 
+def test_source_summary_ready_flag_uses_full_readiness_rules() -> None:
+    report = projections.evaluate_projection_readiness(
+        domain_name="runtime",
+        requirements=(_requirement(),),
+        source_statuses=(
+            _source_status(
+                ready_for_postgres=True,
+                source_watermark="10",
+                projected_watermark="9",
+            ),
+        ),
+        evaluated_at_utc=datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+        source_registry_version="registry-1",
+        outbox_dedupe_constraint_present=True,
+    )
+
+    summary = projections.projection_status_from_readiness(report)
+    source_summary = summary.metadata["source_summaries"][0]
+
+    assert source_summary["row_ready_for_postgres"] is True
+    assert source_summary["ready_for_postgres"] is False
+    assert source_summary["blocker_codes"] == ("unprojected_sources",)
+
+
 def test_postgres_read_repository_remains_read_side_only() -> None:
     repo = PostgresControlPlaneRepository(engine=object(), dsn=SECRET_DSN)
 
@@ -329,6 +353,12 @@ def test_outbox_conflict_error_redacts_details() -> None:
     for value in inspected:
         assert SECRET_DSN not in str(value)
         assert "super-secret" not in str(value)
+
+
+def test_repository_public_exports_include_projection_state_contract_names() -> None:
+    assert "OUTBOX_APPEND_REPOSITORY_GENERATED_FIELDS" in repositories.__all__
+    assert "RepositoryConflictError" in repositories.__all__
+    assert "OutboxAppendConflictError" in repositories.__all__
 
 
 def _requirement(

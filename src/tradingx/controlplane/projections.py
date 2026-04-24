@@ -158,8 +158,16 @@ def projection_status_from_readiness(
         for status in report.source_statuses
         if status.domain_name == report.domain_name
     }
+    source_blockers_by_key = _source_blockers_by_key(report.blockers)
     source_summaries = tuple(
-        _source_summary(requirement, status_by_key.get(requirement.identity_key))
+        _source_summary(
+            requirement,
+            status_by_key.get(requirement.identity_key),
+            source_blockers_by_key.get(
+                (requirement.source_family, requirement.source_identity),
+                (),
+            ),
+        )
         for requirement in report.requirements
     )
     watermarks = tuple(
@@ -411,15 +419,18 @@ def _max_lag_seconds(
 def _source_summary(
     requirement: ProjectionSourceRequirement,
     status: repositories.ProjectionSourceStatusRecord | None,
+    blocker_codes: tuple[str, ...],
 ) -> dict[str, Any]:
     return {
         "source_family": requirement.source_family,
         "source_identity": requirement.source_identity,
         "required": True,
         "present": status is not None,
-        "ready_for_postgres": (
+        "ready_for_postgres": status is not None and not blocker_codes,
+        "row_ready_for_postgres": (
             status.ready_for_postgres if status is not None else False
         ),
+        "blocker_codes": blocker_codes,
         "source_watermark": status.source_watermark if status is not None else None,
         "projected_watermark": (
             status.projected_watermark if status is not None else None
@@ -496,6 +507,22 @@ def _ordered_unique_blocker_codes(
         ordered.append(blocker.code)
         seen.add(blocker.code)
     return tuple(ordered)
+
+
+def _source_blockers_by_key(
+    blockers: tuple[ProjectionReadinessBlocker, ...],
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    blockers_by_key: dict[tuple[str, str], list[str]] = {}
+    for blocker in blockers:
+        if blocker.source_family is None or blocker.source_identity is None:
+            continue
+        key = (blocker.source_family, blocker.source_identity)
+        if blocker.code not in blockers_by_key.setdefault(key, []):
+            blockers_by_key[key].append(blocker.code)
+    return {
+        key: tuple(codes)
+        for key, codes in blockers_by_key.items()
+    }
 
 
 def _aware_utc(value: datetime) -> datetime:
