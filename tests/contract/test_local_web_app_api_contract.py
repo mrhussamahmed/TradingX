@@ -1116,14 +1116,13 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
         not in control_posture.json()["data"]["live_control_layer_states"]
     )
     assert (
-        control_posture.json()["data"]["governance_posture"][
-            "operator_signoff_status"
-        ]
+        control_posture.json()["data"]["governance_posture"]["operator_signoff_status"]
         == "missing"
     )
-    assert "operator_signoff_missing" in control_posture.json()["data"][
-        "fail_closed_reasons"
-    ]
+    assert (
+        "operator_signoff_missing"
+        in control_posture.json()["data"]["fail_closed_reasons"]
+    )
     assert "market_data_posture" in control_posture.json()["data"]
 
     assert runtime.status_code == 200
@@ -1151,7 +1150,10 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
     assert portfolio_performance.status_code == 200
     assert portfolio_performance.json()["data"]["filters"]["symbol"] == "SPY"
     assert portfolio_execution.status_code == 200
-    assert portfolio_execution.json()["data"]["headline"] == "Execution journal is available"
+    assert (
+        portfolio_execution.json()["data"]["headline"]
+        == "Execution journal is available"
+    )
 
     assert validation_readiness.status_code == 200
     assert validation_readiness.json()["data"]["readiness"]["status"] == "pending"
@@ -1173,9 +1175,7 @@ def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() ->
         validation_reports.json()["data"]["reports"][0]["report_id"]
         == "validation-report-1"
     )
-    assert (
-        validation_reports.json()["data"]["decision_briefs"][0]["gate_id"] == "1"
-    )
+    assert validation_reports.json()["data"]["decision_briefs"][0]["gate_id"] == "1"
     assert pbo_reports.status_code == 200
     assert pbo_reports.json()["data"]["items"][0]["report_id"] == "pbo-report-1"
 

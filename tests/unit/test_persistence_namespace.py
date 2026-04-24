@@ -14,9 +14,12 @@ def test_existing_persistence_import_surface_still_exports_filesystem_store() ->
 def test_postgres_helpers_are_available_from_persistence_package() -> None:
     postgres_module = importlib.import_module("tradingx.persistence.postgres")
 
-    assert postgres_module.redact_postgres_dsn(
-        "postgresql://tradingx:super-secret@db.internal:5432/tradingx"
-    ) == "postgresql://tradingx:***@db.internal:5432/tradingx"
+    assert (
+        postgres_module.redact_postgres_dsn(
+            "postgresql://tradingx:super-secret@db.internal:5432/tradingx"
+        )
+        == "postgresql://tradingx:***@db.internal:5432/tradingx"
+    )
 
 
 def test_postgres_dsn_redaction_leaves_non_secret_segments_intact() -> None:

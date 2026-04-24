@@ -478,9 +478,7 @@ def create_app(
                 datetime.now(UTC) - heartbeat.last_evaluation_at_utc
             ).total_seconds()
             status = (
-                "fresh"
-                if elapsed <= max(heartbeat.cadence_seconds * 2, 1)
-                else "stale"
+                "fresh" if elapsed <= max(heartbeat.cadence_seconds * 2, 1) else "stale"
             )
         return {
             "status": status,
@@ -557,13 +555,13 @@ def create_app(
         criteria_rows: list[dict[str, object]] = []
         evidence_refs: list[str] = []
         for report in validation_reports:
-            for candidate in list(report.get("candidate_results", ())):
+            for candidate in _payload_dicts(report.get("candidate_results", ())):
                 if str(candidate.get("candidate_id", "")).strip() != candidate_id:
                     continue
                 evidence_pack_id = str(candidate.get("evidence_pack_id", "")).strip()
                 if evidence_pack_id:
                     evidence_refs.append(evidence_pack_id)
-                for criterion in list(candidate.get("criteria", ())):
+                for criterion in _payload_dicts(candidate.get("criteria", ())):
                     raw_status = criterion.get("status")
                     effective_status = (
                         str(raw_status)
@@ -578,7 +576,9 @@ def create_app(
                             "passed": bool(criterion.get("passed", False)),
                             "threshold": str(criterion.get("threshold", "")),
                             "details": str(criterion.get("details", "")),
-                            "evidence_refs": list(report.get("evidence_refs", ()))
+                            "evidence_refs": _payload_strings(
+                                report.get("evidence_refs", ())
+                            )
                             or ([evidence_pack_id] if evidence_pack_id else []),
                         }
                     )
@@ -1334,6 +1334,22 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _serialize(item) for key, item in value.items()}
     return value
+
+
+def _payload_dicts(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [
+        {str(key): item for key, item in entry.items()}
+        for entry in value
+        if isinstance(entry, dict)
+    ]
+
+
+def _payload_strings(value: object) -> list[str]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [str(item) for item in value]
 
 
 _LIVE_BLOCKER_MESSAGES = {
