@@ -142,8 +142,16 @@ def _required_operator_action(status: str) -> str:
 
 def _latest_replay_slippage_summary(
     validation_store: FilesystemArtifactStore,
+    *,
+    start_at: datetime | None = None,
 ) -> ReplaySlippageSummary | None:
     payloads = validation_store.list_artifact_payloads("replay_slippage_summaries")
+    if start_at is not None:
+        payloads = _payloads_since(
+            payloads,
+            start_at,
+            timestamp_fields=("generated_at_utc",),
+        )
     if not payloads:
         return None
     latest = max(payloads, key=lambda payload: str(payload.get("generated_at_utc", "")))
@@ -269,10 +277,8 @@ def _trade_weights_by_sleeve(payload: dict[str, object]) -> dict[str, Decimal]:
     }
     if not entry_map and not exit_map:
         return {}
-    if not entry_map:
-        return exit_map
-    if not exit_map:
-        return entry_map
+    if not entry_map or not exit_map:
+        return {}
     sleeve_ids = tuple(dict.fromkeys((*entry_map.keys(), *exit_map.keys())))
     return {
         sleeve_id: (
@@ -459,16 +465,64 @@ def _service_cycles_since(
     service_cycles: list[dict[str, object]],
     start_at: datetime | None,
 ) -> list[dict[str, object]]:
+    return _payloads_since(
+        service_cycles,
+        start_at,
+        timestamp_fields=("completed_at_utc",),
+    )
+
+
+def _payloads_since(
+    payloads: list[dict[str, object]],
+    start_at: datetime | None,
+    *,
+    timestamp_fields: tuple[str, ...],
+) -> list[dict[str, object]]:
     if start_at is None:
         return []
     filtered: list[dict[str, object]] = []
-    for payload in service_cycles:
-        completed_at = str(payload.get("completed_at_utc", "")).strip()
-        if not completed_at:
-            continue
-        if datetime.fromisoformat(completed_at) >= start_at:
-            filtered.append(payload)
+    for payload in payloads:
+        for field in timestamp_fields:
+            timestamp = str(payload.get(field, "")).strip()
+            if timestamp and datetime.fromisoformat(timestamp) >= start_at:
+                filtered.append(payload)
+                break
     return filtered
+
+
+def _p1_bug_count(operator_alerts: list[dict[str, object]]) -> int:
+    return sum(
+        1
+        for payload in operator_alerts
+        if str(payload.get("severity", "")) == "critical"
+        and str(payload.get("category", "")) in P1_BUG_CATEGORIES
+    )
+
+
+def _recovery_statuses(
+    recovery_payloads: list[dict[str, object]],
+) -> tuple[bool, bool]:
+    completed = any(
+        str(payload.get("status", "")) == "completed" for payload in recovery_payloads
+    )
+    failed = any(
+        str(payload.get("status", "")) == "failed" for payload in recovery_payloads
+    )
+    return completed, failed
+
+
+def _smtp_statuses(alert_payloads: list[dict[str, object]]) -> tuple[bool, bool]:
+    completed = any(
+        str(payload.get("channel", "")) == "smtp"
+        and str(payload.get("status", "")) == "completed"
+        for payload in alert_payloads
+    )
+    failed = any(
+        str(payload.get("channel", "")) == "smtp"
+        and str(payload.get("status", "")) == "failed"
+        for payload in alert_payloads
+    )
+    return completed, failed
 
 
 def _governed_notional_by_sleeve(
@@ -860,32 +914,9 @@ def build_gate3_readiness_report(
     alert_payloads = paper_store.list_artifact_payloads("alert_drills")
     operator_alerts = paper_store.list_artifact_payloads("operator_alerts")
     service_cycles = paper_store.list_artifact_payloads("service_cycles")
-    replay_summary = _latest_replay_slippage_summary(validation_store)
 
     closed_trade_count = len(closed_trade_payloads)
     calendar_days = _calendar_days_observed(closed_trade_payloads, service_cycles)
-    p1_bug_count = sum(
-        1
-        for payload in operator_alerts
-        if str(payload.get("severity", "")) == "critical"
-        and str(payload.get("category", "")) in P1_BUG_CATEGORIES
-    )
-    recovery_completed = any(
-        str(payload.get("status", "")) == "completed" for payload in recovery_payloads
-    )
-    recovery_failed = any(
-        str(payload.get("status", "")) == "failed" for payload in recovery_payloads
-    )
-    smtp_completed = any(
-        str(payload.get("channel", "")) == "smtp"
-        and str(payload.get("status", "")) == "completed"
-        for payload in alert_payloads
-    )
-    smtp_failed = any(
-        str(payload.get("channel", "")) == "smtp"
-        and str(payload.get("status", "")) == "failed"
-        for payload in alert_payloads
-    )
     sleeve_ids = _governed_sleeve_ids(execution_records, closed_trade_payloads)
     if sleeve_ids:
         governed_execution_records = _governed_execution_records(execution_records)
@@ -905,15 +936,37 @@ def build_gate3_readiness_report(
             governed_closed_trade_payloads,
             governed_service_cycles,
         )
+        governed_operator_alerts = _payloads_since(
+            operator_alerts,
+            governed_start_at,
+            timestamp_fields=("sent_at_utc",),
+        )
+        governed_recovery_payloads = _payloads_since(
+            recovery_payloads,
+            governed_start_at,
+            timestamp_fields=("completed_at_utc", "started_at_utc"),
+        )
+        governed_alert_payloads = _payloads_since(
+            alert_payloads,
+            governed_start_at,
+            timestamp_fields=("recorded_at_utc",),
+        )
+        recovery_completed, recovery_failed = _recovery_statuses(
+            governed_recovery_payloads
+        )
+        smtp_completed, smtp_failed = _smtp_statuses(governed_alert_payloads)
         shared_criteria = _build_shared_criteria(
             closed_trade_count=closed_trade_count,
             calendar_days=calendar_days,
-            p1_bug_count=p1_bug_count,
+            p1_bug_count=_p1_bug_count(governed_operator_alerts),
             recovery_completed=recovery_completed,
             recovery_failed=recovery_failed,
             smtp_completed=smtp_completed,
             smtp_failed=smtp_failed,
-            replay_summary=replay_summary,
+            replay_summary=_latest_replay_slippage_summary(
+                validation_store,
+                start_at=governed_start_at,
+            ),
         )
         return _build_governed_gate3_report(
             execution_records=governed_execution_records,
@@ -924,15 +977,17 @@ def build_gate3_readiness_report(
             closed_trade_count=closed_trade_count,
             calendar_days=calendar_days,
         )
+    recovery_completed, recovery_failed = _recovery_statuses(recovery_payloads)
+    smtp_completed, smtp_failed = _smtp_statuses(alert_payloads)
     shared_criteria = _build_shared_criteria(
         closed_trade_count=closed_trade_count,
         calendar_days=calendar_days,
-        p1_bug_count=p1_bug_count,
+        p1_bug_count=_p1_bug_count(operator_alerts),
         recovery_completed=recovery_completed,
         recovery_failed=recovery_failed,
         smtp_completed=smtp_completed,
         smtp_failed=smtp_failed,
-        replay_summary=replay_summary,
+        replay_summary=_latest_replay_slippage_summary(validation_store),
     )
     return _build_legacy_gate3_report(
         execution_records=execution_records,

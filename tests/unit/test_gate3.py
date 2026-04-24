@@ -10,6 +10,7 @@ from tradingx.types import (
     ClosedTradeRecord,
     EvaluationEvidencePack,
     ExecutionLifecycleRecord,
+    OperatorAlert,
     RecoveryDrillRecord,
     ReplaySlippageSummary,
     ServiceCycleSnapshot,
@@ -493,7 +494,226 @@ def test_gate3_governed_duration_uses_first_governed_artifact_timestamp(
         if criterion.criterion_id == "duration_or_trade_count"
     )
 
-    assert report.closed_trade_count == 1
-    assert report.calendar_days_observed == 1
+    assert report.closed_trade_count == 0
+    assert report.calendar_days_observed == 0
     assert duration_criterion.status == "pending"
-    assert duration_criterion.observed_value == "1 trades / 1 days"
+    assert duration_criterion.observed_value == "0 trades / 0 days"
+
+
+def test_gate3_governed_metrics_reject_exit_only_transition_trades(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    sleeve_attributions = (
+        ("trend-following-v1", Decimal("0.6")),
+        ("vol-target-v1", Decimal("0.4")),
+    )
+
+    for index in range(100):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        paper_store.write_closed_trade_record(
+            closed_trade=ClosedTradeRecord(
+                trade_id=f"legacy-entry-governed-exit-{index}",
+                symbol="SPY",
+                entry_intent_id=f"legacy-entry-{index}",
+                exit_intent_id=f"governed-exit-{index}",
+                opened_at_utc=opened_at,
+                closed_at_utc=closed_at,
+                quantity=Decimal("1"),
+                entry_price=Decimal("500.00"),
+                exit_price=Decimal("505.00"),
+                gross_pnl=Decimal("5.00"),
+                return_pct=Decimal("0.01"),
+                outcome="win",
+                holding_period_seconds=int((closed_at - opened_at).total_seconds()),
+                exit_sleeve_attributions=sleeve_attributions,
+            )
+        )
+        paper_store.write_execution_lifecycle_record(
+            execution=ExecutionLifecycleRecord(
+                execution_id=f"governed-exit-{index}",
+                intent_id=f"governed-exit-{index}",
+                symbol="SPY",
+                side="sell",
+                reason_code="target_weight_exit",
+                reference_price=Decimal("505.25"),
+                fill_price=Decimal("505.00"),
+                filled_qty=Decimal("1"),
+                slippage_bps=Decimal("5"),
+                submitted_at_utc=closed_at,
+                filled_at_utc=closed_at,
+                recovered=False,
+                sleeve_attributions=sleeve_attributions,
+            )
+        )
+
+    for candidate_id in ("trend-following-v1", "vol-target-v1"):
+        validation_store.write_evaluation_evidence(
+            EvaluationEvidencePack(
+                evidence_pack_id=f"{candidate_id}-reference",
+                candidate_id=candidate_id,
+                window_start_utc=start,
+                window_end_utc=start + timedelta(days=100),
+                benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+                candidate_metrics={
+                    "sharpe_ratio": Decimal("0.10"),
+                    "hit_rate": Decimal("1.00"),
+                },
+                adversarial_checks=("none",),
+                recommendation="keep",
+                assumptions=("reference expectation for Gate 3",),
+            )
+        )
+    paper_store.write_recovery_drill_record(
+        recovery_drill=RecoveryDrillRecord(
+            drill_id="governed-recovery",
+            symbol="SPY",
+            started_at_utc=start,
+            completed_at_utc=start + timedelta(minutes=5),
+            status="completed",
+            summary="Recovery succeeded.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/recovery.json",),
+        )
+    )
+    paper_store.write_alert_drill_record(
+        alert_drill=AlertDrillRecord(
+            drill_id="governed-smtp",
+            channel="smtp",
+            recorded_at_utc=start,
+            status="completed",
+            summary="SMTP delivered.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/smtp.json",),
+        )
+    )
+    validation_store.write_replay_slippage_summary(
+        ReplaySlippageSummary(
+            summary_id="governed-replay",
+            matched_execution_count=100,
+            paper_mean_absolute_slippage_bps=Decimal("5"),
+            replay_mean_absolute_slippage_bps=Decimal("5"),
+            divergence_ratio=Decimal("1.0"),
+            status="pass",
+            details="Replay divergence is within the allowed bound.",
+            generated_at_utc=start,
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+    criterion_statuses = {
+        criterion.criterion_id: criterion.status for criterion in report.criteria
+    }
+
+    assert report.closed_trade_count == 0
+    assert criterion_statuses["duration_or_trade_count"] == "pending"
+    assert criterion_statuses["hit_rate_alignment"] == "pending"
+    assert criterion_statuses["realized_sharpe"] == "pending"
+    assert report.status == "pending"
+
+
+def test_gate3_governed_mode_ignores_stale_operational_evidence(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    stale_at = datetime(2025, 12, 1, 14, 30, tzinfo=UTC)
+    governed_start = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    sleeve_attributions = (
+        ("trend-following-v1", Decimal("0.6")),
+        ("vol-target-v1", Decimal("0.4")),
+    )
+
+    for index in range(100):
+        opened_at = governed_start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index < 60 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+            sleeve_attributions=sleeve_attributions,
+        )
+
+    for candidate_id in ("trend-following-v1", "vol-target-v1"):
+        validation_store.write_evaluation_evidence(
+            EvaluationEvidencePack(
+                evidence_pack_id=f"{candidate_id}-reference",
+                candidate_id=candidate_id,
+                window_start_utc=governed_start,
+                window_end_utc=governed_start + timedelta(days=100),
+                benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+                candidate_metrics={
+                    "sharpe_ratio": Decimal("1.4"),
+                    "hit_rate": Decimal("0.60"),
+                },
+                adversarial_checks=("none",),
+                recommendation="keep",
+                assumptions=("reference expectation for Gate 3",),
+            )
+        )
+
+    paper_store.write_operator_alert(
+        OperatorAlert(
+            alert_id="stale-p1-bug",
+            severity="critical",
+            category="bug",
+            summary="Pre-governed P1 bug.",
+            evidence_refs=("artifacts/paper_loop/operator_alerts/stale.json",),
+            delivery_targets=("local",),
+            sent_at_utc=stale_at,
+        )
+    )
+    paper_store.write_recovery_drill_record(
+        recovery_drill=RecoveryDrillRecord(
+            drill_id="stale-recovery",
+            symbol="SPY",
+            started_at_utc=stale_at,
+            completed_at_utc=stale_at + timedelta(minutes=5),
+            status="completed",
+            summary="Stale recovery succeeded.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/stale.json",),
+        )
+    )
+    paper_store.write_alert_drill_record(
+        alert_drill=AlertDrillRecord(
+            drill_id="stale-smtp",
+            channel="smtp",
+            recorded_at_utc=stale_at,
+            status="completed",
+            summary="Stale SMTP delivered.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/stale.json",),
+        )
+    )
+    validation_store.write_replay_slippage_summary(
+        ReplaySlippageSummary(
+            summary_id="stale-replay",
+            matched_execution_count=100,
+            paper_mean_absolute_slippage_bps=Decimal("5"),
+            replay_mean_absolute_slippage_bps=Decimal("5"),
+            divergence_ratio=Decimal("1.0"),
+            status="pass",
+            details="Stale replay divergence is within the allowed bound.",
+            generated_at_utc=stale_at,
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+    criterion_statuses = {
+        criterion.criterion_id: criterion.status for criterion in report.criteria
+    }
+
+    assert criterion_statuses["p1_bug_incidents"] == "pass"
+    assert criterion_statuses["recovery_drill"] == "pending"
+    assert criterion_statuses["smtp_alert_drill"] == "pending"
+    assert criterion_statuses["replay_slippage_divergence"] == "pending"
+    assert report.status == "pending"
