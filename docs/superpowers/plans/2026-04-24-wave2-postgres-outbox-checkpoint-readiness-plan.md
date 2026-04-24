@@ -125,16 +125,25 @@ explicit transactions. Do not add an ORM layer.
 
 1. Append writes to `system.outbox_event`.
 2. `dedupe_key` is the database conflict key.
-3. First insert returns the new `outbox_event_id`.
-4. Repeating the same logical append with the same `dedupe_key` returns
+3. The repository generates `outbox_event_id` as a UUID4 string unless a
+   deterministic test ID provider is injected.
+4. The repository sets `created_at_utc` from an injected clock, defaulting
+   to the current UTC time. Request callers provide `occurred_at_utc`,
+   not `created_at_utc`.
+5. First insert returns the new `outbox_event_id`.
+6. Repeating the same logical append with the same `dedupe_key` returns
    the existing `outbox_event_id` and does not add a row.
-5. Reusing a `dedupe_key` with conflicting `aggregate_type`,
+7. Reusing a `dedupe_key` with conflicting `aggregate_type`,
    `aggregate_id`, `event_type`, `event_version`, `occurred_at_utc`, or
-   payload fingerprint raises a domain conflict error with redacted
+   `payload_json` raises a domain conflict error with redacted
    diagnostics.
-6. `published_at_utc` remains `NULL`; publishing is not implemented in
+8. Payload conflict comparison uses Postgres JSONB equality between the
+   existing `payload_json` and the requested payload. This slice must not
+   add a `payload_fingerprint` column or silently compare a non-persisted
+   hash as the source of truth.
+9. `published_at_utc` remains `NULL`; publishing is not implemented in
    this slice.
-7. The method does not update public timeline tables and does not make
+10. The method does not update public timeline tables and does not make
    `/api/v1/events` read from the outbox.
 
 ### Projection Checkpoints
@@ -148,7 +157,8 @@ explicit transactions. Do not add an ORM layer.
    `metadata_json`.
 5. Batch work and checkpoint advancement must be transaction-compatible:
    tests must prove a simulated batch failure rolls back checkpoint
-   advancement.
+   advancement, outbox append, source-status upsert, and derived
+   status write together.
 6. The projection-state repository must expose a `transaction()` context
    manager that yields a transaction-bound repository view. Writes made
    through that view commit only on normal exit and roll back on
@@ -162,7 +172,10 @@ explicit transactions. Do not add an ORM layer.
 2. Upsert writes to `system.domain_projection_source_status`.
 3. Read methods can fetch one source status by key and list statuses by
    domain.
-4. A source row is ready only when:
+4. `ProjectionSourceStatusBoundary` must add
+   `list_projection_source_statuses(domain_name: str)` as a stable
+   protocol method. This is not an implementation-only helper.
+5. A source row is ready only when:
    - the row exists
    - `ready_for_postgres` is true
    - `projected_watermark` equals `source_watermark` when
@@ -171,12 +184,67 @@ explicit transactions. Do not add an ORM layer.
      freshness window
    - `lag_seconds` is present and no greater than the source requirement
      when a max lag is configured
-5. A domain is ready only when every required source identity is ready.
-6. Missing, stale, unprojected, lagging, or explicitly not-ready source
-   rows block the domain.
-7. Derived `domain_projection_status` rows must summarize readiness, name
+6. A domain is ready only when every required source identity is ready.
+7. Missing, stale, unprojected, lagging, initial-import-incomplete,
+   inactive-write-path, missing outbox dedupe constraint, or explicitly
+   not-ready source rows block the domain.
+8. Derived `domain_projection_status` rows must summarize readiness, name
    blocker reasons in metadata, and must not become the readiness
    authority for routers.
+
+### Required Source Registry
+
+`ProjectionSourceRequirement` is the authoritative required-source
+registry for readiness evaluation. It must live in
+`src/tradingx/controlplane/projections.py` and be passed explicitly to
+readiness evaluation. A domain with no registered requirements is not
+ready; it returns a `missing_requirements` blocker rather than passing by
+vacuous truth.
+
+Each requirement must name:
+
+1. `domain_name`
+2. `source_family`
+3. `source_identity`
+4. whether the source is mutable
+5. optional `max_freshness_seconds`
+6. optional `max_lag_seconds`
+7. whether initial import completion is required
+8. whether active bridge or dual-write evidence is required
+
+Source-status metadata must supply these readiness facts when the
+requirement asks for them:
+
+- `initial_import_complete: true`
+- `write_path: "active_bridge"` or `write_path: "dual_write"` for
+  mutable sources that require an active write path
+
+Readiness evaluation must also receive an
+`outbox_dedupe_constraint_present` boolean. If it is false, every domain
+is blocked with `outbox_dedupe_constraint_missing`, because PLAN-0013
+requires the outbox dedupe constraint before Postgres routing can be
+trusted.
+
+### Derived Domain Status Mapping
+
+`system.domain_projection_status` is a diagnostic summary derived from
+readiness reports. It must be written with this mapping:
+
+| Column | Required mapping |
+| --- | --- |
+| `domain_name` | `ProjectionReadinessReport.domain_name`. |
+| `target_store` | Literal `postgres`. |
+| `bridge_status` | `not_required` when no requirement needs active bridge or dual-write evidence; `ready` when all such requirements have valid write-path metadata; otherwise `blocked`. |
+| `projection_status` | `ready` when the report is ready; otherwise the highest-priority blocker category using this order: `missing_requirements`, `outbox_dedupe_constraint_missing`, `missing_sources`, `initial_import_incomplete`, `write_path_inactive`, `unprojected_sources`, `stale_sources`, `lagging_sources`, `not_ready_sources`, then `blocked`. |
+| `source_watermark` | For one required source, that source's `projected_watermark`; for multiple sources, a deterministic JSON string of sorted `source_family/source_identity/projected_watermark` entries; `NULL` when no source has a projected watermark. |
+| `last_projected_outbox_event_id` | The newest non-null source-status metadata field named `last_projected_outbox_event_id`, ordered by `checked_at_utc DESC`, then `source_family ASC`, then `source_identity ASC`; `NULL` when absent. |
+| `lag_seconds` | The maximum non-null `lag_seconds` across required sources; `NULL` when no required source reports lag. |
+| `ready_for_postgres` | `ProjectionReadinessReport.ready_for_postgres`. |
+| `checked_at_utc` | The readiness evaluation timestamp from the injected clock, not an arbitrary source row timestamp. |
+| `metadata_json` | Includes `authoritative: false`, blocker codes, requirement count, ready source count, source registry version, per-source status summaries, and any watermarks summarized into `source_watermark`. |
+
+The implementation must not use arbitrary constants for these fields.
+Tests must assert the mapping for both ready and blocked reports.
 
 ## Implementation Tasks
 
@@ -206,16 +274,25 @@ The first tests must prove:
 
 1. Slice 3 dataclasses expose the natural keys named in `PLAN-0016`.
 2. outbox append request validation rejects empty aggregate IDs,
-   event types, and dedupe keys.
-3. checkpoint records are keyed by `projection_name`.
-4. source-status records are keyed by `(domain_name, source_family,
+   event types, dedupe keys, and non-positive event versions.
+3. outbox append contract names repository-owned `outbox_event_id` and
+   `created_at_utc` generation.
+4. checkpoint records are keyed by `projection_name`.
+5. source-status records are keyed by `(domain_name, source_family,
    source_identity)`.
-5. readiness aggregation treats missing, stale, unprojected, lagging, and
-   explicitly not-ready sources as blockers.
-6. `domain_projection_status` is derived from source statuses and remains
+6. `ProjectionSourceStatusBoundary` includes
+   `list_projection_source_statuses(domain_name: str)`.
+7. `ProjectionSourceRequirement` is the authoritative source registry,
+   and an empty requirement set blocks readiness.
+8. readiness aggregation treats missing, stale, unprojected, lagging,
+   initial-import-incomplete, inactive-write-path, missing outbox dedupe
+   constraint, and explicitly not-ready sources as blockers.
+9. derived status field mapping is deterministic and follows the table
+   above.
+10. `domain_projection_status` is derived from source statuses and remains
    non-authoritative for routers.
-7. `PostgresControlPlaneRepository` remains read-side only.
-8. repository errors redact `str`, `repr`, `args`, `__cause__`, and
+11. `PostgresControlPlaneRepository` remains read-side only.
+12. repository errors redact `str`, `repr`, `args`, `__cause__`, and
    `__context__`.
 
 Expected red state: imports or assertions fail because projection-state
@@ -238,10 +315,13 @@ Define:
   IDs, event types, dedupe keys, and non-positive event versions
 - source-status key helpers
 - `ProjectionSourceRequirement`
+- authoritative required-source registry helpers with explicit
+  empty-registry blocking semantics
 - `ProjectionReadinessBlocker`
 - `ProjectionReadinessReport`
 - pure readiness evaluation function
 - derived `ProjectionStatusSummary` construction from readiness reports
+  using the field mapping above
 
 Keep these modules independent of SQLAlchemy and FastAPI.
 
@@ -265,9 +345,12 @@ Update:
 Implement:
 
 1. `PostgresProjectionStateRepository`
-2. outbox append with database `dedupe_key` conflict handling
+2. outbox append with repository-generated `outbox_event_id`,
+   repository-generated `created_at_utc`, database `dedupe_key` conflict
+   handling, and JSONB equality conflict comparison
 3. checkpoint load/save upserts
-4. source-status upsert/read/list methods
+4. source-status upsert/read/list methods, including the stable
+   `list_projection_source_statuses(domain_name)` protocol method
 5. derived `domain_projection_status` upsert from readiness reports
 6. `transaction()` context manager yielding a transaction-bound
    repository view, with rollback on exception
@@ -289,19 +372,25 @@ The tests must:
    helpers
 3. run package-local migrations
 4. prove outbox append is idempotent for identical `dedupe_key` reuse
-5. prove conflicting `dedupe_key` reuse raises a redacted conflict error
-6. prove `published_at_utc` remains `NULL`
-7. prove checkpoint load returns `None` before save
-8. prove checkpoint save upserts the expected fields
-9. prove simulated batch failure rolls back checkpoint advancement
-10. prove source-status upsert/read/list by natural key
-11. prove derived domain readiness blocks on missing, stale, unprojected,
-    lagging, and explicitly not-ready source statuses
-12. prove derived `domain_projection_status` metadata names blocker
-    reasons and is not used as router authority
-13. prove `PostgresControlPlaneRepository` still does not implement the
+5. prove outbox append stores repository-generated `outbox_event_id` and
+   `created_at_utc`
+6. prove conflicting `dedupe_key` reuse uses JSONB payload equality and
+   raises a redacted conflict error
+7. prove `published_at_utc` remains `NULL`
+8. prove checkpoint load returns `None` before save
+9. prove checkpoint save upserts the expected fields
+10. prove simulated batch failure rolls back checkpoint advancement,
+    outbox append, source-status upsert, and derived status write
+11. prove source-status upsert/read/list by natural key and by domain
+12. prove derived domain readiness blocks on empty requirements, missing,
+    stale, unprojected, lagging, initial-import-incomplete,
+    inactive-write-path, missing outbox dedupe constraint, and explicitly
+    not-ready source statuses
+13. prove derived `domain_projection_status` column mapping and metadata
+    match the mapping table and are not used as router authority
+14. prove `PostgresControlPlaneRepository` still does not implement the
     Slice 3 boundaries
-14. prove storage failures redact `str`, `repr`, `args`, `__cause__`,
+15. prove storage failures redact `str`, `repr`, `args`, `__cause__`,
     and `__context__`
 
 Run locally with this workstation's DSN:
@@ -367,25 +456,41 @@ Reviewer should challenge:
    `/api/v1` router behavior
 2. whether outbox append idempotency handles conflicting dedupe reuse
    safely
-3. whether checkpoint advancement is transaction-compatible with later
+3. whether outbox append defines who generates `outbox_event_id` and
+   `created_at_utc`
+4. whether payload conflict comparison is truly persisted JSONB equality,
+   not an unstored fingerprint
+5. whether checkpoint advancement is transaction-compatible with later
    projector batches
-4. whether a failed batch can advance a checkpoint
-5. whether `domain_projection_source_status` remains the readiness
+6. whether a failed batch can partially commit any combination of outbox,
+   checkpoint, source-status, or derived status writes
+7. whether `ProjectionSourceRequirement` is clearly the authoritative
+   required-source registry
+8. whether an empty or missing requirement set can incorrectly pass
+   readiness
+9. whether initial import completion, active bridge or dual-write for
+   mutable sources, and outbox dedupe constraint presence are enforced
+10. whether `domain_projection_source_status` remains the readiness
    authority
-6. whether `domain_projection_status` can be mistaken for router
+11. whether `domain_projection_status` can be mistaken for router
    readiness authority
-7. whether missing, stale, unprojected, lagging, and not-ready source
-   rows all block readiness
-8. whether source freshness semantics distinguish mutable from immutable
+12. whether derived `domain_projection_status` fields follow the required
+    mapping instead of arbitrary constants
+13. whether missing, stale, unprojected, lagging, not-ready,
+    initial-import-incomplete, inactive-write-path, and missing outbox
+    dedupe states all block readiness
+14. whether source freshness semantics distinguish mutable from immutable
    sources
-9. whether source identity natural keys are explicit enough for Slice 4
+15. whether source identity natural keys are explicit enough for Slice 4
    adapters
-10. whether `system.outbox_event` leaks into public timeline behavior
-11. whether the Slice 2 read repository accidentally gains write/progress
+16. whether `system.outbox_event` leaks into public timeline behavior
+17. whether the Slice 2 read repository accidentally gains write/progress
     methods
-12. whether raw DSNs or passwords can leak through repository exceptions
-13. whether fake tests could pass while real SQL behavior is broken
-14. whether legacy startup can accidentally instantiate the new
+18. whether `ProjectionSourceStatusBoundary` exposes list-by-domain as a
+    stable protocol method
+19. whether raw DSNs or passwords can leak through repository exceptions
+20. whether fake tests could pass while real SQL behavior is broken
+21. whether legacy startup can accidentally instantiate the new
     projection-state repository
 
 ## Definition Of Done
@@ -396,19 +501,26 @@ This slice is done when:
 2. `PostgresProjectionStateRepository` implements outbox append,
    checkpoint load/save, source-status upsert/read/list, and derived
    status persistence
-3. outbox append is idempotent and rejects conflicting dedupe reuse
-4. checkpoint save/load and rollback behavior are integration-tested
-   against real Postgres
+3. outbox append generates `outbox_event_id` and `created_at_utc`,
+   remains idempotent, and rejects conflicting dedupe reuse by persisted
+   field and JSONB payload comparison
+4. checkpoint save/load and multi-write transaction rollback behavior
+   are integration-tested against real Postgres
 5. source-readiness aggregation is integration-tested against real
-   Postgres for missing, stale, unprojected, lagging, and not-ready
-   sources
-6. `PostgresControlPlaneRepository` remains read-side only
-7. no `/api/v1` route pivots to Postgres
-8. mandatory legacy no-Postgres startup and route regressions pass
-9. Postgres connection, migration, repository, and projection-state gates
+   Postgres for empty requirements, missing, stale, unprojected,
+   lagging, initial-import-incomplete, inactive-write-path, missing
+   outbox dedupe constraint, and not-ready sources
+6. derived `domain_projection_status` field mapping is tested for ready
+   and blocked reports
+7. `ProjectionSourceStatusBoundary` exposes list-by-domain as a stable
+   protocol method
+8. `PostgresControlPlaneRepository` remains read-side only
+9. no `/api/v1` route pivots to Postgres
+10. mandatory legacy no-Postgres startup and route regressions pass
+11. Postgres connection, migration, repository, and projection-state gates
    pass
-10. docs/index validation passes
-11. Postgres-gated tests skip explicitly without a DSN and pass with a
+12. docs/index validation passes
+13. Postgres-gated tests skip explicitly without a DSN and pass with a
    real `TRADINGX_TEST_POSTGRES_DSN`
 
 Only after this definition is met should Wave 2 continue into legacy
