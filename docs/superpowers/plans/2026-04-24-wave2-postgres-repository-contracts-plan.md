@@ -83,10 +83,12 @@ Still missing before projector and router work:
 9. Repository contracts must not implement outbox publishing,
    checkpoint advancement, source-readiness aggregation, bridge/tailer
    behavior, projector orchestration, or domain router selection.
-10. Access, command-session, and commanding contracts are read-side
-    audit/summary contracts only. Write-shaped command intake,
-    idempotency replay, precondition enforcement, and session issuance
-    methods are prohibited until the Wave 3 command intake plan.
+10. Access, command-session, and commanding ordinary repository
+    protocols are deferred in this slice. Their event tables may only
+    appear as public timeline union sources. Write-shaped command
+    intake, idempotency replay, precondition enforcement, result
+    recording, and session issuance methods are prohibited until the
+    Wave 3 command intake plan.
 
 ## Out Of Scope
 
@@ -129,47 +131,83 @@ Protocol categories are explicit:
    be named as contract-only, must not ship fake behavior that claims the
    method works, and must not be counted as SQL-backed repository
    coverage.
+3. **Deferred-note-only domains.** These may be named in the scope
+   matrix to prevent accidental expansion, but they must not add
+   ordinary repository protocols or fake-only behavior in this slice.
 
 If a domain cannot receive real SQL coverage in this slice and is not a
 contract-only Slice 3 boundary, defer that protocol.
 
 ## Repository Domains
 
-Add protocols for these Wave 2 domains:
+Classify every Wave 2 storage boundary before adding protocols. The
+implementation must follow this matrix; if the scope changes during
+implementation, amend this plan before coding the new surface.
 
-1. access and command-session audit summaries
-2. commanding read-side audit summaries
-3. runtime
-4. incidents
-5. public event timeline
-6. portfolio
-7. validation
-8. investigations and replays
-9. documents
-10. system metadata needed by later readiness/router work
-11. Slice 3 contract-only boundaries for outbox append, projection
-    checkpoint load/save, and domain projection source-status upsert/read
+| Boundary | Classification | Slice 2 requirement |
+| --- | --- | --- |
+| runtime posture snapshots and blockers | implemented-now | Protocol, Postgres implementation, and integration tests backed by `runtime.control_posture_snapshot` and `runtime.control_posture_blocker`. |
+| runtime heartbeats | implemented-now | Protocol, Postgres implementation, and integration tests backed by `runtime.runtime_heartbeat`. |
+| incidents and incident events | implemented-now | Protocol, Postgres implementation, and integration tests backed by `incidents.incident` and `incidents.incident_event`. |
+| system projection status reads | implemented-now, non-authoritative | Protocol, Postgres implementation, and integration tests backed by `system.domain_projection_status` only as a derived diagnostic read. The contract must state that `ready_for_postgres` here is not router readiness authority until Slice 3 implements `system.domain_projection_source_status` aggregation. |
+| public event timeline | implemented-now | Protocol, Postgres implementation, and integration tests backed by the explicit union below. `system.outbox_event` is prohibited as a source. |
+| access and command-session audit summaries | deferred-note-only | No ordinary repository protocol in Slice 2. `access.command_session_event` may be consumed only as a public timeline union source. |
+| commanding read-side audit summaries | deferred-note-only | No ordinary command repository protocol in Slice 2. `commanding.command_event` may be consumed only as a public timeline union source. Command creation, idempotency replay, precondition enforcement, result recording, and session issuance remain prohibited. |
+| portfolio | deferred-note-only | No ordinary repository protocol in Slice 2. |
+| validation | deferred-note-only | No ordinary repository protocol in Slice 2. |
+| investigations and replays | deferred-note-only | No ordinary repository protocol in Slice 2. `investigations.replay_event` may be consumed only as a public timeline union source. |
+| documents | deferred-note-only | No ordinary repository protocol in Slice 2. |
+| outbox append | Slice 3 contract-only | Protocol/dataclass boundary only, with natural keys for `aggregate_type`, `aggregate_id`, `event_type`, `event_version`, and `dedupe_key`; no implementation or fake behavior that claims append works. |
+| projection checkpoint load/save | Slice 3 contract-only | Protocol/dataclass boundary only, keyed by `projection_name`; no implementation or fake behavior that claims checkpoint advancement works. |
+| domain projection source-status upsert/read | Slice 3 contract-only | Protocol/dataclass boundary only, keyed by `(domain_name, source_family, source_identity)`; no implementation or fake behavior that claims readiness aggregation works. |
 
 Only implementation-backed domains may define ordinary repository
-protocols. Domains that are not implemented against real SQL in this
-slice must be represented as deferred domain notes, except for the
-explicit Slice 3 contract-only boundaries.
+protocols. Deferred-note-only domains must not add fake-only repository
+surfaces. Slice 3 contract-only boundaries may define method signatures
+and dataclasses, but their concrete behavior and SQL implementation
+remain owned by Slice 3.
 
-Access, command-session, and commanding protocols must be read-only in
-this slice. They may expose audit summaries, command lifecycle summaries,
-session history lookups, and event-history reads. They must not expose
-command creation, session issuance, idempotency replay, precondition
-enforcement, or result recording.
-
-Slice 3 operations may be represented as contract-only protocols and
-dataclasses, but their concrete behavior and SQL implementation remain
-owned by Slice 3.
+### Public Event Timeline SQL Source
 
 The public event timeline contract is mandatory and
 implementation-backed in this slice. It must be separate from
 `system.outbox_event`: outbox rows are internal projector inputs, while
 event timeline records are canonical API read records for later
 `/api/v1/events` router work.
+
+The Postgres implementation must read a `UNION ALL` over these minimum
+event families:
+
+1. `incidents.incident_event`
+2. `commanding.command_event`
+3. `access.command_session_event`
+4. `runtime.control_posture_snapshot`
+5. `runtime.runtime_heartbeat`
+6. `investigations.replay_event`
+
+Each union member must project this canonical shape:
+
+- `timeline_event_id`: globally stable ID formed from source table plus
+  source primary key
+- `source_table`: fully qualified source table name
+- `source_primary_key`: source table primary key
+- `event_family`: stable family label such as `incident`, `command`,
+  `command_session`, `runtime_posture`, `runtime_heartbeat`, or `replay`
+- `event_type`: source event type or a stable synthetic type for
+  snapshot/heartbeat sources
+- `occurred_at_utc`: the source event timestamp
+- `resource_type` and `resource_id`: the domain object the event is about
+- `severity`: nullable normalized severity when available
+- `summary`: short domain summary derived from source columns
+- `metadata`: source JSON payload or metadata JSON, with no SQLAlchemy
+  row objects exposed
+
+Public timeline ordering is `occurred_at_utc DESC`,
+`timeline_event_id DESC`; the cursor encodes that exact tuple and uses an
+exclusive boundary for the next page. `occurred_at_utc` must be non-null;
+future sources with nullable timestamps are excluded until they can
+provide a canonical timestamp. The implementation must not read from
+`system.outbox_event`.
 
 ## Required Contract Behavior
 
@@ -188,17 +226,24 @@ event timeline records are canonical API read records for later
 6. Cursor values must encode the ordered tuple used by the query, such
    as `(observed_at_utc, snapshot_id)`, so inserts between pages cannot
    duplicate or skip records.
-7. Command/session contracts must not expose command intake,
-   idempotency replay, precondition enforcement, session issuance, or
-   other write-shaped methods in this slice.
+7. Command/session surfaces must not expose command intake, idempotency
+   replay, precondition enforcement, session issuance, or other
+   write-shaped methods in this slice; ordinary access/commanding
+   repository protocols are deferred outside the public timeline union.
 8. Slice 3 boundary protocols must name the natural keys needed later for
    outbox append, checkpoint load/save, and source-status upsert/read,
    but must not implement the behavior.
-9. Result dataclasses use plain Python types, tuples, and mappings; they
+9. The public event timeline contract must name its SQL union sources,
+   canonical fields, ordering tuple, and prohibited outbox source exactly
+   as specified above.
+10. System projection status reads must be labeled derived and
+    non-authoritative; router readiness remains blocked on Slice 3
+    source-status aggregation.
+11. Result dataclasses use plain Python types, tuples, and mappings; they
    do not leak SQLAlchemy row objects.
-10. Repository exceptions wrap storage failures with domain context and
+12. Repository exceptions wrap storage failures with domain context and
    redacted DSN diagnostics.
-11. Contract tests assert protocol method names and return shape stability
+13. Contract tests assert protocol method names and return shape stability
    before any concrete Postgres implementation is written.
 
 ## Implementation Tasks
@@ -233,11 +278,18 @@ The first tests must prove:
 5. not-found behavior returns `None`
 6. list behavior is deterministic when records share a timestamp and
    cursor boundaries use the timestamp-plus-ID tuple
-7. command/session protocols expose no write-shaped methods
-8. Slice 3 contract-only boundaries exist for outbox append,
+7. the repository domain matrix is enforced: implementation-backed
+   domains have protocols, deferred-note-only domains have no ordinary
+   repository protocols, and Slice 3 boundaries are contract-only
+8. command/session surfaces expose no write-shaped methods; command and
+   command-session event tables are reachable only through the public
+   timeline union in this slice
+9. public timeline contract fields, source-family labels, ordering tuple,
+   and `system.outbox_event` prohibition are part of the contract
+10. Slice 3 contract-only boundaries exist for outbox append,
    checkpoint load/save, and source-status upsert/read, but have no
    fake implementation behavior
-9. repository error `str`, `repr`, `args`, `__cause__`, and
+11. repository error `str`, `repr`, `args`, `__cause__`, and
    `__context__` do not expose raw DSNs or passwords
 
 Expected red state: imports fail because the contracts do not exist yet.
@@ -251,7 +303,7 @@ Create:
 
 Define:
 
-- implementation-backed repository protocols per domain
+- implementation-backed repository protocols per the domain matrix
 - contract-only Slice 3 boundary protocols for outbox append,
   checkpoint load/save, and source-status upsert/read
 - query dataclasses, including `PageRequest` and `Page`
@@ -262,6 +314,7 @@ Define:
 - domain result dataclasses for each canonical read shape needed by
   Slice 3 and Slice 6
 - typed repository errors with redacted diagnostics
+- deferred domain notes, if useful, without ordinary fake-only protocols
 
 Keep this module independent of SQLAlchemy and FastAPI.
 
@@ -294,8 +347,12 @@ without attempting every future read model. It should include:
    - runtime posture snapshots and blockers
    - runtime heartbeats
    - incidents and incident events
-   - system projection status reads
-   - public event timeline reads
+   - system projection status reads, explicitly marked as derived and
+     non-authoritative for router readiness
+   - public event timeline reads from the required `UNION ALL` of
+     `incidents.incident_event`, `commanding.command_event`,
+     `access.command_session_event`, `runtime.control_posture_snapshot`,
+     `runtime.runtime_heartbeat`, and `investigations.replay_event`
 
 Do not implement outbox append, checkpoint writes, or source-status
 upserts in this task. Those are contract-only Slice 3 boundaries.
@@ -315,14 +372,26 @@ The tests must:
 4. seed rows with minimal SQL fixtures
 5. assert deterministic cursor ordering and pagination against real
    Postgres for every implementation-backed method
-6. assert not-found behavior
-7. assert storage failures are wrapped with redacted diagnostics across
+6. for every SQL-backed list method, fetch page 1, insert rows before,
+   at, and after the page boundary timestamp/ID, then fetch page 2 with
+   the page-1 cursor and assert there are no duplicates or skipped
+   records relative to the ordered query
+7. assert the public event timeline uses the required union sources,
+   canonical field projection, `occurred_at_utc DESC` plus
+   `timeline_event_id DESC` ordering, and no `system.outbox_event`
+   reads
+8. assert system projection status reads are exposed only as
+   non-authoritative derived diagnostics, not router readiness
+9. assert not-found behavior
+10. assert storage failures are wrapped with redacted diagnostics across
    `str`, `repr`, `args`, `__cause__`, and `__context__`
-8. assert repository code uses the existing schema/table names from
+11. assert repository code uses the existing schema/table names from
    `PLAN-0015`
-9. fail if an ordinary repository protocol method lacks real SQL
+12. fail if an ordinary repository protocol method lacks real SQL
    coverage
-10. assert contract-only Slice 3 boundaries are not exposed by the
+13. assert deferred-note-only domains do not have ordinary repository
+    protocols
+14. assert contract-only Slice 3 boundaries are not exposed by the
     Postgres repository implementation yet
 
 Run locally with this workstation's DSN:
@@ -341,12 +410,13 @@ uv run pytest tests/unit/test_persistence_namespace.py tests/unit/test_postgres_
 uv run pytest tests/contract/test_local_web_app_api_contract.py -q
 ```
 
-Add a mandatory regression proving `create_app(...)` and representative
-legacy `/api/v1` read routes do not instantiate Postgres repositories or
+Add a mandatory regression proving `create_app(...)`, `run_web_app(...)`,
+`build_default_local_web_components(...)`, and representative legacy
+`/api/v1` read routes do not instantiate Postgres repositories or
 engines unless a later router slice explicitly wires them. The test
 should monkeypatch repository and engine construction to fail loudly,
-then prove legacy app creation and representative read routes still
-pass.
+then prove legacy app creation, default local web component construction,
+default local startup wiring, and representative read routes still pass.
 
 ### Task 6: Documentation And Index Updates
 
@@ -397,19 +467,24 @@ Reviewer should challenge:
 5. whether the contracts are too thin to support projectors and routers
    without churn
 6. whether fake tests could pass while real SQL behavior is broken
-7. whether deterministic ordering is fully specified per query
-8. whether cursor pagination semantics are stable under inserts between
+7. whether the domain matrix makes implemented-now, deferred-note-only,
+   and Slice 3 contract-only surfaces impossible to confuse
+8. whether public event timeline records have a concrete SQL union source
+   and cannot leak internal outbox rows
+9. whether system projection status reads are clearly marked as derived
+   and non-authoritative until source-status aggregation exists
+10. whether deterministic ordering is fully specified per query
+11. whether cursor pagination semantics are stable under inserts between
    pages
-9. whether not-found behavior and storage failures are distinguished
-10. whether raw DSNs or passwords can leak through repository exceptions
+12. whether not-found behavior and storage failures are distinguished
+13. whether raw DSNs or passwords can leak through repository exceptions
     or chained tracebacks
-11. whether legacy startup or `/api/v1` routes can accidentally import or
-    instantiate Postgres repositories
-12. whether command/session contracts imply stable governed write APIs
+14. whether `create_app`, `run_web_app`,
+    `build_default_local_web_components`, or `/api/v1` routes can
+    accidentally import or instantiate Postgres repositories
+15. whether command/session contracts imply stable governed write APIs
     before Wave 3
-13. whether public event timeline records are clearly separate from
-    internal outbox rows
-14. whether introducing dataclasses now creates a second schema model that
+16. whether introducing dataclasses now creates a second schema model that
     conflicts with the migration tables
 
 ## Definition Of Done
@@ -419,18 +494,26 @@ This slice is done when:
 1. repository protocols and value/result dataclasses exist under
    `tradingx.controlplane`
 2. unit tests prove contract shape, deterministic ordering, cursor
-   pagination, fakes, not-found behavior, command/session read-only
-   scope, Slice 3 contract-only boundaries, and redacted repository
-   errors
+   pagination, fakes, not-found behavior, domain matrix enforcement,
+   command/session write prohibition, public timeline source/shape,
+   Slice 3 contract-only boundaries, and redacted repository errors
 3. Postgres repository package skeleton exists without ORM coupling
 4. every implementation-backed repository method is integration-tested
    against real Postgres
-5. no `/api/v1` route pivots to Postgres
-6. mandatory legacy no-Postgres startup and route regressions pass
-7. legacy local mode and contract tests still pass
-8. Postgres connection and migration safety tests still pass
-9. docs/index validation passes
-10. the Postgres-gated tests skip explicitly without a DSN and pass with a
+5. public timeline reads use the required SQL union and never
+   `system.outbox_event`
+6. system projection status reads are documented and tested as
+   non-authoritative until Slice 3 source-status aggregation
+7. real Postgres pagination tests cover inserts between page fetches for
+   every SQL-backed list method
+8. no `/api/v1` route pivots to Postgres
+9. mandatory no-Postgres regressions pass for `create_app`,
+   `run_web_app`, `build_default_local_web_components`, and
+   representative legacy routes
+10. legacy local mode and contract tests still pass
+11. Postgres connection and migration safety tests still pass
+12. docs/index validation passes
+13. the Postgres-gated tests skip explicitly without a DSN and pass with a
    real `TRADINGX_TEST_POSTGRES_DSN`
 
 Only after this definition is met should Wave 2 continue into outbox,

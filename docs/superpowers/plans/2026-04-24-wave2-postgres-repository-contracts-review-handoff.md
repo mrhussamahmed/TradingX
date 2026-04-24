@@ -55,8 +55,9 @@ these issues:
 
 1. Slice 3 outbox/checkpoint/source-status boundaries are now explicit
    contract-only interfaces.
-2. Access, command-session, and commanding contracts are read-side
-   audit/summary only; write-shaped command intake and session issuance
+2. Access, command-session, and commanding ordinary repository protocols
+   are deferred; their event rows may appear only through the public
+   timeline union, and write-shaped command intake and session issuance
    are prohibited until Wave 3.
 3. Every implementation-backed repository method must have real
    Postgres-gated SQL coverage.
@@ -71,6 +72,17 @@ these issues:
 8. The public event timeline contract is mandatory and
    implementation-backed, and is separate from internal
    `system.outbox_event`.
+9. The domain scope is now a concrete matrix: implemented-now,
+   deferred-note-only, and Slice 3 contract-only.
+10. The public timeline now names its required SQL `UNION ALL` sources,
+    canonical fields, ordering tuple, minimum event families, and
+    `system.outbox_event` prohibition.
+11. Real Postgres tests must cover page-1, mid-pagination insert, page-2
+    cursor behavior for every SQL-backed list method.
+12. Legacy no-Postgres regression coverage now includes `run_web_app`
+    and `build_default_local_web_components`, not only `create_app`.
+13. `system.domain_projection_status` reads are labeled derived and
+    non-authoritative until Slice 3 source-status aggregation exists.
 
 ## What PLAN-0016 Schedules
 
@@ -81,8 +93,9 @@ these issues:
    load/save, and source-status upsert/read.
 4. Add a Postgres repository package skeleton without ORM coupling.
 5. Implement and test the minimal load-bearing SQL-backed subset:
-   runtime posture, runtime heartbeats, incidents/events, system
-   projection status reads, and public event timeline reads.
+   runtime posture, runtime heartbeats, incidents/events, derived
+   non-authoritative system projection status reads, and public event
+   timeline reads.
 6. Add mandatory no-Postgres legacy startup and route regressions.
 7. Keep `/api/v1` routing, SSE parity, projectors, outbox behavior,
    checkpoint advancement, readiness aggregation, and frontend changes
@@ -92,9 +105,10 @@ these issues:
 
 ### No Wave 3 write semantics
 
-Command/session contracts must remain read-side audit and summary
-contracts. The reviewer should reject any method shape that implies
-stable command creation, session issuance, idempotency replay,
+Access, command-session, and commanding ordinary repository protocols
+are deferred in this slice; their event rows may appear only through the
+public timeline union. The reviewer should reject any method shape that
+implies stable command creation, session issuance, idempotency replay,
 precondition enforcement, or result recording before Wave 3.
 
 ### Contract-only does not mean implemented
@@ -113,19 +127,40 @@ test. Fakes are useful for unit tests but cannot be the only proof.
 
 The public event timeline contract must be a canonical read API shape.
 It must not leak internal outbox rows or make `/api/v1/events` depend on
-projector internals.
+projector internals. Its SQL source must be a `UNION ALL` over
+`incidents.incident_event`, `commanding.command_event`,
+`access.command_session_event`, `runtime.control_posture_snapshot`,
+`runtime.runtime_heartbeat`, and `investigations.replay_event`, ordered
+by `occurred_at_utc DESC` and `timeline_event_id DESC`.
+
+### Domain matrix controls scope
+
+Implemented-now surfaces must have real Postgres coverage.
+Deferred-note-only domains must not add ordinary fake-only repository
+protocols. Slice 3 contract-only boundaries may define shapes but cannot
+claim working behavior.
+
+### Projection status is not readiness authority
+
+`system.domain_projection_status` is a derived diagnostic read in this
+slice. Router readiness authority remains deferred until Slice 3
+implements source-family aggregation over
+`system.domain_projection_source_status`.
 
 ### Cursor pagination must be stable
 
 List methods need named timestamp columns, sort direction, tie-break
 columns and direction, null handling, cursor encoding, boundary
 semantics, max page size, invalid cursor behavior, and next-token
-behavior.
+behavior. Integration tests must fetch page 1, insert rows around the
+page boundary, fetch page 2 with the original cursor, and prove no
+duplicates or skips.
 
 ### Legacy local mode stays database-free
 
 Repository contracts and package imports must not instantiate Postgres
-engines during config load, app creation, or legacy route handling.
+engines during config load, app creation, default local web component
+construction, default local startup wiring, or legacy route handling.
 
 ### Secrets stay redacted
 
@@ -193,18 +228,22 @@ Challenge especially:
    accidentally implementing Slice 3 behavior
 3. whether every implementation-backed method is required to have real
    Postgres SQL coverage
-4. whether public event timeline reads are clearly separated from
-   internal outbox rows
-5. whether cursor pagination semantics are complete and stable under
+4. whether the implemented-now/deferred-note-only/Slice 3 contract-only
+   matrix is enforceable
+5. whether public event timeline reads are clearly separated from
+   internal outbox rows and have a concrete SQL union source
+6. whether projection status reads are clearly non-authoritative until
+   source-status aggregation exists
+7. whether cursor pagination semantics are complete and stable under
    inserts between pages
-6. whether fake tests could pass while SQL behavior is broken
-7. whether legacy config/app/route paths can accidentally instantiate
-   Postgres repositories
-8. whether raw DSNs or passwords can leak through repository errors,
+8. whether fake tests could pass while SQL behavior is broken
+9. whether legacy config/app/route/startup paths can accidentally
+   instantiate Postgres repositories
+10. whether raw DSNs or passwords can leak through repository errors,
    reprs, args, chained exceptions, logs, or test output
-9. whether dataclasses create a second schema model that conflicts with
+11. whether dataclasses create a second schema model that conflicts with
    migration tables
-10. whether the verification gates are sufficient and runnable on the
+12. whether the verification gates are sufficient and runnable on the
     workstation's 5433 Postgres DSN
 
 Return whether PLAN-0016 is ready to implement as-is, ready after edits,
