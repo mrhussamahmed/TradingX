@@ -53,6 +53,7 @@ PUBLIC_TIMELINE_ORDERING = (
     ("timeline_event_id", "desc", "not_null"),
 )
 PROJECTION_STATUS_IS_ROUTER_READINESS_AUTHORITY = False
+OUTBOX_APPEND_REPOSITORY_GENERATED_FIELDS = ("outbox_event_id", "created_at_utc")
 _SECRET_QUERY_PARAMETERS = frozenset(
     {"pass", "passwd", "password", "pwd", "sslpassword"}
 )
@@ -79,6 +80,32 @@ class RepositoryStorageError(RuntimeError):
         error = cls(
             f"Control-plane repository operation {operation!r} failed for "
             f"{redact_dsn(dsn)}: {message}"
+        )
+        error.__cause__ = None
+        error.__context__ = None
+        error.__suppress_context__ = True
+        return error
+
+
+class RepositoryConflictError(RuntimeError):
+    """Raised when repository input conflicts with persisted state."""
+
+
+class OutboxAppendConflictError(RepositoryConflictError):
+    """Raised when an outbox dedupe key is reused for a different event."""
+
+    @classmethod
+    def from_conflict(
+        cls,
+        *,
+        dedupe_key: str,
+        dsn: str,
+        details: str,
+    ) -> OutboxAppendConflictError:
+        safe_details = _redact_exception_message(details, dsn)
+        error = cls(
+            "Control-plane outbox append conflict for dedupe_key "
+            f"{dedupe_key!r} in {redact_dsn(dsn)}: {safe_details}"
         )
         error.__cause__ = None
         error.__context__ = None
@@ -255,6 +282,14 @@ class OutboxEventAppendRequest:
     occurred_at_utc: datetime
     payload: Mapping[str, Any]
 
+    def __post_init__(self) -> None:
+        _require_non_empty("aggregate_type", self.aggregate_type)
+        _require_non_empty("aggregate_id", self.aggregate_id)
+        _require_non_empty("event_type", self.event_type)
+        _require_non_empty("dedupe_key", self.dedupe_key)
+        if self.event_version <= 0:
+            raise ValueError("event_version must be positive")
+
 
 @dataclass(frozen=True)
 class ProjectionCheckpointRecord:
@@ -266,6 +301,10 @@ class ProjectionCheckpointRecord:
     lag_seconds: int | None
     status: str
     metadata: Mapping[str, Any]
+
+    @property
+    def identity_key(self) -> str:
+        return self.projection_name
 
 
 @dataclass(frozen=True)
@@ -280,6 +319,10 @@ class ProjectionSourceStatusRecord:
     ready_for_postgres: bool
     checked_at_utc: datetime
     metadata: Mapping[str, Any]
+
+    @property
+    def identity_key(self) -> tuple[str, str, str]:
+        return (self.domain_name, self.source_family, self.source_identity)
 
 
 @runtime_checkable
@@ -388,6 +431,11 @@ class ProjectionSourceStatusBoundary(Protocol):
         record: ProjectionSourceStatusRecord,
     ) -> None: ...
 
+    def list_projection_source_statuses(
+        self,
+        domain_name: str,
+    ) -> tuple[ProjectionSourceStatusRecord, ...]: ...
+
 
 def page_by_desc_timestamp_and_id(
     items: tuple[T, ...],
@@ -457,6 +505,11 @@ def _aware_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _require_non_empty(field_name: str, value: str) -> None:
+    if not value.strip():
+        raise ValueError(f"{field_name} must be non-empty")
 
 
 def _is_after_desc_cursor(

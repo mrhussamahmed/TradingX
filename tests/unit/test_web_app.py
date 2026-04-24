@@ -167,6 +167,9 @@ def _app_config(tmp_path: Path, **overrides: str) -> TradingConfig:
 def _make_postgres_construction_fail(monkeypatch) -> None:
     from tradingx.persistence import postgres as postgres_helpers
     from tradingx.persistence.repositories import postgres as repository_postgres
+    from tradingx.persistence.repositories import (
+        projection_state as repository_projection_state,
+    )
 
     def fail(*args, **kwargs):
         del args, kwargs
@@ -175,6 +178,11 @@ def _make_postgres_construction_fail(monkeypatch) -> None:
     monkeypatch.setattr(postgres_helpers, "build_postgres_engine", fail)
     monkeypatch.setattr(
         repository_postgres.PostgresControlPlaneRepository,
+        "__init__",
+        fail,
+    )
+    monkeypatch.setattr(
+        repository_projection_state.PostgresProjectionStateRepository,
         "__init__",
         fail,
     )
