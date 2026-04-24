@@ -138,11 +138,37 @@ Common optional settings:
 - `TRADINGX_SCHEDULER_POLL_SECONDS`
 - `TRADINGX_LOG_MAX_BYTES`
 - `TRADINGX_LOG_RETENTION_FILES`
+- `TRADINGX_CONTROL_PLANE_STORE`
+- `TRADINGX_POSTGRES_DSN`
+- `TRADINGX_POSTGRES_REQUIRED`
+- `TRADINGX_CONTROL_PLANE_DOMAIN_STORES`
+- `TRADINGX_TEST_POSTGRES_DSN`
 - `TRADINGX_WEB_WRITE_MODE_ENABLED`
 - `TRADINGX_WEB_WRITE_SIGNING_SECRET`
 - `TRADINGX_WEB_WRITE_MAX_AGE_SECONDS`
 - `TRADINGX_TELEGRAM_*`
 - `TRADINGX_SMTP_*`
+
+### 3a. Optional local Postgres verification
+
+Legacy local mode remains the default. The Postgres variables are only
+needed when running Wave 2 migration and repository tests, or when a later
+slice explicitly promotes a domain to Postgres.
+
+On this workstation, port `5432` is already owned by a separate system
+PostgreSQL service. The Homebrew PostgreSQL 16 service used for TradingX
+test verification listens on `5433`, so use this DSN for local
+Postgres-gated tests:
+
+```bash
+TRADINGX_TEST_POSTGRES_DSN=postgresql://tradingx:tradingx@127.0.0.1:5433/tradingx_test \
+  uv run pytest tests/integration/test_controlplane_postgres_store.py -q
+```
+
+If a future machine has TradingX PostgreSQL on `5432`, the equivalent DSN
+is `postgresql://tradingx:tradingx@127.0.0.1:5432/tradingx_test`. Do not
+run the reset-backed integration tests against any database other than
+`tradingx_test`.
 
 ### 4. Build the website bundle
 
