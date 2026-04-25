@@ -1,11 +1,11 @@
 ---
 id: PLAN-0024
 title: Headless control plane Wave 2 Postgres documents route pivot plan
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: PLAN-0024@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -141,8 +141,11 @@ route layer. It should be deliberately boring:
    behavior may read from Postgres.
 3. Evaluate scoped documents route readiness before any Postgres-backed
    route response.
-4. Call `PostgresControlPlaneRepository.list_documents(page=None)` for
-   list reads and `get_document(document_id)` for detail reads.
+4. For list reads, start with
+   `PostgresControlPlaneRepository.list_documents(page=None)` and drain
+   every returned repository `next_cursor` internally via
+   `PageRequest(cursor=...)`; detail reads must call
+   `get_document(document_id)`.
 5. Map `DocumentReadRecord` to the same public shape currently returned
    from `DocumentRecord`:
    - list route remains `_list_response(...)` compatible.
@@ -153,9 +156,9 @@ route layer. It should be deliberately boring:
    - optional fallback
    - `/api/documents`
 7. Keep pagination out of the public response until the existing v1
-   route contract intentionally grows. The provider may pass `page=None`
-   to Postgres and ignore the existing `cursor` parameter just as the
-   current route does.
+   route contract intentionally grows. The public `cursor` query
+   parameter may remain ignored, but the provider must not silently
+   truncate to the repository default page.
 
 Acceptable implementation names are intentionally small, for example:
 
@@ -179,6 +182,9 @@ The implementation must lock this behavior with tests:
 | --- | --- | --- | --- | --- | --- |
 | `legacy` | none | `false` | absent or present | serve legacy | no engine |
 | `legacy` | `documents=legacy` | `false` | absent or present | serve legacy | no engine |
+| `legacy` | `documents=legacy` | `true` | absent or present | serve legacy | no documents-route engine for this domain |
+| `legacy` | none | `true` | ready | serve Postgres | build lazily or required startup wiring |
+| `legacy` | none | `true` | missing DSN, connection error, or readiness blocked | `503 documents_postgres_unavailable` | no secret leakage |
 | `legacy` | `documents=postgres` | `false` | ready | serve Postgres | build lazily |
 | `legacy` | `documents=postgres` | `false` | missing DSN, connection error, or readiness blocked | serve legacy fallback | attempt only when needed; no startup failure |
 | `legacy` | `documents=postgres` | `true` | ready | serve Postgres | build lazily or at app construction if existing startup path requires it |
@@ -209,7 +215,9 @@ Interpretation rules:
    `documents=legacy` override exists, even if
    `TRADINGX_POSTGRES_REQUIRED=false`.
 5. `TRADINGX_POSTGRES_REQUIRED=true` turns any Postgres-requested
-   documents route into fail-closed behavior.
+   documents route into fail-closed behavior. With global `legacy` and no
+   documents override, required mode requests Postgres for this route;
+   `documents=legacy` remains the explicit route-local escape hatch.
 6. Optional fallback covers missing DSN, repository construction
    failure, connection failure, and scoped readiness blockers.
 7. Fallback must be observable in tests but does not need a new public
@@ -273,20 +281,25 @@ Add or update tests around the provider and route behavior:
 3. v1 list route:
    - Optional hybrid with ready scoped Postgres data returns records from
      `PostgresControlPlaneRepository.list_documents(page=None)`.
+   - Postgres-backed list reads drain repository `next_cursor` pages
+     internally and do not truncate to the default repository page size.
    - Required mode with ready scoped Postgres data returns records from
      Postgres for both global `hybrid` plus `documents=postgres` and
-     global `postgres` with no override.
+     global `legacy`/`postgres` with no override.
    - Optional hybrid with readiness blocked falls back to
      `read_model.list_documents()`.
    - Required mode with readiness blocked returns
      `503 documents_postgres_unavailable`.
+   - `documents=legacy` keeps v1 documents legacy-backed even when
+     global store is `legacy`, `hybrid`, or `postgres` and
+     `TRADINGX_POSTGRES_REQUIRED=true`.
 4. v1 detail route:
    - Ready Postgres mode calls `get_document(document_id)` instead of
      scanning legacy list data.
    - Required mode with ready scoped Postgres data calls
      `get_document(document_id)` and serves Postgres for both global
-     `hybrid` plus `documents=postgres` and global `postgres` with no
-     override.
+     `hybrid` plus `documents=postgres` and global `legacy`/`postgres`
+     with no override.
    - Missing Postgres record returns the existing
      `404 document_not_found`.
    - Required mode with unavailable Postgres returns
@@ -322,9 +335,14 @@ Required proofs:
    `503 documents_postgres_unavailable`.
 7. Required mode with ready scoped Postgres data serves Postgres list
    and detail responses for both global `hybrid` plus
-   `documents=postgres` and global `postgres` with no override.
+   `documents=postgres` and global `legacy`/`postgres` with no
+   override.
 8. A present `config_proposals` source status must not be required for
-   the v1 documents route and must not appear in the returned documents.
+   the v1 documents route. Seed an active Postgres document row whose
+   `metadata.source_family` is `config_proposals`; it must not appear in
+   `GET /api/v1/documents`, and
+   `GET /api/v1/documents/{proposal_id}` must return the existing
+   `404 document_not_found` shape.
 
 ### Full verification commands
 

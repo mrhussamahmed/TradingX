@@ -1,11 +1,11 @@
 ---
 id: PLAN-0025
 title: Headless control plane Wave 2 Postgres documents route pivot implementation plan
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: PLAN-0025@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -15,8 +15,10 @@ author_session: codex-gpt-5-2026-04-25
 ## Purpose
 
 This implementation plan turns clean-approved `PLAN-0024` into a
-test-first execution sequence. It is planning only: no production code,
-tests, migrations, or runtime wiring are changed by this artifact.
+test-first execution sequence. The original route pivot has since landed
+on `main`; version 1.0.1 also defines the corrective post-merge delta
+needed after adversarial review found missing plan and regression-test
+coverage.
 
 The slice pivots only the existing v1 document read routes to the
 completed Postgres document read path when configuration and scoped
@@ -30,6 +32,27 @@ readiness allow it:
 Legacy `/api/documents`, config proposal APIs, bridge/projector work,
 repository migrations, and non-document routes remain outside this
 slice.
+
+## Post-Merge Corrective Delta
+
+This amended artifact is now read as a repair plan against merged
+`main`, not as permission to replay the original greenfield execution
+sequence. The corrective pass is intentionally narrow:
+
+1. Amend `PLAN-0024` and this implementation plan to pin required legacy
+   semantics, internal Postgres page draining, and active
+   `config_proposals` document exclusion.
+2. Add regression tests for `TRADINGX_CONTROL_PLANE_STORE=legacy` with
+   no documents override and `TRADINGX_POSTGRES_REQUIRED=true`.
+3. Add regression tests proving `documents=legacy` remains a route-local
+   override even when global store or required mode would otherwise use
+   Postgres.
+4. Keep the existing internal page-drain regression test as a required
+   guard against default-page truncation.
+5. Strengthen guarded DSN-backed tests so an active Postgres
+   `config_proposals` document is excluded from both v1 list and detail.
+6. Change production provider code only if these regression tests expose
+   a real delta.
 
 ## Authority
 
@@ -201,22 +224,27 @@ production code:
 2. `hybrid` plus `documents=postgres` plus ready Postgres list/detail
    uses the Postgres provider through the v1 routes.
 3. `TRADINGX_POSTGRES_REQUIRED=true` with ready scoped Postgres serves
-   Postgres list and detail through the v1 routes.
+   Postgres list and detail through the v1 routes, including global
+   `legacy` with no documents override.
 4. Global `TRADINGX_CONTROL_PLANE_STORE=postgres` with ready scoped
    Postgres serves Postgres list and detail through the v1 routes.
-5. The ready `hybrid`, required, and global-postgres list paths call
-   `list_documents(page=None)`.
+5. The ready `hybrid`, required, and global-postgres list paths start
+   with `list_documents(page=None)` and drain any repository
+   `next_cursor` pages internally.
 6. The ready `hybrid`, required, and global-postgres detail paths call
    `get_document(document_id)` and do not scan the legacy list.
 7. Optional hybrid/readiness-blocked mode falls back to legacy.
 8. `TRADINGX_POSTGRES_REQUIRED=true` or global `postgres` with blocked
    readiness returns `503 documents_postgres_unavailable`.
-9. `/api/documents` remains legacy-backed.
-10. The config proposals route remains legacy/config-specific and is not
+9. `documents=legacy` keeps the v1 documents route legacy-backed even
+   when global store is `legacy`, `hybrid`, or `postgres` and
+   `TRADINGX_POSTGRES_REQUIRED=true`.
+10. `/api/documents` remains legacy-backed.
+11. The config proposals route remains legacy/config-specific and is not
    routed through the document provider.
-11. The v1 detail route uses `get_document` rather than scanning the
+12. The v1 detail route uses `get_document` rather than scanning the
    legacy list when Postgres-ready.
-12. Postgres-backed list/detail response shape excludes metadata,
+13. Postgres-backed list/detail response shape excludes metadata,
    revision internals, page cursors, and table-shaped payloads.
 
 Add the guarded integration tests in
@@ -226,7 +254,8 @@ unit route tests establish the seam:
 1. Ready Postgres list/detail reads use real migrations, repositories,
    projection source statuses, and `TestClient`.
 2. `TRADINGX_POSTGRES_REQUIRED=true` with ready scoped Postgres serves
-   Postgres list and detail through `TestClient`.
+   Postgres list and detail through `TestClient`, including global
+   `legacy` with no documents override.
 3. Global `TRADINGX_CONTROL_PLANE_STORE=postgres` with ready scoped
    Postgres serves Postgres list and detail through `TestClient`.
 4. The required and global-postgres ready list/detail cases prove the
@@ -236,8 +265,12 @@ unit route tests establish the seam:
 6. Optional mode falls back to legacy when one scoped family is blocked.
 7. Required/global-postgres mode fails closed when one scoped family is
    blocked.
-8. `config_proposals` is not required for readiness and is not returned
-   by `/api/v1/documents`.
+8. `config_proposals` is not required for readiness. The guarded suite
+   must seed an active Postgres config-proposal document row and assert
+   it is not returned by `/api/v1/documents`.
+9. `GET /api/v1/documents/{proposal_id}` for that active
+   config-proposal document returns the existing
+   `404 document_not_found` shape.
 
 ## Implementation Notes
 
@@ -248,9 +281,10 @@ The provider should stay deliberately local to the web route layer:
 2. It can return a route-local DTO compatible with the existing v1
    serializer, or directly produce the existing public route shape.
 3. Legacy mode delegates to `read_model.list_documents()`.
-4. Postgres-ready mode calls
-   `PostgresControlPlaneRepository.list_documents(page=None)` for list
-   and `get_document(document_id)` for detail.
+4. Postgres-ready mode starts list reads with
+   `PostgresControlPlaneRepository.list_documents(page=None)`, drains
+   repository `next_cursor` pages internally, and calls
+   `get_document(document_id)` for detail.
 5. Detail 404 behavior should remain `404 document_not_found`.
 6. Public list/detail payloads should include only the existing public
    fields such as `document_id`, `title`, `kind`, `preview`, and
@@ -300,7 +334,8 @@ without the guarded route proof.
 
 ## Adversarial Review Checklist
 
-Reviewers should block execution if any answer is "no":
+Reviewers should block execution or corrective closeout if any answer is
+"no":
 
 1. Does the plan require failing unit route tests before production
    code?
@@ -322,19 +357,20 @@ Reviewers should block execution if any answer is "no":
     repository, migration, frontend, and broad-router work?
 13. Are errors redacted?
 14. Are verification commands precise and runnable?
-15. Is `PLAN-0025` indexed and is `STATE.md` clear that execution has
-    not started or completed?
+15. Is `PLAN-0025` indexed and is `STATE.md` clear whether execution is
+    pending, landed, or under post-merge corrective delta?
 
-## Ready-to-Execute Gate
+## Ready-to-Execute / Corrective Closeout Gate
 
-Implementation may start only after:
+The original implementation sequence may start only after:
 
 1. `PLAN-0024` remains clean-approved.
 2. `PLAN-0025` receives adversarial review approval.
 3. `docs/INDEX.md` indexes `PLAN-0025`.
 4. `docs/handover/STATE.md` names `PLAN-0025` as the current
    implementation-plan artifact pending adversarial review before
-   execution.
+   execution, or records that execution has already landed and this
+   artifact now governs a post-merge corrective delta.
 5. The first implementation commit begins with failing tests in
    `tests/unit/test_web_app.py`.
 6. The first production code move is the small web-local provider seam,
@@ -345,3 +381,16 @@ Implementation may start only after:
 8. Required-mode and global-postgres ready-path list/detail proofs are
    present in both unit/provider route tests and guarded DSN-backed
    `TestClient` tests.
+
+The post-merge corrective delta may close only after:
+
+1. `PLAN-0024` and `PLAN-0025` are amended to v1.0.1 and indexed.
+2. Unit regressions pin global `legacy` plus
+   `TRADINGX_POSTGRES_REQUIRED=true` and the `documents=legacy`
+   override.
+3. Guarded DSN-backed tests assert active config-proposal document
+   exclusion from both v1 list and detail.
+4. Production provider code remains unchanged unless a regression test
+   fails against merged `main`.
+5. Local verification records whether the guarded DSN-backed route proof
+   ran or skipped.

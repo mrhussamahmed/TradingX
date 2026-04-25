@@ -1,11 +1,11 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.13
+version: 1.0.14
 status: active
 created: 2026-04-17
 last_amended: 2026-04-25
-supersedes: STATE-0001@1.0.12
+supersedes: STATE-0001@1.0.13
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -39,12 +39,19 @@ author_session: codex-gpt-5-2026-04-25
   adversarial review. It focuses only on the actual
   `/api/v1/documents` and `/api/v1/documents/{document_id}` Postgres
   route pivot after the completed bridge, repository, and projector
-  work.
+  work. Version 1.0.1 amends the plan to pin required legacy-mode
+  semantics, internal Postgres page draining, and active
+  `config_proposals` document exclusion.
 - `PLAN-0025` route-pivot implementation planning is clean-approved and
   the v1 documents route pivot implementation has landed locally:
   `/api/v1/documents` and `/api/v1/documents/{document_id}` can use the
   scoped Postgres document read path when config and readiness allow,
   while `/api/documents` and config proposal routes remain legacy-backed.
+  Version 1.0.1 records the post-merge corrective delta; local
+  regression coverage now pins required legacy/no-override behavior,
+  `documents=legacy` override behavior, pagination draining, and
+  config-proposal list/detail exclusion without needing production
+  provider changes.
 - Local verification is green for unit, contract, lint, mypy, index, and
   diff checks. The guarded DSN-backed route proof file exists at
   `tests/integration/test_web_app_postgres_documents_routes.py`, but it

@@ -679,6 +679,10 @@ def test_legacy_documents_and_config_proposals_bypass_v1_documents_provider() ->
             "TRADINGX_POSTGRES_REQUIRED": "true",
         },
         {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
             "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
             "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
             "TRADINGX_POSTGRES_REQUIRED": "true",
@@ -906,6 +910,10 @@ def test_v1_documents_optional_postgres_modes_fall_back_to_legacy_when_readiness
             "TRADINGX_POSTGRES_REQUIRED": "true",
         },
         {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
             "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
             "TRADINGX_POSTGRES_REQUIRED": "true",
         },
@@ -955,6 +963,57 @@ def test_v1_documents_required_and_global_postgres_fail_closed_when_readiness_bl
         )
     assert document_repo.list_pages == []
     assert document_repo.detail_ids == []
+
+
+@pytest.mark.parametrize(
+    "global_store",
+    ("legacy", "hybrid", "postgres"),
+)
+def test_v1_documents_legacy_override_beats_required_postgres_modes(
+    tmp_path: Path,
+    global_store: str,
+) -> None:
+    config = _app_config(
+        tmp_path,
+        TRADINGX_CONTROL_PLANE_STORE=global_store,
+        TRADINGX_CONTROL_PLANE_DOMAIN_STORES="documents=legacy",
+        TRADINGX_POSTGRES_REQUIRED="true",
+    )
+    read_model = _ReadModel(
+        documents=(
+            _document_record(
+                "LEGACY",
+                title="Legacy document",
+                preview="Legacy override.",
+            ),
+        )
+    )
+    document_repo = _FakePostgresDocumentRepository((_postgres_document("STATE"),))
+    projection_repo = _FakeProjectionStatusRepository(_ready_document_statuses())
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/LEGACY")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"][0]["doc_id"] == "LEGACY"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["document_id"] == "LEGACY"
+    assert document_repo.list_pages == []
+    assert document_repo.detail_ids == []
+    assert read_model.list_documents_calls == 2
 
 
 def test_unsigned_post_is_rejected(tmp_path) -> None:

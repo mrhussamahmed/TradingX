@@ -89,6 +89,7 @@ def test_v1_documents_hybrid_override_reads_ready_postgres_list_detail_and_tombs
     list_response = client.get("/api/v1/documents")
     detail_response = client.get("/api/v1/documents/STATE")
     tombstone_response = client.get("/api/v1/documents/DELETED")
+    config_proposal_response = client.get("/api/v1/documents/proposal-1")
 
     assert list_response.status_code == 200
     document_ids = {
@@ -96,6 +97,7 @@ def test_v1_documents_hybrid_override_reads_ready_postgres_list_detail_and_tombs
     }
     assert {"STATE", "INDEX", "2026-04-25-wave2"} <= document_ids
     assert "DELETED" not in document_ids
+    assert "proposal-1" not in document_ids
     assert "LEGACY" not in document_ids
     assert detail_response.status_code == 200
     assert detail_response.json()["data"] == {
@@ -107,6 +109,10 @@ def test_v1_documents_hybrid_override_reads_ready_postgres_list_detail_and_tombs
     }
     assert tombstone_response.status_code == 404
     assert tombstone_response.json()["data"]["error"]["code"] == "document_not_found"
+    assert config_proposal_response.status_code == 404
+    assert config_proposal_response.json()["data"]["error"]["code"] == (
+        "document_not_found"
+    )
 
 
 @pytest.mark.parametrize(
@@ -115,6 +121,10 @@ def test_v1_documents_hybrid_override_reads_ready_postgres_list_detail_and_tombs
         {
             "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
             "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
             "TRADINGX_POSTGRES_REQUIRED": "true",
         },
         {
@@ -175,6 +185,10 @@ def test_v1_documents_optional_hybrid_falls_back_to_legacy_when_scoped_family_bl
         {
             "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
             "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
             "TRADINGX_POSTGRES_REQUIRED": "true",
         },
         {
