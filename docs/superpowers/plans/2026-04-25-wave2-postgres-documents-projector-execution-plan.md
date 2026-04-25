@@ -1,11 +1,11 @@
 ---
 id: PLAN-0023
 title: Headless control plane Wave 2 Postgres documents projector execution plan
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: PLAN-0023@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -151,6 +151,7 @@ Add DTOs to `src/tradingx/controlplane/repositories.py`:
    - `document_id`
    - `document_revision_id`
    - `revision_number`
+   - `created_at_utc`
    - `source_ref`
    - `metadata`
 
@@ -160,6 +161,18 @@ Extend `DocumentProjectionWriteRepository` with:
 2. `allocate_document_revision_number(document_id, document_revision_id)`
 3. `replace_document_object_refs(document_revision_id, refs)`
 4. `tombstone_documents_absent_from_inventory_with_revisions(...)`
+
+Add a real Postgres projector unit of work to
+`src/tradingx/persistence/repositories/document_projection.py`:
+
+1. `PostgresDocumentsProjectorUnitOfWork`
+2. `transaction()` opens one `engine.begin()` block and yields:
+   - transaction-bound `PostgresProjectionStateRepository`
+   - transaction-bound `PostgresDocumentProjectionRepository`
+3. Both repository views must receive the same SQLAlchemy connection.
+4. The class should mirror `PostgresRuntimeProjectorUnitOfWork` error
+   handling so repository conflicts propagate and storage errors are
+   redacted.
 
 Implementation rules for
 `PostgresDocumentProjectionRepository`:
@@ -192,10 +205,14 @@ Implementation rules for
      cursor
    - update the document summary to tombstoned
    - append a deterministic tombstone revision per affected document
+   - set tombstone revision `created_at_utc` from the inventory event's
+     deterministic occurrence timestamp, never from wall-clock time
    - return affected public document IDs in deterministic order
 8. The older `tombstone_documents_absent_from_inventory` method may
    remain as a compatibility wrapper, but projector code must use the
    revision-writing method.
+9. Projector integration tests must construct the projector with
+   `PostgresDocumentsProjectorUnitOfWork`, not standalone repositories.
 
 Green gate:
 
@@ -224,14 +241,16 @@ Write failing tests in `tests/unit/test_controlplane_documents_projector.py`:
 8. `test_documents_projector_replaces_object_refs_for_file_revision`
 9. `test_documents_projector_inventory_snapshot_tombstones_missing_docs`
 10. `test_documents_projector_inventory_tombstone_writes_revision_history`
-11. `test_documents_projector_empty_inventory_tombstones_last_document`
-12. `test_documents_projector_partial_inventory_absence_does_not_tombstone`
-13. `test_documents_projector_advances_collect_watermark_only_on_latest_source_event`
-14. `test_documents_projector_rollback_does_not_advance_checkpoint_or_watermark`
-15. `test_documents_projector_returns_scoped_route_readiness_without_domain_status`
-16. `test_documents_projector_scoped_readiness_blocks_when_api_family_status_missing`
-17. `test_documents_projector_per_family_checkpoint_replays_old_rows`
-18. `test_documents_projector_resolves_legacy_checkpoint_cursor_from_event_id`
+11. `test_documents_projector_same_revision_payload_mismatch_conflicts`
+12. `test_documents_projector_active_revision_replay_after_tombstone_noops_only_when_stable_fields_match`
+13. `test_documents_projector_empty_inventory_tombstones_last_document`
+14. `test_documents_projector_partial_inventory_absence_does_not_tombstone`
+15. `test_documents_projector_advances_collect_watermark_only_on_latest_source_event`
+16. `test_documents_projector_rollback_does_not_advance_checkpoint_or_watermark`
+17. `test_documents_projector_returns_scoped_route_readiness_without_domain_status`
+18. `test_documents_projector_scoped_readiness_blocks_when_api_family_status_missing`
+19. `test_documents_projector_per_family_checkpoint_replays_old_rows`
+20. `test_documents_projector_resolves_legacy_checkpoint_cursor_from_event_id`
 
 Fake repository rules:
 
@@ -248,6 +267,8 @@ Fake repository rules:
    raises if called.
 4. Readiness tests must build static requirements from fake inventory,
    then join status rows.
+5. Tombstone revision records must carry event-derived
+   `created_at_utc`.
 
 Green gate:
 
@@ -333,18 +354,26 @@ Required tests:
 7. `test_documents_projector_empty_inventory_tombstones_last_document`
 8. `test_documents_projector_partial_read_without_inventory_does_not_tombstone`
 9. `test_documents_projector_conflict_rolls_back_all_projection_state`
-10. `test_documents_projector_family_checkpoints_are_independent`
-11. `test_documents_projector_legacy_checkpoint_cursor_recovers_from_event_id`
-12. `test_documents_projector_ignores_config_proposals`
-13. `test_documents_projector_does_not_write_domain_projection_status`
-14. `test_documents_projector_missing_api_family_status_blocks_scoped_readiness`
-15. `test_documents_projector_collect_watermark_advances_only_after_latest_event`
+10. `test_documents_projector_same_revision_payload_mismatch_conflicts`
+11. `test_documents_projector_active_revision_replay_after_tombstone_noops_when_stable_fields_match`
+12. `test_documents_projector_active_revision_replay_after_tombstone_conflicts_when_stable_fields_drift`
+13. `test_documents_projector_real_uow_rolls_back_documents_refs_source_status_and_checkpoint`
+14. `test_documents_projector_family_checkpoints_are_independent`
+15. `test_documents_projector_legacy_checkpoint_cursor_recovers_from_event_id`
+16. `test_documents_projector_ignores_config_proposals`
+17. `test_documents_projector_does_not_write_domain_projection_status`
+18. `test_documents_projector_missing_api_family_status_blocks_scoped_readiness`
+19. `test_documents_projector_collect_watermark_advances_only_after_latest_event`
+20. `test_documents_projector_tombstone_revision_uses_inventory_event_time`
 
 Concurrency proof:
 
 1. Keep allocation concurrency tests in repository integration tests.
 2. The projector integration suite should not rely on timing-sensitive
    thread scheduling beyond the repository allocation proof.
+3. The real rollback proof must use `PostgresDocumentsProjectorUnitOfWork`
+   so document writes, object refs, source-status updates, and checkpoint
+   writes share one database transaction.
 
 Green gate:
 
@@ -409,3 +438,9 @@ Before implementation begins, review this execution plan for:
    Postgres tests.
 8. Whether any route construction path can import or instantiate
    Postgres dependencies before the later route pivot.
+9. Whether the execution tests preserve `PLAN-0022` replay guarantees
+   for same-revision conflicts and active replay after tombstone.
+10. Whether tombstone revisions carry deterministic event time all the
+    way to `documents.document_revision.created_at_utc`.
+11. Whether real Postgres projector tests use the concrete UoW rather
+    than separate repositories with independent transactions.
