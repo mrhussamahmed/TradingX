@@ -46,7 +46,7 @@ Implementation proceeds vertical-slice first:
 schema -> artifact -> blocker -> CLI report -> activation refusal -> golden replay
 ```
 
-Milestone 1 creates the enforcement spine. Milestones 2-10 attach additional evidence types and blockers to that spine.
+Milestone 0 defines the mandate, objectives, constraints, benchmarks, capital roles, and allocation governance. Milestone 1 creates the enforcement spine. Milestones 2-10 attach additional evidence types and blockers to that spine.
 
 ## Trust Model Invariant
 
@@ -180,6 +180,7 @@ Periodic recertification:
 
 | Milestone | Status |
 |---|---|
+| 0. Investment Mandate & Capital Allocation Governance | Locked specification / planning-ready |
 | 1. Governance Spine | Locked specification / planning-ready |
 | 2. Experiment Registration & Trial Universe | Locked specification / planning-ready |
 | 3. Data Restatement & Fingerprinting | Locked specification / planning-ready |
@@ -191,7 +192,195 @@ Periodic recertification:
 | 9. Live Probe & Operational Safety | Locked specification / planning-ready |
 | 10. Recertification & Change Control | Locked specification / planning-ready |
 
-These milestones are not instructions to implement all ten at once. Many referenced modules and schema directories do not exist yet. The next work item is a thin architecture slice for Milestone 1 that creates the trust spine, ledger, artifact store interface, schema validator, CLI report, activation refusal, and golden replay.
+These milestones are not instructions to implement all eleven at once. Many referenced modules and schema directories do not exist yet. Milestone 0 defines the mandate and capital allocation policy requirements that later evidence must satisfy. The next architecture work item is still a thin implementation slice for Milestone 1 that creates the trust spine, ledger, artifact store interface, schema validator, CLI report, activation refusal, and golden replay.
+
+## Milestone 0: Investment Mandate & Capital Allocation Governance
+
+### Goal
+
+Define why TradingX exists: to compound capital through controlled exposure to validated positive-edge strategies, while preserving survival, liquidity, and operational control.
+
+### Core Rule
+
+TradingX's mission is capital growth. Governance and statistical validation are filters, not the objective. No strategy receives capital unless it has a falsifiable wealth thesis, mandate-compatible benchmark, capital role, risk budget, and scale-up/down policy.
+
+### Scope Boundary
+
+Milestone 0 defines blockers, objectives, constraints, and allocation policy requirements. It does not prove edge. Milestones 4-9 produce the evidence fields: lower-bound net edge, statistical validity, costs, capacity, attribution confidence, optimizer validity, sizing validity, short-side support, and live readiness.
+
+### Prime Directive
+
+TradingX must:
+
+1. Preserve survival.
+2. Generate positive net wealth contribution.
+3. Allocate capital to stronger validated opportunities.
+4. Scale exposure only when evidence, capacity, and operations support it.
+5. Reduce or remove capital from decaying or unproductive strategies.
+6. Measure opportunity cost without letting it override governance blockers.
+
+Risk control is the immune system. Capital growth is the mission.
+
+### Trust Model
+
+All Milestone 0 artifacts are authority-bearing and must include:
+
+- `schema_version`
+- `artifact_uri`
+- `payload_hash`
+- `ledger_sequence`
+- `approval_record_refs`
+- `authority_ref`
+- `created_at_utc`
+- `replay_input_refs`
+
+Fields like `approved_by` are insufficient unless backed by the signed append-only authority model from Milestone 1.
+
+### Schemas
+
+`investment_mandate` defines account type, base currency, starting capital, target scale, allowed/forbidden instruments, leverage, shorting, liquidity, tax, FX, margin policies, drawdown/CDaR limits, daily/weekly loss limits, ruin threshold, forced de-risking rules, and external cash-flow policy.
+
+`benchmark_policy` defines ex-ante benchmark set, cash/risk-free benchmark, investable market benchmark, 60/40 or mandate-appropriate alternative, no-trade/current-holdings baseline, simple ETF alternative, exclusions, and tax/account/liquidity/instrument compatibility.
+
+`strategy_capital_role` defines role as one of: `growth_candidate`, `defensive_candidate`, `diversifier`, `cash_management`, `research_only`, `inactive`.
+
+`wealth_thesis` defines mechanism exploited, persistence reason, beneficiary regime, benchmark it must beat, failure condition, edge decay detector, capacity limit, and kill condition.
+
+`capital_allocation_policy` defines initial allocation, max strategy/sleeve allocation, reserve policy, reinvestment policy, scale-up/down rules, cooldowns, and repeated-look / strategy-churn controls.
+
+`capital_scaling_decision` defines current allocation, proposed allocation, action, lower-bound net edge status, attribution confidence, capacity status, drawdown status, single-period dominance status, cooldown status, and blockers.
+
+`performance_attribution_report` defines strategy/sleeve PnL, gross return, net return after costs, financing/borrow drag, dividend/interest effects, realized/unrealized PnL, external cash flows, benchmark-relative return, and unexplained residual.
+
+`opportunity_cost_report` defines idle capital, cash drag, missed benchmark return, blocked strategy opportunity cost, reason blocked, later realized counterfactual where available, and diagnostic recommendation.
+
+### Expected Wealth Rule
+
+Capital-bearing promotion or capital increase requires a lower-confidence-bound or posterior lower-bound net edge above the predeclared threshold after:
+
+- costs
+- slippage
+- financing
+- borrow/dividend effects where applicable
+- taxes where modeled
+- capacity stress
+- benchmark comparison
+
+Failure state:
+
+`net_edge_lower_bound_below_threshold`
+
+`research_only` exploration does not require investment-grade expected-wealth evidence.
+
+### Tax / Modeling Rule
+
+Each mandate and report must declare:
+
+- `tax_modeled`
+- `tax_account_type`
+- `pre_tax_or_after_tax`
+- tax assumptions if modeled
+- promotion/allocation ceiling if tax is not modeled
+
+If taxes are not modeled, reports must explicitly declare `pre_tax`, and promotion/allocation ceilings follow the mandate's tax policy.
+
+### Survival Definition
+
+Survival must be defined by:
+
+- max drawdown limit
+- CDaR limit and horizon
+- daily loss limit
+- weekly loss limit
+- liquidity runway
+- margin/financing stress
+- ruin threshold
+- forced de-risking rule
+
+No return target can override survival rules.
+
+### Opportunity Cost Rule
+
+Opportunity-cost reports are diagnostic only.
+
+They may trigger:
+
+- research prioritization
+- mandate review
+- benchmark review
+- capital allocation review
+
+They may not override:
+
+- promotion blockers
+- safety controls
+- evidence gaps
+- stale data
+- cost/capacity failures
+- live-operational blockers
+
+### Scale-Up Rules
+
+Capital can increase only when all are true:
+
+- minimum OOS/live evidence is met
+- lower-bound net edge exceeds threshold
+- attribution confidence is sufficient
+- profits are not dominated by one lucky period
+- drawdown and CDaR remain inside mandate
+- capacity is validated at proposed scale
+- costs remain inside adverse-cost assumptions
+- no unresolved incidents or stale evidence
+- cooldown since last allocation increase has passed
+
+### Scale-Down / Kill Rules
+
+Capital must reduce, pause, or halt when:
+
+- lower-bound edge falls below threshold
+- benchmark underperformance is material
+- cost drag rises materially
+- drawdown/CDaR breaches budget
+- attribution confidence collapses
+- edge decay detector fires
+- capacity shrinks below allocation
+- operational incident remains unresolved
+- strategy churn/repeated-look rules are violated
+
+### Enforcement
+
+Promotion/capital allocation blocks if:
+
+- investment mandate missing
+- benchmark policy missing
+- wealth thesis missing
+- capital role missing
+- capital allocation policy missing
+- survival definition missing
+- tax/modeling status missing
+- net edge lower bound below threshold for capital-bearing promotion
+- PnL reconciliation residual too high
+- opportunity-cost report used to override blockers
+- scale-up cooldown violated
+- strategy churn controls missing
+
+### Acceptance Criteria
+
+- TradingX has a signed investment mandate.
+- Benchmarks are ex-ante, investable, and mandate-compatible.
+- Every strategy has a capital role and falsifiable wealth thesis.
+- Survival limits are formal.
+- Tax/modeling status is explicit.
+- Scale-up/down rules are predeclared.
+- Positive EV is lower-bound based, not point-estimate based.
+- Opportunity cost is diagnostic only.
+- Attribution reconciles to account evidence.
+- Defensive strategies pass only through formal utility.
+- Repeated-look and strategy-churn controls exist.
+
+### Final Lock Statement
+
+TradingX exists to compound capital, not merely to pass statistical gates. Milestone 0 defines the mandate, benchmarks, survival limits, wealth theses, capital roles, attribution, opportunity-cost diagnostics, tax/modeling status, and allocation rules. Later milestones must prove whether a strategy deserves capital under that mandate.
 
 ## Milestone 1: Governance Spine
 
@@ -1474,7 +1663,9 @@ Existing production/paper approvals without recertification metadata become `leg
 
 ## Initial Implementation Order
 
-The first implementation slice is Milestone 1 only, and it must include the full enforcement chain:
+Milestone 0 is the policy layer that capital-bearing promotion must satisfy. Its authority-bearing artifacts depend on the Milestone 1 trust spine, so technical bootstrapping starts with Milestone 1.
+
+The first technical implementation slice is Milestone 1 only, and it must include the full enforcement chain:
 
 ```text
 schema -> artifact -> blocker -> CLI report -> activation refusal -> golden replay
@@ -1488,12 +1679,13 @@ ledger schema -> signed decision/evidence fixture -> blocker evaluator -> promot
 
 Recommended execution waves:
 
-1. Governance spine: Milestone 1.
-2. Evidence provenance: Milestones 2 and 3.
-3. Statistical and economic evidence: Milestones 4 and 5.
-4. Portfolio and sizing: Milestones 6 and 7.
-5. Runtime semantics and operations: Milestones 8 and 9.
-6. Production lifecycle: Milestone 10.
+1. Trust spine foundation: Milestone 1.
+2. Mandate and allocation governance: Milestone 0.
+3. Evidence provenance: Milestones 2 and 3.
+4. Statistical and economic evidence: Milestones 4 and 5.
+5. Portfolio and sizing: Milestones 6 and 7.
+6. Runtime semantics and operations: Milestones 8 and 9.
+7. Production lifecycle: Milestone 10.
 
 Every wave must leave the system safer than it found it. A partially implemented milestone should add blockers and classification before adding any new pathway to promotion.
 
