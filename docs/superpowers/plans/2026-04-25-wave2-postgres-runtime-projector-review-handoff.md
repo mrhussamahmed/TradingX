@@ -1,11 +1,11 @@
 ---
 id: REPORT-0008
 title: Headless control plane Wave 2 Postgres runtime projector plan review handoff
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: REPORT-0008@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -81,6 +81,15 @@ ASC` reads and checkpoint metadata with both cursor fields. Review
 should look for any implementation shortcut that orders by UUID,
 dedupe key, aggregate ID, or occurred time alone.
 
+### Deferred families must remain replayable
+
+The projector must not use one `runtime_projection` cursor that consumes
+unsupported source-family rows. Checkpoints must be per domain, source
+family, and mapper version, or the implementation must include a tested
+backfill/replay path before any unsupported family is checkpointed past.
+Newly supported families must be able to process historical outbox rows
+without manual checkpoint edits.
+
 ### Source-status advancement must be earned
 
 `projected_watermark` can advance only after the projector writes the
@@ -88,6 +97,19 @@ corresponding materialized rows or safely recognizes a supported no-op.
 Unsupported source families must remain unprojected. Full runtime
 readiness must remain blocked while any required runtime source from
 the bridge inventory is deferred or unmapped.
+
+Persisted `system.domain_projection_status` rows must always come from
+full-domain requirements. Filtered readiness may be returned in
+projector results for tests/diagnostics, but it must not overwrite the
+`runtime` or `control_posture` domain rows.
+
+### Control posture is its own readiness domain
+
+`control_posture` bridge sources materialize into runtime schema tables,
+but their source statuses and derived domain status remain keyed by the
+`control_posture` domain. The implementation must prove stale-source,
+unprojected-source, catch-up, and derived-status behavior for that
+domain separately from `runtime`.
 
 ### Runtime rows must be idempotent
 
@@ -181,19 +203,23 @@ Challenge these areas especially:
    of consuming outbox envelopes
 3. whether outbox cursor ordering can skip or duplicate events,
    especially tied timestamps and non-sortable UUIDs
-4. whether checkpoint metadata can diverge from last_outbox_event_id
-5. whether unsupported source families can advance projected_watermark
-6. whether filtered readiness can be mistaken for full runtime-domain
+4. whether deferred families can be stranded behind a global checkpoint
+   when a mapper is added later
+5. whether checkpoint metadata can diverge from last_outbox_event_id
+6. whether unsupported source families can advance projected_watermark
+7. whether filtered readiness can be mistaken for full runtime-domain
    route readiness
-7. whether no-op control-posture refreshes churn snapshots or versions
-8. whether reruns duplicate heartbeat, posture, blocker, checkpoint, or
+8. whether filtered readiness can overwrite persisted domain status
+9. whether control_posture readiness is proved as its own domain
+10. whether no-op control-posture refreshes churn snapshots or versions
+11. whether reruns duplicate heartbeat, posture, blocker, checkpoint, or
    source-status rows
-9. whether changed payloads under the same natural key are detected as
+12. whether changed payloads under the same natural key are detected as
    conflicts and rolled back
-10. whether runtime writes and projection-state writes share one
+13. whether runtime writes and projection-state writes share one
     transaction
-11. whether literal DSNs can leak through argv, help output, or errors
-12. whether legacy local startup remains database-free
+14. whether literal DSNs can leak through argv, help output, or errors
+15. whether legacy local startup remains database-free
 
 Return whether PLAN-0019 is ready to implement as-is, ready after edits,
 or blocked. Include concrete edits for every finding.

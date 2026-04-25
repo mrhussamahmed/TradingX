@@ -1,11 +1,11 @@
 ---
 id: PLAN-0019
 title: Headless control plane Wave 2 Postgres runtime projector plan
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: PLAN-0019@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -86,8 +86,15 @@ Still missing:
 8. `last_outbox_event_id` must not be treated as a sortable cursor.
    Outbox reads must order by `created_at_utc ASC, outbox_event_id ASC`
    and checkpoint that ordered cursor in metadata.
-9. Unsupported source families must not advance `projected_watermark`.
-10. A partial batch failure must not advance checkpoints, source-status
+9. The projector must not use one global cursor that consumes
+   unsupported-family events. Checkpoints are per domain, source family,
+   and mapper version so newly supported families can backfill old
+   outbox rows without manual checkpoint surgery.
+10. Unsupported source families must not advance `projected_watermark`.
+11. Persisted `system.domain_projection_status` rows must be computed
+    from full-domain requirements only. Filtered readiness is test and
+    result metadata, not the persisted domain authority.
+12. A partial batch failure must not advance checkpoints, source-status
     watermarks, or derived domain status.
 
 ## Out Of Scope
@@ -142,6 +149,7 @@ list_outbox_events_after(
     cursor_created_at_utc: datetime | None,
     cursor_outbox_event_id: str | None,
     aggregate_types: tuple[str, ...],
+    source_families: tuple[str, ...],
     batch_size: int,
 ) -> tuple[repositories.OutboxProjectionEvent, ...]
 ```
@@ -149,8 +157,10 @@ list_outbox_events_after(
 The SQL must:
 
 1. Filter `aggregate_type IN ('runtime', 'control_posture')`.
-2. Order by `created_at_utc ASC, outbox_event_id ASC`.
-3. Use an exclusive cursor:
+2. Filter `payload_json ->> 'source_family'` to the supported family or
+   families for the current mapper version.
+3. Order by `created_at_utc ASC, outbox_event_id ASC`.
+4. Use an exclusive cursor:
 
 ```sql
 created_at_utc > :cursor_created_at_utc
@@ -160,7 +170,7 @@ OR (
 )
 ```
 
-4. Bound `batch_size`.
+5. Bound `batch_size`.
 
 Checkpoint metadata must store:
 
@@ -168,12 +178,30 @@ Checkpoint metadata must store:
 - `cursor_outbox_event_id`
 - `last_projected_dedupe_key`
 - `supported_source_families`
-- `skipped_source_families`
+- `skipped_event_types`
+- `mapper_version`
 
 If an existing checkpoint has `last_outbox_event_id` but no cursor
 metadata, the repository or projector must resolve the event's
 `created_at_utc` before resuming. If resolution fails, the projector
 must stop with a redacted error rather than guessing.
+
+Projection names must be per domain, source family, and mapper version,
+for example:
+
+```text
+runtime_projection:runtime:service_cycles:v1
+runtime_projection:control_posture:live_config_env:v1
+```
+
+Unsupported families must not be selected by the query and must not
+share a checkpoint with supported families. When a later slice adds a
+mapper for a previously deferred family, that family starts with no
+checkpoint for its mapper version and scans historical outbox rows for
+that family from the beginning. If mapper behavior changes for an
+already supported family, the implementation must either introduce a new
+mapper version checkpoint or provide a tested replay/backfill command
+before changing production semantics.
 
 ### Runtime materialization repository
 
@@ -292,15 +320,20 @@ source watermark for the source event it safely recognized.
 
 ## Checkpoint And Readiness Rules
 
-Use projection name `runtime_projection`.
+Use projection names in the form
+`runtime_projection:<domain_name>:<source_family>:<mapper_version>`.
 
-For each batch:
+For each family-specific batch:
 
-1. Load checkpoint.
+1. Load the checkpoint for the domain, source family, and mapper
+   version being run.
 2. Resolve ordered cursor from checkpoint metadata.
-3. Read outbox events after cursor.
+3. Read only outbox events after cursor for that domain/source-family
+   filter.
 4. Map and write supported events.
-5. Skip unsupported events with explicit metadata.
+5. Record malformed or mapper-deferred events within the selected
+   family as explicit skipped/no-op metadata. Events for unsupported
+   families must not be read or checkpointed by this mapper version.
 6. Advance `projected_watermark` only for source identities whose event
    was successfully projected or safely recognized as a no-op by this
    projector. The update must load the existing bridge source-status
@@ -309,14 +342,23 @@ For each batch:
    the projector is intentionally adding projection metadata.
 7. Save checkpoint to the last consumed outbox event only after all
    writes and source-status updates succeed.
-8. Save derived domain status from readiness only after checkpoint and
-   source-status updates succeed.
+8. Save derived domain status from full-domain readiness only after
+   checkpoint and source-status updates succeed.
 
 Readiness tests must distinguish two levels:
 
 - Filtered projector readiness for the supported source-family subset.
 - Full runtime-domain readiness, which must remain blocked while
   bridge inventory families are deferred or unmapped.
+- Full control-posture readiness for the `control_posture` domain,
+  which is separate from runtime readiness even though the rows
+  materialize into the `runtime` schema.
+
+Filtered readiness reports must either remain in the structured
+projector result or be written only as metadata clearly labeled
+`readiness_scope: filtered`. They must not overwrite
+`system.domain_projection_status` rows keyed by `runtime` or
+`control_posture`.
 
 ## Execution Plan
 
@@ -350,16 +392,23 @@ production code. The first failing tests must cover:
    unknown-state defaults.
 3. Control-posture mapper fails closed when live evidence is incomplete.
 4. No-op posture refresh does not create a new material snapshot.
-5. Unsupported source family is skipped and does not advance
-   `projected_watermark`.
-6. Supported source family advances projected watermark only after
+5. Unsupported source family is not selected by a supported-family query
+   and does not advance `projected_watermark`.
+6. Unsupported source family is not consumed by a supported-family
+   checkpoint, and a newly supported family can replay old rows from the
+   beginning under its own mapper-version checkpoint.
+7. Supported source family advances projected watermark only after
    materialization succeeds.
-7. Projector rerun over the same event is idempotent.
-8. Mapper or repository conflict rolls back checkpoint/source-status
+8. Projector rerun over the same event is idempotent.
+9. Mapper or repository conflict rolls back checkpoint/source-status
    advancement.
-9. Filtered readiness can clear `unprojected_sources` while full
+10. Filtered readiness can clear `unprojected_sources` while full
    runtime readiness remains blocked by deferred sources.
-10. Legacy web startup construction still does not construct the
+11. Persisted `domain_projection_status` uses full-domain readiness and
+    remains blocked when filtered readiness passes.
+12. Control-posture readiness is evaluated as `control_posture`, not
+    collapsed into the runtime domain.
+13. Legacy web startup construction still does not construct the
     projector or Postgres write repositories.
 
 ### 2. Pure projector foundation
@@ -459,6 +508,17 @@ with guarded tests for:
 7. Stale bridge freshness still blocks readiness after projector
    catch-up.
 8. Deferred runtime source families keep full-domain readiness blocked.
+9. Persisted `runtime` domain status remains blocked while deferred
+   runtime families exist, even if a filtered projector report is ready.
+10. A later mapper-version checkpoint for a previously unsupported
+    runtime family can process old outbox rows that were present before
+    that mapper existed.
+11. `control_posture` source statuses catch up for
+    `live_config_env`, `operator_control_state`,
+    `operator_sleeve_halts`, and `market_data_posture`.
+12. Persisted `control_posture` domain status blocks on stale sources
+    and unprojected sources, then becomes ready only when the full
+    control-posture requirement set catches up.
 
 ### 8. Safety closeout
 
@@ -509,15 +569,20 @@ Before implementation starts, review must challenge:
 1. Whether this plan still smuggles in a route pivot.
 2. Whether the projector can accidentally reread legacy artifacts.
 3. Whether outbox ordering can skip tied timestamp events.
-4. Whether checkpoint metadata can become inconsistent with
+4. Whether per-family mapper-version checkpoints prevent deferred
+   families from being stranded behind a global cursor.
+5. Whether checkpoint metadata can become inconsistent with
    `last_outbox_event_id`.
-5. Whether unsupported source families can advance projected
+6. Whether unsupported source families can advance projected
    watermarks.
-6. Whether full runtime readiness can pass while deferred sources remain
+7. Whether persisted domain status can be overwritten by filtered
+   readiness.
+8. Whether full runtime readiness can pass while deferred sources remain
    unprojected.
-7. Whether no-op posture events churn snapshots or resource versions.
-8. Whether duplicate events create duplicate heartbeat/blocker rows.
-9. Whether conflicts are detected rather than silently overwriting
+9. Whether control-posture readiness is proved as its own domain.
+10. Whether no-op posture events churn snapshots or resource versions.
+11. Whether duplicate events create duplicate heartbeat/blocker rows.
+12. Whether conflicts are detected rather than silently overwriting
    history.
-10. Whether any new import path makes legacy local startup require
+13. Whether any new import path makes legacy local startup require
     Postgres.
