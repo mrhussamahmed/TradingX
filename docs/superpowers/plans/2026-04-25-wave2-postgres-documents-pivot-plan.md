@@ -1,11 +1,11 @@
 ---
 id: PLAN-0020
 title: Headless control plane Wave 2 Postgres documents pivot plan
-version: 1.0.1
+version: 1.0.2
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: PLAN-0020@1.0.0
+supersedes: PLAN-0020@1.0.1
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -101,10 +101,12 @@ Still missing:
    build Postgres engines, repositories, projectors, or routers.
 6. The documents projector must consume `system.outbox_event`; it must
    not reread filesystem documents directly.
-7. The route pivot must be readiness-gated by the full `documents`
-   source requirement set for the current documents API
+7. The route pivot must be readiness-gated by a scoped document API
+   source requirement set
    (`handover_sessions` and `state_and_index_docs`), not by filtered
-   mapper readiness and not by unrelated config proposal sources.
+   mapper readiness, not by unrelated config proposal sources, and not
+   by a persisted `system.domain_projection_status` row keyed only as
+   `documents`.
 8. The fallback path must be explicit. If Postgres mode is requested but
    documents readiness is blocked, the route must either fail closed
    when Postgres is required or serve legacy reads when hybrid fallback
@@ -219,11 +221,15 @@ The projector must:
    family, ordered by `created_at_utc ASC, outbox_event_id ASC`.
 3. Map each source event to one or more document records and revisions.
 4. Write document rows in the same transaction as projected source
-   status, checkpoint, and derived domain status updates.
+   status and checkpoint updates.
 5. Advance `projected_watermark` only after materialization succeeds or
    after a recognized idempotent no-op.
-6. Persist `system.domain_projection_status` for the full `documents`
-   domain only, never for a filtered subset.
+6. Do not persist `system.domain_projection_status` for this scoped
+   route pivot. That table is keyed only by `domain_name`, while the
+   broader `documents` inventory still includes `config_proposals`.
+   Persisting a ready `documents` row from only
+   `handover_sessions` plus `state_and_index_docs` would overstate
+   domain-wide readiness.
 
 ### Mapping rules
 
@@ -265,8 +271,11 @@ event that observed the deletion. If that is not queryable without
 ambiguous JSON filtering, add a reviewed schema migration before the
 pivot.
 
-If the same natural key appears with different payload content, the
-projector must raise a redacted conflict and roll back the batch.
+If the same deterministic revision/event key appears with different
+payload content, the projector must raise a redacted conflict and roll
+back the batch. Different payload content for the same stable
+`document_id` under a new revision discriminator is the normal edit path
+and must create a later revision, not a conflict.
 
 ### Documents read router
 
@@ -278,7 +287,8 @@ The router must evaluate:
 - control-plane store mode: `legacy`, `hybrid`, or `postgres`
 - optional domain override for `documents`
 - `TRADINGX_POSTGRES_REQUIRED`
-- current full-domain `documents` projection status
+- scoped document API route readiness computed from source-status and
+  checkpoint rows for `handover_sessions` and `state_and_index_docs`
 - availability of the Postgres document read repository
 
 `TRADINGX_POSTGRES_REQUIRED=true` has precedence whenever the effective
@@ -299,9 +309,11 @@ In `hybrid` mode, the effective documents store is computed from the
 domain override. `documents=legacy` is `legacy`; `documents=postgres` is
 `postgres`.
 
-Do not make `system.domain_projection_status` a general router
-authority for every domain in this slice. It is authority only for the
-documents pivot implemented here.
+Do not use `system.domain_projection_status` as documents route
+authority in this slice. Until either `config_proposals` moves out of
+the `documents` source registry or the entire documents domain is
+projected, documents route readiness must stay scoped and computed
+directly from the two API source families.
 
 ## Execution Plan
 
@@ -352,8 +364,9 @@ Create failing unit tests before production code. The tests must cover:
    statuses.
 11. Tombstoned documents disappear from list/detail reads without
     affecting unrelated active documents.
-12. Full `documents` readiness stays blocked until all required document
-   families are projected and fresh.
+12. Scoped document API readiness stays blocked until
+    `handover_sessions` and `state_and_index_docs` are projected and
+    fresh.
 13. The document router uses legacy mode by default and constructs no
    Postgres objects during default local web startup.
 14. The document router fails closed in required Postgres mode when
@@ -391,10 +404,12 @@ Implement the Postgres write repository and tests for:
 1. Insert document plus first revision.
 2. Insert a later revision for the same document.
 3. Idempotent rerun of the same revision.
-4. Natural-key conflict on changed payload.
+4. Deterministic revision-key conflict on changed payload.
 5. Object-ref replacement without duplicates.
-6. Tombstone revision and hidden read behavior for deleted documents.
-7. Transaction rollback when any document write fails.
+6. Legitimate edits under a new revision discriminator create later
+   revisions instead of conflicts.
+7. Tombstone revision and hidden read behavior for deleted documents.
+8. Transaction rollback when any document write fails.
 
 ### 5. Documents projector orchestration
 
@@ -406,7 +421,8 @@ transaction rules proven by the runtime projector:
 3. Materialize documents and revisions.
 4. Update projected source statuses.
 5. Save checkpoint metadata with ordered cursor fields.
-6. Save full-domain documents diagnostic status.
+6. Return scoped document API route-readiness evidence without writing
+   `system.domain_projection_status`.
 7. Return structured counts for seen, projected, no-op, skipped,
    conflicts, source updates, and checkpoint position.
 
@@ -436,17 +452,20 @@ Add guarded integration tests for:
    Postgres document reads.
 6. Reruns do not duplicate documents, revisions, or object refs.
 7. Checkpoint resume processes only later ordered document events.
-8. Conflict rollback leaves document rows, checkpoints, source statuses,
-   and domain status unchanged.
-9. Full `documents` domain status blocks on stale or unprojected
-   document source families.
-10. Full `documents` domain status becomes ready only when all required
-   document families are fresh and projected.
+8. Conflict rollback leaves document rows, checkpoints, and source
+   statuses unchanged.
+9. Scoped document API route readiness blocks on stale or unprojected
+   `handover_sessions` or `state_and_index_docs` source families.
+10. Scoped document API route readiness becomes ready only when both API
+    source families are fresh and projected.
 11. Postgres document reads preserve list/detail ordering and 404
    semantics.
 12. `/api/v1/documents` pivots to Postgres only when readiness passes.
 13. Required Postgres mode fails closed for blocked documents readiness,
     including `hybrid` with `documents=postgres`.
+14. The scoped documents projector does not write a ready
+    `system.domain_projection_status` row keyed by `documents` while
+    `config_proposals` remains outside the route scope.
 
 ### 8. Safety closeout
 
@@ -511,15 +530,16 @@ Before implementation starts, review must challenge:
    `/api/v1/documents` scope.
 5. Whether deleted or renamed files can leave stale Postgres documents
    visible.
-6. Whether full documents readiness can be confused with filtered
-   mapper readiness.
+6. Whether scoped document API readiness can be confused with
+   domain-wide `documents` readiness.
 7. Whether route fallback behavior can hide a required-Postgres failure.
 8. Whether response metadata leaks absolute local paths beyond the
    existing legacy retrieval references.
 9. Whether document revisions churn on no-op reruns.
 10. Whether per-family checkpoints prevent newly supported document
    families from being stranded.
-11. Whether conflicts roll back source watermarks and domain status.
+11. Whether conflicts roll back source watermarks and scoped readiness
+    evidence.
 12. Whether default local web startup remains Postgres-free.
 13. Whether public timeline or SSE behavior changes accidentally.
 
