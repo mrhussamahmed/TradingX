@@ -42,6 +42,11 @@ from tradingx.types import (
     StrategyActivationRecord,
     WebActionResult,
 )
+from tradingx.web.document_routes import (
+    DocumentsPostgresUnavailable,
+    DocumentsRouteProvider,
+    build_documents_route_provider,
+)
 from tradingx.web.security import WebWriteAuthorizer, WebWriteIdempotencyStore
 
 
@@ -282,8 +287,13 @@ def create_app(
     config: TradingConfig,
     read_model: ReadModelProtocol,
     action_runner: ActionRunnerProtocol,
+    documents_route_provider: DocumentsRouteProvider | None = None,
 ) -> FastAPI:
     app = FastAPI(title="TradingX Local Control Web App")
+    document_provider = documents_route_provider or build_documents_route_provider(
+        config=config,
+        read_model=read_model,
+    )
     static_dir = _repo_root() / "webapp" / "dist"
     write_authorizer = WebWriteAuthorizer(
         config=config,
@@ -386,6 +396,13 @@ def create_app(
         )
         response.headers["X-TradingX-Stability"] = "provisional"
         return response
+
+    def _documents_postgres_unavailable_response() -> JSONResponse:
+        return _error_response(
+            status_code=503,
+            code="documents_postgres_unavailable",
+            message="Documents are temporarily unavailable from Postgres.",
+        )
 
     def _generated_at_hint(value: object) -> datetime | None:
         if isinstance(value, dict):
@@ -862,18 +879,18 @@ def create_app(
     @app.get("/api/v1/documents")
     def get_v1_documents(cursor: str | None = None) -> JSONResponse:
         del cursor
-        return _list_response(read_model.list_documents())
+        try:
+            documents = document_provider.list_documents()
+        except DocumentsPostgresUnavailable:
+            return _documents_postgres_unavailable_response()
+        return _list_response(documents)
 
     @app.get("/api/v1/documents/{document_id}")
     def get_v1_document(document_id: str) -> JSONResponse:
-        document = next(
-            (
-                record
-                for record in read_model.list_documents()
-                if record.doc_id == document_id
-            ),
-            None,
-        )
+        try:
+            document = document_provider.get_document(document_id)
+        except DocumentsPostgresUnavailable:
+            return _documents_postgres_unavailable_response()
         if document is None:
             return _error_response(
                 status_code=404,

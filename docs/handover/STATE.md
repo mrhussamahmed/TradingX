@@ -1,11 +1,11 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.10
+version: 1.0.13
 status: active
 created: 2026-04-17
 last_amended: 2026-04-25
-supersedes: STATE-0001@1.0.9
+supersedes: STATE-0001@1.0.12
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -13,7 +13,7 @@ author_session: codex-gpt-5-2026-04-25
 # Current project state
 
 - Active session: codex-gpt-5-2026-04-25
-- Active branch: codex/wave2-documents-implementation-plan
+- Active branch: main
 - Active phase: Headless control plane Wave 2 Postgres projections
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -23,24 +23,33 @@ author_session: codex-gpt-5-2026-04-25
 ## Pending items
 
 - Headless control plane Wave 2 is active. `main` is synced through the
-  merged runtime-projector slice, ending at commit `f80279d`.
+  completed documents bridge, repository, and projector slices.
 - The completed Wave 2 Postgres slices now cover:
   - connection management and migrations (`PLAN-0015`)
   - repository contracts (`PLAN-0016`)
   - outbox checkpoints and source readiness (`PLAN-0017`)
   - legacy bridge and tailer (`PLAN-0018`)
   - runtime/control-posture projector materialization (`PLAN-0019`)
-- `PLAN-0020` is approved and merged. It prepares the first guarded
-  route pivot for the current `/api/v1/documents` scope only, with
-  runtime, control-posture, incidents, validation, portfolio, events,
-  commands, config proposals, and SSE still out of scope.
-- `PLAN-0021` is the current implementation-plan artifact. Its first
-  execution slice is bridge enrichment: revision-safe file-level
-  document events plus inventory snapshot events for deletion/tombstone
-  handling.
-- Next execution step: adversarially review `PLAN-0021`; if approved,
-  implement Slice 1 with failing bridge-enrichment tests before any
-  documents projector or route-router code.
+- `PLAN-0020` and `PLAN-0021` remain historical planning context for
+  the documents pivot, but their bridge/repository/projector execution
+  portions have now been completed through the later documents slices.
+- `PLAN-0022` and `PLAN-0023` documents projector
+  implementation/execution slices are complete and merged.
+- `PLAN-0024` route-pivot planning is clean-approved after
+  adversarial review. It focuses only on the actual
+  `/api/v1/documents` and `/api/v1/documents/{document_id}` Postgres
+  route pivot after the completed bridge, repository, and projector
+  work.
+- `PLAN-0025` route-pivot implementation planning is clean-approved and
+  the v1 documents route pivot implementation has landed locally:
+  `/api/v1/documents` and `/api/v1/documents/{document_id}` can use the
+  scoped Postgres document read path when config and readiness allow,
+  while `/api/documents` and config proposal routes remain legacy-backed.
+- Local verification is green for unit, contract, lint, mypy, index, and
+  diff checks. The guarded DSN-backed route proof file exists at
+  `tests/integration/test_web_app_postgres_documents_routes.py`, but it
+  skipped locally because `TRADINGX_TEST_POSTGRES_DSN` was not
+  configured.
 - Phase 0 is complete and pushed to `origin/main`.
 - `SPEC-0001` is active at `specs/001-paper-trading-bot/spec.md`.
 - `PLAN-0001` is active at `specs/001-paper-trading-bot/plan.md`.

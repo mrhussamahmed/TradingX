@@ -2,14 +2,26 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tradingx.config import TradingConfig
-from tradingx.types import RuntimeHeartbeatSnapshot, WebActionResult
+from tradingx.controlplane import repositories
+from tradingx.types import (
+    ConfigProposal,
+    DocumentRecord,
+    RuntimeHeartbeatSnapshot,
+    WebActionResult,
+)
 from tradingx.web import app as web_app
 from tradingx.web import runtime as web_runtime
 from tradingx.web.app import create_app
+from tradingx.web.document_routes import (
+    DocumentsPostgresUnavailable,
+    build_documents_route_provider,
+)
 from tradingx.web.security import (
     IDEMPOTENCY_HEADER,
     SIGNATURE_HEADER,
@@ -19,6 +31,16 @@ from tradingx.web.security import (
 
 
 class _ReadModel:
+    def __init__(
+        self,
+        *,
+        documents: tuple[DocumentRecord, ...] = (),
+        proposals: tuple[ConfigProposal, ...] = (),
+    ) -> None:
+        self.documents = documents
+        self.proposals = proposals
+        self.list_documents_calls = 0
+
     def build_dashboard_snapshot(self):
         return {"status": "ok"}
 
@@ -32,14 +54,15 @@ class _ReadModel:
         return {"status": "ok"}
 
     def list_documents(self):
-        return ()
+        self.list_documents_calls += 1
+        return self.documents
 
     def list_evidence(self, category=None):
         del category
         return ()
 
     def list_config_proposals(self):
-        return ()
+        return self.proposals
 
     def get_service_state(self):
         return {"status": "idle"}
@@ -154,6 +177,86 @@ class _ActionRunner:
         }
 
 
+class _InjectedDocumentsProvider:
+    def __init__(
+        self,
+        *,
+        documents: tuple[DocumentRecord, ...] = (),
+        error: Exception | None = None,
+    ) -> None:
+        self.documents = documents
+        self.error = error
+        self.list_calls = 0
+        self.detail_calls: list[str] = []
+
+    def list_documents(self) -> tuple[DocumentRecord, ...]:
+        self.list_calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.documents
+
+    def get_document(self, document_id: str) -> DocumentRecord | None:
+        self.detail_calls.append(document_id)
+        if self.error is not None:
+            raise self.error
+        return next(
+            (document for document in self.documents if document.doc_id == document_id),
+            None,
+        )
+
+
+class _FakePostgresDocumentRepository:
+    def __init__(
+        self,
+        documents: tuple[repositories.DocumentReadRecord, ...],
+        *,
+        next_cursor: str | None = None,
+        pages_by_cursor: dict[str, repositories.Page[repositories.DocumentReadRecord]]
+        | None = None,
+    ) -> None:
+        self.documents = {document.document_id: document for document in documents}
+        self.next_cursor = next_cursor
+        self.pages_by_cursor = pages_by_cursor or {}
+        self.list_pages: list[repositories.PageRequest | None] = []
+        self.detail_ids: list[str] = []
+
+    def list_documents(
+        self,
+        *,
+        page: repositories.PageRequest | None = None,
+    ) -> repositories.Page[repositories.DocumentReadRecord]:
+        self.list_pages.append(page)
+        if page is not None and page.cursor in self.pages_by_cursor:
+            return self.pages_by_cursor[page.cursor]
+        return repositories.Page(
+            items=tuple(self.documents.values()),
+            next_cursor=self.next_cursor,
+        )
+
+    def get_document(
+        self,
+        document_id: str,
+    ) -> repositories.DocumentReadRecord | None:
+        self.detail_ids.append(document_id)
+        return self.documents.get(document_id)
+
+
+class _FakeProjectionStatusRepository:
+    def __init__(
+        self,
+        statuses: tuple[repositories.ProjectionSourceStatusRecord, ...],
+    ) -> None:
+        self.statuses = statuses
+        self.domains: list[str] = []
+
+    def list_projection_source_statuses(
+        self,
+        domain_name: str,
+    ) -> tuple[repositories.ProjectionSourceStatusRecord, ...]:
+        self.domains.append(domain_name)
+        return self.statuses
+
+
 def _app_config(tmp_path: Path, **overrides: str) -> TradingConfig:
     values = {
         "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
@@ -162,6 +265,140 @@ def _app_config(tmp_path: Path, **overrides: str) -> TradingConfig:
     }
     values.update(overrides)
     return TradingConfig.from_mapping(values)
+
+
+def _document_record(
+    document_id: str,
+    *,
+    title: str | None = None,
+    kind: str = "state",
+    preview: str = "Legacy preview.",
+    path: str | None = None,
+) -> DocumentRecord:
+    return DocumentRecord(
+        doc_id=document_id,
+        title=title or document_id,
+        path=Path(path or f"docs/{document_id}.md"),
+        preview=preview,
+        kind=kind,
+    )
+
+
+def _postgres_document(
+    document_id: str,
+    *,
+    title: str | None = None,
+    kind: str = "state",
+    preview: str = "Postgres preview.",
+    retrieval_ref: str | None = None,
+    source_family: str = "state_and_index_docs",
+) -> repositories.DocumentReadRecord:
+    timestamp = datetime(2026, 4, 24, 12, 0, tzinfo=UTC)
+    return repositories.DocumentReadRecord(
+        document_id=document_id,
+        document_kind=kind,
+        title=title or document_id,
+        preview=preview,
+        logical_retrieval_ref=retrieval_ref or f"docs/{document_id}.md",
+        source_ref="source-ref",
+        created_at_utc=timestamp,
+        updated_at_utc=timestamp,
+        metadata={"internal": "not-public", "source_family": source_family},
+        latest_revision=repositories.DocumentRevisionRecord(
+            document_revision_id=f"{document_id}:1",
+            document_id=document_id,
+            revision_number=1,
+            created_at_utc=timestamp,
+            source_ref="revision-source-ref",
+            metadata={"revision": "not-public"},
+        ),
+    )
+
+
+def _ready_document_statuses(
+    *,
+    ready: bool = True,
+) -> tuple[repositories.ProjectionSourceStatusRecord, ...]:
+    timestamp = datetime(2026, 4, 24, 12, 0, tzinfo=UTC)
+    identities = {
+        "handover_sessions": "repo:docs/handover_sessions",
+        "state_and_index_docs": "repo:docs/state_index",
+        "config_proposals": "repo:config/proposals",
+    }
+    statuses: list[repositories.ProjectionSourceStatusRecord] = []
+    for family in ("handover_sessions", "state_and_index_docs"):
+        statuses.append(
+            repositories.ProjectionSourceStatusRecord(
+                domain_name="documents",
+                source_family=family,
+                source_identity=identities[family],
+                source_watermark=f"{family}:watermark",
+                projected_watermark=(
+                    f"{family}:watermark" if ready else f"{family}:old-watermark"
+                ),
+                lag_seconds=None,
+                is_mutable=True,
+                ready_for_postgres=ready,
+                checked_at_utc=timestamp,
+                metadata={
+                    "initial_import_complete": ready,
+                    "write_path": "active_bridge" if ready else "disabled",
+                    "latest_source_event_id": f"{family}:event",
+                },
+            )
+        )
+    statuses.append(
+        repositories.ProjectionSourceStatusRecord(
+            domain_name="documents",
+            source_family="config_proposals",
+            source_identity=identities["config_proposals"],
+            source_watermark="config-proposals:watermark",
+            projected_watermark=None,
+            lag_seconds=None,
+            is_mutable=True,
+            ready_for_postgres=False,
+            checked_at_utc=timestamp,
+            metadata={},
+        )
+    )
+    return tuple(statuses)
+
+
+def _provider_from_fake_postgres(
+    *,
+    config: TradingConfig,
+    read_model: _ReadModel,
+    document_repo: _FakePostgresDocumentRepository,
+    projection_repo: _FakeProjectionStatusRepository,
+):
+    return build_documents_route_provider(
+        config=config,
+        read_model=read_model,
+        engine_factory=lambda settings: {"dsn": settings.dsn},
+        document_repository_factory=lambda engine, dsn: document_repo,
+        projection_repository_factory=lambda engine, dsn: projection_repo,
+        clock=lambda: datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+    )
+
+
+def _assert_postgres_document_payload(
+    payload: dict[str, Any],
+    *,
+    list_response: bool = False,
+) -> None:
+    serialized = str(payload)
+    assert "not-public" not in serialized
+    assert "latest_revision" not in serialized
+    assert "metadata" not in serialized
+    if list_response:
+        assert "next_cursor" in payload["data"]
+
+
+def _repository_cursor(stable_id: str) -> str:
+    return repositories.OrderedCursor.encode(
+        timestamp=datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+        stable_id=stable_id,
+    )
 
 
 def _make_postgres_construction_fail(monkeypatch) -> None:
@@ -311,6 +548,413 @@ def test_legacy_local_web_paths_do_not_construct_postgres(
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 0
     assert captured["app"] is not None
+
+
+def test_v1_documents_use_injected_provider_for_list_and_detail() -> None:
+    provider = _InjectedDocumentsProvider(
+        documents=(
+            _document_record(
+                "STATE",
+                title="Project state",
+                preview="Postgres preview.",
+                path="docs/handover/STATE.md",
+            ),
+        )
+    )
+    read_model = _ReadModel(
+        documents=(
+            _document_record(
+                "LEGACY",
+                title="Legacy document",
+                preview="Legacy preview.",
+            ),
+        )
+    )
+    app = create_app(
+        config=TradingConfig.from_mapping({}),
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/STATE")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"][0]["doc_id"] == "STATE"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"] == {
+        "document_id": "STATE",
+        "title": "Project state",
+        "kind": "state",
+        "preview": "Postgres preview.",
+        "retrieval_ref": "docs/handover/STATE.md",
+    }
+    assert provider.list_calls == 1
+    assert provider.detail_calls == ["STATE"]
+    assert read_model.list_documents_calls == 0
+
+
+def test_v1_documents_fail_closed_provider_returns_stable_503() -> None:
+    provider = _InjectedDocumentsProvider(
+        error=DocumentsPostgresUnavailable(reason="scoped_readiness_blocked")
+    )
+    app = create_app(
+        config=TradingConfig.from_mapping({}),
+        read_model=_ReadModel(),
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/STATE")
+
+    for response in (list_response, detail_response):
+        assert response.status_code == 503
+        assert response.json()["data"]["error"]["code"] == (
+            "documents_postgres_unavailable"
+        )
+
+
+def test_legacy_documents_and_config_proposals_bypass_v1_documents_provider() -> None:
+    provider = _InjectedDocumentsProvider(
+        error=AssertionError("v1 documents provider should not be used")
+    )
+    read_model = _ReadModel(
+        documents=(
+            _document_record(
+                "LEGACY",
+                title="Legacy document",
+                preview="Legacy preview.",
+            ),
+        ),
+        proposals=(
+            ConfigProposal(
+                proposal_id="proposal-1",
+                target_area="runtime",
+                proposed_values={"TRADINGX_SYMBOL_UNIVERSE": ["SPY"]},
+                diff_preview="+ TRADINGX_SYMBOL_UNIVERSE=SPY",
+                output_path=Path("config/proposals/proposal-1.md"),
+            ),
+        ),
+    )
+    app = create_app(
+        config=TradingConfig.from_mapping({}),
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    legacy_documents = client.get("/api/documents")
+    config_proposals = client.get("/api/config/proposals")
+
+    assert legacy_documents.status_code == 200
+    assert legacy_documents.json()[0]["doc_id"] == "LEGACY"
+    assert config_proposals.status_code == 200
+    assert config_proposals.json()[0]["proposal_id"] == "proposal-1"
+    assert provider.list_calls == 0
+    assert provider.detail_calls == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "postgres",
+        },
+    ),
+)
+def test_v1_documents_postgres_ready_modes_use_repository_list_and_detail(
+    tmp_path: Path,
+    overrides: dict[str, str],
+) -> None:
+    config = _app_config(
+        tmp_path,
+        TRADINGX_POSTGRES_DSN="postgresql://tradingx:secret@db.local/tradingx",
+        **overrides,
+    )
+    document_repo = _FakePostgresDocumentRepository(
+        (
+            _postgres_document(
+                "STATE",
+                title="Project state",
+                preview="Postgres state.",
+                retrieval_ref="docs/handover/STATE.md",
+            ),
+        )
+    )
+    projection_repo = _FakeProjectionStatusRepository(_ready_document_statuses())
+    read_model = _ReadModel(documents=(_document_record("LEGACY"),))
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/STATE")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"][0]["doc_id"] == "STATE"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["document_id"] == "STATE"
+    assert document_repo.list_pages == [None]
+    assert document_repo.detail_ids == ["STATE"]
+    assert read_model.list_documents_calls == 0
+    _assert_postgres_document_payload(list_response.json(), list_response=True)
+    _assert_postgres_document_payload(detail_response.json())
+
+
+def test_v1_documents_postgres_list_drains_repository_pages(
+    tmp_path: Path,
+) -> None:
+    next_cursor = _repository_cursor("STATE")
+    config = _app_config(
+        tmp_path,
+        TRADINGX_POSTGRES_DSN="postgresql://tradingx:secret@db.local/tradingx",
+        TRADINGX_CONTROL_PLANE_STORE="hybrid",
+        TRADINGX_CONTROL_PLANE_DOMAIN_STORES="documents=postgres",
+    )
+    document_repo = _FakePostgresDocumentRepository(
+        (_postgres_document("STATE"),),
+        next_cursor=next_cursor,
+        pages_by_cursor={
+            next_cursor: repositories.Page(
+                items=(
+                    _postgres_document(
+                        "2026-04-25-wave2",
+                        kind="handover",
+                        source_family="handover_sessions",
+                    ),
+                ),
+                next_cursor=None,
+            )
+        },
+    )
+    projection_repo = _FakeProjectionStatusRepository(_ready_document_statuses())
+    read_model = _ReadModel(documents=(_document_record("LEGACY"),))
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+
+    response = TestClient(app).get("/api/v1/documents")
+
+    assert response.status_code == 200
+    assert [
+        item["doc_id"] for item in response.json()["data"]["items"]
+    ] == ["STATE", "2026-04-25-wave2"]
+    assert document_repo.list_pages[0] is None
+    assert document_repo.list_pages[1] is not None
+    assert document_repo.list_pages[1].cursor == next_cursor
+
+
+def test_v1_documents_postgres_filters_non_api_document_families(
+    tmp_path: Path,
+) -> None:
+    config = _app_config(
+        tmp_path,
+        TRADINGX_POSTGRES_DSN="postgresql://tradingx:secret@db.local/tradingx",
+        TRADINGX_CONTROL_PLANE_STORE="hybrid",
+        TRADINGX_CONTROL_PLANE_DOMAIN_STORES="documents=postgres",
+    )
+    document_repo = _FakePostgresDocumentRepository(
+        (
+            _postgres_document("STATE"),
+            _postgres_document(
+                "proposal-1",
+                kind="config_proposal",
+                source_family="config_proposals",
+            ),
+        )
+    )
+    projection_repo = _FakeProjectionStatusRepository(_ready_document_statuses())
+    read_model = _ReadModel(documents=(_document_record("LEGACY"),))
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/proposal-1")
+
+    assert list_response.status_code == 200
+    assert [
+        item["doc_id"] for item in list_response.json()["data"]["items"]
+    ] == ["STATE"]
+    assert detail_response.status_code == 404
+    assert detail_response.json()["data"]["error"]["code"] == "document_not_found"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+        },
+    ),
+)
+def test_v1_documents_optional_postgres_modes_fall_back_to_legacy_when_readiness_blocks(
+    tmp_path: Path,
+    overrides: dict[str, str],
+) -> None:
+    config = _app_config(
+        tmp_path,
+        TRADINGX_POSTGRES_DSN="postgresql://tradingx:secret@db.local/tradingx",
+        **overrides,
+    )
+    document_repo = _FakePostgresDocumentRepository((_postgres_document("STATE"),))
+    projection_repo = _FakeProjectionStatusRepository((_ready_document_statuses()[0],))
+    read_model = _ReadModel(
+        documents=(
+            _document_record(
+                "LEGACY",
+                title="Legacy document",
+                preview="Legacy fallback.",
+            ),
+        )
+    )
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/LEGACY")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"][0]["doc_id"] == "LEGACY"
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["document_id"] == "LEGACY"
+    assert document_repo.list_pages == []
+    assert document_repo.detail_ids == []
+    assert read_model.list_documents_calls == 2
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "legacy",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "hybrid",
+            "TRADINGX_CONTROL_PLANE_DOMAIN_STORES": "documents=postgres",
+            "TRADINGX_POSTGRES_REQUIRED": "true",
+        },
+        {
+            "TRADINGX_CONTROL_PLANE_STORE": "postgres",
+        },
+    ),
+)
+def test_v1_documents_required_and_global_postgres_fail_closed_when_readiness_blocks(
+    tmp_path: Path,
+    overrides: dict[str, str],
+) -> None:
+    config = _app_config(
+        tmp_path,
+        TRADINGX_POSTGRES_DSN="postgresql://tradingx:secret@db.local/tradingx",
+        **overrides,
+    )
+    document_repo = _FakePostgresDocumentRepository((_postgres_document("STATE"),))
+    projection_repo = _FakeProjectionStatusRepository((_ready_document_statuses()[0],))
+    read_model = _ReadModel(documents=(_document_record("LEGACY"),))
+    provider = _provider_from_fake_postgres(
+        config=config,
+        read_model=read_model,
+        document_repo=document_repo,
+        projection_repo=projection_repo,
+    )
+    app = create_app(
+        config=config,
+        read_model=read_model,
+        action_runner=_ActionRunner(),
+        documents_route_provider=provider,
+    )
+    client = TestClient(app)
+
+    list_response = client.get("/api/v1/documents")
+    detail_response = client.get("/api/v1/documents/STATE")
+
+    for response in (list_response, detail_response):
+        assert response.status_code == 503
+        assert response.json()["data"]["error"]["code"] == (
+            "documents_postgres_unavailable"
+        )
+    assert document_repo.list_pages == []
+    assert document_repo.detail_ids == []
 
 
 def test_unsigned_post_is_rejected(tmp_path) -> None:
