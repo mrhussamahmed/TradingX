@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.44
+version: 1.2.45
 status: active
 created: 2026-04-17
-last_amended: 2026-04-24
-supersedes: INDEX-0001@1.2.43
+last_amended: 2026-04-25
+supersedes: INDEX-0001@1.2.44
 superseded_by: null
-author_session: codex-gpt-5-2026-04-24
+author_session: codex-gpt-5-2026-04-25
 ---
 
 # Artifact index
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.8   | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.44  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.45  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -137,6 +137,7 @@ field (session lifecycle). This index tracks `status` only.
 | DESIGN-0020 | TradingX frontend UX and information architecture | 1.0.0 | active | `docs/architecture/TradingX_Frontend_Design.md` |
 | DESIGN-0021 | TradingX dashboard and design system | 1.0.0 | active | `docs/architecture/TradingX_Dashboard_And_Design_System.md` |
 | DESIGN-0022 | TradingX headless control plane architecture | 1.0.0 | draft | `docs/architecture/TradingX_Headless_Control_Plane_Architecture.md` |
+| DESIGN-0023 | Headless control plane Wave 2 runtime projector design | 1.0.0 | draft | `docs/superpowers/specs/2026-04-25-wave2-postgres-runtime-projector-design.md` |
 
 ### Planning briefs (BRIEF-NNNN)
 
