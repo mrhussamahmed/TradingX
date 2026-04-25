@@ -1,11 +1,11 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.51
+version: 1.2.52
 status: active
 created: 2026-04-17
 last_amended: 2026-04-25
-supersedes: INDEX-0001@1.2.50
+supersedes: INDEX-0001@1.2.51
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.10  | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.51  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.52  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -192,7 +192,7 @@ field (session lifecycle). This index tracks `status` only.
 | PLAN-0018 | Headless control plane Wave 2 Postgres legacy bridge and tailer plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-24-wave2-postgres-legacy-bridge-tailer-plan.md` |
 | PLAN-0019 | Headless control plane Wave 2 Postgres runtime projector plan | 1.0.1 | draft | `docs/superpowers/plans/2026-04-25-wave2-postgres-runtime-projector-plan.md` |
 | PLAN-0020 | Headless control plane Wave 2 Postgres documents pivot plan | 1.0.2 | draft | `docs/superpowers/plans/2026-04-25-wave2-postgres-documents-pivot-plan.md` |
-| PLAN-0021 | Headless control plane Wave 2 Postgres documents pivot implementation plan | 1.0.0 | draft | `docs/superpowers/plans/2026-04-25-wave2-postgres-documents-pivot-implementation-plan.md` |
+| PLAN-0021 | Headless control plane Wave 2 Postgres documents pivot implementation plan | 1.0.1 | draft | `docs/superpowers/plans/2026-04-25-wave2-postgres-documents-pivot-implementation-plan.md` |
 
 ### Review reports (REPORT-NNNN)
 
