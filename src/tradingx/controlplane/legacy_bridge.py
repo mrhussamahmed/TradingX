@@ -39,6 +39,7 @@ SECRET_FIELD_MARKERS = (
 )
 SECRET_PATH_MARKERS = ("secret", "token", "key", "password")
 VOLATILE_EVENT_METADATA_KEYS = frozenset({"observed_at_utc"})
+DOCUMENT_API_SOURCE_FAMILIES = ("handover_sessions", "state_and_index_docs")
 
 
 def _require_non_empty(field_name: str, value: str) -> None:
@@ -480,6 +481,138 @@ class FileTreeSourceAdapter(LegacySourceAdapter):
             is_mutable=self.is_mutable,
             source_errors=tuple(errors),
             initial_import_complete=not errors and bool(events),
+            source_root_display=source_root_ref,
+        )
+
+
+@dataclass(frozen=True)
+class DocumentFileTreeSourceAdapter(LegacySourceAdapter):
+    identity: LegacySourceIdentity
+    root_dir: Path
+    patterns: tuple[str, ...]
+    repo_root: Path
+    artifact_root: Path
+    data_root: Path
+    is_mutable: bool = True
+    secrets: tuple[str, ...] = ()
+
+    def collect(
+        self,
+        *,
+        observed_at_utc: datetime,
+        since: datetime | None = None,
+    ) -> LegacyBridgeSourceResult:
+        del since
+        source_root_ref = source_root_display(
+            self.root_dir,
+            repo_root=self.repo_root,
+            artifact_root=self.artifact_root,
+            data_root=self.data_root,
+            secrets=self.secrets,
+        )
+        if not self.root_dir.exists():
+            return LegacyBridgeSourceResult(
+                identity=self.identity,
+                source_watermark=None,
+                events=(),
+                is_mutable=self.is_mutable,
+                source_errors=("missing_source_root",),
+                initial_import_complete=False,
+                source_root_display=source_root_ref,
+            )
+
+        paths = _unique_paths(
+            path
+            for pattern in self.patterns
+            for path in self.root_dir.glob(pattern)
+            if path.is_file()
+        )
+        events: list[LegacySourceEvent] = []
+        errors: list[str] = []
+        active_documents: list[dict[str, str]] = []
+        for path in paths:
+            relative_path = path.relative_to(self.root_dir).as_posix()
+            try:
+                payload = _document_file_payload(
+                    path,
+                    relative_path=relative_path,
+                    source_family=self.identity.source_family,
+                    secrets=self.secrets,
+                    source_roots=(self.repo_root, self.artifact_root, self.data_root),
+                )
+            except (OSError, UnicodeDecodeError):
+                errors.append(f"unreadable_file:{relative_path}")
+                continue
+
+            source_event_id = (
+                f"file:{relative_path}:{str(payload['content_hash'])}"
+            )
+            source_watermark = _event_payload_watermark(source_event_id, payload)
+            active_documents.append(
+                {
+                    "document_id": str(payload["document_id"]),
+                    "relative_path": relative_path,
+                    "content_hash": str(payload["content_hash"]),
+                }
+            )
+            events.append(
+                LegacySourceEvent(
+                    identity=self.identity,
+                    source_event_id=source_event_id,
+                    source_watermark=source_watermark,
+                    occurred_at_utc=FIXED_LEGACY_EPOCH,
+                    event_family="documents",
+                    event_type=f"legacy.{self.identity.source_family}.file_observed",
+                    resource_type="document",
+                    resource_id=str(payload["document_id"]),
+                    payload=payload,
+                    metadata={
+                        "observed_at_utc": _aware_utc(
+                            observed_at_utc
+                        ).isoformat(),
+                        "source_path": relative_path,
+                        "document_event_kind": "file_observed",
+                        "internal_document_key": str(payload["internal_document_key"]),
+                    },
+                    is_mutable=self.is_mutable,
+                )
+            )
+
+        inventory_payload = _document_inventory_payload(
+            source_family=self.identity.source_family,
+            active_documents=tuple(active_documents),
+        )
+        inventory_event_id = f"inventory:{_canonical_hash(inventory_payload)}"
+        events.append(
+            LegacySourceEvent(
+                identity=self.identity,
+                source_event_id=inventory_event_id,
+                source_watermark=_event_payload_watermark(
+                    inventory_event_id,
+                    inventory_payload,
+                ),
+                occurred_at_utc=FIXED_LEGACY_EPOCH,
+                event_family="documents",
+                event_type=f"legacy.{self.identity.source_family}.inventory_snapshot",
+                resource_type="document_inventory",
+                resource_id=self.identity.source_family,
+                payload=inventory_payload,
+                metadata={
+                    "observed_at_utc": _aware_utc(observed_at_utc).isoformat(),
+                    "document_event_kind": "inventory_snapshot",
+                },
+                is_mutable=self.is_mutable,
+            )
+        )
+
+        events_tuple = tuple(sorted(events, key=lambda event: event.source_event_id))
+        return LegacyBridgeSourceResult(
+            identity=self.identity,
+            source_watermark=ordered_event_watermark(events_tuple),
+            events=events_tuple,
+            is_mutable=self.is_mutable,
+            source_errors=tuple(errors),
+            initial_import_complete=not errors,
             source_root_display=source_root_ref,
         )
 
@@ -1079,6 +1212,10 @@ def source_inventory() -> tuple[LegacySourceInventoryRow, ...]:
     return SOURCE_INVENTORY
 
 
+def document_api_source_families() -> tuple[str, ...]:
+    return DOCUMENT_API_SOURCE_FAMILIES
+
+
 def build_default_bridge(
     *,
     repo_root: Path | None = None,
@@ -1625,12 +1762,24 @@ def _repo_file_adapter_for_row(
     artifact_root: Path,
     data_root: Path,
     secrets: tuple[str, ...],
-) -> FileTreeSourceAdapter:
+) -> LegacySourceAdapter:
     patterns_by_family = {
         "handover_sessions": ("docs/handover/SESSIONS/*.md",),
         "state_and_index_docs": ("docs/handover/STATE.md", "docs/INDEX.md"),
         "config_proposals": ("config/proposals/*.md",),
     }
+    if row.source_family in DOCUMENT_API_SOURCE_FAMILIES:
+        return DocumentFileTreeSourceAdapter(
+            identity=row.identity,
+            root_dir=repo_root,
+            patterns=patterns_by_family.get(row.source_family, (row.inputs,)),
+            repo_root=repo_root,
+            artifact_root=artifact_root,
+            data_root=data_root,
+            is_mutable=row.is_mutable,
+            secrets=secrets,
+        )
+
     return FileTreeSourceAdapter(
         identity=row.identity,
         root_dir=repo_root,
@@ -1885,6 +2034,89 @@ def _file_payload(
     return payload
 
 
+def _document_file_payload(
+    path: Path,
+    *,
+    relative_path: str,
+    source_family: str,
+    secrets: Sequence[str],
+    source_roots: Sequence[Path],
+) -> Mapping[str, Any]:
+    content = path.read_bytes()
+    content_hash = hashlib.sha256(content).hexdigest()
+    redacted_text = str(
+        redact_for_bridge_output(
+            path.read_text(encoding="utf-8"),
+            secrets=secrets,
+            source_roots=source_roots,
+        )
+    )
+    document_id = _document_id_for_path(source_family, relative_path)
+    document_kind, title = _document_kind_and_title(source_family, relative_path)
+    return {
+        "document_event_kind": "file_observed",
+        "document_state": "active",
+        "document_id": document_id,
+        "internal_document_key": f"document:{source_family}:{relative_path}",
+        "document_kind": document_kind,
+        "title": title,
+        "preview": _document_preview_text(redacted_text),
+        "relative_path": relative_path,
+        "logical_retrieval_ref": relative_path,
+        "content_hash": content_hash,
+        "size_bytes": len(content),
+        "content_text": redacted_text,
+    }
+
+
+def _document_inventory_payload(
+    *,
+    source_family: str,
+    active_documents: Sequence[Mapping[str, str]],
+) -> Mapping[str, Any]:
+    documents = tuple(
+        sorted(active_documents, key=lambda document: document["relative_path"])
+    )
+    return {
+        "document_event_kind": "inventory_snapshot",
+        "document_state": "inventory",
+        "source_family": source_family,
+        "active_document_ids": [
+            document["document_id"] for document in documents
+        ],
+        "active_documents": [dict(document) for document in documents],
+    }
+
+
+def _document_id_for_path(source_family: str, relative_path: str) -> str:
+    del source_family
+    return Path(relative_path).stem
+
+
+def _document_kind_and_title(
+    source_family: str,
+    relative_path: str,
+) -> tuple[str, str]:
+    if source_family == "handover_sessions":
+        stem = Path(relative_path).stem
+        return "handover", stem.replace("-", " ")
+    if relative_path == "docs/handover/STATE.md":
+        return "state", "Project state"
+    if relative_path == "docs/INDEX.md":
+        return "index", "Artifact index"
+    stem = Path(relative_path).stem
+    return "document", stem.replace("-", " ")
+
+
+def _document_preview_text(text: str) -> str:
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("---")
+    ]
+    return lines[1] if len(lines) > 1 else (lines[0] if lines else "")
+
+
 def _unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
     unique: dict[str, Path] = {}
     for path in paths:
@@ -2024,6 +2256,7 @@ __all__ = (
     "LegacySourceInventoryRow",
     "LegacySourceWatermark",
     "DeferredLegacySourceAdapter",
+    "DocumentFileTreeSourceAdapter",
     "FileTreeSourceAdapter",
     "JsonArtifactSourceAdapter",
     "LegacyBridge",
@@ -2033,6 +2266,7 @@ __all__ = (
     "bridge_source_requirements",
     "build_source_status",
     "deterministic_occurred_at",
+    "document_api_source_families",
     "file_snapshot_watermark",
     "ordered_event_watermark",
     "redact_for_bridge_output",

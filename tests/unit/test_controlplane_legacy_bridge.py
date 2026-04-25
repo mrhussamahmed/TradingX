@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from tradingx.controlplane import repositories
+from tradingx.controlplane import legacy_bridge, repositories
 from tradingx.controlplane.legacy_bridge import (
     FIXED_LEGACY_EPOCH,
     JsonArtifactSourceAdapter,
@@ -630,6 +630,183 @@ def test_default_bridge_reads_top_level_runtime_artifact_sources(
     assert [event.source_event_id for event in result.events] == ["attr-1"]
 
 
+def test_document_file_tree_adapter_uses_revision_safe_event_ids(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "docs" / "handover" / "STATE.md"
+    _write_text(state_path, "# State\n\nFirst version.\n")
+
+    first = _collect_document_source(tmp_path, "state_and_index_docs")
+    _write_text(state_path, "# State\n\nSecond version.\n")
+    second = _collect_document_source(tmp_path, "state_and_index_docs")
+
+    first_event = _only_active_document_event(first, "STATE")
+    second_event = _only_active_document_event(second, "STATE")
+    assert first_event.payload["document_id"] == second_event.payload["document_id"]
+    assert first_event.source_event_id != second_event.source_event_id
+    assert first_event.source_event_id.startswith("file:docs/handover/STATE.md:")
+    assert second_event.source_event_id.startswith("file:docs/handover/STATE.md:")
+
+
+def test_document_file_tree_adapter_emits_file_level_document_payload(
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n\nReady.\n")
+
+    result = _collect_document_source(tmp_path, "state_and_index_docs")
+    event = _only_active_document_event(result, "STATE")
+    payload = event.payload
+
+    assert payload["document_id"] == "STATE"
+    assert payload["document_kind"] == "state"
+    assert payload["title"] == "Project state"
+    assert "Ready." in payload["preview"]
+    assert payload["relative_path"] == "docs/handover/STATE.md"
+    assert payload["logical_retrieval_ref"] == "docs/handover/STATE.md"
+    assert isinstance(payload["content_hash"], str)
+    assert len(payload["content_hash"]) == 64
+    assert payload["document_state"] == "active"
+    assert payload["internal_document_key"] == (
+        "document:state_and_index_docs:docs/handover/STATE.md"
+    )
+    assert str(tmp_path) not in repr(payload)
+
+
+def test_document_file_tree_adapter_preserves_public_document_ids(
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n")
+    _write_text(tmp_path / "docs" / "INDEX.md", "# Index\n")
+    _write_text(
+        tmp_path / "docs" / "handover" / "SESSIONS" / "2026-04-25-wave2.md",
+        "# Session\n",
+    )
+
+    state_result = _collect_document_source(tmp_path, "state_and_index_docs")
+    handover_result = _collect_document_source(tmp_path, "handover_sessions")
+
+    state_ids = {
+        event.payload["document_id"]
+        for event in _active_document_events(state_result)
+    }
+    handover_ids = {
+        event.payload["document_id"]
+        for event in _active_document_events(handover_result)
+    }
+    assert state_ids == {"STATE", "INDEX"}
+    assert handover_ids == {"2026-04-25-wave2"}
+    all_events = _active_document_events(state_result) + _active_document_events(
+        handover_result
+    )
+    assert all(
+        event.payload["document_id"] == Path(event.payload["relative_path"]).stem
+        and event.payload["internal_document_key"].endswith(
+            event.payload["relative_path"]
+        )
+        for event in all_events
+    )
+
+
+def test_document_file_tree_adapter_unchanged_rerun_reuses_event_id(
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n\nStable.\n")
+
+    first = _collect_document_source(
+        tmp_path,
+        "state_and_index_docs",
+        observed_at_utc=datetime(2026, 4, 24, 13, tzinfo=UTC),
+    )
+    second = _collect_document_source(
+        tmp_path,
+        "state_and_index_docs",
+        observed_at_utc=datetime(2026, 4, 24, 14, tzinfo=UTC),
+    )
+
+    first_event = _only_active_document_event(first, "STATE")
+    second_event = _only_active_document_event(second, "STATE")
+    assert second_event.source_event_id == first_event.source_event_id
+    assert second_event.source_watermark == first_event.source_watermark
+
+
+def test_document_file_tree_adapter_emits_inventory_snapshot(
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n")
+    _write_text(tmp_path / "docs" / "INDEX.md", "# Index\n")
+
+    result = _collect_document_source(tmp_path, "state_and_index_docs")
+    event = _only_inventory_document_event(result)
+
+    assert event.payload["document_event_kind"] == "inventory_snapshot"
+    assert event.payload["source_family"] == "state_and_index_docs"
+    assert event.payload["active_document_ids"] == ["INDEX", "STATE"]
+    assert [doc["relative_path"] for doc in event.payload["active_documents"]] == [
+        "docs/INDEX.md",
+        "docs/handover/STATE.md",
+    ]
+
+
+def test_document_file_tree_adapter_inventory_changes_after_delete(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "docs" / "handover" / "SESSIONS" / "first.md"
+    second_path = tmp_path / "docs" / "handover" / "SESSIONS" / "second.md"
+    _write_text(first_path, "# First\n")
+    _write_text(second_path, "# Second\n")
+
+    first = _collect_document_source(tmp_path, "handover_sessions")
+    first_inventory = _only_inventory_document_event(first)
+    first_path.unlink()
+    second = _collect_document_source(tmp_path, "handover_sessions")
+    second_inventory = _only_inventory_document_event(second)
+
+    assert first_inventory.source_event_id != second_inventory.source_event_id
+    assert first_inventory.payload["active_document_ids"] == ["first", "second"]
+    assert second_inventory.payload["active_document_ids"] == ["second"]
+
+
+def test_document_file_tree_adapter_emits_empty_inventory_snapshot(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "docs" / "handover" / "SESSIONS").mkdir(parents=True)
+
+    result = _collect_document_source(tmp_path, "handover_sessions")
+    inventory = _only_inventory_document_event(result)
+
+    assert inventory.payload["active_document_ids"] == []
+    assert inventory.payload["active_documents"] == []
+    assert result.initial_import_complete is True
+
+
+def test_document_file_tree_adapter_last_file_delete_emits_empty_inventory(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "docs" / "handover" / "SESSIONS" / "only.md"
+    _write_text(session_path, "# Only\n")
+    first = _collect_document_source(tmp_path, "handover_sessions")
+
+    session_path.unlink()
+    second = _collect_document_source(tmp_path, "handover_sessions")
+    inventory = _only_inventory_document_event(second)
+
+    assert _only_inventory_document_event(first).payload["active_document_ids"] == [
+        "only"
+    ]
+    assert inventory.payload["active_document_ids"] == []
+    assert inventory.source_event_id.startswith("inventory:")
+    assert second.initial_import_complete is True
+
+
+def test_document_bridge_scope_excludes_config_proposals_from_api_docs() -> None:
+    scoped_families = tuple(
+        getattr(legacy_bridge, "document_api_source_families", lambda: ())()
+    )
+
+    assert scoped_families == ("handover_sessions", "state_and_index_docs")
+    assert "config_proposals" not in scoped_families
+
+
 def test_default_bridge_includes_one_adapter_per_inventory_row(tmp_path: Path) -> None:
     bridge = build_default_bridge(
         repo_root=tmp_path,
@@ -868,6 +1045,64 @@ def test_bridge_source_requirements_keep_domains_blocked_until_projected() -> No
     assert service_cycles.requires_initial_import_complete is True
     assert service_cycles.requires_active_write_path is True
     assert service_cycles.max_freshness_seconds == 90
+
+
+def _collect_document_source(
+    tmp_path: Path,
+    source_family: str,
+    *,
+    observed_at_utc: datetime = datetime(2026, 4, 24, 13, tzinfo=UTC),
+) -> LegacyBridgeSourceResult:
+    bridge = build_default_bridge(
+        repo_root=tmp_path,
+        artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
+        domains=("documents",),
+        source_families=(source_family,),
+    )
+    preview = bridge.dry_run(observed_at_utc=observed_at_utc)
+    assert len(preview.source_results) == 1
+    return preview.source_results[0]
+
+
+def _active_document_events(
+    result: LegacyBridgeSourceResult,
+) -> tuple[LegacySourceEvent, ...]:
+    return tuple(
+        event
+        for event in result.events
+        if event.payload.get("document_state") == "active"
+    )
+
+
+def _only_active_document_event(
+    result: LegacyBridgeSourceResult,
+    document_id: str,
+) -> LegacySourceEvent:
+    events = tuple(
+        event
+        for event in _active_document_events(result)
+        if event.payload.get("document_id") == document_id
+    )
+    assert len(events) == 1
+    return events[0]
+
+
+def _only_inventory_document_event(
+    result: LegacyBridgeSourceResult,
+) -> LegacySourceEvent:
+    events = tuple(
+        event
+        for event in result.events
+        if event.payload.get("document_event_kind") == "inventory_snapshot"
+    )
+    assert len(events) == 1
+    return events[0]
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _event(

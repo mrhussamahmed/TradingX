@@ -19,6 +19,7 @@ from tradingx.controlplane.legacy_bridge import (
     LegacySourceEvent,
     LegacySourceIdentity,
     bridge_source_requirements,
+    build_default_bridge,
     ordered_event_watermark,
 )
 from tradingx.controlplane.projections import evaluate_projection_readiness
@@ -396,6 +397,160 @@ def test_legacy_bridge_stale_status_blocks_readiness(
     assert report.ready_for_postgres is False
 
 
+def test_document_bridge_edit_appends_new_outbox_event_not_conflict(
+    repo: PostgresProjectionStateRepository,
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "docs" / "handover" / "STATE.md"
+    _write_text(state_path, "# State\n\nFirst version.\n")
+    bridge = _bridge_with_document_source(tmp_path, "state_and_index_docs")
+
+    bridge.run_once(
+        repository=repo,
+        checked_at_utc=FIXED_NOW,
+        source_registry_version="legacy-bridge-v1",
+    )
+    _write_text(state_path, "# State\n\nSecond version.\n")
+    bridge.run_once(
+        repository=repo,
+        checked_at_utc=datetime(2026, 4, 24, 13, 5, tzinfo=UTC),
+        source_registry_version="legacy-bridge-v1",
+    )
+
+    active_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="state_and_index_docs",
+        event_kind="file_observed",
+    )
+
+    assert len(active_rows) == 2
+    assert {
+        row["payload_json"]["payload"]["document_id"] for row in active_rows
+    } == {"STATE"}
+    assert active_rows[0]["payload_json"]["source_event_id"] != active_rows[1][
+        "payload_json"
+    ]["source_event_id"]
+
+
+def test_document_bridge_unchanged_rerun_reuses_existing_outbox_row(
+    repo: PostgresProjectionStateRepository,
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n\nStable.\n")
+    bridge = _bridge_with_document_source(tmp_path, "state_and_index_docs")
+
+    first = bridge.run_once(
+        repository=repo,
+        checked_at_utc=FIXED_NOW,
+        source_registry_version="legacy-bridge-v1",
+    )
+    second = bridge.run_once(
+        repository=repo,
+        checked_at_utc=datetime(2026, 4, 24, 13, 5, tzinfo=UTC),
+        source_registry_version="legacy-bridge-v1",
+    )
+
+    outbox_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="state_and_index_docs",
+    )
+    status_rows = _rows(
+        repo.engine,
+        """
+        SELECT metadata_json
+        FROM system.domain_projection_source_status
+        WHERE domain_name = 'documents'
+          AND source_family = 'state_and_index_docs'
+        """,
+    )
+
+    assert first.source_results[0].outbox_event_ids == second.source_results[
+        0
+    ].outbox_event_ids
+    assert second.source_results[0].existing_outbox_event_ids == first.source_results[
+        0
+    ].outbox_event_ids
+    assert len(outbox_rows) == 2
+    assert status_rows[0]["metadata_json"]["new_event_count"] == 0
+    assert status_rows[0]["metadata_json"]["existing_event_count"] == 2
+
+
+def test_document_bridge_delete_appends_inventory_snapshot(
+    repo: PostgresProjectionStateRepository,
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "docs" / "handover" / "SESSIONS" / "first.md"
+    second_path = tmp_path / "docs" / "handover" / "SESSIONS" / "second.md"
+    _write_text(first_path, "# First\n")
+    _write_text(second_path, "# Second\n")
+    bridge = _bridge_with_document_source(tmp_path, "handover_sessions")
+
+    first = bridge.run_once(
+        repository=repo,
+        checked_at_utc=FIXED_NOW,
+        source_registry_version="legacy-bridge-v1",
+    )
+    first_path.unlink()
+    second = bridge.run_once(
+        repository=repo,
+        checked_at_utc=datetime(2026, 4, 24, 13, 5, tzinfo=UTC),
+        source_registry_version="legacy-bridge-v1",
+    )
+
+    inventory_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="handover_sessions",
+        event_kind="inventory_snapshot",
+    )
+
+    assert first.source_results[0].source_watermark != second.source_results[
+        0
+    ].source_watermark
+    assert len(inventory_rows) == 2
+    assert inventory_rows[0]["payload_json"]["payload"]["active_document_ids"] == [
+        "first",
+        "second",
+    ]
+    assert inventory_rows[1]["payload_json"]["payload"]["active_document_ids"] == [
+        "second"
+    ]
+
+
+def test_document_bridge_empty_valid_family_writes_inventory_snapshot(
+    repo: PostgresProjectionStateRepository,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "docs" / "handover" / "SESSIONS").mkdir(parents=True)
+    bridge = _bridge_with_document_source(tmp_path, "handover_sessions")
+
+    result = bridge.run_once(
+        repository=repo,
+        checked_at_utc=FIXED_NOW,
+        source_registry_version="legacy-bridge-v1",
+    )
+
+    inventory_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="handover_sessions",
+        event_kind="inventory_snapshot",
+    )
+    status_rows = _rows(
+        repo.engine,
+        """
+        SELECT ready_for_postgres, metadata_json
+        FROM system.domain_projection_source_status
+        WHERE domain_name = 'documents'
+          AND source_family = 'handover_sessions'
+        """,
+    )
+
+    assert result.source_results[0].initial_import_complete is True
+    assert len(inventory_rows) == 1
+    assert inventory_rows[0]["payload_json"]["payload"]["active_document_ids"] == []
+    assert status_rows[0]["ready_for_postgres"] is True
+    assert status_rows[0]["metadata_json"]["initial_import_complete"] is True
+
+
 def _bridge_with_service_cycle(
     tmp_path: Path,
     *,
@@ -436,6 +591,16 @@ def _bridge_with_service_cycle(
         data_root=tmp_path / "data",
     )
     return LegacyBridge((adapter,))
+
+
+def _bridge_with_document_source(tmp_path: Path, source_family: str) -> LegacyBridge:
+    return build_default_bridge(
+        repo_root=tmp_path,
+        artifact_root=tmp_path / "artifacts",
+        data_root=tmp_path / "data",
+        domains=("documents",),
+        source_families=(source_family,),
+    )
 
 
 def _legacy_event(*, source_event_id: str, equity: str) -> LegacySourceEvent:
@@ -522,3 +687,36 @@ def _rows(
 def _count(engine: Engine, table_name: str) -> int:
     rows = _rows(engine, f"SELECT count(*) AS count FROM {table_name}")
     return int(rows[0]["count"])
+
+
+def _document_outbox_rows(
+    engine: Engine,
+    *,
+    source_family: str,
+    event_kind: str | None = None,
+) -> tuple[dict[str, Any], ...]:
+    filters = [
+        "payload_json ->> 'domain_name' = 'documents'",
+        "payload_json ->> 'source_family' = :source_family",
+    ]
+    params: dict[str, object] = {"source_family": source_family}
+    if event_kind is not None:
+        filters.append(
+            "payload_json -> 'payload' ->> 'document_event_kind' = :event_kind"
+        )
+        params["event_kind"] = event_kind
+    return _rows(
+        engine,
+        f"""
+        SELECT outbox_event_id, dedupe_key, payload_json
+        FROM system.outbox_event
+        WHERE {" AND ".join(filters)}
+        ORDER BY outbox_event_id ASC
+        """,
+        params,
+    )
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
