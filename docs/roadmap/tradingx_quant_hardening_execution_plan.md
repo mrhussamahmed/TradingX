@@ -1,6 +1,6 @@
 # TradingX Quant Hardening Execution Plan
 
-Status: locked / implementation-ready
+Status: locked specification / implementation-planning-ready
 Date locked: 2026-04-25
 
 This document is the canonical execution program for hardening TradingX into a replayable, fail-closed, statistically defensible quantitative trading system.
@@ -48,6 +48,31 @@ schema -> artifact -> blocker -> CLI report -> activation refusal -> golden repl
 
 Milestone 1 creates the enforcement spine. Milestones 2-10 attach additional evidence types and blockers to that spine.
 
+## Trust Model Invariant
+
+Activation state is a projection, never a source of truth.
+
+The source of truth for promotion state, evidence classification, approvals, amendments, and recertification is an append-only, content-addressed ledger. Mutable files under `config/` may cache the latest projection for operator readability, but they cannot authorize activation, production, live probe, recertification, or exception handling.
+
+Every authority-bearing artifact must include:
+
+- canonical payload hash
+- schema version
+- content-addressed artifact URI
+- ledger sequence
+- previous ledger hash
+- writer identity
+- role/authority reference
+- signature or approval record reference
+- timestamp from an auditable clock source
+- replay input references
+
+Any missing, invalid, unsigned, tampered, out-of-sequence, or non-replayable authority artifact blocks promotion and runtime activation. A local edit to a projection file must be detected as projection drift, not accepted as a state transition.
+
+Promotion-valid replay requires retained immutable inputs, not hashes alone. If raw data, normalized frames, code versions, configuration, or decision inputs cannot be retrieved from a content-addressed artifact store, the evidence is not replay-valid.
+
+Research registration also has a pre-result boundary: promotion-valid runs must be registered before metrics are visible. Out-of-band exploratory work must be attested, and unregistered work cannot become invisible simply because it was not cited.
+
 ## V5 Governance Protocol
 
 ### Final Blocking Rule
@@ -88,6 +113,8 @@ A change is material if any are true:
 - Medium-risk exception: operator plus reviewer, max five trading days
 - High-risk exception: two approvers, explicit rollback condition, no auto-renewal
 - No exception may disable kill switch, reconciliation, stale-data checks, or idempotency
+
+Approval is not a free-text JSON field. Authority records must be bound to a verifiable operator identity, role registry, approval scope, expiry, canonical payload hash, and signature. Missing identity registry, missing signature, stale role registry, or write authorization failure blocks live probe, production, recertification, and manual exceptions.
 
 ### Objective Hierarchy
 
@@ -153,29 +180,37 @@ Periodic recertification:
 
 | Milestone | Status |
 |---|---|
-| 1. Governance Spine | Locked / implementation-ready |
-| 2. Experiment Registration & Trial Universe | Locked / implementation-ready |
-| 3. Data Restatement & Fingerprinting | Locked / implementation-ready |
-| 4. Validation Evidence Engine | Locked / implementation-ready |
-| 5. Cost, Quote Quality & Capacity Instrumentation | Locked / implementation-ready |
-| 6. Portfolio Utility & Optimizer Gates | Locked / implementation-ready |
-| 7. Expected Return & Sizing Governance | Locked / implementation-ready |
-| 8. Short-Side Capability & Financing | Locked / implementation-ready |
-| 9. Live Probe & Operational Safety | Locked / implementation-ready |
-| 10. Recertification & Change Control | Locked / implementation-ready |
+| 1. Governance Spine | Locked specification / planning-ready |
+| 2. Experiment Registration & Trial Universe | Locked specification / planning-ready |
+| 3. Data Restatement & Fingerprinting | Locked specification / planning-ready |
+| 4. Validation Evidence Engine | Locked specification / planning-ready |
+| 5. Cost, Quote Quality & Capacity Instrumentation | Locked specification / planning-ready |
+| 6. Portfolio Utility & Optimizer Gates | Locked specification / planning-ready |
+| 7. Expected Return & Sizing Governance | Locked specification / planning-ready |
+| 8. Short-Side Capability & Financing | Locked specification / planning-ready |
+| 9. Live Probe & Operational Safety | Locked specification / planning-ready |
+| 10. Recertification & Change Control | Locked specification / planning-ready |
+
+These milestones are not instructions to implement all ten at once. Many referenced modules and schema directories do not exist yet. The next work item is a thin architecture slice for Milestone 1 that creates the trust spine, ledger, artifact store interface, schema validator, CLI report, activation refusal, and golden replay.
 
 ## Milestone 1: Governance Spine
 
 ### Goal
 
-Create the first enforceable quant-governance spine: strategy capability manifests, promotion states, blocker evaluation, artifact classification, and activation refusal for unsupported or incomplete evidence.
+Create the first enforceable quant-governance spine: append-only decision/evidence ledger, content-addressed artifact store interface, signed approvals, strategy capability manifests, blocker evaluation, artifact classification, CLI report, activation refusal, and golden replay for unsupported or incomplete evidence.
 
 ### Core Rule
 
-A malformed manifest cannot suppress blockers. Blockers are recomputed by `src/tradingx/promotion.py` from:
+A malformed manifest or mutable promotion projection cannot suppress blockers.
+
+`config/strategy/promotion/<strategy_id>.json` is a generated projection only. The authoritative state is derived from append-only promotion decision ledger records plus referenced evidence artifacts.
+
+Blockers are recomputed by `src/tradingx/promotion.py` from:
 
 - capability manifest
-- promotion state artifact
+- append-only promotion decision ledger
+- signed approval records
+- promotion state projection
 - promotion evidence artifacts
 - runtime semantics
 - replay artifacts
@@ -191,6 +226,8 @@ A malformed manifest cannot suppress blockers. Blockers are recomputed by `src/t
 - `src/tradingx/__main__.py`
 - `config/strategy/capabilities/<strategy_id>.json`
 - `config/strategy/promotion/<strategy_id>.json`
+- `artifacts/quant/ledger/`
+- `artifacts/quant/store/`
 - `schemas/quant/*.schema.json`
 - `tests/fixtures/promotion/`
 - `tests/unit/test_promotion.py`
@@ -201,20 +238,50 @@ A malformed manifest cannot suppress blockers. Blockers are recomputed by `src/t
 - `schemas/quant/strategy_capability_manifest.schema.json`
 - `schemas/quant/promotion_evidence.schema.json`
 - `schemas/quant/promotion_decision.schema.json`
+- `schemas/quant/promotion_decision_ledger_record.schema.json`
+- `schemas/quant/content_addressed_artifact.schema.json`
+- `schemas/quant/approval_record.schema.json`
+- `schemas/quant/operator_identity.schema.json`
 
 `strategy_capability_manifest` declares capabilities, assumptions, limits, and promotion ceiling. It does not contain `blocking_reasons`.
 
 `promotion_evidence` governs evidence refs, replay refs, evidence class, schema versions, tax/financing/capacity statuses, and artifact freshness.
 
-`promotion_decision` governs strategy id, current state, promotion ceiling, max allowed state, blockers, evidence classification, decision timestamp, and source artifacts.
+`promotion_decision` governs strategy id, current state projection, promotion ceiling, max allowed state, blockers, evidence classification, decision timestamp, and source artifacts.
 
-Current promotion state source of truth:
+Promotion decision ledger record governs:
+
+- `ledger_record_id`
+- `record_sequence`
+- `previous_record_hash`
+- `decision_payload_hash`
+- `strategy_id`
+- `decision_id`
+- `approval_record_refs`
+- `evidence_artifact_refs`
+- `projection_target_ref`
+- `created_at_utc`
+- `created_by_identity_ref`
+- `signature_ref`
+
+Approval records bind reviewer intent to verifiable identity:
+
+- operator identity ID
+- role registry version
+- authority boundary ref
+- approval scope
+- risk accepted
+- expiry
+- canonical payload hash
+- signature
+
+Current promotion state projection:
 
 ```text
 config/strategy/promotion/<strategy_id>.json
 ```
 
-It stores:
+It stores derived fields for operator readability:
 
 - `strategy_id`
 - `current_state`
@@ -224,12 +291,15 @@ It stores:
 - `evidence_refs`
 - `schema_version`
 
-Milestone 10 later adds production expiry and recertification metadata to the same artifact.
+Milestone 10 later adds production expiry and recertification metadata to the same projection. Activation must verify that this projection matches the append-only ledger and must ignore or block on projection drift.
 
 ### Enforcement
 
 - Activation gateway refuses any strategy/blueprint whose evidence state is below required promotion level.
 - CLI promotion reports surface exact blockers.
+- Local projection edits cannot create promotion state.
+- Missing or invalid approval signatures block promotion.
+- Ledger sequence gaps, hash mismatches, or projection drift block activation.
 - Runtime planner refuses unsupported emitted sides.
 - Negative weights require explicit short support or a manifest-declared long-only transform.
 - `mean-reversion-v1` is capped at `research_only` until short-side support exists or the strategy is redesigned long-only.
@@ -256,6 +326,9 @@ Output includes strategy id, evidence class, promotion ceiling, max allowed stat
 ### Acceptance Criteria
 
 - `promotion-check --strategy-id trend-following-v1` produces a reproducible `paper_shadow`-eligible decision from fixture artifacts.
+- The same decision can be reproduced from the ledger and content-addressed artifacts without trusting mutable config projection files.
+- Editing `config/strategy/promotion/<strategy_id>.json` by hand produces projection drift and cannot activate a higher state.
+- Missing/invalid approval identity or signature blocks promotion.
 - `mean-reversion-v1` is capped at `research_only` with `unsupported_side` or `short_support_missing`.
 - An old evidence pack without V5 fields is classified `legacy`.
 - Activation refuses a blocked strategy and prints exact blockers.
@@ -306,6 +379,9 @@ Promotion-valid DSR/PBO/MCS evidence must use the registered experiment universe
 - `loss_function`
 - `registered_at_utc`
 - `registered_by`
+- `pre_result_registration_status`
+- `metric_visibility_policy`
+- `outside_exploration_attestation_ref`
 - `code_git_sha`
 - `script_or_notebook_hash`
 - `registration_sequence`
@@ -320,6 +396,16 @@ Promotion-valid DSR/PBO/MCS evidence must use the registered experiment universe
 
 Failed and canceled runs remain in the universe.
 
+Each run record also records:
+
+- `metrics_visible_at_utc`
+- `metrics_visibility_status`
+- `termination_reason_code`
+- `termination_stage`
+- `partial_metric_payload_hash`
+- `conservative_imputation_policy`
+- `cancellation_sensitivity_status`
+
 `experiment_amendment_record` is append-only and records corrections or influence changes. Changing `selection_influence=false` to `true` marks the universe `selection_audit_required`.
 
 `trial_universe_manifest` is scoped by `promotion_decision_scope`, not just `study_id`.
@@ -333,12 +419,17 @@ Changing objective, loss, label, feature set, benchmark family, dataset, or cost
 ### Integrity Rules
 
 - Records are never edited in place.
+- Experiment registration and run start records must be committed before metrics are computed or displayed.
+- Backtest, validation, and notebook wrappers must obtain a registered run token before releasing metric outputs.
+- A run whose metrics were visible before registration is `post_result_registered` and cannot support promotion.
 - `registration_sequence` is monotonic per `promotion_decision_scope`.
 - Duplicate sequence -> `ledger_integrity_violation`
 - Sequence gap -> `trial_universe_incomplete`
 - Same ID with different payload -> `ledger_integrity_violation`
 - Registered experiment without run record -> `trial_universe_incomplete`
 - Cited unregistered artifact -> `selection_audit_required`
+- Missing outside-exploration attestation -> `selection_audit_required`
+- Repeated unexplained out-of-band exploration -> promotion capped at `paper_shadow` until reviewed
 
 All hashes use canonical JSON with sorted keys, normalized decimal strings, UTC ISO timestamps, stable enum casing, explicit schema version, and no insignificant whitespace.
 
@@ -355,9 +446,12 @@ All hashes use canonical JSON with sorted keys, normalized decimal strings, UTC 
 
 DSR variance uses metric-bearing completed runs. Trial count and audit metadata include all selection-influencing registered attempts.
 
+Failed and canceled runs require reason codes and cancellation sensitivity. Promotion-valid DSR must report whether conservative imputation of failed/canceled/no-metric attempts would change the hard-pass conclusion. If the conclusion flips or reason codes indicate result-contingent cancellation, DSR status becomes `pending_selection_bias`.
+
 ### Enforcement
 
 - Promotion engine blocks states above `paper_shadow` if trial universe is incomplete or audit-required.
+- Promotion engine blocks states above `paper_shadow` if any supporting run is post-result registered.
 - Gate reports intended for promotion require registered experiment context.
 - DSR/PBO/MCS readiness fails closed unless the universe is complete and registered.
 - Gate reports without `--experiment-id` embed `promotion_valid=false` and `evidence_class=exploratory`.
@@ -383,6 +477,9 @@ Existing `TrialsLedger` rows are classified `legacy_unregistered`, excluded from
 - Splitting studies by changing loss/objective/feature set does not evade promotion-decision universe accounting.
 - Registered-but-omitted failed experiments make `trial_universe_incomplete`.
 - Unregistered notebooks cannot support promotion and trigger `selection_audit_required` if later cited.
+- Out-of-band exploratory work must be attested; missing or contradictory attestation triggers `selection_audit_required`.
+- Post-result registered runs cannot support promotion.
+- Failed/canceled runs require reason codes and DSR cancellation sensitivity.
 - Legacy trials are excluded from DSR/PBO/MCS.
 - Trial universe is reproducible from artifacts alone.
 
@@ -397,7 +494,9 @@ Make promotion-valid evidence dependent on reproducible data provenance, restate
 Promotion-valid evidence must be tied to:
 
 - raw vendor payload hashes
+- raw vendor payload artifact refs
 - normalized research-frame hashes
+- normalized research-frame artifact refs
 - normalization code/policy hashes
 - universe membership hash
 - calendar/timezone/session policy
@@ -405,6 +504,8 @@ Promotion-valid evidence must be tied to:
 - dependency references from dataset to evidence
 
 Data-level change makes evidence `stale/replay_required`. Replay-proven claim change makes evidence `invalid` for the old claim.
+
+A hash without retained inputs is not replay-valid. Promotion-valid datasets require immutable content-addressed storage of raw payloads when available, normalized frames, normalization code reference, normalization policy, benchmark/cash inputs, and universe membership inputs.
 
 ### Primary Files
 
@@ -489,12 +590,15 @@ Existing evidence with a manifest becomes:
 - `invalid` if replay proves old metric/gate/trade/safety claim changed
 - `manual_review_required` if old raw payload is unavailable and normalized data changed
 
+`manual_review_required` cannot support promotion above `paper_shadow`. If raw or normalized replay inputs are missing and the dataset cannot be reconstructed from immutable artifacts, the evidence is `replay_input_missing` and capped at `research_only` for claims that depend on that dataset.
+
 ### Acceptance Criteria
 
 - Promotion-valid evidence references dataset manifests.
 - Raw/normalized/code/policy hashes are recorded.
 - Cumulative small changes can trigger material restatement.
 - Unavailable old raw data plus normalized change requires manual review.
+- Missing raw/normalized replay inputs cap evidence and cannot satisfy artifact-only replay.
 - Dependency index lists affected evidence from `dataset_id`.
 - Data-level change makes evidence stale/replay-required.
 - Replay-proven claim change makes old evidence invalid.
@@ -1092,7 +1196,7 @@ Live probe does not prove durable edge.
 
 ### Schemas
 
-`authority_boundary` records approval type, role, scope, max exception duration, second approver requirement, approvers, approval time, and expiry.
+`authority_boundary` records approval type, identity provider, operator identity IDs, role registry version, role, scope, write authorization status, max exception duration, second approver requirement, approvers, canonical approval payload hash, signatures, approval time, and expiry.
 
 `live_probe_plan` records strategy, broker, mode, symbols, capital/order/loss/order-count/participation/spread limits, duration, minimum order count, minimum filled notional, minimum reconciliation cycles, minimum sessions, no-signal outcome policy, start/success/rollback criteria, flatten policy, kill switch requirement, authority ref, approval, and expiry.
 
@@ -1210,13 +1314,15 @@ Production approval is expiring evidence, not a permanent state. Any unknown, un
 
 ### Milestone 1 Amendment
 
-Promotion state artifact gains:
+Promotion state projection gains:
 
 - `production_approved_at_utc`
 - `production_expires_at_utc`
 - `last_recertification_report_id`
 - `next_operational_review_due_utc`
 - `next_statistical_review_due_utc`
+
+These fields are derived from the append-only decision/recertification ledger. They are not an approval source of truth.
 
 ### Schemas
 
@@ -1368,10 +1474,16 @@ Existing production/paper approvals without recertification metadata become `leg
 
 ## Initial Implementation Order
 
-The first implementation slice is Milestone 1 only:
+The first implementation slice is Milestone 1 only, and it must include the full enforcement chain:
 
 ```text
-schema -> manifest -> promotion blocker -> failing test
+schema -> artifact -> blocker -> CLI report -> activation refusal -> golden replay
+```
+
+For Milestone 1 specifically, that means:
+
+```text
+ledger schema -> signed decision/evidence fixture -> blocker evaluator -> promotion-check CLI -> activation refusal -> projection-drift and replay fixtures
 ```
 
 Recommended execution waves:
