@@ -1,11 +1,11 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.9
+version: 1.0.10
 status: active
 created: 2026-04-17
 last_amended: 2026-04-25
-supersedes: STATE-0001@1.0.8
+supersedes: STATE-0001@1.0.9
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -13,7 +13,7 @@ author_session: codex-gpt-5-2026-04-25
 # Current project state
 
 - Active session: codex-gpt-5-2026-04-25
-- Active branch: codex/wave2-documents-pivot-plan
+- Active branch: codex/wave2-documents-implementation-plan
 - Active phase: Headless control plane Wave 2 Postgres projections
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
@@ -30,13 +30,17 @@ author_session: codex-gpt-5-2026-04-25
   - outbox checkpoints and source readiness (`PLAN-0017`)
   - legacy bridge and tailer (`PLAN-0018`)
   - runtime/control-posture projector materialization (`PLAN-0019`)
-- `PLAN-0020` is the current planning artifact. It prepares the first
-  guarded route pivot for the `documents` domain only, with runtime,
-  control-posture, incidents, validation, portfolio, events, commands,
-  and SSE still out of scope.
-- Next execution step: adversarially review `PLAN-0020`; if approved,
-  implement the documents projector, document read repository, and
-  readiness-gated `/api/v1/documents` pivot with TDD.
+- `PLAN-0020` is approved and merged. It prepares the first guarded
+  route pivot for the current `/api/v1/documents` scope only, with
+  runtime, control-posture, incidents, validation, portfolio, events,
+  commands, config proposals, and SSE still out of scope.
+- `PLAN-0021` is the current implementation-plan artifact. Its first
+  execution slice is bridge enrichment: revision-safe file-level
+  document events plus inventory snapshot events for deletion/tombstone
+  handling.
+- Next execution step: adversarially review `PLAN-0021`; if approved,
+  implement Slice 1 with failing bridge-enrichment tests before any
+  documents projector or route-router code.
 - Phase 0 is complete and pushed to `origin/main`.
 - `SPEC-0001` is active at `specs/001-paper-trading-bot/spec.md`.
 - `PLAN-0001` is active at `specs/001-paper-trading-bot/plan.md`.
