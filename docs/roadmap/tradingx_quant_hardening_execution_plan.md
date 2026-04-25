@@ -30,6 +30,21 @@ disabled -> research_only -> paper_shadow -> paper_trading -> tiny_live_probe ->
 
 Promotion above `research_only` requires executable semantics. Promotion above `paper_shadow` requires promotion-valid evidence. Promotion to `production` requires complete evidence, live-probe recertification where applicable, capacity inside validated range, and unexpired production approval.
 
+### State Action Contracts
+
+Promotion state is not just a label. Each state has an executable allowed-action contract:
+
+| State | Data / Broker Access | Order Permission | Capital Ceiling | Short Permission | Required Runtime Controls |
+|---|---|---|---|---|---|
+| `disabled` | No activation; artifact replay only. | None. | None. | None. | Activation refusal. |
+| `research_only` | Offline or research data only. | No paper or live orders. | None. | Research simulation only, explicitly labeled. | Research labeling and no activation path. |
+| `paper_shadow` | Real-time or historical data may be consumed; no order route. | Shadow decisions only; no broker order submission. | None. | Shadow short signals only if labeled unsupported until short package exists. | Stale-data checks and activation refusal for order-capable routes. |
+| `paper_trading` | Paper broker/simulator route only. | Paper orders only. | No real capital. | Paper shorting only when paper/live semantic mismatch is disclosed. | Idempotency, reconciliation, stale-data checks, quote-quality checks, kill switch, and paper/live mismatch labeling. |
+| `tiny_live_probe` | Approved live broker route for the approved probe only. | Real orders only within signed probe limits. | Probe plan capital/loss/order/notional limits. | Live shorts only with complete short-side package and locate/financing controls. | Full pre-trade controls, idempotency, reconciliation, stale-data checks, kill switch, clock health, safety drills, rollback/flatten. |
+| `production` | Approved live broker route for approved strategy and account use. | Real orders within mandate, allocation, capacity, and recertification limits. | Approved production allocation and capacity range. | Only with production-valid short-side package. | All live controls, pre-trade market-access controls, monitoring, drift checks, incident handling, and unexpired recertification. |
+
+If any module interprets a state more permissively than this contract, activation fails with `state_action_contract_missing`.
+
 ## Program-Level Locks
 
 Every milestone must demonstrate:
@@ -69,9 +84,45 @@ Every authority-bearing artifact must include:
 
 Any missing, invalid, unsigned, tampered, out-of-sequence, or non-replayable authority artifact blocks promotion and runtime activation. A local edit to a projection file must be detected as projection drift, not accepted as a state transition.
 
+The ledger threat model must include signing-key custody, key rotation, key revocation, role-registry versioning, WORM or equivalent immutable backups, restore tests, and quorum/identity rules for key or ledger recovery. Missing key-management or immutable-backup controls produce `ledger_key_worm_controls_missing` and disable authority-bearing promotion until corrected.
+
 Promotion-valid replay requires retained immutable inputs, not hashes alone. If raw data, normalized frames, code versions, configuration, or decision inputs cannot be retrieved from a content-addressed artifact store, the evidence is not replay-valid.
 
 Research registration also has a pre-result boundary: promotion-valid runs must be registered before metrics are visible. Out-of-band exploratory work must be attested, and unregistered work cannot become invisible simply because it was not cited.
+
+## Non-Discretionary Production Blockers
+
+The following caps are deterministic. They are not advisory severity labels and cannot be waived by expert judgment, opportunity-cost pressure, manual approval, or retrospective explanation. The promotion engine must emit the named blocker and cap the state exactly as specified until the missing artifact, invalid assumption, or unsafe condition is corrected through the signed append-only authority model.
+
+| Blocker | Condition | Max State |
+|---|---|---|
+| `authority_artifact_invalid` | Any authority-bearing artifact is missing, unsigned, tampered, out-of-sequence, unauthoritative, or not replayable from retained immutable inputs. | `disabled` |
+| `ledger_key_worm_controls_missing` | Signing-key custody, rotation/revocation, role-registry versioning, immutable backup/WORM retention, restore test, or recovery quorum controls are missing. | `disabled` |
+| `state_action_contract_missing` | A promotion state lacks an executable allowed-action contract or any module permits data, broker, order, capital, short, or runtime-control behavior beyond that state's contract. | `disabled` |
+| `replay_path_missing` | Raw data, normalized frames, code version, configuration, decision input, or referenced authority input cannot be retrieved from content-addressed storage. | `research_only` |
+| `tax_account_financing_unspecified` | Tax mode, account type, financing assumptions, or pre-tax/after-tax status is missing or `unspecified`. | `paper_shadow` |
+| `after_tax_edge_missing_for_taxable_account` | Taxable capital lacks after-tax lower-bound net edge evidence and the mandate does not hard-cap the strategy below live capital use. | `paper_trading` |
+| `jurisdiction_account_use_unknown` | Jurisdiction, account-use category, regulatory/compliance status, broker permission, margin permission, or instrument/account eligibility is unknown. | `paper_trading` |
+| `external_capital_compliance_unknown` | Advisory, client, fund, retirement, or other external-capital use lacks required fiduciary, suitability/IPS, marketing/hypothetical-performance, custody, record-retention, or account-restriction status. | `disabled` |
+| `utility_definition_missing` | Portfolio utility, defensive utility threshold, benchmark policy, mandate, capital role, wealth thesis, or allocation policy is missing. | `research_only` |
+| `strategy_materiality_policy_missing` | Strategy-scale-aware materiality policy is missing, or fixed defaults are used when turnover, volatility, expected edge, sample length, decision sensitivity, or allocation sensitivity require tighter thresholds. | `paper_shadow` |
+| `lower_bound_net_edge_undefined` | Lower-bound net edge lacks a predeclared estimator, confidence/posterior level, horizon, serial-dependence correction, skew/fat-tail treatment, benchmark pairing, prior when Bayesian, and minimum effective sample size. | `research_only` |
+| `net_edge_lower_bound_below_threshold` | Capital-bearing promotion has lower-bound net edge below the predeclared threshold after costs, slippage, financing, tax treatment where modeled, benchmark pairing, and capacity stress. | `research_only` |
+| `trial_lineage_contaminated` | Prior metric exposure cannot be ruled out, metric vault controls were bypassed, immutable notebook/script/output capture is missing, or selection influence is contradicted by artifacts. | `research_only` |
+| `trial_universe_incomplete` | Registered, failed, canceled, related, or selection-influencing trials are missing from the promotion-decision universe. | `paper_shadow` |
+| `dsr_pbo_inputs_incomplete` | DSR/PBO/MCS evidence lacks effective independent trial count, trial correlation, selection rule, selected-strategy rank, non-normality inputs, failed-run treatment, or full CPCV/PBO matrix. | `paper_shadow` |
+| `point_in_time_data_incomplete` | Point-in-time universe membership, symbol mapping, delisting returns, bitemporal vendor timestamps, or replayable raw/normalized inputs are missing for a data-dependent claim. | `research_only` |
+| `execution_semantics_incomplete` | Order type, venue/broker semantics, partial/non-fill behavior, queue/adverse-selection handling, halt/open/close behavior, rate limits, or non-fill opportunity cost is unmodeled for the promoted execution path. | `paper_shadow` |
+| `execution_sample_power_missing` | Execution/cost evidence lacks powered bucket-level sample requirements or cannot prove coverage for intended order type, venue, liquidity, spread, volatility, session, and participation buckets. | `paper_shadow` |
+| `capacity_lower_bound_missing` | Capacity is a point estimate, extrapolated beyond validated range, or lacks a lower-confidence/posterior-bound capacity curve at proposed scale. | `paper_shadow` |
+| `live_sample_requirement_unmet` | Minimum live/probe order count, filled notional, sessions, quote-quality coverage, reconciliation cycles, or adverse-event coverage is not met. | `tiny_live_probe` |
+| `pre_trade_control_missing` | Live order entry lacks price collars, fat-finger notional/share limits, max open orders, duplicate prevention, cancel-on-disconnect, self-trade prevention where relevant, or reject-on-missing-control behavior. | `paper_trading` |
+| `short_legal_mechanics_missing` | Short-emitting runtime path lacks order marking, locate documentation, locate expiry, threshold-security/close-out handling, recall/forced-buy-in handling, or broker-specific hard-to-borrow semantics. | `research_only` |
+| `instrument_package_missing` | Instrument class is not covered by a promotion-valid instrument support package defining data, execution, margin, settlement, corporate-action, tax, and risk semantics. | `research_only` |
+| `optimizer_or_sizing_lockbox_missing` | Utility lambdas, baselines, feature sets, sizing caps, optimizer settings, or selection rules were not frozen before OOS evaluation or nested validation/final lockbox is missing. | `paper_shadow` |
+| `drift_monitor_spec_missing` | Production candidate lacks drift monitor specification for monitored variables, reference windows, thresholds, regime labels, multiple-testing policy, alert latency, and demotion rules. | `paper_shadow` |
+
+If multiple blockers apply, the strictest cap wins. `research_only` exploration may continue under research labels, but no capital-bearing promotion, live probe, production approval, or allocation increase may rely on evidence capped below the requested state.
 
 ## V5 Governance Protocol
 
@@ -91,11 +142,13 @@ Evidence cannot support `production` if any of the following are true:
 - replay path is missing
 - recertification trigger is undefined
 
-These cases can support at most `research_only` or `paper_shadow`, depending on severity.
+These cases use the deterministic caps in `Non-Discretionary Production Blockers`. No blocker in this list may be escalated by discretionary severity judgment.
 
 ### Materiality Defaults
 
 A change is material if any are true:
+
+Default numeric thresholds are maximum tolerances, not safe harbors. A strategy-specific materiality policy must tighten them when turnover, volatility, expected edge, sample length, decision sensitivity, allocation sensitivity, or instrument class makes the default too coarse.
 
 - any split, dividend, or corporate action changes
 - any daily return changes by `>= 5 bps`
@@ -106,6 +159,7 @@ A change is material if any are true:
 - any gate outcome changes
 - any trade decision would have changed
 - any production safety rule would have changed
+- any strategy-specific materiality threshold would have fired
 
 ### Authority Boundary
 
@@ -137,10 +191,15 @@ Every strategy must declare:
 - max participation rate
 - max order notional
 - liquidity bucket
+- instrument support package
 - expected cost curve as notional scales
-- capacity limit where marginal edge becomes nonpositive
+- capacity limit where lower-bound net edge no longer exceeds the predeclared threshold
+- lower-bound capacity curve at proposed scale
 - whether evidence was generated at intended scale or extrapolated
 - account type
+- jurisdiction/account-use category
+- regulatory/compliance status
+- taxable/tax-exempt status
 - tax treatment assumption
 - dividend treatment
 - borrow fee treatment
@@ -151,6 +210,12 @@ Every strategy must declare:
 `capacity_extrapolation_risk` blocks `production`.
 
 `unspecified` tax/account/financing caps evidence at `paper_shadow`.
+
+`jurisdiction_account_use_unknown` blocks live trading and caps evidence at `paper_trading`.
+
+`after_tax_edge_missing_for_taxable_account` blocks live capital use and caps evidence at `paper_trading`.
+
+`instrument_package_missing` caps evidence at `research_only`.
 
 ### Production Recertification
 
@@ -242,6 +307,10 @@ Fields like `approved_by` are insufficient unless backed by the signed append-on
 
 `benchmark_policy` defines ex-ante benchmark set, cash/risk-free benchmark, investable market benchmark, 60/40 or mandate-appropriate alternative, no-trade/current-holdings baseline, simple ETF alternative, exclusions, and tax/account/liquidity/instrument compatibility.
 
+`jurisdiction_account_use_manifest` defines jurisdiction, account-use category, account owner/operator role, self-directed proprietary/advisory/client/fund/retirement/margin classification, broker permissions, margin permissions, instrument eligibility, short eligibility, fiduciary-duty status, client suitability/IPS status, marketing/hypothetical-performance status, custody status, record-retention status, account-specific restriction status, applicable compliance review refs, and live-trading ceiling when any status is unknown.
+
+`instrument_support_package` defines instrument class, data semantics, total-return/corporate-action treatment, execution venues/order types, settlement cycle, margin requirements, short/borrow semantics, tax treatment, risk model, operational controls, broker permissions, and promotion ceiling. Any instrument outside a valid package is `instrument_package_missing`.
+
 `strategy_capital_role` defines role as one of: `growth_candidate`, `defensive_candidate`, `diversifier`, `cash_management`, `research_only`, `inactive`.
 
 `wealth_thesis` defines mechanism exploited, persistence reason, beneficiary regime, benchmark it must beat, failure condition, edge decay detector, capacity limit, and kill condition.
@@ -249,6 +318,10 @@ Fields like `approved_by` are insufficient unless backed by the signed append-on
 `capital_allocation_policy` defines initial allocation, max strategy/sleeve allocation, reserve policy, reinvestment policy, scale-up/down rules, cooldowns, and repeated-look / strategy-churn controls.
 
 `capital_scaling_decision` defines current allocation, proposed allocation, action, lower-bound net edge status, attribution confidence, capacity status, drawdown status, single-period dominance status, cooldown status, and blockers.
+
+`lower_bound_net_edge_spec` defines estimator family, frequentist confidence level or Bayesian posterior credibility level, return horizon, benchmark pairing, serial-dependence/HAC or block-bootstrap correction, skew/fat-tail treatment, minimum effective sample size, prior and prior-sensitivity policy when Bayesian, cost/tax/financing/capacity stress inputs, and pass/fail threshold.
+
+`strategy_materiality_policy` defines strategy-specific materiality thresholds tied to turnover, volatility, expected edge, sample length, decision sensitivity, allocation sensitivity, instrument class, and safety-rule sensitivity.
 
 `performance_attribution_report` defines strategy/sleeve PnL, gross return, net return after costs, financing/borrow drag, dividend/interest effects, realized/unrealized PnL, external cash flows, benchmark-relative return, and unexplained residual.
 
@@ -262,9 +335,14 @@ Capital-bearing promotion or capital increase requires a lower-confidence-bound 
 - slippage
 - financing
 - borrow/dividend effects where applicable
-- taxes where modeled
+- taxes for taxable accounts
+- taxes where modeled for non-taxable or tax-deferred accounts
 - capacity stress
 - benchmark comparison
+
+The lower-bound method must be predeclared before OOS/live results are visible and must specify estimator family, confidence/posterior level, horizon, benchmark pairing, serial-dependence correction, skew/fat-tail handling, minimum effective sample size, and Bayesian prior/sensitivity when applicable.
+
+For taxable capital, production or live-probe capital use requires after-tax lower-bound net edge evidence unless the mandate explicitly hard-caps the strategy below live capital use. A pre-tax-only positive edge cannot support taxable live promotion.
 
 Failure state:
 
@@ -279,10 +357,36 @@ Each mandate and report must declare:
 - `tax_modeled`
 - `tax_account_type`
 - `pre_tax_or_after_tax`
+- `taxable_or_tax_exempt_status`
 - tax assumptions if modeled
 - promotion/allocation ceiling if tax is not modeled
 
 If taxes are not modeled, reports must explicitly declare `pre_tax`, and promotion/allocation ceilings follow the mandate's tax policy.
+
+If capital is taxable and taxes are not modeled, the max state is `paper_trading` unless the mandate explicitly hard-caps the strategy below live capital use. Tax-exempt or tax-deferred accounts must still declare the exemption or deferral basis and any account-specific restrictions.
+
+### Jurisdiction / Account-Use Rule
+
+Each live-capable mandate must declare:
+
+- jurisdiction
+- account-use category
+- account owner/operator role
+- broker permission set
+- margin permission set
+- instrument eligibility
+- short eligibility
+- required legal/tax/compliance review refs where applicable
+- fiduciary-duty status for advisory/client/fund/retirement use
+- client suitability/IPS status for advisory/client/fund/retirement use
+- marketing/hypothetical-performance status before any external presentation
+- custody status
+- record-retention status
+- account-specific restrictions
+
+Unknown jurisdiction, account-use, broker permission, margin permission, or instrument eligibility produces `jurisdiction_account_use_unknown` and blocks live trading until resolved.
+
+Unknown advisory, client, fund, retirement, custody, fiduciary, suitability/IPS, marketing/hypothetical-performance, record-retention, or account-restriction status produces `external_capital_compliance_unknown` and disables any external-capital/advice activation until resolved.
 
 ### Survival Definition
 
@@ -358,6 +462,11 @@ Promotion/capital allocation blocks if:
 - capital allocation policy missing
 - survival definition missing
 - tax/modeling status missing
+- jurisdiction/account-use status missing or unknown for live trading
+- external-capital/advice compliance status missing where applicable
+- taxable account lacks after-tax lower-bound evidence for live capital use
+- instrument support package missing
+- strategy-scale-aware materiality policy missing for production claims
 - net edge lower bound below threshold for capital-bearing promotion
 - PnL reconciliation residual too high
 - opportunity-cost report used to override blockers
@@ -371,6 +480,11 @@ Promotion/capital allocation blocks if:
 - Every strategy has a capital role and falsifiable wealth thesis.
 - Survival limits are formal.
 - Tax/modeling status is explicit.
+- Jurisdiction/account-use status is explicit before live trading.
+- Taxable capital requires after-tax lower-bound evidence before live capital use.
+- External-capital/advice status is explicit and blocks activation when unresolved.
+- Instrument support packages exist for every promoted instrument class, including simple equities.
+- Strategy-specific materiality policies exist and tighten defaults where needed.
 - Scale-up/down rules are predeclared.
 - Positive EV is lower-bound based, not point-estimate based.
 - Opportunity cost is diagnostic only.
@@ -431,8 +545,12 @@ Blockers are recomputed by `src/tradingx/promotion.py` from:
 - `schemas/quant/content_addressed_artifact.schema.json`
 - `schemas/quant/approval_record.schema.json`
 - `schemas/quant/operator_identity.schema.json`
+- `schemas/quant/ledger_key_management_policy.schema.json`
+- `schemas/quant/state_action_contract.schema.json`
 
 `strategy_capability_manifest` declares capabilities, assumptions, limits, and promotion ceiling. It does not contain `blocking_reasons`.
+
+`state_action_contract` records state, data/broker access, order permissions, capital ceiling, short permissions, required runtime controls, route constraints, and disallowed actions. Runtime code may hard-code a safer subset, but no module may permit behavior outside the canonical state-action contract.
 
 `promotion_evidence` governs evidence refs, replay refs, evidence class, schema versions, tax/financing/capacity statuses, and artifact freshness.
 
@@ -464,6 +582,8 @@ Approval records bind reviewer intent to verifiable identity:
 - canonical payload hash
 - signature
 
+`ledger_key_management_policy` records signing-key custody, rotation, revocation, role registry version, recovery quorum, immutable/WORM backup location, restore-test cadence, and last restore-test evidence.
+
 Current promotion state projection:
 
 ```text
@@ -491,6 +611,7 @@ Milestone 10 later adds production expiry and recertification metadata to the sa
 - Ledger sequence gaps, hash mismatches, or projection drift block activation.
 - Runtime planner refuses unsupported emitted sides.
 - Negative weights require explicit short support or a manifest-declared long-only transform.
+- State action contracts are enforced before activation, runtime planning, and order route selection.
 - `mean-reversion-v1` is capped at `research_only` until short-side support exists or the strategy is redesigned long-only.
 
 ### Migration
@@ -514,10 +635,13 @@ Output includes strategy id, evidence class, promotion ceiling, max allowed stat
 
 ### Acceptance Criteria
 
-- `promotion-check --strategy-id trend-following-v1` produces a reproducible `paper_shadow`-eligible decision from fixture artifacts.
+- `promotion-check --strategy-id trend-following-v1` produces a reproducible `research_only` decision with exact mandate/utility blockers until signed Milestone 0 placeholder mandate artifacts exist.
+- A second fixture that includes signed placeholder mandate, benchmark, wealth-thesis, utility, allocation, tax/account, jurisdiction/account-use, and instrument-package artifacts can become `paper_shadow`-eligible from artifacts alone.
 - The same decision can be reproduced from the ledger and content-addressed artifacts without trusting mutable config projection files.
 - Editing `config/strategy/promotion/<strategy_id>.json` by hand produces projection drift and cannot activate a higher state.
 - Missing/invalid approval identity or signature blocks promotion.
+- Missing key-management or immutable-backup policy produces `ledger_key_worm_controls_missing`.
+- A state/action mismatch produces `state_action_contract_missing` and blocks activation.
 - `mean-reversion-v1` is capped at `research_only` with `unsupported_side` or `short_support_missing`.
 - An old evidence pack without V5 fields is classified `legacy`.
 - Activation refuses a blocked strategy and prints exact blockers.
@@ -573,6 +697,10 @@ Promotion-valid DSR/PBO/MCS evidence must use the registered experiment universe
 - `outside_exploration_attestation_ref`
 - `code_git_sha`
 - `script_or_notebook_hash`
+- `immutable_source_artifact_ref`
+- `metric_vault_policy_ref`
+- `metric_release_token_ref`
+- `output_capture_artifact_ref`
 - `registration_sequence`
 - `selection_influence`
 
@@ -589,6 +717,10 @@ Each run record also records:
 
 - `metrics_visible_at_utc`
 - `metrics_visibility_status`
+- `metric_vault_release_status`
+- `immutable_stdout_stderr_hash`
+- `notebook_output_hash`
+- `result_artifact_hash`
 - `termination_reason_code`
 - `termination_stage`
 - `partial_metric_payload_hash`
@@ -609,16 +741,22 @@ Changing objective, loss, label, feature set, benchmark family, dataset, or cost
 
 - Records are never edited in place.
 - Experiment registration and run start records must be committed before metrics are computed or displayed.
-- Backtest, validation, and notebook wrappers must obtain a registered run token before releasing metric outputs.
-- A run whose metrics were visible before registration is `post_result_registered` and cannot support promotion.
+- Backtest, validation, and notebook wrappers must obtain a registered run token before computing metrics and a metric-vault release token before displaying, exporting, logging, or persisting metric outputs.
+- Notebook/script source, stdout/stderr, rendered notebook outputs, result artifacts, and error artifacts are captured immutably before metric release.
+- A run whose metrics were visible before registration is `post_result_registered`, maps to `trial_lineage_contaminated`, and cannot support promotion above `research_only`.
+- A run whose prior metric exposure cannot be ruled out is `trial_lineage_contaminated` and cannot support promotion above `research_only`.
 - `registration_sequence` is monotonic per `promotion_decision_scope`.
 - Duplicate sequence -> `ledger_integrity_violation`
 - Sequence gap -> `trial_universe_incomplete`
 - Same ID with different payload -> `ledger_integrity_violation`
+- Missing metric-vault token -> `trial_lineage_contaminated`
+- Missing immutable notebook/script/output capture -> `trial_lineage_contaminated`
+- Contradictory selection influence or unexplained influence downgrade -> `trial_lineage_contaminated`
 - Registered experiment without run record -> `trial_universe_incomplete`
-- Cited unregistered artifact -> `selection_audit_required`
-- Missing outside-exploration attestation -> `selection_audit_required`
-- Repeated unexplained out-of-band exploration -> promotion capped at `paper_shadow` until reviewed
+- Cited unregistered metric-bearing artifact -> `trial_lineage_contaminated`
+- Cited unregistered non-metric artifact -> `selection_audit_required` only if prior metric exposure is ruled out by immutable artifacts
+- Missing outside-exploration attestation -> `trial_lineage_contaminated`
+- Repeated unexplained out-of-band exploration -> `trial_lineage_contaminated`
 
 All hashes use canonical JSON with sorted keys, normalized decimal strings, UTC ISO timestamps, stable enum casing, explicit schema version, and no insignificant whitespace.
 
@@ -628,19 +766,31 @@ All hashes use canonical JSON with sorted keys, normalized decimal strings, UTC 
 
 - `registered_trial_count`
 - `metric_bearing_trial_count`
+- `effective_independent_trial_count`
+- `trial_correlation_estimate`
+- `selection_rule`
+- `selected_strategy_rank`
 - `trial_sharpe_mean`
 - `trial_sharpe_variance`
+- `trial_return_skewness`
+- `trial_return_kurtosis`
 - `failed_or_canceled_count`
+- `failed_run_treatment`
+- `failed_run_effective_trial_penalty`
+- `full_cpcv_pbo_matrix_ref`
 - `selection_audit_required`
 
-DSR variance uses metric-bearing completed runs. Trial count and audit metadata include all selection-influencing registered attempts.
+DSR variance uses metric-bearing completed runs. Effective trial count, selected-strategy rank penalty, and audit metadata include all selection-influencing registered attempts, including failed, canceled, and no-metric attempts unless immutable artifacts prove the attempt failed before metric visibility and was non-result-contingent.
 
-Failed and canceled runs require reason codes and cancellation sensitivity. Promotion-valid DSR must report whether conservative imputation of failed/canceled/no-metric attempts would change the hard-pass conclusion. If the conclusion flips or reason codes indicate result-contingent cancellation, DSR status becomes `pending_selection_bias`.
+Failed and canceled runs require reason codes, cancellation sensitivity, and an effective-trial penalty. Promotion-valid DSR must report whether conservative imputation or rank/trial-count penalization of failed/canceled/no-metric attempts would change the hard-pass conclusion. If the conclusion flips, failure timing is unproven, or reason codes indicate result-contingent cancellation, DSR status becomes `pending_selection_bias` and cannot support promotion above `paper_shadow`.
 
 ### Enforcement
 
-- Promotion engine blocks states above `paper_shadow` if trial universe is incomplete or audit-required.
-- Promotion engine blocks states above `paper_shadow` if any supporting run is post-result registered.
+- Promotion engine blocks states above `paper_shadow` if trial universe is incomplete.
+- Promotion engine blocks states above `paper_shadow` if `selection_audit_required` remains after immutable artifacts rule out prior metric exposure.
+- Promotion engine blocks states above `research_only` if any supporting run is post-result registered.
+- Promotion engine blocks states above `research_only` if unregistered metric-bearing artifacts, missing outside-exploration attestation, repeated unexplained out-of-band exploration, or any other contaminated lineage is present.
+- Promotion engine blocks states above `research_only` if metric-vault enforcement, immutable output capture, or uncontaminated lineage cannot be proven.
 - Gate reports intended for promotion require registered experiment context.
 - DSR/PBO/MCS readiness fails closed unless the universe is complete and registered.
 - Gate reports without `--experiment-id` embed `promotion_valid=false` and `evidence_class=exploratory`.
@@ -665,10 +815,15 @@ Existing `TrialsLedger` rows are classified `legacy_unregistered`, excluded from
 - Child parameter and cost perturbation runs are visible in `U`.
 - Splitting studies by changing loss/objective/feature set does not evade promotion-decision universe accounting.
 - Registered-but-omitted failed experiments make `trial_universe_incomplete`.
-- Unregistered notebooks cannot support promotion and trigger `selection_audit_required` if later cited.
-- Out-of-band exploratory work must be attested; missing or contradictory attestation triggers `selection_audit_required`.
+- Unregistered metric-bearing notebooks trigger `trial_lineage_contaminated`; unregistered non-metric artifacts trigger `selection_audit_required` only when immutable artifacts rule out prior metric exposure.
+- Metric-vault release is required before metrics can be displayed, exported, logged, or persisted.
+- Immutable notebook/script/output capture is required for promotion-valid evidence.
+- Contaminated lineage caps evidence at `research_only`.
+- Out-of-band exploratory work must be attested; missing or contradictory attestation triggers `trial_lineage_contaminated`.
 - Post-result registered runs cannot support promotion.
 - Failed/canceled runs require reason codes and DSR cancellation sensitivity.
+- DSR/PBO inputs include effective independent trial count, trial correlation, selection rule, selected-strategy rank, non-normality inputs, failed-run treatment, and full CPCV/PBO matrix.
+- Failed/canceled/no-metric attempts affect effective trial count and rank penalty unless artifacts prove pre-metric, non-result-contingent failure.
 - Legacy trials are excluded from DSR/PBO/MCS.
 - Trial universe is reproducible from artifacts alone.
 
@@ -690,6 +845,10 @@ Promotion-valid evidence must be tied to:
 - universe membership hash
 - calendar/timezone/session policy
 - benchmark/cash curve versions
+- point-in-time universe membership
+- point-in-time symbol/security identifier mapping
+- delisting return policy and retained delisting inputs
+- bitemporal vendor observation and availability timestamps
 - dependency references from dataset to evidence
 
 Data-level change makes evidence `stale/replay_required`. Replay-proven claim change makes evidence `invalid` for the old claim.
@@ -715,7 +874,7 @@ A hash without retained inputs is not replay-valid. Promotion-valid datasets req
 
 ### Schemas
 
-`dataset_manifest` records vendor, pull time, symbols, window, bar frequency, adjustment policy, total-return policy, corporate-action policy, benchmark/cash curve versions, timezone, calendar, session policy, timestamp alignment, missing/stale policies, universe membership, inception/delisting policy, survivorship policy, raw payload hashes, normalized frame hashes, normalization code hash, normalization policy hash, corporate action hash, benchmark hash, and cash curve hash.
+`dataset_manifest` records vendor, pull time, symbols, window, bar frequency, adjustment policy, total-return policy, corporate-action policy, benchmark/cash curve versions, timezone, calendar, session policy, timestamp alignment, missing/stale policies, point-in-time universe membership, point-in-time symbol/security identifier mapping, inception/delisting policy, delisting return inputs, survivorship policy, bitemporal vendor observation/availability timestamps, raw payload hashes, normalized frame hashes, normalization code hash, normalization policy hash, corporate action hash, benchmark hash, and cash curve hash.
 
 `data_restatement_report` records old/new dataset IDs, changed symbols/bars/corporate actions/benchmark/cash values, data-level materiality flags, evidence-level materiality flags, return deltas, raw payload availability, manual review requirement, and summary metrics.
 
@@ -737,6 +896,10 @@ Data-level materiality:
 - total-return policy mismatch
 - corporate-action policy mismatch
 - universe membership change
+- missing or changed point-in-time universe membership
+- missing or changed symbol/security identifier mapping
+- missing or changed delisting return input
+- missing or changed vendor availability timestamp
 - calendar/timezone/session mismatch
 - daily return delta `>= 5 bps`
 - cumulative benchmark return delta `>= 25 bps`
@@ -755,6 +918,7 @@ Evidence-level materiality after replay:
 ### Enforcement
 
 - Promotion blocks above `paper_shadow` on missing/stale/materially restated datasets.
+- Promotion blocks above `research_only` for data-dependent claims when point-in-time universe membership, symbol mapping, delisting returns, bitemporal vendor timestamps, or replayable raw/normalized inputs are missing.
 - Gate reports intended for promotion require dataset manifest.
 - DSR/PBO/MCS readiness requires dataset fingerprints through Milestone 2 experiment records.
 - Adjustment policy mismatch blocks promotion.
@@ -784,6 +948,10 @@ Existing evidence with a manifest becomes:
 ### Acceptance Criteria
 
 - Promotion-valid evidence references dataset manifests.
+- Promotion-valid data-dependent evidence includes point-in-time universe membership.
+- Promotion-valid data-dependent evidence includes point-in-time symbol/security identifier mapping.
+- Promotion-valid data-dependent evidence includes delisting returns or explicit delisting-return unavailability treatment.
+- Promotion-valid data-dependent evidence includes bitemporal vendor observation and availability timestamps.
 - Raw/normalized/code/policy hashes are recorded.
 - Cumulative small changes can trigger material restatement.
 - Unavailable old raw data plus normalized change requires manual review.
@@ -839,7 +1007,7 @@ DSR/PBO/MCS can block promotion. They cannot, by themselves, prove economic edge
 
 `paired_benchmark_uncertainty_report` covers cash, 60/40, static sleeve baseline, and no-trade/current holdings where applicable. It reports paired excess return CI, paired excess utility CI, paired cost-stressed CI, material edge threshold, and pass/pending/fail per baseline.
 
-`statistical_validation_report` records dataset, experiment, promotion scope, trial universe hash, power/bootstrap/paired benchmark refs, return edge, risk constraints, cost stress, portfolio contribution, multiple-testing status, DSR/PBO/MCS/SPA statuses, economic edge CI, registered/metric-bearing/failed counts, exploratory lineage, promotion validity, and blockers.
+`statistical_validation_report` records dataset, experiment, promotion scope, trial universe hash, power/bootstrap/paired benchmark refs, return edge, risk constraints, cost stress, portfolio contribution, multiple-testing status, effective independent trial count, trial correlation estimate, selection rule, selected-strategy rank, non-normality inputs, failed-run treatment, failed-run effective-trial penalty, full CPCV/PBO matrix ref, DSR/PBO/MCS/SPA statuses, economic edge CI, registered/metric-bearing/failed counts, exploratory/contaminated lineage, promotion validity, and blockers.
 
 `threshold_justification` records threshold value, economic rationale, statistical rationale, strategy type, approval metadata, and version.
 
@@ -849,12 +1017,13 @@ DSR/PBO/MCS can block promotion. They cannot, by themselves, prove economic edge
 - Underpowered or unstable evidence -> max state `paper_shadow`.
 - Evidence derived from exploratory gate report remains non-promotable downstream.
 - DSR uses only Milestone 2 registered universe stats.
-- PBO requires a complete promotion-decision CPCV matrix.
+- DSR requires effective independent trial count, trial correlation estimate, selected-strategy rank, selection rule, sample length, skewness, kurtosis, failed-run treatment, and failed-run effective-trial penalty.
+- PBO requires a complete promotion-decision CPCV matrix and cannot rely on summarized fold winners alone.
 - MCS/SPA requires predeclared loss and hypothesis family.
 
 ### Enforcement
 
-Promotion blocks above `paper_shadow` if any are true:
+Promotion follows `Non-Discretionary Production Blockers` first. For Milestone 4 statistical evidence, promotion blocks above `paper_shadow` if any are true:
 
 - missing threshold justification
 - underpowered evidence
@@ -863,8 +1032,11 @@ Promotion blocks above `paper_shadow` if any are true:
 - exploratory source evidence
 - missing paired benchmark uncertainty
 - DSR/PBO/MCS not universe-backed
+- DSR/PBO inputs incomplete
+- failed/canceled/no-metric attempts lack effective-trial penalty
 - missing dataset manifest
-- missing replay path
+
+Promotion blocks above `research_only` if the replay path is missing.
 
 ### CLI
 
@@ -887,6 +1059,8 @@ Old evidence packs without power, bootstrap, paired benchmark uncertainty, and u
 - Paired benchmark uncertainty is required for economic edge claims.
 - Exploratory evidence remains non-promotable downstream.
 - DSR uses registered universe stats only.
+- DSR evidence includes effective independent trial count, trial correlation, selection rule, selected-strategy rank, non-normality inputs, failed-run treatment, and failed-run effective-trial penalty.
+- PBO evidence includes the full CPCV/PBO matrix.
 - PBO/MCS/SPA fail closed on incomplete universe or missing loss/null definition.
 - Old metric-only evidence is legacy.
 
@@ -904,8 +1078,10 @@ Promotion-valid cost evidence must:
 - include clean and all-events estimates
 - fall back conservatively for sparse buckets
 - model runtime no-trade quote states
+- model order type, venue/broker semantics, partial fills, non-fills, halts, open/close auctions, rate limits, queue/adverse-selection effects, and non-fill opportunity cost
 - separate paper from live/probe/live evidence
-- prove capacity at intended turnover-adjusted capital scale
+- define powered bucket-level sample requirements for intended order type, venue, liquidity, spread, volatility, session, and participation buckets
+- prove lower-bound capacity at intended turnover-adjusted capital scale
 
 Paper fills validate lifecycle/reconciliation. They do not prove real market impact.
 
@@ -935,17 +1111,19 @@ Add `arrival_timestamp_policy` to `experiment_registration`. Changing it creates
 
 `quote_quality_record` records quote timestamps, system receive time, source, bid/ask/mid, spread, locked/crossed/stale flags, quote age, latency, handling policy, outage-adjacent window, trading session, vendor, and quality status.
 
-`execution_cost_observation` records intent/order/execution IDs, symbol, side, decision/submit/ack timestamps, arrival timestamp policy, arrival mid, fill price, signed slippage, half-spread, quantity, notional, interval volume, participation rate, volatility/spread/time buckets, quote quality ref, paper/live status, and whether an impact claim is allowed.
+`execution_cost_observation` records intent/order/execution IDs, symbol, side, order type, time-in-force, venue/broker route, decision/submit/ack timestamps, arrival timestamp policy, arrival mid, fill price, partial-fill quantity, unfilled quantity, non-fill reason, signed slippage, half-spread, queue/adverse-selection marker, halt/open/close state, rate-limit state, quantity, notional, interval volume, participation rate, volatility/spread/time buckets, quote quality ref, paper/live status, and whether an impact claim is allowed.
 
-`cost_model_report` records model version, cost feature hash, bucket assignment policy, training dataset, sample window, bucket definitions, minimum bucket sample size, bucket confidence, sparse-bucket fallback policy, clean estimate, all-events stress, adverse percentiles, sample sizes, unsupported buckets, counterfactual quality, paper/live-probe/live counts, calibration source, impact claim status, and blockers.
+`cost_model_report` records model version, cost feature hash, bucket assignment policy, training dataset, sample window, bucket definitions, minimum bucket sample size, bucket-level power target, bucket-level confidence, powered bucket coverage, sparse-bucket fallback policy, clean estimate, all-events stress, adverse percentiles, sample sizes, unsupported buckets, non-fill opportunity-cost estimate, queue/adverse-selection estimate, counterfactual quality, paper/live-probe/live counts, minimum live sample requirements, calibration source, impact claim status, and blockers.
 
-`capacity_curve_report` records target capital scale, tested scales, validated range, max participation, expected turnover, orders per day, rebalance frequency, annualized cost drag by scale, capacity under turnover assumption, expected cost curve, net edge curve, capacity limit, extrapolation risk, and blockers.
+`capacity_curve_report` records target capital scale, tested scales, validated range, max participation, expected turnover, orders per day, rebalance frequency, annualized cost drag by scale, capacity under turnover assumption, lower-confidence/posterior-bound capacity curve, expected cost curve, net edge curve, lower-bound net edge by scale, lower-bound capacity limit, extrapolation risk, and blockers.
 
 ### Cost Rules
 
 Clean quote estimate can support promotion only if runtime has enforced no-trade rules for stale/crossed/locked/bad-quality quote states. Otherwise promotion uses `all_events_cost_stress`.
 
 If an intended bucket lacks samples, use the worst defensible fallback among parent bucket, liquidity-class bucket, or global adverse p90. If no defensible fallback exists: `unsupported_cost_bucket`.
+
+If powered bucket-level sample requirements are missing or unmet for the intended execution path, promotion uses `execution_sample_power_missing` and cannot claim live impact or production capacity.
 
 If runtime refuses bad quote states and quote-state data exists, backtest replay must model skipped trades under those states.
 
@@ -957,9 +1135,13 @@ Promotion blocks above `paper_shadow` if:
 - no clean/all-events reports
 - sparse bucket has no conservative fallback
 - intended bucket unsupported
+- execution semantics incomplete
+- execution sample power missing
 - intended capital scale outside validated range
+- lower-bound capacity curve missing
 - capacity extrapolation risk is true
 - impact claim based only on paper fills
+- minimum live/probe sample requirement unmet for live impact or production capacity claims
 - clean estimate used without runtime no-trade rules
 - cost counterfactual quality is low
 
@@ -985,11 +1167,15 @@ Existing cost evidence becomes `legacy_cost_evidence` if missing quote-quality o
 - Clean and all-events cost reports are both produced.
 - Quote-quality state is recorded for cost observations.
 - Paper/live-probe/live samples are split.
+- Order type, venue/broker semantics, partial fills, non-fills, queue/adverse selection, halts, open/close behavior, and rate limits are modeled.
+- Non-fill opportunity cost is reported.
 - Paper fills cannot support market-impact claims.
+- Minimum live/probe sample requirements are predeclared before live impact or production capacity claims.
+- Powered bucket-level execution sample requirements are predeclared and checked.
 - Sparse buckets use conservative fallback or block.
 - Bad quote clean-cost promotion requires runtime no-trade rule.
 - Backtest replay models no-trade quote states when data exists.
-- Capacity includes turnover/order-frequency assumptions.
+- Capacity includes turnover/order-frequency assumptions and lower-bound capacity curves.
 - Capacity extrapolation and target scale outside validated range block production.
 
 ## Milestone 6: Portfolio Utility & Optimizer Gates
@@ -1003,6 +1189,7 @@ Prevent optimization from becoming a new overfitting engine by requiring governe
 An optimizer can support promotion only if:
 
 - utility weights were predeclared and justified
+- utility lambdas, baselines, candidate set, constraints, and optimizer settings were frozen before OOS evaluation
 - tail risk is explicit
 - all applicable baselines are tested or approved for exclusion
 - expected-return inputs are promotion-valid or uncertainty-penalized
@@ -1033,7 +1220,7 @@ An optimizer can support promotion only if:
 
 ### Schemas
 
-`portfolio_utility_definition` records utility ID, lambda values, lambda justification refs, pre-experiment approval, change policy, return/risk/drawdown/tail/cost/capacity/liquidity/constraint components, objective hierarchy, threshold justification, approver, and timestamp.
+`portfolio_utility_definition` records utility ID, lambda values, lambda justification refs, pre-experiment approval, freeze timestamp, change policy, return/risk/drawdown/tail/cost/capacity/liquidity/constraint components, objective hierarchy, threshold justification, approver, and timestamp.
 
 Tail risk must include at least one of:
 
@@ -1042,11 +1229,11 @@ Tail risk must include at least one of:
 - left-tail penalty
 - predeclared tail-event stress scenarios
 
-`optimizer_input` records candidate sleeves, expected return estimates and uncertainty, expected return promotion status, penalty policy, covariance estimator, shrinkage method, lookback, effective sample size, condition number, PSD repair policy, cost model, capacity curves, constraints, current positions, baselines, and input hash.
+`optimizer_input` records candidate sleeves, expected return estimates and uncertainty, expected return promotion status, penalty policy, covariance estimator, shrinkage method, lookback, effective sample size, condition number, PSD repair policy, cost model, capacity curves, constraints, current positions, baselines, freeze/lockbox refs, and input hash.
 
 `optimizer_decision` records target weights, expected utility/cost/turnover/risk, tail risk estimate, marginal risk contributions, shadow prices, fallback status/reason, and decision hash.
 
-`optimizer_validation_report` records baselines, excluded baselines and approvals, paired OOS utility, cost/capacity/tail/covariance/return/constraint stress, turnover, adjacent decision turnover, smoothing policy, weight and risk-contribution stability, no-alpha full pipeline results, covariance drift, recertification triggers, optimizer status, and blockers.
+`optimizer_validation_report` records baselines, excluded baselines and approvals, nested validation or final lockbox status, paired OOS utility, cost/capacity/tail/covariance/return/constraint stress, turnover, adjacent decision turnover, smoothing policy, weight and risk-contribution stability, no-alpha full pipeline results, covariance drift, recertification triggers, optimizer status, and blockers.
 
 `optimizer_recertification_report` and `optimizer_fallback_record` make recertification and fallback auditable.
 
@@ -1064,6 +1251,7 @@ Applicable baseline exclusion blocks unless approved in an artifact.
 ### Validation Requirements
 
 - Paired OOS utility on the same windows with lower 95% paired CI above threshold.
+- Utility lambdas, baselines, candidate set, feature set, constraints, and optimizer settings are frozen before the OOS window or evaluated through nested validation with a final lockbox.
 - No-alpha simulation reruns the full optimizer/baseline comparison pipeline under null/permuted returns.
 - Perturb covariance, expected return, cost, capacity, constraints, and tail stress.
 - Constraint shadow-price instability includes sign flip, order-of-magnitude change, binding set changes, or utility rank flips.
@@ -1074,6 +1262,7 @@ Applicable baseline exclusion blocks unless approved in an artifact.
 Promotion blocks optimizer use above `paper_shadow` if:
 
 - lambdas lack prior justification
+- optimizer or sizing lockbox is missing
 - tail-risk term/stress missing
 - applicable baseline excluded without approval
 - paired OOS utility fails
@@ -1103,6 +1292,7 @@ Existing static allocations remain valid baselines. Optimizer evidence without u
 ### Acceptance Criteria
 
 - Utility function and lambdas are predeclared, justified, and versioned.
+- Utility lambdas, baselines, candidate set, constraints, and optimizer settings are frozen before OOS evaluation or covered by nested validation/final lockbox.
 - Tail risk is explicit and stress-tested.
 - All applicable baselines are tested or approved for exclusion.
 - Optimizer beats baselines on paired OOS utility after costs.
@@ -1126,6 +1316,7 @@ Prevent expected-return models and sizing rules from becoming polished heuristic
 Expected returns may affect weights only when:
 
 - forecast identity is registered
+- feature set, label definition, sizing caps, and selection rules were frozen before OOS evaluation or covered by nested validation/final lockbox
 - feature and label timing is auditable
 - uncertainty is calibrated
 - OOS utility improves after costs against no-forecast baselines
@@ -1166,13 +1357,13 @@ Changing horizon, label, feature set, model identity, or sizing policy creates a
 
 `forecast_model_manifest` records model identity, hashes, change policy, horizon, target variable, label/feature manifests, training dataset, model class/parameters, prior/shrinkage, uncertainty estimator/version, retraining cadence, regime conditioning, economic rationale, monotonicity constraints, promotion status, and approval timestamp.
 
-`feature_manifest` records feature definitions, source refs, availability timestamp policy, timestamp source, source data arrival timestamp, computation timestamp, decision timestamp, lookback windows, lag policy, missing value policy, normalization, hash, leakage audit, and leakage checks.
+`feature_manifest` records feature definitions, source refs, availability timestamp policy, timestamp source, source data arrival timestamp, computation timestamp, decision timestamp, lockbox/freeze ref, lookback windows, lag policy, missing value policy, normalization, hash, leakage audit, and leakage checks.
 
 `label_definition` records target, horizon, return basis, benchmark ref, cost adjustment, overlap policy, purge window, embargo window, overlap status, timestamp alignment, and hash.
 
 `expected_return_report` records `mu_hat`, `sigma_mu`, uncertainty-penalized mu, uncertainty calibration, prediction interval coverage, calibration window/status, forecast decay, OOS utility, no-forecast baseline, simple heuristic baselines, feature ablation, regime split, promotion validity, and blockers.
 
-`sizing_policy` records sizing method, target vol, position/sleeve/gross/net/leverage/order/participation caps, drawdown budget, cost/capacity refs, Kelly disablement/gate/variance/tail/estimation-error haircuts, max Kelly multiplier, cap rules, and approval timestamp.
+`sizing_policy` records sizing method, target vol, position/sleeve/gross/net/leverage/order/participation caps, drawdown budget, cost/capacity refs, lockbox/freeze ref, Kelly disablement/gate/variance/tail/estimation-error haircuts, max Kelly multiplier, cap rules, and approval timestamp.
 
 `sizing_decision` records forecast ref, sizing policy, raw signal, mu/sigma/penalized mu, vol, cost/capacity/drawdown adjustment, final target weight, cap bindings, and decision hash.
 
@@ -1186,6 +1377,8 @@ If uncertainty is present but uncalibrated:
 - max state: `paper_shadow`
 
 Features must be available before decision time with auditable timestamp source. Label overlap must feed purge/embargo behavior in CV/CPCV.
+
+Feature sets, labels, sizing caps, and selection rules must be frozen before OOS evaluation. If any were adapted after OOS metrics were visible, the evidence is `optimizer_or_sizing_lockbox_missing` unless nested validation or a final lockbox isolates the final evaluation.
 
 ### Sizing Rules
 
@@ -1208,6 +1401,7 @@ Promotion blocks above `paper_shadow` if:
 - uncertainty is uncalibrated
 - forecast fails OOS utility after costs
 - hashes missing from experiment registration
+- optimizer or sizing lockbox is missing
 - feature timestamp source unauditable
 - hard exposure caps missing
 - heuristic signals lack governed sizing
@@ -1228,6 +1422,7 @@ Existing signals remain heuristic signals, not expected-return forecasts. Existi
 ### Acceptance Criteria
 
 - Forecast identity, feature manifest, label definition, and sizing policy are registered.
+- Feature set, label definition, sizing caps, and selection rules are frozen before OOS evaluation or covered by nested validation/final lockbox.
 - Feature timestamp source is auditable.
 - Label overlap policy drives purge/embargo.
 - Uncertainty is calibrated, not merely present.
@@ -1250,6 +1445,8 @@ Short strategies may be researched with modeled financing, but runtime short pro
 
 - broker/mode-specific short capability
 - fresh borrow/locate/fee data
+- order marking and locate documentation
+- locate expiry, threshold-security, and close-out handling
 - ex-dividend and corporate-action controls
 - margin stress and portfolio interaction
 - forced-buy-in and broker-initiated cover handling
@@ -1279,21 +1476,23 @@ Mean reversion remains capped until short package exists or the strategy is rede
 
 ### Schemas
 
-`short_capability_manifest` separates `short_research_simulation_supported` from `short_runtime_supported` and records broker ID, broker mode, API version, shortability semantics, paper/live match status, allowed symbols, borrow/shortability sources, locate requirements, freshness thresholds, HTB/fee/recall/forced buy-in/dividend/corporate action/margin policies, exposure caps, live-probe requirement, and approval timestamp.
+`short_capability_manifest` separates `short_research_simulation_supported` from `short_runtime_supported` and records broker ID, broker mode, API version, order-marking policy, shortability semantics, paper/live match status, allowed symbols, borrow/shortability sources, locate documentation requirements, locate expiry policy, freshness thresholds, threshold-security handling, close-out handling, broker-specific HTB/fee/recall/forced buy-in/dividend/corporate action/margin policies, exposure caps, live-probe requirement, and approval timestamp.
 
-`borrow_availability_snapshot` records symbol, broker, mode, shortable/easy-to-borrow/hard-to-borrow flags, borrow rate, fee timestamp, locate status/expiry, source, and staleness.
+`borrow_availability_snapshot` records symbol, broker, mode, shortable/easy-to-borrow/hard-to-borrow flags, threshold-security status, borrow rate, fee timestamp, locate ID/ref, locate documentation ref, locate status/expiry, source, and staleness.
 
-`short_financing_model` records borrow fee curve, locate fee policy, dividend liability, margin model, portfolio margin usage, concentration/gross/net policies, stress margin, cash collateral, fee stress, forced-buy-in slippage, financing drag, and version.
+`short_financing_model` records borrow fee curve, locate fee policy, dividend liability, margin model, portfolio margin usage, concentration/gross/net policies, stress margin, cash collateral, fee stress, close-out cost policy, recall cost policy, forced-buy-in slippage, financing drag, and version.
 
-`short_risk_report` records broker/mode, symbols tested, borrow coverage, historical borrow coverage, fee/margin/portfolio margin/recall/dividend/ex-dividend/corporate action/forced buy-in stress, paper/live semantics, live-probe refs, constraint status, and blockers.
+`short_risk_report` records broker/mode, symbols tested, borrow coverage, historical borrow coverage, order-marking status, locate documentation coverage, locate expiry coverage, threshold-security status, close-out handling status, fee/margin/portfolio margin/recall/dividend/ex-dividend/corporate action/forced buy-in stress, paper/live semantics, live-probe refs, constraint status, and blockers.
 
-`short_runtime_event` includes borrow unavailable, fee spike, recall, forced buy-in, margin breach, dividend liability, short rejected, shortability changed, broker-initiated cover detected, ex-dividend risk, and corporate-action risk.
+`short_runtime_event` includes order marking rejected, locate missing/expired, threshold-security status changed, close-out required, borrow unavailable, fee spike, recall, forced buy-in, margin breach, dividend liability, short rejected, shortability changed, broker-initiated cover detected, ex-dividend risk, and corporate-action risk.
 
 ### Runtime Rules
 
 - Negative target weights require short capability manifest.
-- Sell-short intents require fresh broker/mode-specific borrow snapshot.
+- Sell-short intents require correct order marking and fresh broker/mode-specific borrow/locate snapshot.
 - Stale borrow/locate/fee data blocks new shorts.
+- Missing locate documentation or expired locate blocks new shorts.
+- Threshold-security and close-out policies run before opening and while holding shorts.
 - Policy defines whether stale data also forces reduction.
 - Shortability changes produce event and apply policy.
 - Ex-dividend/corporate-action checks run before opening and while holding shorts.
@@ -1311,11 +1510,12 @@ Borrow fees, locate fees, dividend liability, forced-buy-in slippage, and short 
 Promotion blocks:
 
 - above `research_only` if runtime short support is incomplete
+- above `research_only` if short legal mechanics are missing
 - above `paper_shadow` if broker/mode behavior is unverified
 - above `tiny_live_probe` if live-probe short evidence is missing
 - production if paper/live semantics mismatch or live-probe evidence is absent
 
-Runtime blocks short target/order if manifest missing, runtime support false, symbol not shortable, locate missing, borrow/fee snapshot stale, margin insufficient, ex-dividend/corporate-action policy blocks, or broker constraint is unknown.
+Runtime blocks short target/order if manifest missing, runtime support false, order marking unsupported, symbol not shortable, locate missing/expired/undocumented, borrow/fee snapshot stale, threshold-security/close-out policy blocks, margin insufficient, ex-dividend/corporate-action policy blocks, or broker constraint is unknown.
 
 ### CLI
 
@@ -1335,6 +1535,7 @@ Existing short-emitting strategies are capped at `research_only`. Existing short
 - Research short simulation is separate from runtime short support.
 - Short-emitting strategies require broker/mode-specific capability for runtime promotion.
 - Borrow/locate/fee freshness is enforced.
+- Order marking, locate documentation, locate expiry, threshold-security handling, and close-out handling are enforced.
 - Ex-dividend and corporate-action controls exist.
 - Margin stress includes portfolio interaction.
 - Broker-initiated covers reconcile and emit events.
@@ -1354,6 +1555,7 @@ Live probe can validate operational readiness only if it is:
 
 - preapproved by role-bounded authority
 - constrained by explicit capital/loss/activity limits
+- protected by approved pre-trade market-access controls
 - backed by fresh safety drills
 - governed by a broker-timeout state machine
 - fully idempotent and reconciled
@@ -1379,6 +1581,7 @@ Live probe does not prove durable edge.
 - `schemas/quant/authority_boundary.schema.json`
 - `schemas/quant/broker_timeout_state_transition.schema.json`
 - `schemas/quant/operational_safety_drill.schema.json`
+- `schemas/quant/pre_trade_control_manifest.schema.json`
 - `schemas/quant/runtime_override_event.schema.json`
 - `schemas/quant/reconciliation_incident.schema.json`
 - `tests/fixtures/live_probe/`
@@ -1387,13 +1590,15 @@ Live probe does not prove durable edge.
 
 `authority_boundary` records approval type, identity provider, operator identity IDs, role registry version, role, scope, write authorization status, max exception duration, second approver requirement, approvers, canonical approval payload hash, signatures, approval time, and expiry.
 
-`live_probe_plan` records strategy, broker, mode, symbols, capital/order/loss/order-count/participation/spread limits, duration, minimum order count, minimum filled notional, minimum reconciliation cycles, minimum sessions, no-signal outcome policy, start/success/rollback criteria, flatten policy, kill switch requirement, authority ref, approval, and expiry.
+`live_probe_plan` records strategy, broker, mode, symbols, capital/order/loss/order-count/participation/spread limits, duration, minimum order count, minimum filled notional, minimum reconciliation cycles, minimum sessions, no-signal outcome policy, start/success/rollback criteria, flatten policy, kill switch requirement, pre-trade control manifest ref, authority ref, approval, and expiry.
 
 `live_probe_run_record` records status, orders, fills, filled notional, sessions, reconciliation cycles, slippage, quote quality, reconciliation, limit breaches, rollback, success criteria, minimum activity, and evidence refs.
 
 `live_probe_recertification_report` records run refs, incidents, unresolved incidents, minimum activity, drill status, broker-timeout status, idempotency, reconciliation, cost observations, production eligibility, blockers, and approval.
 
 `operational_safety_drill` records drill type, expected/observed behavior, pass/fail, freshness window, valid-until timestamp, staleness, evidence refs, and execution time.
+
+`pre_trade_control_manifest` records price collars, fat-finger notional/share limits, max open orders, max order rate, duplicate prevention, idempotency key policy, cancel-on-disconnect behavior, self-trade prevention where relevant, broker buying-power/margin precheck, locate precheck for shorts, reject-on-missing-control behavior, control owner, drill refs, and expiry.
 
 `runtime_override_event` records event type, priority, action, scope, reason, operator, authority ref, disabled controls requested, expiry, and timestamp. `disabled_controls_requested` must be empty.
 
@@ -1426,6 +1631,7 @@ Higher priority overrides lower priority. No exception may disable core controls
 ### Runtime Rules
 
 - Live probe requires approved, unexpired authority and plan.
+- Live order entry requires approved, unexpired pre-trade control manifest.
 - Safety drills must be fresh.
 - Minimum activity must be met; otherwise status is `inconclusive`.
 - No-signal outcome cannot be marked pass unless predeclared policy permits extension, not promotion.
@@ -1433,6 +1639,8 @@ Higher priority overrides lower priority. No exception may disable core controls
 - Timeout triggers reconcile before retry unless idempotency proves retry safe.
 - Clock health is required.
 - Stale data blocks orders.
+- Missing price collar, fat-finger limit, open-order cap, duplicate prevention, cancel-on-disconnect policy, or required self-trade prevention blocks orders.
+- Runtime must reject orders when any required pre-trade control is unavailable or indeterminate.
 - Reconciliation is required before and after trading cycles.
 - Rollback/flatten follows plan.
 - Unresolved incidents block production eligibility.
@@ -1449,17 +1657,18 @@ uv run tradingx live-probe-recertify --probe-id ...
 
 ### Migration
 
-Existing live/paper evidence is `legacy_live_probe_evidence` unless it has approved plan, authority boundary, limits, success criteria, rollback criteria, minimum activity record, reconciliation artifacts, drill evidence, and recertification report.
+Existing live/paper evidence is `legacy_live_probe_evidence` unless it has approved plan, authority boundary, pre-trade control manifest, limits, success criteria, rollback criteria, minimum activity record, reconciliation artifacts, drill evidence, and recertification report.
 
 ### Enforcement
 
-Promotion blocks above `tiny_live_probe` if minimum activity is not met, probe inconclusive, drill evidence stale, authority boundary missing, broker-timeout state machine missing, post-probe recertification missing, unresolved incident exists, idempotency/reconciliation evidence missing, or broker anomaly unresolved.
+Promotion follows `Non-Discretionary Production Blockers` first. Missing pre-trade controls cap at `paper_trading`. Promotion blocks above `tiny_live_probe` if minimum activity is not met, probe inconclusive, drill evidence stale, authority boundary missing, broker-timeout state machine missing, post-probe recertification missing, unresolved incident exists, idempotency/reconciliation evidence missing, or broker anomaly unresolved.
 
-Runtime blocks live probe if authority approval invalid, plan expired, clock health invalid, kill switch unavailable, idempotency unavailable, stale-data checks unavailable, or reconciliation unavailable.
+Runtime blocks live probe if authority approval invalid, plan expired, clock health invalid, kill switch unavailable, pre-trade controls unavailable, idempotency unavailable, stale-data checks unavailable, or reconciliation unavailable.
 
 ### Acceptance Criteria
 
 - Live-probe plans define limits, activity, success, rollback, and authority.
+- Pre-trade controls define price collars, fat-finger limits, open-order caps, duplicate prevention, cancel-on-disconnect behavior, self-trade prevention where relevant, and reject-on-missing-control behavior.
 - Safety drills have freshness windows.
 - Minimum activity gates pass/fail/inconclusive.
 - Broker-timeout state machine is defined and tested.
@@ -1498,6 +1707,8 @@ Production approval is expiring evidence, not a permanent state. Any unknown, un
 - `schemas/quant/evidence_invalidation_report.schema.json`
 - `schemas/quant/replay_equivalence_report.schema.json`
 - `schemas/quant/recertification_report.schema.json`
+- `schemas/quant/drift_monitor_spec.schema.json`
+- `schemas/quant/drift_monitor_report.schema.json`
 - `schemas/quant/production_decay_event.schema.json`
 - `tests/fixtures/change_control/`
 
@@ -1522,6 +1733,10 @@ Automatic git diff classification is advisory only. Manual classification overri
 `replay_equivalence_report` records old/new artifacts, metric deltas, decision deltas, trade deltas, safety rule deltas, equivalence status, and blockers. Replay equivalence fails if any V5 materiality default fires.
 
 `recertification_report` records production state before/after, reason, authority ref, risk accepted, evidence refs, freshness/statistical/cost-capacity/optimizer/live-probe/drift/incident statuses, approval status, approval, production expiry, next review due dates, and blockers.
+
+`drift_monitor_spec` records monitored variables, reference windows, live windows, thresholds, regime labels, multiple-testing policy, alert latency, missing-data policy, minimum sample requirement, demotion rules, operator notification path, and expiry.
+
+`drift_monitor_report` records monitored values, threshold results, regime classification, missing-data status, multiple-testing adjustment, alert time, demotion recommendation, and evidence refs.
 
 Critical recertification requires two approvers through Milestone 9 authority boundary semantics.
 
@@ -1583,6 +1798,7 @@ Immediate recertification or demotion when:
 - utility/lambda changes
 - universe changes
 - live drift monitor fails
+- drift monitor spec missing or expired
 - quote quality degrades
 - strategy inactive beyond window
 - live probe incident unresolved
@@ -1617,6 +1833,7 @@ Production blocks if:
 - recertification authority invalid
 - breaking schema change lacks migration
 - required replay missing or failed
+- drift monitor spec missing, expired, or failed
 - stale evidence
 - inactive beyond window
 - unresolved incident
@@ -1629,6 +1846,7 @@ Runtime live path checks approval freshness before each cycle and before order s
 uv run tradingx change-record --type code --scope ...
 uv run tradingx replay-equivalence --change-id ...
 uv run tradingx recertify-strategy --strategy-id ...
+uv run tradingx drift-monitor-report --strategy-id ...
 uv run tradingx production-decay-check --strategy-id ...
 ```
 
@@ -1656,6 +1874,8 @@ Existing production/paper approvals without recertification metadata become `leg
 - Production approval expires without recertification.
 - Operational/statistical due dates are enforced.
 - Inactive strategies decay.
+- Drift monitor specs define variables, reference/live windows, thresholds, multiple-testing policy, regime labels, alert latency, and demotion rules.
+- Missing, expired, or failed drift monitors block production or trigger demotion.
 - Unresolved incidents block production.
 - Activation/runtime enforce approval freshness every cycle and before orders.
 - Monthly/quarterly recertification artifacts exist.
