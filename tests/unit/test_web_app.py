@@ -171,6 +171,9 @@ def _make_postgres_construction_fail(monkeypatch) -> None:
     from tradingx.persistence.repositories import (
         projection_state as repository_projection_state,
     )
+    from tradingx.persistence.repositories import (
+        runtime_projection as repository_runtime_projection,
+    )
 
     def fail(*args, **kwargs):
         del args, kwargs
@@ -184,6 +187,16 @@ def _make_postgres_construction_fail(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         repository_projection_state.PostgresProjectionStateRepository,
+        "__init__",
+        fail,
+    )
+    monkeypatch.setattr(
+        repository_runtime_projection.PostgresRuntimeProjectionRepository,
+        "__init__",
+        fail,
+    )
+    monkeypatch.setattr(
+        repository_runtime_projection.PostgresRuntimeProjectorUnitOfWork,
         "__init__",
         fail,
     )

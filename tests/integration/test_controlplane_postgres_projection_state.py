@@ -54,11 +54,13 @@ def test_postgres_projection_state_repository_owns_slice3_boundaries(
     repo: Any,
 ) -> None:
     assert isinstance(repo, repositories.OutboxAppendBoundary)
+    assert isinstance(repo, repositories.OutboxProjectionReadBoundary)
     assert isinstance(repo, repositories.ProjectionCheckpointBoundary)
     assert isinstance(repo, repositories.ProjectionSourceStatusBoundary)
 
     read_repo = PostgresControlPlaneRepository(engine=repo.engine, dsn=_postgres_dsn())
     assert not isinstance(read_repo, repositories.OutboxAppendBoundary)
+    assert not isinstance(read_repo, repositories.OutboxProjectionReadBoundary)
     assert not isinstance(read_repo, repositories.ProjectionCheckpointBoundary)
     assert not isinstance(read_repo, repositories.ProjectionSourceStatusBoundary)
 
@@ -125,6 +127,54 @@ def test_outbox_conflicting_dedupe_key_raises_redacted_conflict(
         assert raw_dsn not in str(value)
         assert "tradingx@127.0.0.1" not in str(value)
     assert _count(repo.engine, "system.outbox_event") == 1
+
+
+def test_list_outbox_events_after_filters_family_and_uses_ordered_cursor(
+    repo: Any,
+) -> None:
+    _insert_outbox_projection_event(
+        repo.engine,
+        outbox_event_id="outbox-z",
+        dedupe_key="dedupe-z",
+        source_family="service_cycles",
+        created_at_utc=FIXED_NOW,
+    )
+    _insert_outbox_projection_event(
+        repo.engine,
+        outbox_event_id="outbox-a",
+        dedupe_key="dedupe-a",
+        source_family="service_cycles",
+        created_at_utc=FIXED_NOW,
+    )
+    _insert_outbox_projection_event(
+        repo.engine,
+        outbox_event_id="outbox-m",
+        dedupe_key="dedupe-m",
+        source_family="market_sessions",
+        created_at_utc=FIXED_NOW - timedelta(seconds=1),
+    )
+
+    first_page = repo.list_outbox_events_after(
+        cursor_created_at_utc=None,
+        cursor_outbox_event_id=None,
+        aggregate_types=("runtime",),
+        source_families=("service_cycles",),
+        batch_size=10,
+    )
+    second_page = repo.list_outbox_events_after(
+        cursor_created_at_utc=FIXED_NOW,
+        cursor_outbox_event_id="outbox-a",
+        aggregate_types=("runtime",),
+        source_families=("service_cycles",),
+        batch_size=10,
+    )
+
+    assert [event.outbox_event_id for event in first_page] == [
+        "outbox-a",
+        "outbox-z",
+    ]
+    assert [event.outbox_event_id for event in second_page] == ["outbox-z"]
+    assert first_page[0].payload["source_family"] == "service_cycles"
 
 
 def test_checkpoint_load_save_and_upsert(repo: Any) -> None:
@@ -537,6 +587,68 @@ def _rows(
 def _count(engine: Engine, table_name: str) -> int:
     rows = _rows(engine, f"SELECT count(*) AS count FROM {table_name}")
     return int(rows[0]["count"])
+
+
+def _insert_outbox_projection_event(
+    engine: Engine,
+    *,
+    outbox_event_id: str,
+    dedupe_key: str,
+    source_family: str,
+    created_at_utc: datetime,
+) -> None:
+    payload = {
+        "domain_name": "runtime",
+        "source_family": source_family,
+        "source_identity": f"artifact:{source_family}",
+        "source_event_id": outbox_event_id,
+        "source_watermark": f"{outbox_event_id}:hash",
+        "event_family": "runtime",
+        "event_type": "legacy.runtime.observed",
+        "resource_type": source_family,
+        "resource_id": outbox_event_id,
+        "source_ref": f"artifact:{source_family}:{outbox_event_id}",
+        "payload": {"status": "ok"},
+        "metadata": {},
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO system.outbox_event (
+                    outbox_event_id,
+                    aggregate_type,
+                    aggregate_id,
+                    event_type,
+                    event_version,
+                    occurred_at_utc,
+                    dedupe_key,
+                    payload_json,
+                    created_at_utc,
+                    published_at_utc
+                ) VALUES (
+                    :outbox_event_id,
+                    'runtime',
+                    :aggregate_id,
+                    'legacy.runtime.observed',
+                    1,
+                    :occurred_at_utc,
+                    :dedupe_key,
+                    CAST(:payload_json AS JSONB),
+                    :created_at_utc,
+                    NULL
+                )
+                """
+            ),
+            {
+                "outbox_event_id": outbox_event_id,
+                "aggregate_id": f"{source_family}/{outbox_event_id}",
+                "occurred_at_utc": created_at_utc - timedelta(seconds=5),
+                "dedupe_key": dedupe_key,
+                "payload_json": json.dumps(payload, sort_keys=True),
+                "created_at_utc": created_at_utc,
+            },
+        )
 
 
 def _domain_projection_status(engine: Engine, domain_name: str) -> dict[str, Any]:

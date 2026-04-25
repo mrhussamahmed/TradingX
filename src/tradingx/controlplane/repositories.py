@@ -292,6 +292,28 @@ class OutboxEventAppendRequest:
 
 
 @dataclass(frozen=True)
+class OutboxProjectionEvent:
+    outbox_event_id: str
+    aggregate_type: str
+    aggregate_id: str
+    event_type: str
+    event_version: int
+    occurred_at_utc: datetime
+    dedupe_key: str
+    payload: Mapping[str, Any]
+    created_at_utc: datetime
+
+    def __post_init__(self) -> None:
+        _require_non_empty("outbox_event_id", self.outbox_event_id)
+        _require_non_empty("aggregate_type", self.aggregate_type)
+        _require_non_empty("aggregate_id", self.aggregate_id)
+        _require_non_empty("event_type", self.event_type)
+        _require_non_empty("dedupe_key", self.dedupe_key)
+        if self.event_version <= 0:
+            raise ValueError("event_version must be positive")
+
+
+@dataclass(frozen=True)
 class ProjectionCheckpointRecord:
     projection_name: str
     last_outbox_event_id: str | None
@@ -401,6 +423,19 @@ class PublicEventTimelineRepository(Protocol):
 @runtime_checkable
 class OutboxAppendBoundary(Protocol):
     def append_outbox_event(self, request: OutboxEventAppendRequest) -> str: ...
+
+
+@runtime_checkable
+class OutboxProjectionReadBoundary(Protocol):
+    def list_outbox_events_after(
+        self,
+        *,
+        cursor_created_at_utc: datetime | None,
+        cursor_outbox_event_id: str | None,
+        aggregate_types: tuple[str, ...],
+        source_families: tuple[str, ...],
+        batch_size: int,
+    ) -> tuple[OutboxProjectionEvent, ...]: ...
 
 
 @runtime_checkable
@@ -604,6 +639,8 @@ __all__ = (
     "OutboxAppendBoundary",
     "OutboxAppendConflictError",
     "OutboxEventAppendRequest",
+    "OutboxProjectionEvent",
+    "OutboxProjectionReadBoundary",
     "Page",
     "PageRequest",
     "ProjectionCheckpointBoundary",

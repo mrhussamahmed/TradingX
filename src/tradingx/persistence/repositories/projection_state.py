@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from tradingx.controlplane import projections, repositories
 
@@ -169,6 +169,75 @@ class PostgresProjectionStateRepository:
             {"dedupe_key": dedupe_key},
         )
         return str(rows[0]["outbox_event_id"]) if rows else None
+
+    def list_outbox_events_after(
+        self,
+        *,
+        cursor_created_at_utc: datetime | None,
+        cursor_outbox_event_id: str | None,
+        aggregate_types: tuple[str, ...],
+        source_families: tuple[str, ...],
+        batch_size: int,
+    ) -> tuple[repositories.OutboxProjectionEvent, ...]:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if not aggregate_types:
+            return ()
+        if not source_families:
+            return ()
+        if (cursor_created_at_utc is None) != (cursor_outbox_event_id is None):
+            raise ValueError(
+                "cursor_created_at_utc and cursor_outbox_event_id must be paired"
+            )
+
+        cursor_filter = ""
+        params: dict[str, Any] = {
+            "aggregate_types": tuple(aggregate_types),
+            "source_families": tuple(source_families),
+            "batch_size": batch_size,
+        }
+        if cursor_created_at_utc is not None and cursor_outbox_event_id is not None:
+            cursor_filter = """
+              AND (
+                    created_at_utc > :cursor_created_at_utc
+                    OR (
+                        created_at_utc = :cursor_created_at_utc
+                        AND outbox_event_id > :cursor_outbox_event_id
+                    )
+              )
+            """
+            params["cursor_created_at_utc"] = _aware_utc(cursor_created_at_utc)
+            params["cursor_outbox_event_id"] = cursor_outbox_event_id
+
+        statement = text(
+            f"""
+            SELECT
+                outbox_event_id,
+                aggregate_type,
+                aggregate_id,
+                event_type,
+                event_version,
+                occurred_at_utc,
+                dedupe_key,
+                payload_json,
+                created_at_utc
+            FROM system.outbox_event
+            WHERE aggregate_type IN :aggregate_types
+              AND payload_json ->> 'source_family' IN :source_families
+              {cursor_filter}
+            ORDER BY created_at_utc ASC, outbox_event_id ASC
+            LIMIT :batch_size
+            """
+        ).bindparams(
+            bindparam("aggregate_types", expanding=True),
+            bindparam("source_families", expanding=True),
+        )
+        rows = self._query(
+            "list outbox projection events",
+            statement,
+            params,
+        )
+        return tuple(_outbox_projection_event_from_row(row) for row in rows)
 
     def load_projection_checkpoint(
         self,
@@ -443,11 +512,12 @@ class PostgresProjectionStateRepository:
     def _query(
         self,
         operation: str,
-        sql: str,
+        sql: Any,
         params: Mapping[str, Any],
     ) -> tuple[Mapping[str, Any], ...]:
         def query(connection: Any) -> tuple[Mapping[str, Any], ...]:
-            rows = connection.execute(text(sql), dict(params)).mappings().all()
+            statement = text(sql) if isinstance(sql, str) else sql
+            rows = connection.execute(statement, dict(params)).mappings().all()
             return tuple(dict(row) for row in rows)
 
         error: repositories.RepositoryStorageError | None = None
@@ -537,6 +607,22 @@ def _source_status_from_row(
         ready_for_postgres=bool(row["ready_for_postgres"]),
         checked_at_utc=_datetime(row["checked_at_utc"]),
         metadata=_json_mapping(row["metadata_json"]),
+    )
+
+
+def _outbox_projection_event_from_row(
+    row: Mapping[str, Any],
+) -> repositories.OutboxProjectionEvent:
+    return repositories.OutboxProjectionEvent(
+        outbox_event_id=str(row["outbox_event_id"]),
+        aggregate_type=str(row["aggregate_type"]),
+        aggregate_id=str(row["aggregate_id"]),
+        event_type=str(row["event_type"]),
+        event_version=int(row["event_version"]),
+        occurred_at_utc=_datetime(row["occurred_at_utc"]),
+        dedupe_key=str(row["dedupe_key"]),
+        payload=_json_mapping(row["payload_json"]),
+        created_at_utc=_datetime(row["created_at_utc"]),
     )
 
 
