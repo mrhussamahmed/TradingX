@@ -90,6 +90,7 @@ def test_domain_scope_matrix_is_executable_contract() -> None:
         "IncidentRepository",
         "ProjectionStatusRepository",
         "PublicEventTimelineRepository",
+        "DocumentReadRepository",
     )
     assert repositories.DEFERRED_DOMAIN_NOTES == {
         "access_command_session_audit",
@@ -97,7 +98,6 @@ def test_domain_scope_matrix_is_executable_contract() -> None:
         "portfolio",
         "validation",
         "investigations_replays",
-        "documents",
     }
     assert repositories.SLICE3_CONTRACT_ONLY_PROTOCOLS == (
         "OutboxAppendBoundary",
@@ -111,7 +111,6 @@ def test_domain_scope_matrix_is_executable_contract() -> None:
         "PortfolioRepository",
         "ValidationRepository",
         "InvestigationRepository",
-        "DocumentRepository",
     ):
         assert not hasattr(repositories, deferred_name)
 
@@ -253,6 +252,18 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
             del event_family, resource_type, resource_id, page
             return repositories.Page(items=(), next_cursor=None)
 
+        def list_documents(
+            self,
+            *,
+            page: repositories.PageRequest | None = None,
+        ) -> repositories.Page[Any]:
+            del page
+            return repositories.Page(items=(), next_cursor=None)
+
+        def get_document(self, document_id: str) -> Any | None:
+            del document_id
+            return None
+
     fake = FakeRepositories()
 
     assert isinstance(fake, repositories.RuntimePostureRepository)
@@ -260,6 +271,7 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
     assert isinstance(fake, repositories.IncidentRepository)
     assert isinstance(fake, repositories.ProjectionStatusRepository)
     assert isinstance(fake, repositories.PublicEventTimelineRepository)
+    assert isinstance(fake, repositories.DocumentReadRepository)
     assert not isinstance(fake, repositories.OutboxAppendBoundary)
     assert not isinstance(fake, repositories.ProjectionCheckpointBoundary)
     assert not isinstance(fake, repositories.ProjectionSourceStatusBoundary)

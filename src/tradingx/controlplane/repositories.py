@@ -26,6 +26,7 @@ IMPLEMENTED_REPOSITORY_PROTOCOLS = (
     "IncidentRepository",
     "ProjectionStatusRepository",
     "PublicEventTimelineRepository",
+    "DocumentReadRepository",
 )
 DEFERRED_DOMAIN_NOTES = {
     "access_command_session_audit",
@@ -33,7 +34,6 @@ DEFERRED_DOMAIN_NOTES = {
     "portfolio",
     "validation",
     "investigations_replays",
-    "documents",
 }
 SLICE3_CONTRACT_ONLY_PROTOCOLS = (
     "OutboxAppendBoundary",
@@ -273,6 +273,62 @@ class PublicTimelineEvent:
 
 
 @dataclass(frozen=True)
+class DocumentRevisionRecord:
+    document_revision_id: str
+    document_id: str
+    revision_number: int
+    created_at_utc: datetime
+    source_ref: str | None
+    metadata: Mapping[str, Any]
+
+    @property
+    def revision_key(self) -> tuple[str, int]:
+        return (self.document_id, self.revision_number)
+
+
+@dataclass(frozen=True)
+class DocumentReadRecord:
+    document_id: str
+    document_kind: str
+    title: str
+    preview: str
+    logical_retrieval_ref: str
+    source_ref: str | None
+    created_at_utc: datetime
+    updated_at_utc: datetime
+    metadata: Mapping[str, Any]
+    latest_revision: DocumentRevisionRecord | None
+
+
+@dataclass(frozen=True)
+class DocumentProjectionDocument:
+    document_id: str
+    document_kind: str
+    title: str
+    preview: str
+    logical_retrieval_ref: str
+    document_state: str
+    created_at_utc: datetime
+    updated_at_utc: datetime
+    source_ref: str | None
+    metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DocumentProjectionRevision:
+    document_revision_id: str
+    document_id: str
+    revision_number: int
+    created_at_utc: datetime
+    source_ref: str | None
+    metadata: Mapping[str, Any]
+
+    @property
+    def revision_key(self) -> tuple[str, int]:
+        return (self.document_id, self.revision_number)
+
+
+@dataclass(frozen=True)
 class OutboxEventAppendRequest:
     aggregate_type: str
     aggregate_id: str
@@ -418,6 +474,29 @@ class PublicEventTimelineRepository(Protocol):
         resource_id: str | None = None,
         page: PageRequest | None = None,
     ) -> Page[PublicTimelineEvent]: ...
+
+
+@runtime_checkable
+class DocumentReadRepository(Protocol):
+    def list_documents(
+        self,
+        *,
+        page: PageRequest | None = None,
+    ) -> Page[DocumentReadRecord]: ...
+
+    def get_document(
+        self,
+        document_id: str,
+    ) -> DocumentReadRecord | None: ...
+
+
+@runtime_checkable
+class DocumentProjectionWriteRepository(Protocol):
+    def upsert_document_revision(
+        self,
+        document: DocumentProjectionDocument,
+        revision: DocumentProjectionRevision,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -636,6 +715,12 @@ __all__ = (
     "SLICE3_CONTRACT_ONLY_PROTOCOLS",
     "ControlPostureBlocker",
     "ControlPostureSnapshot",
+    "DocumentProjectionDocument",
+    "DocumentProjectionRevision",
+    "DocumentProjectionWriteRepository",
+    "DocumentReadRecord",
+    "DocumentReadRepository",
+    "DocumentRevisionRecord",
     "IncidentEvent",
     "IncidentRepository",
     "IncidentSummary",

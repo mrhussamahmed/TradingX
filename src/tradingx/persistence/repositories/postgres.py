@@ -318,6 +318,43 @@ class PostgresControlPlaneRepository:
             stable_id_getter=lambda item: item.timeline_event_id,
         )
 
+    def list_documents(
+        self,
+        *,
+        page: repositories.PageRequest | None = None,
+    ) -> repositories.Page[repositories.DocumentReadRecord]:
+        return self._list_desc(
+            operation="list documents",
+            base_sql=f"""
+                {_DOCUMENT_SELECT_SQL}
+                WHERE COALESCE(d.metadata_json ->> 'document_state', 'active')
+                    = 'active'
+            """,
+            params={},
+            page=page,
+            timestamp_column="updated_at_utc",
+            stable_id_column="document_id",
+            mapper=self._document_from_row,
+            timestamp_getter=lambda item: item.updated_at_utc,
+            stable_id_getter=lambda item: item.document_id,
+        )
+
+    def get_document(
+        self,
+        document_id: str,
+    ) -> repositories.DocumentReadRecord | None:
+        rows = self._query(
+            "get document",
+            f"""
+            {_DOCUMENT_SELECT_SQL}
+            WHERE d.document_id = :document_id
+              AND COALESCE(d.metadata_json ->> 'document_state', 'active')
+                    = 'active'
+            """,
+            {"document_id": document_id},
+        )
+        return self._document_from_row(rows[0]) if rows else None
+
     def _list_desc(
         self,
         *,
@@ -508,6 +545,29 @@ class PostgresControlPlaneRepository:
             metadata=_json_mapping(row["metadata"]),
         )
 
+    def _document_from_row(
+        self,
+        row: Mapping[str, Any],
+    ) -> repositories.DocumentReadRecord:
+        metadata = _json_mapping(row["metadata_json"])
+        return repositories.DocumentReadRecord(
+            document_id=str(row["document_id"]),
+            document_kind=str(row["document_type"]),
+            title=str(row["title"]),
+            preview=str(metadata.get("preview", "")),
+            logical_retrieval_ref=str(
+                metadata.get("logical_retrieval_ref")
+                or metadata.get("relative_path")
+                or row["source_ref"]
+                or row["document_id"]
+            ),
+            source_ref=_optional_str(row["source_ref"]),
+            created_at_utc=_datetime(row["created_at_utc"]),
+            updated_at_utc=_datetime(row["updated_at_utc"]),
+            metadata=metadata,
+            latest_revision=_document_revision_from_row(row),
+        )
+
 
 def _datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
@@ -555,6 +615,54 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
     if isinstance(value, list | tuple):
         return tuple(str(item) for item in value)
     return (str(value),)
+
+
+def _document_revision_from_row(
+    row: Mapping[str, Any],
+) -> repositories.DocumentRevisionRecord | None:
+    if row["document_revision_id"] is None:
+        return None
+    return repositories.DocumentRevisionRecord(
+        document_revision_id=str(row["document_revision_id"]),
+        document_id=str(row["document_id"]),
+        revision_number=int(row["revision_number"]),
+        created_at_utc=_datetime(row["revision_created_at_utc"]),
+        source_ref=_optional_str(row["revision_source_ref"]),
+        metadata=_json_mapping(row["revision_metadata_json"]),
+    )
+
+
+_DOCUMENT_SELECT_SQL = """
+    SELECT
+        d.document_id,
+        d.document_type,
+        d.title,
+        d.created_at_utc,
+        d.updated_at_utc,
+        d.source_ref,
+        d.metadata_json,
+        latest_revision.document_revision_id,
+        latest_revision.revision_number,
+        latest_revision.created_at_utc AS revision_created_at_utc,
+        latest_revision.source_ref AS revision_source_ref,
+        latest_revision.metadata_json AS revision_metadata_json
+    FROM documents.document AS d
+    LEFT JOIN LATERAL (
+        SELECT
+            revision.document_revision_id,
+            revision.revision_number,
+            revision.created_at_utc,
+            revision.source_ref,
+            revision.metadata_json
+        FROM documents.document_revision AS revision
+        WHERE revision.document_id = d.document_id
+        ORDER BY
+            revision.revision_number DESC,
+            revision.created_at_utc DESC,
+            revision.document_revision_id DESC
+        LIMIT 1
+    ) AS latest_revision ON TRUE
+"""
 
 
 _PUBLIC_TIMELINE_UNION_SQL = """

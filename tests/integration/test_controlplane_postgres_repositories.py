@@ -48,6 +48,7 @@ def test_postgres_repository_implements_only_slice2_protocols(repo: Any) -> None
     assert isinstance(repo, repositories.IncidentRepository)
     assert isinstance(repo, repositories.ProjectionStatusRepository)
     assert isinstance(repo, repositories.PublicEventTimelineRepository)
+    assert isinstance(repo, repositories.DocumentReadRepository)
 
     assert not isinstance(repo, repositories.OutboxAppendBoundary)
     assert not isinstance(repo, repositories.ProjectionCheckpointBoundary)
@@ -59,7 +60,6 @@ def test_postgres_repository_implements_only_slice2_protocols(repo: Any) -> None
         "list_portfolios",
         "list_validation_runs",
         "list_replay_runs",
-        "list_documents",
     ):
         assert not hasattr(repo, deferred_method)
 
@@ -165,6 +165,217 @@ def test_storage_failures_are_redacted() -> None:
     for value in inspected:
         assert raw_dsn not in str(value)
         assert "super-secret" not in str(value)
+
+
+def test_document_read_repository_lists_active_documents_only(repo: Any) -> None:
+    base = datetime(2026, 4, 24, 12, 0, tzinfo=UTC)
+    _insert_document(repo.engine, "INDEX", "index", base + timedelta(minutes=1))
+    _insert_document(repo.engine, "STATE", "state", base + timedelta(minutes=2))
+    _insert_document(
+        repo.engine,
+        "old-session",
+        "handover",
+        base + timedelta(minutes=3),
+        document_state="tombstoned",
+    )
+
+    page = repo.list_documents(page=repositories.PageRequest(page_size=10))
+
+    assert [document.document_id for document in page.items] == ["STATE", "INDEX"]
+    assert page.items[0].preview == "Preview for STATE"
+    assert page.items[0].latest_revision is not None
+    assert page.items[0].latest_revision.revision_number == 1
+
+
+def test_document_read_repository_gets_document_by_id(repo: Any) -> None:
+    updated_at = datetime(2026, 4, 24, 12, 0, tzinfo=UTC)
+    _insert_document(repo.engine, "STATE", "state", updated_at)
+
+    document = repo.get_document("STATE")
+
+    assert document is not None
+    assert document.document_id == "STATE"
+    assert document.document_kind == "state"
+    assert document.logical_retrieval_ref == "docs/STATE.md"
+    assert document.latest_revision is not None
+    assert document.latest_revision.document_revision_id == "STATE:1"
+    assert repo.get_document("missing") is None
+
+
+def test_document_read_repository_returns_none_for_tombstoned_document(
+    repo: Any,
+) -> None:
+    _insert_document(
+        repo.engine,
+        "STATE",
+        "state",
+        datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+        document_state="tombstoned",
+    )
+
+    assert repo.get_document("STATE") is None
+    assert repo.list_documents().items == ()
+
+
+def test_document_read_repository_uses_public_document_id_contract(repo: Any) -> None:
+    base = datetime(2026, 4, 24, 12, 0, tzinfo=UTC)
+    for offset, document_id, document_kind in (
+        (1, "STATE", "state"),
+        (2, "INDEX", "index"),
+        (3, "2026-04-25-wave2", "handover"),
+    ):
+        _insert_document(
+            repo.engine,
+            document_id,
+            document_kind,
+            base + timedelta(minutes=offset),
+            internal_document_key=f"document:test:{document_id}",
+        )
+
+    documents = repo.list_documents(page=repositories.PageRequest(page_size=10)).items
+
+    assert {document.document_id for document in documents} == {
+        "STATE",
+        "INDEX",
+        "2026-04-25-wave2",
+    }
+    assert not any(
+        document.document_id.startswith("document:") for document in documents
+    )
+    assert repo.get_document("document:test:STATE") is None
+
+
+def test_document_write_repository_inserts_document_and_first_revision(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    document = _document_projection_document("STATE", revision_number=1)
+    revision = _document_projection_revision("STATE", revision_number=1)
+
+    writer.upsert_document_revision(document, revision)
+
+    document_rows = _rows(
+        repo.engine,
+        """
+        SELECT document_id, document_type, title, metadata_json
+        FROM documents.document
+        """,
+    )
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT document_revision_id, document_id, revision_number, metadata_json
+        FROM documents.document_revision
+        """,
+    )
+
+    assert document_rows == [
+        {
+            "document_id": "STATE",
+            "document_type": "state",
+            "title": "Project state",
+            "metadata_json": {
+                "document_state": "active",
+                "logical_retrieval_ref": "docs/STATE.md",
+                "preview": "Revision 1",
+                "source_family": "state_and_index_docs",
+            },
+        }
+    ]
+    assert revision_rows[0]["document_revision_id"] == "STATE:1"
+    assert revision_rows[0]["revision_number"] == 1
+    assert revision_rows[0]["metadata_json"]["content_hash"] == "hash-1"
+
+
+def test_document_write_repository_adds_later_revision_for_same_document(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=2),
+        _document_projection_revision("STATE", revision_number=2),
+    )
+
+    document = repo.get_document("STATE")
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT document_revision_id, revision_number
+        FROM documents.document_revision
+        WHERE document_id = 'STATE'
+        ORDER BY revision_number ASC
+        """,
+    )
+
+    assert document is not None
+    assert document.preview == "Revision 2"
+    assert document.latest_revision is not None
+    assert document.latest_revision.revision_number == 2
+    assert [row["document_revision_id"] for row in revision_rows] == [
+        "STATE:1",
+        "STATE:2",
+    ]
+
+
+def test_document_write_repository_replaying_old_revision_keeps_latest_summary(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    first_document = _document_projection_document("STATE", revision_number=1)
+    first_revision = _document_projection_revision("STATE", revision_number=1)
+    second_document = _document_projection_document("STATE", revision_number=2)
+    second_revision = _document_projection_revision("STATE", revision_number=2)
+    writer.upsert_document_revision(first_document, first_revision)
+    writer.upsert_document_revision(second_document, second_revision)
+
+    writer.upsert_document_revision(first_document, first_revision)
+
+    document = repo.get_document("STATE")
+    assert document is not None
+    assert document.preview == "Revision 2"
+    assert document.latest_revision is not None
+    assert document.latest_revision.revision_number == 2
+
+
+def test_document_write_repository_conflicts_only_on_same_revision_key(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    first_document = _document_projection_document("STATE", revision_number=1)
+    first_revision = _document_projection_revision("STATE", revision_number=1)
+    second_document = _document_projection_document("STATE", revision_number=2)
+    second_revision = _document_projection_revision("STATE", revision_number=2)
+    writer.upsert_document_revision(first_document, first_revision)
+
+    writer.upsert_document_revision(second_document, second_revision)
+    writer.upsert_document_revision(second_document, second_revision)
+
+    conflicting_revision = repositories.DocumentProjectionRevision(
+        document_revision_id="STATE:2-conflict",
+        document_id="STATE",
+        revision_number=2,
+        created_at_utc=second_revision.created_at_utc,
+        source_ref=second_revision.source_ref,
+        metadata={"content_hash": "different-hash"},
+    )
+    with pytest.raises(repositories.RepositoryConflictError):
+        writer.upsert_document_revision(second_document, conflicting_revision)
+
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT document_revision_id, revision_number
+        FROM documents.document_revision
+        WHERE document_id = 'STATE'
+        ORDER BY revision_number ASC
+        """,
+    )
+    assert [row["revision_number"] for row in revision_rows] == [1, 2]
 
 
 @pytest.mark.parametrize(
@@ -932,3 +1143,146 @@ def _insert_outbox_event(
                 "created_at_utc": occurred_at_utc,
             },
         )
+
+
+def _insert_document(
+    engine: Engine,
+    document_id: str,
+    document_kind: str,
+    updated_at_utc: datetime,
+    *,
+    document_state: str = "active",
+    internal_document_key: str | None = None,
+) -> None:
+    metadata = {
+        "document_state": document_state,
+        "internal_document_key": internal_document_key
+        or f"document:test:{document_id}",
+        "logical_retrieval_ref": f"docs/{document_id}.md",
+        "preview": f"Preview for {document_id}",
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents.document (
+                    document_id,
+                    document_type,
+                    title,
+                    created_at_utc,
+                    updated_at_utc,
+                    source_ref,
+                    metadata_json
+                ) VALUES (
+                    :document_id,
+                    :document_type,
+                    :title,
+                    :created_at_utc,
+                    :updated_at_utc,
+                    :source_ref,
+                    CAST(:metadata_json AS JSONB)
+                )
+                """
+            ),
+            {
+                "document_id": document_id,
+                "document_type": document_kind,
+                "title": _document_title(document_id, document_kind),
+                "created_at_utc": updated_at_utc - timedelta(minutes=5),
+                "updated_at_utc": updated_at_utc,
+                "source_ref": f"source:{document_id}",
+                "metadata_json": json.dumps(metadata),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents.document_revision (
+                    document_revision_id,
+                    document_id,
+                    revision_number,
+                    created_at_utc,
+                    source_ref,
+                    metadata_json
+                ) VALUES (
+                    :document_revision_id,
+                    :document_id,
+                    1,
+                    :created_at_utc,
+                    :source_ref,
+                    CAST(:metadata_json AS JSONB)
+                )
+                """
+            ),
+            {
+                "document_revision_id": f"{document_id}:1",
+                "document_id": document_id,
+                "created_at_utc": updated_at_utc,
+                "source_ref": f"source:{document_id}:revision:1",
+                "metadata_json": json.dumps({"content_hash": f"hash-{document_id}"}),
+            },
+        )
+
+
+def _document_projection_document(
+    document_id: str,
+    *,
+    revision_number: int,
+) -> repositories.DocumentProjectionDocument:
+    observed_at = datetime(2026, 4, 24, 12, revision_number, tzinfo=UTC)
+    return repositories.DocumentProjectionDocument(
+        document_id=document_id,
+        document_kind="state",
+        title="Project state",
+        preview=f"Revision {revision_number}",
+        logical_retrieval_ref=f"docs/{document_id}.md",
+        document_state="active",
+        created_at_utc=observed_at,
+        updated_at_utc=observed_at,
+        source_ref=f"source:{document_id}:revision:{revision_number}",
+        metadata={"source_family": "state_and_index_docs"},
+    )
+
+
+def _document_projection_revision(
+    document_id: str,
+    *,
+    revision_number: int,
+) -> repositories.DocumentProjectionRevision:
+    observed_at = datetime(2026, 4, 24, 12, revision_number, tzinfo=UTC)
+    return repositories.DocumentProjectionRevision(
+        document_revision_id=f"{document_id}:{revision_number}",
+        document_id=document_id,
+        revision_number=revision_number,
+        created_at_utc=observed_at,
+        source_ref=f"source:{document_id}:revision:{revision_number}",
+        metadata={"content_hash": f"hash-{revision_number}"},
+    )
+
+
+def _document_writer(engine: Engine, dsn: str) -> Any:
+    from tradingx.persistence.repositories.document_projection import (
+        PostgresDocumentProjectionRepository,
+    )
+
+    return PostgresDocumentProjectionRepository(engine=engine, dsn=dsn)
+
+
+def _document_title(document_id: str, document_kind: str) -> str:
+    if document_id == "STATE":
+        return "Project state"
+    if document_id == "INDEX":
+        return "Artifact index"
+    if document_kind == "handover":
+        return document_id.replace("-", " ")
+    return document_id
+
+
+def _rows(
+    engine: Engine,
+    sql: str,
+    params: dict[str, object] | None = None,
+) -> list[dict[str, Any]]:
+    with engine.connect() as connection:
+        rows = connection.execute(text(sql), params or {}).mappings().all()
+        return [dict(row) for row in rows]
