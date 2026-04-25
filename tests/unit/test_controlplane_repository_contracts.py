@@ -264,6 +264,26 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
             del document_id
             return None
 
+        def upsert_document_revision(
+            self,
+            document: repositories.DocumentProjectionDocument,
+            revision: repositories.DocumentProjectionRevision,
+        ) -> None:
+            del document, revision
+
+        def tombstone_documents_absent_from_inventory(
+            self,
+            *,
+            source_family: str,
+            active_document_ids: tuple[str, ...],
+            tombstoned_at_utc: datetime,
+            source_ref: str,
+            metadata: dict[str, object],
+        ) -> tuple[str, ...]:
+            del source_family, active_document_ids, tombstoned_at_utc, source_ref
+            del metadata
+            return ()
+
     fake = FakeRepositories()
 
     assert isinstance(fake, repositories.RuntimePostureRepository)
@@ -272,6 +292,7 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
     assert isinstance(fake, repositories.ProjectionStatusRepository)
     assert isinstance(fake, repositories.PublicEventTimelineRepository)
     assert isinstance(fake, repositories.DocumentReadRepository)
+    assert isinstance(fake, repositories.DocumentProjectionWriteRepository)
     assert not isinstance(fake, repositories.OutboxAppendBoundary)
     assert not isinstance(fake, repositories.ProjectionCheckpointBoundary)
     assert not isinstance(fake, repositories.ProjectionSourceStatusBoundary)

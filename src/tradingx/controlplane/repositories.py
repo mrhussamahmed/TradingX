@@ -498,6 +498,16 @@ class DocumentProjectionWriteRepository(Protocol):
         revision: DocumentProjectionRevision,
     ) -> None: ...
 
+    def tombstone_documents_absent_from_inventory(
+        self,
+        *,
+        source_family: str,
+        active_document_ids: tuple[str, ...],
+        tombstoned_at_utc: datetime,
+        source_ref: str,
+        metadata: Mapping[str, Any],
+    ) -> tuple[str, ...]: ...
+
 
 @runtime_checkable
 class OutboxAppendBoundary(Protocol):

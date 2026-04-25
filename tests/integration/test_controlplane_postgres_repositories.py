@@ -342,6 +342,30 @@ def test_document_write_repository_replaying_old_revision_keeps_latest_summary(
     assert document.latest_revision.revision_number == 2
 
 
+def test_document_write_repository_same_revision_document_mismatch_conflicts(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    document = _document_projection_document("STATE", revision_number=1)
+    revision = _document_projection_revision("STATE", revision_number=1)
+    writer.upsert_document_revision(document, revision)
+    mutated_document = repositories.DocumentProjectionDocument(
+        **{
+            **document.__dict__,
+            "preview": "Mutated preview",
+            "document_state": "tombstoned",
+        }
+    )
+
+    with pytest.raises(repositories.RepositoryConflictError):
+        writer.upsert_document_revision(mutated_document, revision)
+
+    persisted = repo.get_document("STATE")
+    assert persisted is not None
+    assert persisted.preview == "Revision 1"
+    assert persisted.metadata["document_state"] == "active"
+
+
 def test_document_write_repository_conflicts_only_on_same_revision_key(
     repo: Any,
 ) -> None:
@@ -376,6 +400,55 @@ def test_document_write_repository_conflicts_only_on_same_revision_key(
         """,
     )
     assert [row["revision_number"] for row in revision_rows] == [1, 2]
+
+
+def test_document_write_repository_tombstones_absent_inventory_documents(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+    writer.upsert_document_revision(
+        _document_projection_document("INDEX", revision_number=1),
+        _document_projection_revision("INDEX", revision_number=1),
+    )
+    other_document = repositories.DocumentProjectionDocument(
+        **{
+            **_document_projection_document("session-1", revision_number=1).__dict__,
+            "document_kind": "handover",
+            "metadata": {"source_family": "handover_sessions"},
+        }
+    )
+    writer.upsert_document_revision(
+        other_document,
+        _document_projection_revision("session-1", revision_number=1),
+    )
+
+    tombstoned_ids = writer.tombstone_documents_absent_from_inventory(
+        source_family="state_and_index_docs",
+        active_document_ids=("STATE",),
+        tombstoned_at_utc=datetime(2026, 4, 24, 13, 0, tzinfo=UTC),
+        source_ref="inventory:state_and_index_docs:hash",
+        metadata={"inventory_event_id": "inventory:hash"},
+    )
+
+    assert tombstoned_ids == ("INDEX",)
+    assert repo.get_document("STATE") is not None
+    assert repo.get_document("INDEX") is None
+    assert repo.get_document("session-1") is not None
+    rows = _rows(
+        repo.engine,
+        """
+        SELECT metadata_json, source_ref
+        FROM documents.document
+        WHERE document_id = 'INDEX'
+        """,
+    )
+    assert rows[0]["source_ref"] == "inventory:state_and_index_docs:hash"
+    assert rows[0]["metadata_json"]["document_state"] == "tombstoned"
+    assert rows[0]["metadata_json"]["inventory_event_id"] == "inventory:hash"
 
 
 @pytest.mark.parametrize(
