@@ -437,6 +437,11 @@ class OutboxProjectionReadBoundary(Protocol):
         batch_size: int,
     ) -> tuple[OutboxProjectionEvent, ...]: ...
 
+    def get_outbox_event_cursor(
+        self,
+        outbox_event_id: str,
+    ) -> tuple[datetime, str] | None: ...
+
 
 @runtime_checkable
 class ProjectionCheckpointBoundary(Protocol):

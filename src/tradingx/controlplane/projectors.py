@@ -193,7 +193,10 @@ class RuntimeProjector:
             mapper_version=self._mapper_version,
         )
         checkpoint = projection_repo.load_projection_checkpoint(projection_name)
-        cursor = _cursor_from_checkpoint(checkpoint)
+        cursor = _cursor_from_checkpoint(
+            checkpoint,
+            projection_repo=projection_repo,
+        )
         events = projection_repo.list_outbox_events_after(
             cursor_created_at_utc=(
                 None if cursor is None else cursor.created_at_utc
@@ -427,7 +430,6 @@ def _project_control_posture_event(
         {
             "facts": facts,
             "blocker_codes": blocker_codes,
-            "source_family": source_family,
         }
     )
     latest = runtime_repo.get_latest_control_posture_snapshot()
@@ -491,7 +493,14 @@ def _control_posture_facts(
     payload = _payload_mapping(event.payload, "payload")
     requested_mode = _first_text(
         payload,
-        ("requested_mode", "mode", "broker_mode", "market_data_mode"),
+        (
+            "requested_mode",
+            "requested_broker_mode",
+            "mode",
+            "broker_mode",
+            "market_data_mode",
+            "effective_market_data_mode",
+        ),
     ) or "unknown"
     dry_run = _optional_bool(
         payload.get("dry_run")
@@ -501,12 +510,20 @@ def _control_posture_facts(
     live_enabled = _optional_bool(
         payload.get("live_enabled")
         if "live_enabled" in payload
-        else payload.get("live_allowed")
+        else (
+            payload.get("live_trading_enabled")
+            if "live_trading_enabled" in payload
+            else payload.get("live_allowed")
+        )
     )
     kill_switch = _optional_bool(
         payload.get("manual_kill_switch")
         if "manual_kill_switch" in payload
-        else payload.get("kill_switch_active")
+        else (
+            payload.get("manual_kill_switch_active")
+            if "manual_kill_switch_active" in payload
+            else payload.get("kill_switch_active")
+        )
     )
     market_data_degraded = _optional_bool(payload.get("market_data_degraded"))
 
@@ -599,12 +616,24 @@ def _advance_projected_source_status(
 
 def _cursor_from_checkpoint(
     checkpoint: repositories.ProjectionCheckpointRecord | None,
+    *,
+    projection_repo: ProjectionStateRepository,
 ) -> OutboxCursor | None:
     if checkpoint is None:
         return None
     created_raw = checkpoint.metadata.get("cursor_created_at_utc")
     event_id = checkpoint.metadata.get("cursor_outbox_event_id")
     if created_raw is None or event_id is None:
+        if checkpoint.last_outbox_event_id is None:
+            return None
+        resolved = projection_repo.get_outbox_event_cursor(
+            checkpoint.last_outbox_event_id
+        )
+        if resolved is not None:
+            return OutboxCursor(
+                created_at_utc=_aware_utc(resolved[0]),
+                outbox_event_id=resolved[1],
+            )
         raise RuntimeError(
             "Projection checkpoint is missing ordered outbox cursor metadata."
         )

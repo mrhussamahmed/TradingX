@@ -119,7 +119,7 @@ class PostgresRuntimeProjectionRepository:
                 payload_hash,
                 payload_json
             FROM runtime.control_posture_snapshot
-            ORDER BY observed_at_utc DESC, posture_id DESC
+            ORDER BY resource_version DESC, observed_at_utc DESC, posture_id DESC
             LIMIT 1
             """,
             {},

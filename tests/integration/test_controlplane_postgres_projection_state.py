@@ -177,6 +177,24 @@ def test_list_outbox_events_after_filters_family_and_uses_ordered_cursor(
     assert first_page[0].payload["source_family"] == "service_cycles"
 
 
+def test_get_outbox_event_cursor_resolves_legacy_checkpoint_position(
+    repo: Any,
+) -> None:
+    _insert_outbox_projection_event(
+        repo.engine,
+        outbox_event_id="outbox-legacy",
+        dedupe_key="dedupe-legacy",
+        source_family="service_cycles",
+        created_at_utc=FIXED_NOW,
+    )
+
+    assert repo.get_outbox_event_cursor("outbox-legacy") == (
+        FIXED_NOW,
+        "outbox-legacy",
+    )
+    assert repo.get_outbox_event_cursor("missing") is None
+
+
 def test_checkpoint_load_save_and_upsert(repo: Any) -> None:
     assert repo.load_projection_checkpoint("runtime_projection") is None
 

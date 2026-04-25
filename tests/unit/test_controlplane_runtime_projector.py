@@ -199,6 +199,107 @@ def test_control_posture_status_is_evaluated_as_its_own_domain() -> None:
     assert live_status.projected_watermark == "live-config:hash"
 
 
+def test_control_posture_maps_legacy_config_safe_summary_live_ready_fields() -> None:
+    uow = FakeRuntimeProjectorUnitOfWork(
+        events=(
+            _event(
+                domain_name="control_posture",
+                outbox_event_id="outbox-control-1",
+                aggregate_id="control_posture/live_config",
+                event_type="legacy.live_config.observed",
+                source_family="live_config_env",
+                source_identity="config:local",
+                source_event_id="local-config",
+                source_watermark="local-config:hash",
+                payload={
+                    "requested_broker_mode": "live",
+                    "live_trading_enabled": True,
+                    "manual_kill_switch_active": False,
+                    "dry_run": False,
+                },
+            ),
+        ),
+        statuses=(
+            _status(
+                domain_name="control_posture",
+                source_family="live_config_env",
+                source_identity="config:local",
+                source_watermark="local-config:hash",
+            ),
+        ),
+        requirements=(),
+    )
+
+    runtime_projector = projectors.RuntimeProjector(
+        unit_of_work=uow,
+        clock=lambda: FIXED_NOW,
+    )
+    runtime_projector.run_once(batch_size=10)
+
+    snapshots = tuple(uow.runtime_repo.control_posture_snapshots.values())
+    assert len(snapshots) == 1
+    assert snapshots[0].requested_mode == "live"
+    assert snapshots[0].effective_mode == "live"
+    assert snapshots[0].live_allowed is True
+    assert snapshots[0].governance_status == "live_allowed"
+    assert snapshots[0].blockers == ()
+
+
+def test_control_posture_noop_fingerprint_ignores_source_family() -> None:
+    first = _event(
+        domain_name="control_posture",
+        outbox_event_id="outbox-control-1",
+        aggregate_id="control_posture/live_config",
+        event_type="legacy.live_config.observed",
+        source_family="live_config_env",
+        source_identity="config:local",
+        source_event_id="local-config",
+        source_watermark="local-config:hash",
+        payload={"requested_mode": "live"},
+        created_at_utc=FIXED_NOW,
+    )
+    second = _event(
+        domain_name="control_posture",
+        outbox_event_id="outbox-control-2",
+        aggregate_id="control_posture/market_data",
+        event_type="legacy.market_data_posture.observed",
+        source_family="market_data_posture",
+        source_identity="runtime:market_data",
+        source_event_id="market-data-posture",
+        source_watermark="market-data-posture:hash",
+        payload={"requested_mode": "live"},
+        created_at_utc=FIXED_NOW + timedelta(seconds=1),
+    )
+    uow = FakeRuntimeProjectorUnitOfWork(
+        events=(first, second),
+        statuses=(
+            _status(
+                domain_name="control_posture",
+                source_family="live_config_env",
+                source_identity="config:local",
+                source_watermark="local-config:hash",
+            ),
+            _status(
+                domain_name="control_posture",
+                source_family="market_data_posture",
+                source_identity="runtime:market_data",
+                source_watermark="market-data-posture:hash",
+            ),
+        ),
+        requirements=(),
+    )
+
+    runtime_projector = projectors.RuntimeProjector(
+        unit_of_work=uow,
+        clock=lambda: FIXED_NOW,
+    )
+    runtime_projector.run_once(batch_size=10)
+
+    snapshots = tuple(uow.runtime_repo.control_posture_snapshots.values())
+    assert len(snapshots) == 1
+    assert snapshots[0].resource_version == 1
+
+
 def test_runtime_heartbeat_projection_is_idempotent_and_conservative() -> None:
     event = _event(
         source_family="service_cycles",
@@ -328,6 +429,64 @@ def test_materialization_failure_rolls_back_checkpoint_and_projected_status() ->
     assert uow.runtime_repo.heartbeats == {}
 
 
+def test_legacy_checkpoint_without_cursor_metadata_resolves_last_event_cursor() -> None:
+    first = _event(
+        outbox_event_id="outbox-001",
+        source_family="service_cycles",
+        source_identity="artifact:paper_loop/service_cycles",
+        source_event_id="cycle-1",
+        source_watermark="cycle-1:hash",
+        created_at_utc=FIXED_NOW,
+    )
+    second = _event(
+        outbox_event_id="outbox-002",
+        source_family="service_cycles",
+        source_identity="artifact:paper_loop/service_cycles",
+        source_event_id="cycle-2",
+        source_watermark="cycle-2:hash",
+        created_at_utc=FIXED_NOW + timedelta(seconds=1),
+    )
+    projection_name = "runtime_projection:runtime:service_cycles:v1"
+    uow = FakeRuntimeProjectorUnitOfWork(
+        events=(first, second),
+        statuses=(
+            _status(
+                source_family="service_cycles",
+                source_identity="artifact:paper_loop/service_cycles",
+                source_watermark="cycle-2:hash",
+            ),
+        ),
+        requirements=(),
+    )
+    uow.projection_repo.checkpoints[projection_name] = (
+        repositories.ProjectionCheckpointRecord(
+            projection_name=projection_name,
+            last_outbox_event_id="outbox-001",
+            last_processed_at_utc=FIXED_NOW,
+            source_watermark="cycle-1:hash",
+            last_source_observed_at_utc=FIXED_NOW - timedelta(seconds=5),
+            lag_seconds=5,
+            status="running",
+            metadata={},
+        )
+    )
+
+    runtime_projector = projectors.RuntimeProjector(
+        unit_of_work=uow,
+        clock=lambda: FIXED_NOW,
+    )
+    runtime_projector.run_once(batch_size=10)
+
+    assert any(
+        call["cursor_created_at_utc"] == FIXED_NOW
+        and call["cursor_outbox_event_id"] == "outbox-001"
+        for call in uow.projection_repo.outbox_read_calls
+    )
+    assert tuple(uow.runtime_repo.heartbeats.values())[0].source_ref == (
+        "artifact:paper_loop/service_cycles:cycle-2"
+    )
+
+
 class FakeRuntimeProjectorUnitOfWork:
     def __init__(
         self,
@@ -432,6 +591,15 @@ class FakeProjectionRepository:
             and _after_cursor(event, cursor_created_at_utc, cursor_outbox_event_id)
         )
         return rows[:batch_size]
+
+    def get_outbox_event_cursor(
+        self,
+        outbox_event_id: str,
+    ) -> tuple[datetime, str] | None:
+        for event in self.events:
+            if event.outbox_event_id == outbox_event_id:
+                return (event.created_at_utc, event.outbox_event_id)
+        return None
 
     def get_projection_source_status(
         self,

@@ -170,6 +170,23 @@ class PostgresProjectionStateRepository:
         )
         return str(rows[0]["outbox_event_id"]) if rows else None
 
+    def get_outbox_event_cursor(
+        self,
+        outbox_event_id: str,
+    ) -> tuple[datetime, str] | None:
+        rows = self._query(
+            "get outbox event cursor",
+            """
+            SELECT created_at_utc, outbox_event_id
+            FROM system.outbox_event
+            WHERE outbox_event_id = :outbox_event_id
+            """,
+            {"outbox_event_id": outbox_event_id},
+        )
+        if not rows:
+            return None
+        return (_datetime(rows[0]["created_at_utc"]), str(rows[0]["outbox_event_id"]))
+
     def list_outbox_events_after(
         self,
         *,

@@ -211,6 +211,108 @@ def test_control_posture_projector_persists_own_domain_status(
     assert _domain_projection_status(engine, "runtime") is None
 
 
+def test_control_posture_projector_maps_legacy_safe_summary_live_ready_payload(
+    engine: Engine,
+) -> None:
+    from tradingx.persistence.repositories.projection_state import (
+        PostgresProjectionStateRepository,
+    )
+    from tradingx.persistence.repositories.runtime_projection import (
+        PostgresRuntimeProjectorUnitOfWork,
+    )
+
+    dsn = _postgres_dsn()
+    projection_repo = PostgresProjectionStateRepository(
+        engine=engine,
+        dsn=dsn,
+        id_provider=_sequential_id_provider(),
+        clock=lambda: FIXED_NOW,
+    )
+    projection_repo.upsert_projection_source_status(
+        _status(
+            domain_name="control_posture",
+            source_family="live_config_env",
+            source_identity="config:local",
+            source_watermark="live-config:hash",
+        )
+    )
+    projection_repo.append_outbox_event(
+        _append_request(
+            domain_name="control_posture",
+            aggregate_id="control_posture/live_config",
+            event_type="legacy.live_config.observed",
+            source_family="live_config_env",
+            source_identity="config:local",
+            source_event_id="live-config",
+            source_watermark="live-config:hash",
+            payload={
+                "requested_broker_mode": "live",
+                "live_trading_enabled": True,
+                "manual_kill_switch_active": False,
+                "dry_run": False,
+            },
+        )
+    )
+
+    runtime_projector = projectors.RuntimeProjector(
+        unit_of_work=PostgresRuntimeProjectorUnitOfWork(
+            engine=engine,
+            dsn=dsn,
+            id_provider=_sequential_id_provider(start=100),
+            clock=lambda: FIXED_NOW,
+        ),
+        clock=lambda: FIXED_NOW,
+    )
+
+    runtime_projector.run_once(batch_size=10)
+
+    snapshots = PostgresControlPlaneRepository(
+        engine=engine,
+        dsn=dsn,
+    ).list_control_posture_snapshots().items
+
+    assert len(snapshots) == 1
+    assert snapshots[0].requested_mode == "live"
+    assert snapshots[0].effective_mode == "live"
+    assert snapshots[0].live_allowed is True
+    assert snapshots[0].governance_status == "live_allowed"
+    assert snapshots[0].blockers == ()
+
+
+def test_latest_control_posture_snapshot_uses_resource_version_order(
+    engine: Engine,
+) -> None:
+    from tradingx.persistence.repositories.runtime_projection import (
+        PostgresRuntimeProjectionRepository,
+    )
+
+    dsn = _postgres_dsn()
+    repo = PostgresRuntimeProjectionRepository(engine=engine, dsn=dsn)
+    observed_at = FIXED_NOW - timedelta(seconds=5)
+    repo.upsert_control_posture_snapshot(
+        _snapshot(
+            posture_id="posture-z",
+            observed_at_utc=observed_at,
+            resource_version=1,
+            state_fingerprint="fingerprint-old",
+        )
+    )
+    repo.upsert_control_posture_snapshot(
+        _snapshot(
+            posture_id="posture-a",
+            observed_at_utc=observed_at,
+            resource_version=2,
+            state_fingerprint="fingerprint-new",
+        )
+    )
+
+    latest = repo.get_latest_control_posture_snapshot()
+
+    assert latest is not None
+    assert latest.posture_id == "posture-a"
+    assert latest.resource_version == 2
+
+
 def test_runtime_projector_conflict_rolls_back_status_and_checkpoint(
     engine: Engine,
 ) -> None:
@@ -468,6 +570,31 @@ def _insert_conflicting_heartbeat(engine: Engine, heartbeat_id: str) -> None:
                 "payload_json": '{"conflict": true}',
             },
         )
+
+
+def _snapshot(
+    *,
+    posture_id: str,
+    observed_at_utc: datetime,
+    resource_version: int,
+    state_fingerprint: str,
+) -> repositories.ControlPostureSnapshot:
+    return repositories.ControlPostureSnapshot(
+        posture_id=posture_id,
+        observed_at_utc=observed_at_utc,
+        requested_mode="live",
+        effective_mode="paper",
+        live_allowed=False,
+        governance_status="blocked",
+        blocker_count=1,
+        explicit_blocker_codes=("live_enable_evidence_missing",),
+        fail_closed_reason_codes=("live_enable_evidence_missing",),
+        resource_version=resource_version,
+        state_fingerprint=state_fingerprint,
+        payload_hash=f"payload-{posture_id}",
+        payload={"posture_id": posture_id},
+        blockers=(),
+    )
 
 
 def _sequential_id_provider(start: int = 0) -> Any:
