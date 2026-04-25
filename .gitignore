@@ -10,6 +10,7 @@
 __pycache__/
 artifacts/
 data/
+output/
 webapp/dist/
 webapp/node_modules/
 
