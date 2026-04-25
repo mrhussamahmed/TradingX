@@ -1,11 +1,11 @@
 ---
 id: PLAN-0022
 title: Headless control plane Wave 2 Postgres documents projector implementation plan
-version: 1.0.0
+version: 1.0.1
 status: draft
 created: 2026-04-25
 last_amended: 2026-04-25
-supersedes: null
+supersedes: PLAN-0022@1.0.0
 superseded_by: null
 author_session: codex-gpt-5-2026-04-25
 ---
@@ -28,7 +28,7 @@ The target path for this slice is:
 ```text
 document outbox events
 -> documents projector
--> documents.document and documents.document_revision
+-> documents.document, documents.document_revision, and documents.document_object_ref
 -> projected source watermarks
 -> per-family projector checkpoints
 -> scoped route-readiness report returned to callers
@@ -66,10 +66,13 @@ These facts are true at the start of this slice:
    tombstones absent active documents, but it does not yet expose the
    transaction-bound revision-number lookup the projector needs for
    idempotent replay.
-7. `PostgresProjectionStateRepository` already supports ordered outbox
+7. The current document projection writer does not yet expose normalized
+   object-ref replacement or tombstone-revision creation. This slice
+   must add those contracts before projector materialization.
+8. `PostgresProjectionStateRepository` already supports ordered outbox
    reads, per-projection checkpoints, source-status reads/writes, and
    transaction-bound repository views.
-8. The runtime projector already provides usable patterns for ordered
+9. The runtime projector already provides usable patterns for ordered
    cursors, per-family checkpoints, projected-watermark advancement,
    and rollback behavior.
 
@@ -104,6 +107,18 @@ These facts are true at the start of this slice:
 11. Unknown event kinds can be checkpointed only under the current mapper
     version. A later mapper that supports them must use a new mapper
     version and therefore a new per-family checkpoint name.
+12. Scoped readiness requirements come from the static documents API
+    source registry first, not from whichever source-status rows happen
+    to exist. A missing `handover_sessions` or `state_and_index_docs`
+    status row must block readiness.
+13. Every active document revision writes its logical retrieval ref to
+    `documents.document_object_ref`; metadata-only retrieval refs are
+    not enough for this slice.
+14. Every inventory deletion writes an inactive document summary plus a
+    tombstone revision carrying the deletion-observing inventory event.
+15. Revision-number allocation is owned by the repository inside the
+    projector transaction and must use a per-document lock,
+    serializable retry, or equivalent concurrency-safe mechanism.
 
 ## Proposed Code Shape
 
@@ -148,22 +163,25 @@ class DocumentsProjectorUnitOfWork(Protocol):
 - `upsert_projection_source_status`
 
 `DocumentProjectionRepository` should extend the current write boundary
-with transaction-bound revision lookup:
+with transaction-bound revision lookup, allocation, object refs, and
+tombstone revisions:
 
 - `get_document_revision(document_revision_id)`
-- `get_latest_document_revision_number(document_id)`
+- `allocate_document_revision_number(document_id, document_revision_id)`
 - `upsert_document_revision(document, revision)`
-- `tombstone_documents_absent_from_inventory(...)`
+- `replace_document_object_refs(document_revision_id, refs)`
+- `tombstone_documents_absent_from_inventory_with_revisions(...)`
 
-The lookup methods belong on the projection writer boundary rather than
-the web read boundary because they are projector bookkeeping, not route
-read behavior.
+These methods belong on the projection writer boundary rather than the
+web read boundary because they are projector bookkeeping, not route read
+behavior.
 
 ## Revision Number Strategy
 
 The projector cannot invent revision numbers from content hashes alone:
-the database has a unique `(document_id, revision_number)` contract, and
-replays must reuse the original revision number.
+the database has a unique `(document_id, revision_number)` contract,
+replays must reuse the original revision number, and overlapping
+projector runs must not both allocate the same next number.
 
 Implement this deterministic flow for every active file event:
 
@@ -174,11 +192,16 @@ Implement this deterministic flow for every active file event:
    `upsert_document_revision` with the current event-derived document
    and revision payload. Existing repository hardening then catches
    same-revision payload drift while preserving valid tombstone replay.
-4. If it does not exist, read
-   `get_latest_document_revision_number(document_id)`.
-5. Assign `revision_number = latest + 1`, or `1` when no revision
-   exists.
-6. Insert through `upsert_document_revision`.
+4. If it does not exist, call
+   `allocate_document_revision_number(document_id, document_revision_id)`.
+5. The allocation method must run inside the same transaction as the
+   eventual insert and must acquire a per-document lock, use
+   `SERIALIZABLE` plus retry, or use an equivalent repository-level
+   guard before reading the latest revision number.
+6. The allocation method returns the existing revision number when the
+   revision ID was inserted by a concurrent transaction, otherwise it
+   returns the next monotonic number.
+7. Insert through `upsert_document_revision`.
 
 The revision ID must not include `observed_at_utc`, outbox
 `created_at_utc`, random IDs, or any value that changes on an unchanged
@@ -214,19 +237,35 @@ For `file_observed` events:
      `content_hash`; it may include redacted `content_text` if the route
      or future retrieval work needs it, but the existing route response
      must not expand in this slice.
+4. Replace object refs for the revision with one normalized ref:
+   - `object_uri = logical_retrieval_ref`.
+   - `content_type = "text/markdown"` for the current markdown document
+     sources.
+   - `sha256_hash = content_hash`.
+   - metadata containing source family, source identity, source event
+     ID, relative path, and mapper version.
+5. Object-ref replacement must be idempotent on rerun and must not
+   duplicate refs for the same revision.
 
 For `inventory_snapshot` events:
 
 1. Read `active_document_ids` as the authoritative active public IDs for
    that source family.
 2. Call
-   `tombstone_documents_absent_from_inventory(source_family, active_document_ids, ...)`
+   `tombstone_documents_absent_from_inventory_with_revisions(source_family, active_document_ids, ...)`
    after all earlier active file events in ordered cursor sequence have
    been processed.
-3. Store tombstone metadata with the inventory outbox event ID, source
-   ref, source family, source watermark, mapper version, and
+3. That repository method must update each missing active document to an
+   inactive or tombstoned summary and append a tombstone revision for
+   each affected document in the same transaction.
+4. Tombstone revision IDs must be deterministic from the missing public
+   document ID and inventory source event, and revision numbers must use
+   the same concurrency-safe allocation contract as active revisions.
+5. Tombstone revision metadata must carry the deletion-observing
+   inventory outbox event ID, source ref, source family, source
+   watermark, active-set hash, mapper version, and
    `document_state = "tombstoned"`.
-4. Treat an empty active ID tuple as valid and tombstone all currently
+6. Treat an empty active ID tuple as valid and tombstone all currently
    active documents for that source family.
 
 For unknown document event kinds:
@@ -332,8 +371,11 @@ state_and_index_docs
 ```
 
 The report should use `evaluate_projection_readiness` with requirements
-derived from the matching source-status rows, mirroring the runtime
-projector's filtered readiness path.
+derived from the static legacy source inventory filtered by
+`document_api_source_families()`, then joined to whatever source-status
+rows exist. This deliberately differs from a status-row-only filter:
+missing API families must remain requirements so they produce
+missing-source blockers.
 
 Rules:
 
@@ -345,6 +387,9 @@ Rules:
 4. Block readiness on stale source status, unprojected source watermark,
    missing initial import, or inactive write path for mutable sources.
 5. Ignore `config_proposals` for this scoped report.
+6. Add an explicit missing-family test where `state_and_index_docs`
+   exists and is projected, `handover_sessions` has no source-status
+   row, and the scoped readiness report remains blocked.
 
 ## Slice 0: Baseline
 
@@ -369,7 +414,8 @@ If the guarded DSN is unavailable, record that explicitly.
 
 ## Slice 1: Repository Lookup Contract
 
-Goal: make revision-number resolution expressible before projector code.
+Goal: make revision-number allocation, object refs, and tombstone
+revisions expressible before projector code.
 
 Owned paths:
 
@@ -381,17 +427,25 @@ Owned paths:
 First failing tests:
 
 1. `test_document_projection_writer_can_get_revision_by_id`
-2. `test_document_projection_writer_can_get_latest_revision_number`
-3. `test_document_projection_writer_returns_none_for_missing_revision`
-4. `test_document_projection_writer_cursor_bound_tombstone_keeps_newer_active_doc`
+2. `test_document_projection_writer_allocates_revision_number_under_lock`
+3. `test_document_projection_writer_returns_existing_number_for_existing_revision`
+4. `test_document_projection_writer_returns_none_for_missing_revision`
+5. `test_document_projection_writer_replaces_object_refs_idempotently`
+6. `test_document_projection_writer_tombstones_with_revision_history`
+7. `test_document_projection_writer_cursor_bound_tombstone_keeps_newer_active_doc`
+8. `test_document_projection_writer_concurrent_allocations_do_not_share_number`
 
 Implementation notes:
 
-1. Add lookup methods to `DocumentProjectionWriteRepository`.
+1. Add lookup, allocation, object-ref replacement, and tombstone revision
+   methods to `DocumentProjectionWriteRepository`.
 2. Implement the methods in `PostgresDocumentProjectionRepository`.
-3. Keep the lookup methods transaction-bound when the repository is
-   created with a transaction connection.
-4. Extend tombstone reconciliation only as far as needed for
+3. Keep all methods transaction-bound when the repository is created
+   with a transaction connection.
+4. Use a per-document lock, serializable retry, or equivalent
+   repository-level allocation guard before assigning a new revision
+   number.
+5. Extend tombstone reconciliation only as far as needed for
    cursor-bound safety; preserve current source-family active-set
    behavior.
 
@@ -423,15 +477,18 @@ First failing tests:
 6. `test_documents_projector_reuses_revision_number_on_existing_revision`
 7. `test_documents_projector_assigns_next_revision_number_for_new_content`
 8. `test_documents_projector_idempotent_rerun_does_not_duplicate_revisions`
-9. `test_documents_projector_same_revision_payload_mismatch_conflicts`
-10. `test_documents_projector_inventory_snapshot_tombstones_missing_docs`
-11. `test_documents_projector_empty_inventory_tombstones_last_document`
-12. `test_documents_projector_inventory_cursor_guard_keeps_newer_active_doc`
-13. `test_documents_projector_advances_collect_watermark_only_on_latest_source_event`
-14. `test_documents_projector_rollback_does_not_advance_checkpoint_or_watermark`
-15. `test_documents_projector_returns_scoped_route_readiness_without_domain_status`
-16. `test_documents_projector_per_family_checkpoint_replays_old_rows`
-17. `test_documents_projector_resolves_legacy_checkpoint_cursor_from_event_id`
+9. `test_documents_projector_replaces_object_refs_for_file_revision`
+10. `test_documents_projector_same_revision_payload_mismatch_conflicts`
+11. `test_documents_projector_inventory_snapshot_tombstones_missing_docs`
+12. `test_documents_projector_inventory_tombstone_writes_revision_history`
+13. `test_documents_projector_empty_inventory_tombstones_last_document`
+14. `test_documents_projector_inventory_cursor_guard_keeps_newer_active_doc`
+15. `test_documents_projector_advances_collect_watermark_only_on_latest_source_event`
+16. `test_documents_projector_rollback_does_not_advance_checkpoint_or_watermark`
+17. `test_documents_projector_returns_scoped_route_readiness_without_domain_status`
+18. `test_documents_projector_scoped_readiness_blocks_when_api_family_status_missing`
+19. `test_documents_projector_per_family_checkpoint_replays_old_rows`
+20. `test_documents_projector_resolves_legacy_checkpoint_cursor_from_event_id`
 
 Implementation notes:
 
@@ -442,6 +499,8 @@ Implementation notes:
    tombstones, projected source-status updates, then checkpoint writes.
 3. Make the fake unit of work roll back in-memory writes on exceptions.
 4. Assert no call is made to a domain-status persistence method.
+5. Assert readiness requirements are built from the static API source
+   registry, not only from existing source-status rows.
 
 Green gate:
 
@@ -478,23 +537,31 @@ Required proof cases:
    `RepositoryConflictError`.
 8. Deleting one handover session tombstones only that document and hides
    it from `list_documents` and `get_document`.
-9. Empty inventory tombstones the last previously active document for a
+9. Deleting one handover session appends a tombstone revision and keeps
+   the previous active revision history.
+10. Empty inventory tombstones the last previously active document for a
    family.
-10. Partial-read bridge runs without inventory cannot tombstone a
+11. Partial-read bridge runs without inventory cannot tombstone a
     missing active document.
-11. A projector conflict rolls back document rows, source projected
-    watermarks, and family checkpoint changes.
-12. Family checkpoints are independent; a new family checkpoint can
+12. Active document revisions write normalized object refs and reruns do
+    not duplicate those refs.
+13. A projector conflict rolls back document rows, object refs, source
+    projected watermarks, and family checkpoint changes.
+14. Family checkpoints are independent; a new family checkpoint can
     replay old rows even if another family is caught up.
-13. Existing checkpoints with `last_outbox_event_id` and missing cursor
+15. Existing checkpoints with `last_outbox_event_id` and missing cursor
     metadata resume through `get_outbox_event_cursor`.
-14. `config_proposals` outbox rows are ignored and cannot advance a
+16. `config_proposals` outbox rows are ignored and cannot advance a
     scoped documents checkpoint.
-15. No ready `system.domain_projection_status` row is written for
+17. No ready `system.domain_projection_status` row is written for
     `documents` by this projector.
-16. Projected source watermark equals the bridge collect-level source
+18. Projected source watermark equals the bridge collect-level source
     watermark only after the source status's latest source event is
     consumed.
+19. Scoped readiness stays blocked when one API source family has no
+    source-status row.
+20. Concurrent new revisions for the same document allocate distinct
+    monotonic revision numbers or retry to a stable idempotent result.
 
 Green gate:
 
@@ -569,3 +636,10 @@ Review this plan against these risks before implementation starts:
     order?
 14. Can DSN-backed tests prove the same repository behavior used by the
     future route pivot?
+15. Can a missing API source family be hidden by building readiness
+    requirements from existing status rows only?
+16. Can normalized object refs drift from document metadata or duplicate
+    on rerun?
+17. Can deletion history be audited through `documents.document_revision`
+    after inventory tombstones?
+18. Can concurrent projectors race on `latest + 1` revision allocation?
