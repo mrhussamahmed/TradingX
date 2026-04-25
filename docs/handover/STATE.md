@@ -1,20 +1,20 @@
 ---
 id: STATE-0001
 title: Project state
-version: 1.0.8
+version: 1.0.9
 status: active
 created: 2026-04-17
-last_amended: 2026-04-19
-supersedes: STATE-0001@1.0.7
+last_amended: 2026-04-25
+supersedes: STATE-0001@1.0.8
 superseded_by: null
-author_session: SESS-2026-04-19-028
+author_session: codex-gpt-5-2026-04-25
 ---
 
 # Current project state
 
-- Active session: SESS-2026-04-19-028
-- Active branch: main
-- Active phase: 15
+- Active session: codex-gpt-5-2026-04-25
+- Active branch: codex/wave2-documents-pivot-plan
+- Active phase: Headless control plane Wave 2 Postgres projections
 - Last completed gate: 0.5
 - Walking skeleton: implemented; credentialed Alpaca paper smoke run passed
   on 2026-04-17
@@ -22,6 +22,21 @@ author_session: SESS-2026-04-19-028
 
 ## Pending items
 
+- Headless control plane Wave 2 is active. `main` is synced through the
+  merged runtime-projector slice, ending at commit `f80279d`.
+- The completed Wave 2 Postgres slices now cover:
+  - connection management and migrations (`PLAN-0015`)
+  - repository contracts (`PLAN-0016`)
+  - outbox checkpoints and source readiness (`PLAN-0017`)
+  - legacy bridge and tailer (`PLAN-0018`)
+  - runtime/control-posture projector materialization (`PLAN-0019`)
+- `PLAN-0020` is the current planning artifact. It prepares the first
+  guarded route pivot for the `documents` domain only, with runtime,
+  control-posture, incidents, validation, portfolio, events, commands,
+  and SSE still out of scope.
+- Next execution step: adversarially review `PLAN-0020`; if approved,
+  implement the documents projector, document read repository, and
+  readiness-gated `/api/v1/documents` pivot with TDD.
 - Phase 0 is complete and pushed to `origin/main`.
 - `SPEC-0001` is active at `specs/001-paper-trading-bot/spec.md`.
 - `PLAN-0001` is active at `specs/001-paper-trading-bot/plan.md`.
