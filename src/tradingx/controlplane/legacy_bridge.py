@@ -578,32 +578,35 @@ class DocumentFileTreeSourceAdapter(LegacySourceAdapter):
                 )
             )
 
-        inventory_payload = _document_inventory_payload(
-            source_family=self.identity.source_family,
-            active_documents=tuple(active_documents),
-        )
-        inventory_event_id = f"inventory:{_canonical_hash(inventory_payload)}"
-        events.append(
-            LegacySourceEvent(
-                identity=self.identity,
-                source_event_id=inventory_event_id,
-                source_watermark=_event_payload_watermark(
-                    inventory_event_id,
-                    inventory_payload,
-                ),
-                occurred_at_utc=FIXED_LEGACY_EPOCH,
-                event_family="documents",
-                event_type=f"legacy.{self.identity.source_family}.inventory_snapshot",
-                resource_type="document_inventory",
-                resource_id=self.identity.source_family,
-                payload=inventory_payload,
-                metadata={
-                    "observed_at_utc": _aware_utc(observed_at_utc).isoformat(),
-                    "document_event_kind": "inventory_snapshot",
-                },
-                is_mutable=self.is_mutable,
+        if not errors:
+            inventory_payload = _document_inventory_payload(
+                source_family=self.identity.source_family,
+                active_documents=tuple(active_documents),
             )
-        )
+            inventory_event_id = f"inventory:{_canonical_hash(inventory_payload)}"
+            events.append(
+                LegacySourceEvent(
+                    identity=self.identity,
+                    source_event_id=inventory_event_id,
+                    source_watermark=_event_payload_watermark(
+                        inventory_event_id,
+                        inventory_payload,
+                    ),
+                    occurred_at_utc=FIXED_LEGACY_EPOCH,
+                    event_family="documents",
+                    event_type=(
+                        f"legacy.{self.identity.source_family}.inventory_snapshot"
+                    ),
+                    resource_type="document_inventory",
+                    resource_id=self.identity.source_family,
+                    payload=inventory_payload,
+                    metadata={
+                        "observed_at_utc": _aware_utc(observed_at_utc).isoformat(),
+                        "document_event_kind": "inventory_snapshot",
+                    },
+                    is_mutable=self.is_mutable,
+                )
+            )
 
         events_tuple = tuple(sorted(events, key=lambda event: event.source_event_id))
         return LegacyBridgeSourceResult(

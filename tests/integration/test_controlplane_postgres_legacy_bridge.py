@@ -551,6 +551,53 @@ def test_document_bridge_empty_valid_family_writes_inventory_snapshot(
     assert status_rows[0]["metadata_json"]["initial_import_complete"] is True
 
 
+def test_document_bridge_partial_read_failure_does_not_write_inventory_snapshot(
+    repo: PostgresProjectionStateRepository,
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n")
+    bad_path = tmp_path / "docs" / "INDEX.md"
+    bad_path.write_bytes(b"\xff")
+    bridge = _bridge_with_document_source(tmp_path, "state_and_index_docs")
+
+    result = bridge.run_once(
+        repository=repo,
+        checked_at_utc=FIXED_NOW,
+        source_registry_version="legacy-bridge-v1",
+    )
+
+    inventory_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="state_and_index_docs",
+        event_kind="inventory_snapshot",
+    )
+    active_rows = _document_outbox_rows(
+        repo.engine,
+        source_family="state_and_index_docs",
+        event_kind="file_observed",
+    )
+    status_rows = _rows(
+        repo.engine,
+        """
+        SELECT ready_for_postgres, metadata_json
+        FROM system.domain_projection_source_status
+        WHERE domain_name = 'documents'
+          AND source_family = 'state_and_index_docs'
+        """,
+    )
+
+    assert result.source_results[0].source_errors == (
+        "unreadable_file:docs/INDEX.md",
+    )
+    assert len(active_rows) == 1
+    assert active_rows[0]["payload_json"]["payload"]["document_id"] == "STATE"
+    assert inventory_rows == ()
+    assert status_rows[0]["ready_for_postgres"] is False
+    assert status_rows[0]["metadata_json"]["source_errors"] == [
+        "unreadable_file:docs/INDEX.md"
+    ]
+
+
 def _bridge_with_service_cycle(
     tmp_path: Path,
     *,

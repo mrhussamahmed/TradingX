@@ -747,6 +747,29 @@ def test_document_file_tree_adapter_emits_inventory_snapshot(
     ]
 
 
+def test_document_file_tree_adapter_suppresses_inventory_after_partial_read_failure(
+    tmp_path: Path,
+) -> None:
+    _write_text(tmp_path / "docs" / "handover" / "STATE.md", "# State\n")
+    bad_path = tmp_path / "docs" / "INDEX.md"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    bad_path.write_bytes(b"\xff")
+
+    result = _collect_document_source(tmp_path, "state_and_index_docs")
+    inventory_events = tuple(
+        event
+        for event in result.events
+        if event.payload.get("document_event_kind") == "inventory_snapshot"
+    )
+
+    assert result.source_errors == ("unreadable_file:docs/INDEX.md",)
+    assert [
+        event.payload["document_id"] for event in _active_document_events(result)
+    ] == ["STATE"]
+    assert inventory_events == ()
+    assert result.initial_import_complete is False
+
+
 def test_document_file_tree_adapter_inventory_changes_after_delete(
     tmp_path: Path,
 ) -> None:
