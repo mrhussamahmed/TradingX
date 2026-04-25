@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, TypeVar
 
@@ -27,6 +29,33 @@ class PostgresDocumentProjectionRepository:
         self.engine = engine
         self._dsn = dsn
         self._connection = connection
+
+    def get_document_revision(
+        self,
+        document_revision_id: str,
+    ) -> repositories.DocumentProjectionRevision | None:
+        def read(connection: Any) -> repositories.DocumentProjectionRevision | None:
+            row = _load_revision_by_id(
+                connection,
+                document_revision_id=document_revision_id,
+            )
+            return None if row is None else _revision_from_row(row)
+
+        return self._write("get document revision", read)
+
+    def allocate_document_revision_number(
+        self,
+        document_id: str,
+        document_revision_id: str,
+    ) -> int:
+        def allocate(connection: Any) -> int:
+            return _allocate_document_revision_number(
+                connection,
+                document_id=document_id,
+                document_revision_id=document_revision_id,
+            )
+
+        return self._write("allocate document revision number", allocate)
 
     def upsert_document_revision(
         self,
@@ -71,6 +100,28 @@ class PostgresDocumentProjectionRepository:
                         f"{revision.revision_number!r} in "
                         f"{repositories.redact_dsn(self._dsn)}."
                     )
+                if latest_revision_number is not None and (
+                    latest_revision_number > revision.revision_number
+                ):
+                    existing_document = _load_document_by_id(
+                        connection,
+                        document.document_id,
+                    )
+                    if _document_row_is_later_tombstone(
+                        existing_document,
+                        document,
+                    ):
+                        return
+                    if _document_row_is_tombstoned_active_replay(
+                        existing_document,
+                        document,
+                    ):
+                        raise repositories.RepositoryConflictError(
+                            "Document projection summary conflict for "
+                            f"{document.document_id!r} revision "
+                            f"{revision.revision_number!r} in "
+                            f"{repositories.redact_dsn(self._dsn)}."
+                        )
                 return
 
             latest_revision_number = _load_latest_revision_number(
@@ -140,6 +191,54 @@ class PostgresDocumentProjectionRepository:
             )
 
         self._write("upsert document revision", write)
+
+    def replace_document_object_refs(
+        self,
+        document_revision_id: str,
+        refs: tuple[repositories.DocumentProjectionObjectRef, ...],
+    ) -> None:
+        def replace(connection: Any) -> None:
+            connection.execute(
+                text(
+                    """
+                    DELETE FROM documents.document_object_ref
+                    WHERE document_revision_id = :document_revision_id
+                    """
+                ),
+                {"document_revision_id": document_revision_id},
+            )
+            for ref in sorted(
+                refs,
+                key=lambda item: (item.object_uri, item.document_object_ref_id),
+            ):
+                if ref.document_revision_id != document_revision_id:
+                    raise ValueError(
+                        "object ref document_revision_id must match replacement key"
+                    )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO documents.document_object_ref (
+                            document_object_ref_id,
+                            document_revision_id,
+                            object_uri,
+                            content_type,
+                            sha256_hash,
+                            metadata_json
+                        ) VALUES (
+                            :document_object_ref_id,
+                            :document_revision_id,
+                            :object_uri,
+                            :content_type,
+                            :sha256_hash,
+                            CAST(:metadata_json AS JSONB)
+                        )
+                        """
+                    ),
+                    _object_ref_params(ref),
+                )
+
+        self._write("replace document object refs", replace)
 
     def tombstone_documents_absent_from_inventory(
         self,
@@ -217,6 +316,126 @@ class PostgresDocumentProjectionRepository:
 
         return self._write("tombstone documents absent from inventory", write)
 
+    def tombstone_documents_absent_from_inventory_with_revisions(
+        self,
+        *,
+        source_family: str,
+        active_document_ids: tuple[str, ...],
+        tombstoned_at_utc: datetime,
+        source_ref: str,
+        metadata: Mapping[str, Any],
+        inventory_cursor_created_at_utc: datetime | None = None,
+        inventory_outbox_event_id: str | None = None,
+    ) -> tuple[str, ...]:
+        active_ids = tuple(dict.fromkeys(str(item) for item in active_document_ids))
+
+        def write(connection: Any) -> tuple[str, ...]:
+            candidates = _load_active_documents_for_family(
+                connection,
+                source_family=source_family,
+                active_document_ids=active_ids,
+            )
+            tombstoned: list[str] = []
+            for row in candidates:
+                document_id = str(row["document_id"])
+                row_metadata = _json_mapping(row["metadata_json"])
+                if _active_cursor_after_inventory(
+                    row_metadata,
+                    inventory_cursor_created_at_utc=inventory_cursor_created_at_utc,
+                    inventory_outbox_event_id=inventory_outbox_event_id,
+                ):
+                    continue
+
+                revision_id = _stable_id(
+                    "document-tombstone-revision",
+                    document_id,
+                    source_ref,
+                    metadata.get("source_event_id")
+                    or metadata.get("inventory_event_id")
+                    or "",
+                )
+                revision_number = _allocate_document_revision_number(
+                    connection,
+                    document_id=document_id,
+                    document_revision_id=revision_id,
+                )
+                tombstone_metadata = {
+                    **row_metadata,
+                    **dict(metadata),
+                    "document_state": "tombstoned",
+                    "tombstoned_at_utc": _aware_utc(
+                        tombstoned_at_utc
+                    ).isoformat(),
+                    "tombstone_source_ref": source_ref,
+                }
+                connection.execute(
+                    text(
+                        """
+                        UPDATE documents.document
+                        SET
+                            updated_at_utc = :updated_at_utc,
+                            source_ref = :source_ref,
+                            metadata_json = CAST(:metadata_json AS JSONB)
+                        WHERE document_id = :document_id
+                        """
+                    ),
+                    {
+                        "document_id": document_id,
+                        "updated_at_utc": _aware_utc(tombstoned_at_utc),
+                        "source_ref": source_ref,
+                        "metadata_json": _json_dumps(tombstone_metadata),
+                    },
+                )
+                existing = _load_revision_by_id(
+                    connection,
+                    document_revision_id=revision_id,
+                )
+                revision = repositories.DocumentProjectionRevision(
+                    document_revision_id=revision_id,
+                    document_id=document_id,
+                    revision_number=revision_number,
+                    created_at_utc=_aware_utc(tombstoned_at_utc),
+                    source_ref=source_ref,
+                    metadata=tombstone_metadata,
+                )
+                if existing is not None:
+                    if not _revision_row_matches(existing, revision):
+                        raise repositories.RepositoryConflictError(
+                            "Document tombstone revision projection conflict for "
+                            f"{revision.revision_key!r} in "
+                            f"{repositories.redact_dsn(self._dsn)}."
+                        )
+                else:
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO documents.document_revision (
+                                document_revision_id,
+                                document_id,
+                                revision_number,
+                                created_at_utc,
+                                source_ref,
+                                metadata_json
+                            ) VALUES (
+                                :document_revision_id,
+                                :document_id,
+                                :revision_number,
+                                :created_at_utc,
+                                :source_ref,
+                                CAST(:metadata_json AS JSONB)
+                            )
+                            """
+                        ),
+                        _revision_params(revision),
+                    )
+                tombstoned.append(document_id)
+            return tuple(tombstoned)
+
+        return self._write(
+            "tombstone documents absent from inventory with revisions",
+            write,
+        )
+
     def _write(
         self,
         operation: str,
@@ -247,6 +466,78 @@ class PostgresDocumentProjectionRepository:
                 exc,
                 dsn=self._dsn,
             ) from None
+
+
+class PostgresDocumentsProjectorUnitOfWork:
+    """Creates document and projection-state repository views in one transaction."""
+
+    def __init__(
+        self,
+        *,
+        engine: Any,
+        dsn: str,
+        id_provider: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.engine = engine
+        self._dsn = dsn
+        self._id_provider = id_provider
+        self._clock = clock
+
+    @contextmanager
+    def transaction(self) -> Iterator[tuple[Any, PostgresDocumentProjectionRepository]]:
+        from tradingx.persistence.repositories.projection_state import (
+            PostgresProjectionStateRepository,
+        )
+
+        try:
+            with self.engine.begin() as connection:
+                yield (
+                    PostgresProjectionStateRepository(
+                        engine=self.engine,
+                        dsn=self._dsn,
+                        id_provider=self._id_provider,
+                        clock=self._clock,
+                        connection=connection,
+                    ),
+                    PostgresDocumentProjectionRepository(
+                        engine=self.engine,
+                        dsn=self._dsn,
+                        connection=connection,
+                    ),
+                )
+        except repositories.RepositoryConflictError:
+            raise
+        except Exception as exc:
+            raise repositories.RepositoryStorageError.from_exception(
+                "documents projector transaction",
+                exc,
+                dsn=self._dsn,
+            ) from None
+
+
+def _load_revision_by_id(
+    connection: Any,
+    *,
+    document_revision_id: str,
+) -> Mapping[str, Any] | None:
+    row = connection.execute(
+        text(
+            """
+            SELECT
+                document_revision_id,
+                document_id,
+                revision_number,
+                created_at_utc,
+                source_ref,
+                metadata_json
+            FROM documents.document_revision
+            WHERE document_revision_id = :document_revision_id
+            """
+        ),
+        {"document_revision_id": document_revision_id},
+    ).mappings().one_or_none()
+    return None if row is None else dict(row)
 
 
 def _load_revision_by_key(
@@ -289,6 +580,44 @@ def _load_latest_revision_number(connection: Any, document_id: str) -> int | Non
         {"document_id": document_id},
     ).scalar_one_or_none()
     return None if value is None else int(value)
+
+
+def _load_active_documents_for_family(
+    connection: Any,
+    *,
+    source_family: str,
+    active_document_ids: tuple[str, ...],
+) -> tuple[Mapping[str, Any], ...]:
+    params: dict[str, Any] = {"source_family": source_family}
+    active_filter = ""
+    if active_document_ids:
+        bind_names = []
+        for index, document_id in enumerate(active_document_ids):
+            key = f"active_document_id_{index}"
+            params[key] = document_id
+            bind_names.append(f":{key}")
+        active_filter = f"AND document_id NOT IN ({', '.join(bind_names)})"
+
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT
+                document_id,
+                document_type,
+                title,
+                updated_at_utc,
+                source_ref,
+                metadata_json
+            FROM documents.document
+            WHERE metadata_json ->> 'source_family' = :source_family
+              AND COALESCE(metadata_json ->> 'document_state', 'active') = 'active'
+              {active_filter}
+            ORDER BY document_id ASC
+            """
+        ),
+        params,
+    ).mappings().all()
+    return tuple(dict(row) for row in rows)
 
 
 def _load_document_by_id(
@@ -341,6 +670,19 @@ def _revision_params(
     }
 
 
+def _object_ref_params(
+    ref: repositories.DocumentProjectionObjectRef,
+) -> dict[str, Any]:
+    return {
+        "document_object_ref_id": ref.document_object_ref_id,
+        "document_revision_id": ref.document_revision_id,
+        "object_uri": ref.object_uri,
+        "content_type": ref.content_type,
+        "sha256_hash": ref.sha256_hash,
+        "metadata_json": _json_dumps(ref.metadata),
+    }
+
+
 def _document_metadata(
     document: repositories.DocumentProjectionDocument,
 ) -> Mapping[str, Any]:
@@ -389,12 +731,39 @@ def _document_row_is_later_tombstone(
         return False
     if row["title"] != document.title:
         return False
-    for key, value in expected_metadata.items():
-        if key == "document_state":
+    stable_metadata_keys = (
+        "content_hash",
+        "internal_document_key",
+        "latest_active_outbox_created_at_utc",
+        "latest_active_outbox_event_id",
+        "logical_retrieval_ref",
+        "preview",
+        "relative_path",
+        "revision_number",
+        "source_family",
+        "source_identity",
+    )
+    for key in stable_metadata_keys:
+        if key not in expected_metadata:
             continue
+        value = expected_metadata[key]
         if _json_normalized(existing_metadata.get(key)) != _json_normalized(value):
             return False
     return True
+
+
+def _document_row_is_tombstoned_active_replay(
+    row: Mapping[str, Any] | None,
+    document: repositories.DocumentProjectionDocument,
+) -> bool:
+    if row is None:
+        return False
+    existing_metadata = _json_mapping(row["metadata_json"])
+    expected_metadata = _document_metadata(document)
+    return (
+        existing_metadata.get("document_state") == "tombstoned"
+        and expected_metadata.get("document_state") == "active"
+    )
 
 
 def _revision_row_matches(
@@ -412,6 +781,75 @@ def _revision_row_matches(
         "source_ref": revision.source_ref,
         "metadata_json": _json_normalized(revision.metadata),
     }
+
+
+def _revision_from_row(
+    row: Mapping[str, Any],
+) -> repositories.DocumentProjectionRevision:
+    return repositories.DocumentProjectionRevision(
+        document_revision_id=str(row["document_revision_id"]),
+        document_id=str(row["document_id"]),
+        revision_number=int(row["revision_number"]),
+        created_at_utc=_datetime(row["created_at_utc"]),
+        source_ref=None if row["source_ref"] is None else str(row["source_ref"]),
+        metadata=_json_mapping(row["metadata_json"]),
+    )
+
+
+def _active_cursor_after_inventory(
+    metadata: Mapping[str, Any],
+    *,
+    inventory_cursor_created_at_utc: datetime | None,
+    inventory_outbox_event_id: str | None,
+) -> bool:
+    if inventory_cursor_created_at_utc is None or inventory_outbox_event_id is None:
+        return False
+    created_raw = metadata.get("latest_active_outbox_created_at_utc")
+    event_id = metadata.get("latest_active_outbox_event_id")
+    if created_raw is None or event_id is None:
+        return False
+    created = _datetime(created_raw)
+    inventory_created = _aware_utc(inventory_cursor_created_at_utc)
+    return created > inventory_created or (
+        created == inventory_created and str(event_id) > inventory_outbox_event_id
+    )
+
+
+def _lock_document_revision_allocation(connection: Any, document_id: str) -> None:
+    connection.execute(
+        text(
+            """
+            SELECT pg_advisory_xact_lock(
+                hashtext('documents.document_revision'),
+                hashtext(:document_id)
+            )
+            """
+        ),
+        {"document_id": document_id},
+    )
+
+
+def _allocate_document_revision_number(
+    connection: Any,
+    *,
+    document_id: str,
+    document_revision_id: str,
+) -> int:
+    _lock_document_revision_allocation(connection, document_id)
+    existing = _load_revision_by_id(
+        connection,
+        document_revision_id=document_revision_id,
+    )
+    if existing is not None:
+        return int(existing["revision_number"])
+    latest = _load_latest_revision_number(connection, document_id)
+    return 1 if latest is None else latest + 1
+
+
+def _stable_id(prefix: str, *parts: object) -> str:
+    raw = json.dumps(tuple(str(part) for part in parts), separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+    return f"{prefix}:{digest}"
 
 
 def _json_dumps(value: object) -> str:
@@ -445,4 +883,7 @@ def _aware_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-__all__ = ("PostgresDocumentProjectionRepository",)
+__all__ = (
+    "PostgresDocumentProjectionRepository",
+    "PostgresDocumentsProjectorUnitOfWork",
+)

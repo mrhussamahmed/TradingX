@@ -329,6 +329,26 @@ class DocumentProjectionRevision:
 
 
 @dataclass(frozen=True)
+class DocumentProjectionObjectRef:
+    document_object_ref_id: str
+    document_revision_id: str
+    object_uri: str
+    content_type: str | None
+    sha256_hash: str | None
+    metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DocumentTombstoneRevision:
+    document_id: str
+    document_revision_id: str
+    revision_number: int
+    created_at_utc: datetime
+    source_ref: str | None
+    metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class OutboxEventAppendRequest:
     aggregate_type: str
     aggregate_id: str
@@ -492,10 +512,27 @@ class DocumentReadRepository(Protocol):
 
 @runtime_checkable
 class DocumentProjectionWriteRepository(Protocol):
+    def get_document_revision(
+        self,
+        document_revision_id: str,
+    ) -> DocumentProjectionRevision | None: ...
+
+    def allocate_document_revision_number(
+        self,
+        document_id: str,
+        document_revision_id: str,
+    ) -> int: ...
+
     def upsert_document_revision(
         self,
         document: DocumentProjectionDocument,
         revision: DocumentProjectionRevision,
+    ) -> None: ...
+
+    def replace_document_object_refs(
+        self,
+        document_revision_id: str,
+        refs: tuple[DocumentProjectionObjectRef, ...],
     ) -> None: ...
 
     def tombstone_documents_absent_from_inventory(
@@ -506,6 +543,18 @@ class DocumentProjectionWriteRepository(Protocol):
         tombstoned_at_utc: datetime,
         source_ref: str,
         metadata: Mapping[str, Any],
+    ) -> tuple[str, ...]: ...
+
+    def tombstone_documents_absent_from_inventory_with_revisions(
+        self,
+        *,
+        source_family: str,
+        active_document_ids: tuple[str, ...],
+        tombstoned_at_utc: datetime,
+        source_ref: str,
+        metadata: Mapping[str, Any],
+        inventory_cursor_created_at_utc: datetime | None = None,
+        inventory_outbox_event_id: str | None = None,
     ) -> tuple[str, ...]: ...
 
 
@@ -726,8 +775,10 @@ __all__ = (
     "ControlPostureBlocker",
     "ControlPostureSnapshot",
     "DocumentProjectionDocument",
+    "DocumentProjectionObjectRef",
     "DocumentProjectionRevision",
     "DocumentProjectionWriteRepository",
+    "DocumentTombstoneRevision",
     "DocumentReadRecord",
     "DocumentReadRepository",
     "DocumentRevisionRecord",

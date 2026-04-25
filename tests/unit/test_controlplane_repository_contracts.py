@@ -271,6 +271,28 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
         ) -> None:
             del document, revision
 
+        def get_document_revision(
+            self,
+            document_revision_id: str,
+        ) -> repositories.DocumentProjectionRevision | None:
+            del document_revision_id
+            return None
+
+        def allocate_document_revision_number(
+            self,
+            document_id: str,
+            document_revision_id: str,
+        ) -> int:
+            del document_id, document_revision_id
+            return 1
+
+        def replace_document_object_refs(
+            self,
+            document_revision_id: str,
+            refs: tuple[repositories.DocumentProjectionObjectRef, ...],
+        ) -> None:
+            del document_revision_id, refs
+
         def tombstone_documents_absent_from_inventory(
             self,
             *,
@@ -282,6 +304,21 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
         ) -> tuple[str, ...]:
             del source_family, active_document_ids, tombstoned_at_utc, source_ref
             del metadata
+            return ()
+
+        def tombstone_documents_absent_from_inventory_with_revisions(
+            self,
+            *,
+            source_family: str,
+            active_document_ids: tuple[str, ...],
+            tombstoned_at_utc: datetime,
+            source_ref: str,
+            metadata: dict[str, object],
+            inventory_cursor_created_at_utc: datetime | None = None,
+            inventory_outbox_event_id: str | None = None,
+        ) -> tuple[str, ...]:
+            del source_family, active_document_ids, tombstoned_at_utc, source_ref
+            del metadata, inventory_cursor_created_at_utc, inventory_outbox_event_id
             return ()
 
     fake = FakeRepositories()
@@ -296,6 +333,112 @@ def test_fake_repositories_satisfy_implemented_protocols_only() -> None:
     assert not isinstance(fake, repositories.OutboxAppendBoundary)
     assert not isinstance(fake, repositories.ProjectionCheckpointBoundary)
     assert not isinstance(fake, repositories.ProjectionSourceStatusBoundary)
+
+
+def test_document_projection_writer_exposes_revision_lookup_and_allocation() -> None:
+    revision = repositories.DocumentProjectionRevision(
+        document_revision_id="STATE:1",
+        document_id="STATE",
+        revision_number=1,
+        created_at_utc=datetime(2026, 4, 24, 12, tzinfo=UTC),
+        source_ref="source:STATE:revision:1",
+        metadata={"content_hash": "hash-1"},
+    )
+
+    class FakeWriter:
+        def get_document_revision(
+            self,
+            document_revision_id: str,
+        ) -> repositories.DocumentProjectionRevision | None:
+            if document_revision_id == revision.document_revision_id:
+                return revision
+            return None
+
+        def allocate_document_revision_number(
+            self,
+            document_id: str,
+            document_revision_id: str,
+        ) -> int:
+            del document_id, document_revision_id
+            return 2
+
+        def upsert_document_revision(
+            self,
+            document: repositories.DocumentProjectionDocument,
+            revision: repositories.DocumentProjectionRevision,
+        ) -> None:
+            del document, revision
+
+        def replace_document_object_refs(
+            self,
+            document_revision_id: str,
+            refs: tuple[repositories.DocumentProjectionObjectRef, ...],
+        ) -> None:
+            del document_revision_id, refs
+
+        def tombstone_documents_absent_from_inventory(
+            self,
+            *,
+            source_family: str,
+            active_document_ids: tuple[str, ...],
+            tombstoned_at_utc: datetime,
+            source_ref: str,
+            metadata: dict[str, object],
+        ) -> tuple[str, ...]:
+            del source_family, active_document_ids, tombstoned_at_utc, source_ref
+            del metadata
+            return ()
+
+        def tombstone_documents_absent_from_inventory_with_revisions(
+            self,
+            *,
+            source_family: str,
+            active_document_ids: tuple[str, ...],
+            tombstoned_at_utc: datetime,
+            source_ref: str,
+            metadata: dict[str, object],
+            inventory_cursor_created_at_utc: datetime | None = None,
+            inventory_outbox_event_id: str | None = None,
+        ) -> tuple[str, ...]:
+            del source_family, active_document_ids, tombstoned_at_utc, source_ref
+            del metadata, inventory_cursor_created_at_utc, inventory_outbox_event_id
+            return ()
+
+    writer = FakeWriter()
+
+    assert isinstance(writer, repositories.DocumentProjectionWriteRepository)
+    assert writer.get_document_revision("STATE:1") == revision
+    assert writer.allocate_document_revision_number("STATE", "STATE:2") == 2
+
+
+def test_document_projection_writer_exposes_object_ref_replacement() -> None:
+    ref = repositories.DocumentProjectionObjectRef(
+        document_object_ref_id="ref:STATE:1",
+        document_revision_id="STATE:1",
+        object_uri="docs/handover/STATE.md",
+        content_type="text/markdown",
+        sha256_hash="hash-1",
+        metadata={"source_family": "state_and_index_docs"},
+    )
+
+    assert ref.document_revision_id == "STATE:1"
+    assert ref.object_uri == "docs/handover/STATE.md"
+    assert ref.content_type == "text/markdown"
+
+
+def test_document_projection_writer_exposes_tombstone_revision_reconciliation() -> None:
+    tombstone = repositories.DocumentTombstoneRevision(
+        document_id="STATE",
+        document_revision_id="STATE:tombstone:inventory",
+        revision_number=2,
+        created_at_utc=datetime(2026, 4, 24, 13, tzinfo=UTC),
+        source_ref="inventory:state_and_index_docs:hash",
+        metadata={"document_state": "tombstoned"},
+    )
+
+    assert tombstone.document_id == "STATE"
+    assert tombstone.created_at_utc == datetime(2026, 4, 24, 13, tzinfo=UTC)
+    assert tombstone.metadata["document_state"] == "tombstoned"
 
 
 def test_repository_error_redacts_dsn_and_chained_diagnostics() -> None:

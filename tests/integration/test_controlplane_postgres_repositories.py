@@ -4,6 +4,8 @@ import json
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from queue import Queue
+from threading import Event, Thread
 from typing import Any
 
 import pytest
@@ -487,6 +489,236 @@ def test_document_write_repository_replays_active_revision_after_tombstone(
     )
     assert rows[0]["metadata_json"]["document_state"] == "tombstoned"
     assert [row["revision_number"] for row in revision_rows] == [1]
+
+
+def test_document_projection_writer_gets_revision_by_id(repo: Any) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    revision = _document_projection_revision("STATE", revision_number=1)
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        revision,
+    )
+
+    loaded = writer.get_document_revision("STATE:1")
+
+    assert loaded == revision
+    assert writer.get_document_revision("missing") is None
+
+
+def test_document_projection_writer_allocates_revision_numbers(repo: Any) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+
+    assert writer.allocate_document_revision_number("STATE", "STATE:1") == 1
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+
+    assert writer.allocate_document_revision_number("STATE", "STATE:1") == 1
+    assert writer.allocate_document_revision_number("STATE", "STATE:2") == 2
+
+
+def test_document_projection_writer_replaces_object_refs_idempotently(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+    refs = (
+        repositories.DocumentProjectionObjectRef(
+            document_object_ref_id="ref:STATE:1:markdown",
+            document_revision_id="STATE:1",
+            object_uri="docs/handover/STATE.md",
+            content_type="text/markdown",
+            sha256_hash="hash-1",
+            metadata={"source_family": "state_and_index_docs"},
+        ),
+    )
+
+    writer.replace_document_object_refs("STATE:1", refs)
+    writer.replace_document_object_refs("STATE:1", refs)
+
+    rows = _rows(
+        repo.engine,
+        """
+        SELECT document_object_ref_id, document_revision_id, object_uri,
+               content_type, sha256_hash, metadata_json
+        FROM documents.document_object_ref
+        ORDER BY object_uri ASC
+        """,
+    )
+    assert rows == [
+        {
+            "document_object_ref_id": "ref:STATE:1:markdown",
+            "document_revision_id": "STATE:1",
+            "object_uri": "docs/handover/STATE.md",
+            "content_type": "text/markdown",
+            "sha256_hash": "hash-1",
+            "metadata_json": {"source_family": "state_and_index_docs"},
+        }
+    ]
+
+
+def test_document_projection_writer_tombstones_with_revision_history(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+    writer.upsert_document_revision(
+        _document_projection_document("INDEX", revision_number=1),
+        _document_projection_revision("INDEX", revision_number=1),
+    )
+    tombstoned_at = datetime(2026, 4, 24, 13, 0, tzinfo=UTC)
+
+    tombstoned_ids = writer.tombstone_documents_absent_from_inventory_with_revisions(
+        source_family="state_and_index_docs",
+        active_document_ids=("STATE",),
+        tombstoned_at_utc=tombstoned_at,
+        source_ref="inventory:state_and_index_docs:hash",
+        metadata={
+            "inventory_event_id": "inventory:hash",
+            "source_event_id": "inventory:hash",
+        },
+    )
+
+    assert tombstoned_ids == ("INDEX",)
+    assert repo.get_document("INDEX") is None
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT revision_number, created_at_utc, source_ref, metadata_json
+        FROM documents.document_revision
+        WHERE document_id = 'INDEX'
+        ORDER BY revision_number ASC
+        """,
+    )
+    assert [row["revision_number"] for row in revision_rows] == [1, 2]
+    assert revision_rows[1]["created_at_utc"] == tombstoned_at
+    assert revision_rows[1]["source_ref"] == "inventory:state_and_index_docs:hash"
+    assert revision_rows[1]["metadata_json"]["document_state"] == "tombstoned"
+    assert revision_rows[1]["metadata_json"]["inventory_event_id"] == "inventory:hash"
+
+
+def test_document_projection_writer_empty_inventory_tombstones_all_active_docs(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+    writer.upsert_document_revision(
+        _document_projection_document("INDEX", revision_number=1),
+        _document_projection_revision("INDEX", revision_number=1),
+    )
+
+    tombstoned_ids = writer.tombstone_documents_absent_from_inventory_with_revisions(
+        source_family="state_and_index_docs",
+        active_document_ids=(),
+        tombstoned_at_utc=datetime(2026, 4, 24, 13, 0, tzinfo=UTC),
+        source_ref="inventory:state_and_index_docs:empty",
+        metadata={"inventory_event_id": "inventory:empty"},
+    )
+
+    assert tombstoned_ids == ("INDEX", "STATE")
+    assert repo.list_documents().items == ()
+
+
+def test_document_projection_writer_tombstone_respects_newer_active_cursor(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    newer_document = repositories.DocumentProjectionDocument(
+        **{
+            **_document_projection_document("INDEX", revision_number=1).__dict__,
+            "metadata": {
+                "source_family": "state_and_index_docs",
+                "latest_active_outbox_created_at_utc": (
+                    "2026-04-24T13:00:00+00:00"
+                ),
+                "latest_active_outbox_event_id": "outbox-newer",
+            },
+        }
+    )
+    writer.upsert_document_revision(
+        newer_document,
+        _document_projection_revision("INDEX", revision_number=1),
+    )
+
+    tombstoned_ids = writer.tombstone_documents_absent_from_inventory_with_revisions(
+        source_family="state_and_index_docs",
+        active_document_ids=(),
+        tombstoned_at_utc=datetime(2026, 4, 24, 13, 30, tzinfo=UTC),
+        source_ref="inventory:state_and_index_docs:old",
+        metadata={"inventory_event_id": "inventory:old"},
+        inventory_cursor_created_at_utc=datetime(2026, 4, 24, 12, 59, tzinfo=UTC),
+        inventory_outbox_event_id="outbox-old",
+    )
+
+    assert tombstoned_ids == ()
+    assert repo.get_document("INDEX") is not None
+
+
+def test_document_projection_writer_concurrent_allocations_do_not_share_number(
+    repo: Any,
+) -> None:
+    from tradingx.persistence.repositories.document_projection import (
+        PostgresDocumentProjectionRepository,
+    )
+
+    first_started = Event()
+    release_first = Event()
+    results: Queue[tuple[str, int | str]] = Queue()
+
+    def first_worker() -> None:
+        with repo.engine.begin() as connection:
+            writer = PostgresDocumentProjectionRepository(
+                engine=repo.engine,
+                dsn=_postgres_dsn(),
+                connection=connection,
+            )
+            revision_number = writer.allocate_document_revision_number(
+                "STATE",
+                "STATE:1",
+            )
+            results.put(("first", revision_number))
+            first_started.set()
+            release_first.wait(timeout=5)
+            writer.upsert_document_revision(
+                _document_projection_document("STATE", revision_number=1),
+                _document_projection_revision("STATE", revision_number=1),
+            )
+
+    def second_worker() -> None:
+        first_started.wait(timeout=5)
+        with repo.engine.begin() as connection:
+            writer = PostgresDocumentProjectionRepository(
+                engine=repo.engine,
+                dsn=_postgres_dsn(),
+                connection=connection,
+            )
+            revision_number = writer.allocate_document_revision_number(
+                "STATE",
+                "STATE:2",
+            )
+            results.put(("second", revision_number))
+
+    first = Thread(target=first_worker)
+    second = Thread(target=second_worker)
+    first.start()
+    second.start()
+    first_started.wait(timeout=5)
+    release_first.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    observed = dict(results.get_nowait() for _ in range(results.qsize()))
+    assert observed == {"first": 1, "second": 2}
 
 
 @pytest.mark.parametrize(

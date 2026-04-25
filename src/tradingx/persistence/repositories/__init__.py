@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tradingx.persistence.repositories.document_projection import (
     PostgresDocumentProjectionRepository,
+    PostgresDocumentsProjectorUnitOfWork,
 )
 from tradingx.persistence.repositories.postgres import PostgresControlPlaneRepository
 from tradingx.persistence.repositories.projection_state import (
@@ -13,5 +14,6 @@ from tradingx.persistence.repositories.projection_state import (
 __all__ = (
     "PostgresControlPlaneRepository",
     "PostgresDocumentProjectionRepository",
+    "PostgresDocumentsProjectorUnitOfWork",
     "PostgresProjectionStateRepository",
 )
