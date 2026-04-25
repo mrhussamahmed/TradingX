@@ -338,7 +338,17 @@ class PostgresDocumentProjectionRepository:
             tombstoned: list[str] = []
             for row in candidates:
                 document_id = str(row["document_id"])
-                row_metadata = _json_mapping(row["metadata_json"])
+                _lock_document_revision_allocation(connection, document_id)
+                current = _load_document_by_id(connection, document_id)
+                if current is None:
+                    continue
+                if not _document_row_is_active_candidate(
+                    current,
+                    source_family=source_family,
+                    active_document_ids=active_ids,
+                ):
+                    continue
+                row_metadata = _json_mapping(current["metadata_json"])
                 if _active_cursor_after_inventory(
                     row_metadata,
                     inventory_cursor_created_at_utc=inventory_cursor_created_at_utc,
@@ -641,6 +651,21 @@ def _load_document_by_id(
         {"document_id": document_id},
     ).mappings().one_or_none()
     return None if row is None else dict(row)
+
+
+def _document_row_is_active_candidate(
+    row: Mapping[str, Any],
+    *,
+    source_family: str,
+    active_document_ids: tuple[str, ...],
+) -> bool:
+    document_id = str(row["document_id"])
+    if document_id in active_document_ids:
+        return False
+    metadata = _json_mapping(row["metadata_json"])
+    if metadata.get("source_family") != source_family:
+        return False
+    return str(metadata.get("document_state", "active")) == "active"
 
 
 def _document_params(

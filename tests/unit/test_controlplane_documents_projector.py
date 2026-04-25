@@ -137,7 +137,42 @@ def test_documents_projector_materializes_file_events_and_object_refs() -> None:
     status = uow.projection_repo.statuses[
         ("documents", "state_and_index_docs", "repo:docs/state_index")
     ]
+    checkpoint = uow.projection_repo.checkpoints[
+        document_projectors.document_projection_name(
+            domain_name="documents",
+            source_family="state_and_index_docs",
+        )
+    ]
     assert status.projected_watermark == "collect-watermark"
+    assert checkpoint.source_watermark == "collect-watermark"
+
+
+def test_documents_projector_records_custom_mapper_version_metadata() -> None:
+    event = _file_event(document_id="STATE", content_hash="hash-state")
+    uow = FakeDocumentsProjectorUnitOfWork(
+        events=(event,),
+        statuses=(
+            _status(
+                source_family="state_and_index_docs",
+                latest_source_event_id="file:docs/handover/STATE.md:hash-state",
+            ),
+            _status(source_family="handover_sessions"),
+        ),
+    )
+
+    projector = document_projectors.DocumentsProjector(
+        unit_of_work=uow,
+        clock=lambda: FIXED_NOW,
+        mapper_version="v2",
+    )
+    projector.run_once(batch_size=10)
+
+    document = uow.document_repo.documents[0]
+    revision = uow.document_repo.revisions[0]
+    ref = uow.document_repo.object_refs[revision.document_revision_id][0]
+    assert document.metadata["mapper_version"] == "v2"
+    assert revision.metadata["mapper_version"] == "v2"
+    assert ref.metadata["mapper_version"] == "v2"
 
 
 def test_documents_projector_inventory_tombstone_writes_revision_history() -> None:

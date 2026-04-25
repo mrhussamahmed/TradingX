@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from queue import Queue
 from threading import Event, Thread
+from time import monotonic, sleep
 from typing import Any
 
 import pytest
@@ -662,6 +663,80 @@ def test_document_projection_writer_tombstone_respects_newer_active_cursor(
 
     assert tombstoned_ids == ()
     assert repo.get_document("INDEX") is not None
+
+
+def test_document_projection_writer_rechecks_tombstone_candidate_after_lock(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    writer.upsert_document_revision(
+        _document_projection_document("STATE", revision_number=1),
+        _document_projection_revision("STATE", revision_number=1),
+    )
+    inventory_created_at = datetime(2026, 4, 24, 12, 59, tzinfo=UTC)
+    results: Queue[tuple[str, object]] = Queue()
+
+    lock_connection = repo.engine.connect()
+    lock_transaction = lock_connection.begin()
+    lock_connection.execute(
+        text(
+            """
+            SELECT pg_advisory_xact_lock(
+                hashtext('documents.document_revision'),
+                hashtext(:document_id)
+            )
+            """
+        ),
+        {"document_id": "STATE"},
+    )
+
+    def tombstone_worker() -> None:
+        try:
+            thread_writer = _document_writer(repo.engine, _postgres_dsn())
+            tombstoned_ids = (
+                thread_writer.tombstone_documents_absent_from_inventory_with_revisions(
+                    source_family="state_and_index_docs",
+                    active_document_ids=(),
+                    tombstoned_at_utc=datetime(2026, 4, 24, 13, 0, tzinfo=UTC),
+                    source_ref="inventory:state_and_index_docs:old",
+                    metadata={"inventory_event_id": "inventory:old"},
+                    inventory_cursor_created_at_utc=inventory_created_at,
+                    inventory_outbox_event_id="outbox-old",
+                )
+            )
+            results.put(("ok", tombstoned_ids))
+        except Exception as exc:  # pragma: no cover - surfaced in assertion
+            results.put(("error", repr(exc)))
+
+    worker = Thread(target=tombstone_worker)
+    worker.start()
+    try:
+        _wait_for_advisory_lock_wait(repo.engine)
+        _materialize_newer_active_document_summary(
+            repo.engine,
+            document_id="STATE",
+            observed_at_utc=inventory_created_at + timedelta(seconds=1),
+            outbox_event_id="outbox-newer",
+        )
+    finally:
+        lock_transaction.commit()
+        lock_connection.close()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert results.get_nowait() == ("ok", ())
+    assert repo.get_document("STATE") is not None
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT revision_number, metadata_json
+        FROM documents.document_revision
+        WHERE document_id = 'STATE'
+        ORDER BY revision_number ASC
+        """,
+    )
+    assert [row["revision_number"] for row in revision_rows] == [1, 2]
+    assert revision_rows[1]["metadata_json"]["content_hash"] == "hash-2"
 
 
 def test_document_projection_writer_concurrent_allocations_do_not_share_number(
@@ -1601,6 +1676,91 @@ def _document_projection_revision(
         source_ref=f"source:{document_id}:revision:{revision_number}",
         metadata={"content_hash": f"hash-{revision_number}"},
     )
+
+
+def _materialize_newer_active_document_summary(
+    engine: Engine,
+    *,
+    document_id: str,
+    observed_at_utc: datetime,
+    outbox_event_id: str,
+) -> None:
+    metadata = {
+        "content_hash": "hash-2",
+        "document_state": "active",
+        "latest_active_outbox_created_at_utc": observed_at_utc.isoformat(),
+        "latest_active_outbox_event_id": outbox_event_id,
+        "logical_retrieval_ref": f"docs/{document_id}.md",
+        "preview": "Revision 2",
+        "source_family": "state_and_index_docs",
+        "source_identity": "repo:docs/state_index",
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE documents.document
+                SET
+                    updated_at_utc = :updated_at_utc,
+                    source_ref = :source_ref,
+                    metadata_json = CAST(:metadata_json AS JSONB)
+                WHERE document_id = :document_id
+                """
+            ),
+            {
+                "document_id": document_id,
+                "updated_at_utc": observed_at_utc,
+                "source_ref": f"source:{document_id}:revision:2",
+                "metadata_json": json.dumps(metadata),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents.document_revision (
+                    document_revision_id,
+                    document_id,
+                    revision_number,
+                    created_at_utc,
+                    source_ref,
+                    metadata_json
+                ) VALUES (
+                    :document_revision_id,
+                    :document_id,
+                    2,
+                    :created_at_utc,
+                    :source_ref,
+                    CAST(:metadata_json AS JSONB)
+                )
+                """
+            ),
+            {
+                "document_revision_id": f"{document_id}:2",
+                "document_id": document_id,
+                "created_at_utc": observed_at_utc,
+                "source_ref": f"source:{document_id}:revision:2",
+                "metadata_json": json.dumps({"content_hash": "hash-2"}),
+            },
+        )
+
+
+def _wait_for_advisory_lock_wait(engine: Engine) -> None:
+    deadline = monotonic() + 5
+    while monotonic() < deadline:
+        rows = _rows(
+            engine,
+            """
+            SELECT pid
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND query LIKE '%pg_advisory_xact_lock%'
+            """,
+        )
+        if rows:
+            return
+        sleep(0.01)
+    raise AssertionError("timed out waiting for advisory lock contention")
 
 
 def _document_writer(engine: Engine, dsn: str) -> Any:

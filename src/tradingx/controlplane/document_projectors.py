@@ -184,9 +184,9 @@ class DocumentsProjector:
                     projection_name=projection_name,
                     last_outbox_event_id=last_event.outbox_event_id,
                     last_processed_at_utc=_aware_utc(self._clock()),
-                    source_watermark=_payload_str(
-                        last_event.payload,
-                        "source_watermark",
+                    source_watermark=_checkpoint_source_watermark(
+                        event=last_event,
+                        projection_repo=projection_repo,
                     ),
                     last_source_observed_at_utc=last_event.occurred_at_utc,
                     lag_seconds=_lag_seconds(
@@ -251,11 +251,13 @@ class DocumentsProjector:
         document = document_from_outbox_event(
             event,
             revision_number=revision_number,
+            mapper_version=self._mapper_version,
         )
         revision = document_revision_from_outbox_event(
             event,
             revision_number=revision_number,
             document_revision_id=revision_id,
+            mapper_version=self._mapper_version,
         )
         document_repo.upsert_document_revision(document, revision)
         document_repo.replace_document_object_refs(
@@ -264,6 +266,7 @@ class DocumentsProjector:
                 document_object_ref_from_outbox_event(
                     event,
                     document_revision_id=revision.document_revision_id,
+                    mapper_version=self._mapper_version,
                 ),
             ),
         )
@@ -282,7 +285,7 @@ class DocumentsProjector:
             tombstoned_at_utc=_aware_utc(event.occurred_at_utc),
             source_ref=_payload_str(event.payload, "source_ref"),
             metadata={
-                **_source_metadata(event),
+                **_source_metadata(event, mapper_version=self._mapper_version),
                 "document_state": "tombstoned",
                 "inventory_active_set_hash": _canonical_hash(active_ids),
                 "inventory_event_id": event.outbox_event_id,
@@ -305,12 +308,13 @@ def document_from_outbox_event(
     event: repositories.OutboxProjectionEvent,
     *,
     revision_number: int,
+    mapper_version: str = DOCUMENTS_MAPPER_VERSION,
 ) -> repositories.DocumentProjectionDocument:
     payload = _payload_mapping(event.payload, "payload")
     document_id = _required_payload_str(payload, "document_id")
     logical_ref = _required_payload_str(payload, "logical_retrieval_ref")
     metadata = {
-        **_source_metadata(event),
+        **_source_metadata(event, mapper_version=mapper_version),
         "document_state": "active",
         "content_hash": _required_payload_str(payload, "content_hash"),
         "internal_document_key": _payload_str(payload, "internal_document_key"),
@@ -340,6 +344,7 @@ def document_revision_from_outbox_event(
     *,
     revision_number: int,
     document_revision_id: str | None = None,
+    mapper_version: str = DOCUMENTS_MAPPER_VERSION,
 ) -> repositories.DocumentProjectionRevision:
     payload = _payload_mapping(event.payload, "payload")
     document_id = _required_payload_str(payload, "document_id")
@@ -351,7 +356,7 @@ def document_revision_from_outbox_event(
         created_at_utc=_aware_utc(event.occurred_at_utc),
         source_ref=_payload_str(event.payload, "source_ref"),
         metadata={
-            **_source_metadata(event),
+            **_source_metadata(event, mapper_version=mapper_version),
             "content_hash": _required_payload_str(payload, "content_hash"),
             "content_text": _payload_str(payload, "content_text"),
             "document_state": "active",
@@ -363,6 +368,7 @@ def document_object_ref_from_outbox_event(
     event: repositories.OutboxProjectionEvent,
     *,
     document_revision_id: str,
+    mapper_version: str = DOCUMENTS_MAPPER_VERSION,
 ) -> repositories.DocumentProjectionObjectRef:
     payload = _payload_mapping(event.payload, "payload")
     logical_ref = _required_payload_str(payload, "logical_retrieval_ref")
@@ -376,7 +382,7 @@ def document_object_ref_from_outbox_event(
         content_type="text/markdown",
         sha256_hash=_payload_str(payload, "content_hash"),
         metadata={
-            **_source_metadata(event),
+            **_source_metadata(event, mapper_version=mapper_version),
             "relative_path": _payload_str(payload, "relative_path"),
         },
     )
@@ -457,6 +463,25 @@ def _advance_projected_source_status(
     return True
 
 
+def _checkpoint_source_watermark(
+    *,
+    event: repositories.OutboxProjectionEvent,
+    projection_repo: ProjectionStateRepository,
+) -> str:
+    status = projection_repo.get_projection_source_status(
+        domain_name=_payload_str(event.payload, "domain_name"),
+        source_family=_payload_str(event.payload, "source_family"),
+        source_identity=_payload_str(event.payload, "source_identity"),
+    )
+    if (
+        status is not None
+        and _payload_str(event.payload, "source_event_id")
+        == status.metadata.get("latest_source_event_id")
+    ):
+        return status.source_watermark or ""
+    return _payload_str(event.payload, "source_watermark")
+
+
 def _cursor_from_checkpoint(
     checkpoint: repositories.ProjectionCheckpointRecord | None,
     *,
@@ -486,7 +511,11 @@ def _cursor_from_checkpoint(
     )
 
 
-def _source_metadata(event: repositories.OutboxProjectionEvent) -> Mapping[str, Any]:
+def _source_metadata(
+    event: repositories.OutboxProjectionEvent,
+    *,
+    mapper_version: str = DOCUMENTS_MAPPER_VERSION,
+) -> Mapping[str, Any]:
     return {
         "outbox_event_id": event.outbox_event_id,
         "dedupe_key": event.dedupe_key,
@@ -496,7 +525,7 @@ def _source_metadata(event: repositories.OutboxProjectionEvent) -> Mapping[str, 
         "source_event_id": _payload_str(event.payload, "source_event_id"),
         "source_watermark": _payload_str(event.payload, "source_watermark"),
         "source_ref": _payload_str(event.payload, "source_ref"),
-        "mapper_version": DOCUMENTS_MAPPER_VERSION,
+        "mapper_version": mapper_version,
     }
 
 
