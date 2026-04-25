@@ -58,13 +58,19 @@ class PostgresDocumentProjectionRepository:
                         connection,
                         document.document_id,
                     )
-                    if not _document_row_matches(existing_document, document):
-                        raise repositories.RepositoryConflictError(
-                            "Document projection summary conflict for "
-                            f"{document.document_id!r} revision "
-                            f"{revision.revision_number!r} in "
-                            f"{repositories.redact_dsn(self._dsn)}."
-                        )
+                    if _document_row_matches(existing_document, document):
+                        return
+                    if _document_row_is_later_tombstone(
+                        existing_document,
+                        document,
+                    ):
+                        return
+                    raise repositories.RepositoryConflictError(
+                        "Document projection summary conflict for "
+                        f"{document.document_id!r} revision "
+                        f"{revision.revision_number!r} in "
+                        f"{repositories.redact_dsn(self._dsn)}."
+                    )
                 return
 
             latest_revision_number = _load_latest_revision_number(
@@ -367,6 +373,30 @@ def _document_row_matches(
     }
 
 
+def _document_row_is_later_tombstone(
+    row: Mapping[str, Any] | None,
+    document: repositories.DocumentProjectionDocument,
+) -> bool:
+    if row is None:
+        return False
+    existing_metadata = _json_mapping(row["metadata_json"])
+    expected_metadata = _document_metadata(document)
+    if existing_metadata.get("document_state") != "tombstoned":
+        return False
+    if expected_metadata.get("document_state") != "active":
+        return False
+    if row["document_type"] != document.document_kind:
+        return False
+    if row["title"] != document.title:
+        return False
+    for key, value in expected_metadata.items():
+        if key == "document_state":
+            continue
+        if _json_normalized(existing_metadata.get(key)) != _json_normalized(value):
+            return False
+    return True
+
+
 def _revision_row_matches(
     row: Mapping[str, Any],
     revision: repositories.DocumentProjectionRevision,
@@ -386,6 +416,17 @@ def _revision_row_matches(
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _json_mapping(value: Any) -> Mapping[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        decoded = json.loads(value)
+        return decoded if isinstance(decoded, dict) else {"value": decoded}
+    if isinstance(value, dict):
+        return value
+    return dict(value)
 
 
 def _json_normalized(value: object) -> object:

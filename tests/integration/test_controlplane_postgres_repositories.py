@@ -451,6 +451,44 @@ def test_document_write_repository_tombstones_absent_inventory_documents(
     assert rows[0]["metadata_json"]["inventory_event_id"] == "inventory:hash"
 
 
+def test_document_write_repository_replays_active_revision_after_tombstone(
+    repo: Any,
+) -> None:
+    writer = _document_writer(repo.engine, _postgres_dsn())
+    document = _document_projection_document("INDEX", revision_number=1)
+    revision = _document_projection_revision("INDEX", revision_number=1)
+    writer.upsert_document_revision(document, revision)
+    writer.tombstone_documents_absent_from_inventory(
+        source_family="state_and_index_docs",
+        active_document_ids=(),
+        tombstoned_at_utc=datetime(2026, 4, 24, 13, 0, tzinfo=UTC),
+        source_ref="inventory:state_and_index_docs:hash",
+        metadata={"inventory_event_id": "inventory:hash"},
+    )
+
+    writer.upsert_document_revision(document, revision)
+
+    assert repo.get_document("INDEX") is None
+    rows = _rows(
+        repo.engine,
+        """
+        SELECT document_id, metadata_json
+        FROM documents.document
+        WHERE document_id = 'INDEX'
+        """,
+    )
+    revision_rows = _rows(
+        repo.engine,
+        """
+        SELECT revision_number
+        FROM documents.document_revision
+        WHERE document_id = 'INDEX'
+        """,
+    )
+    assert rows[0]["metadata_json"]["document_state"] == "tombstoned"
+    assert [row["revision_number"] for row in revision_rows] == [1]
+
+
 @pytest.mark.parametrize(
     (
         "seed_initial",
