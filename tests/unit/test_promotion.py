@@ -710,6 +710,7 @@ def _authority_capable_artifact_stubs(
             "production_expires_at_utc": far_future,
             "next_operational_review_due_utc": far_future,
             "next_statistical_review_due_utc": far_future,
+            "change_id": "stub-change-id",
             "evidence_class": "promotion_valid",
             "promotion_valid": True,
             "blocker_codes": [],

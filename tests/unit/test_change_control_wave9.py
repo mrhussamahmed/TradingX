@@ -316,3 +316,34 @@ def test_recertification_without_authority_boundary_blocks() -> None:
     blockers = evaluate_change_control_blockers(artifact_payloads=(payload,))
     codes = {blocker.code for blocker in blockers}
     assert "authority_boundary_missing" in codes
+
+
+def test_recertification_report_with_mismatched_change_id_blocks_production() -> None:
+    """Defect 3 — recertification_report.change_id must match an open change.
+
+    A bundle whose change_control_record requires recertification on
+    ``chg-real`` but whose recertification_report references ``chg-stale``
+    must NOT be promotable: the report does not certify any actual change.
+    """
+
+    open_change = _change(change_id="chg-real")  # material -> recert required
+    stale_recert = _recert(change_id="chg-stale")
+    blockers = evaluate_change_control_blockers(
+        artifact_payloads=(open_change, stale_recert)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "recertification_report_missing" in codes
+    cap = strictest_state_cap(blockers)
+    assert cap != PromotionState.PRODUCTION
+
+
+def test_recertification_report_with_aligned_change_id_passes() -> None:
+    """Sanity: matching change_id does NOT fire the cross-bundle blocker."""
+
+    open_change = _change(change_id="chg-real")
+    aligned_recert = _recert(change_id="chg-real")
+    blockers = evaluate_change_control_blockers(
+        artifact_payloads=(open_change, aligned_recert)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "recertification_report_missing" not in codes

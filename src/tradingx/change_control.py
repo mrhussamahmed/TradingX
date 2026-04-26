@@ -165,6 +165,7 @@ def build_recertification_report(
     production_expires_at_utc: datetime,
     next_operational_review_due_utc: datetime,
     next_statistical_review_due_utc: datetime,
+    change_id: str = "",
     generated_at_utc: datetime | None = None,
 ) -> dict[str, object]:
     blocker_codes: list[str] = []
@@ -211,6 +212,7 @@ def build_recertification_report(
         "production_expires_at_utc": _utc_iso(production_expires_at_utc),
         "next_operational_review_due_utc": _utc_iso(next_operational_review_due_utc),
         "next_statistical_review_due_utc": _utc_iso(next_statistical_review_due_utc),
+        "change_id": change_id,
         "evidence_class": evidence_class,
         "promotion_valid": promotion_valid,
         "blocker_codes": blocker_codes,

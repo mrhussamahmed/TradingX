@@ -2137,12 +2137,20 @@ def evaluate_live_probe_blockers(
 
     Re-derives blockers from raw fields so a tampered payload claiming
     ``blocker_codes=[]`` cannot bypass enforcement.
+
+    Defect 3 — cross-bundle linkage. The bundle's
+    live_probe_recertification_report.run_refs must be a superset of the
+    run_id values from every live_probe_run_record in the bundle. A
+    bundle whose recertification report omits any actual run cannot
+    promote past the live-probe state.
     """
 
     blockers: list[Blocker] = []
     now = datetime.now(UTC)
     has_run_record = False
     has_recertification = False
+    observed_run_ids: set[str] = set()
+    recert_run_ref_sets: list[set[str]] = []
     for payload in artifact_payloads:
         kind = str(payload.get("kind", ""))
         if kind not in {
@@ -2228,6 +2236,9 @@ def evaluate_live_probe_blockers(
                 _append_blocker(blockers, "pre_trade_control_missing")
         if kind == "live_probe_run_record":
             has_run_record = True
+            run_id = str(payload.get("run_id", "")).strip()
+            if run_id:
+                observed_run_ids.add(run_id)
             if not bool(payload.get("minimum_activity_met", False)):
                 _append_blocker(blockers, "live_probe_minimum_activity_unmet")
                 # Without minimum activity met, the run is inconclusive
@@ -2238,6 +2249,13 @@ def evaluate_live_probe_blockers(
                 _append_blocker(blockers, "live_probe_inconclusive")
         if kind == "live_probe_recertification_report":
             has_recertification = True
+            run_refs_raw = payload.get("run_refs", ())
+            if isinstance(run_refs_raw, Sequence) and not isinstance(
+                run_refs_raw, str | bytes
+            ):
+                recert_run_ref_sets.append(
+                    {str(item).strip() for item in run_refs_raw if str(item).strip()}
+                )
             unresolved = payload.get("unresolved_incident_refs", ())
             if (
                 isinstance(unresolved, Sequence)
@@ -2296,6 +2314,12 @@ def evaluate_live_probe_blockers(
     # the bundle cannot satisfy production eligibility (Milestone 9).
     if has_run_record and not has_recertification:
         _append_blocker(blockers, "post_probe_recertification_missing")
+    # Defect 3 — cross-bundle linkage: every observed run_id must appear
+    # in at least one live_probe_recertification_report.run_refs set.
+    if has_run_record and has_recertification and observed_run_ids:
+        certified = set().union(*recert_run_ref_sets) if recert_run_ref_sets else set()
+        if not observed_run_ids.issubset(certified):
+            _append_blocker(blockers, "post_probe_recertification_missing")
     return tuple(blockers)
 
 
@@ -2303,12 +2327,22 @@ def evaluate_change_control_blockers(
     *,
     artifact_payloads: Sequence[Mapping[str, object]],
 ) -> tuple[Blocker, ...]:
-    """Wave 9 recertification and change-control enforcement."""
+    """Wave 9 recertification and change-control enforcement.
+
+    Defect 3 — cross-bundle linkage. The bundle's recertification_report
+    must reference (via change_id) one of the change_control_record
+    entries that requires recertification. Bundles whose
+    recertification_report has no change_id, or a change_id absent from
+    the change_control_record set with recertification_required=true,
+    fire ``recertification_report_missing``.
+    """
 
     blockers: list[Blocker] = []
     now = datetime.now(UTC)
     has_change_requiring_recert = False
     has_recertification_report = False
+    required_change_ids: set[str] = set()
+    recert_change_ids: list[str] = []
     for payload in artifact_payloads:
         kind = str(payload.get("kind", ""))
         if kind not in {
@@ -2326,6 +2360,9 @@ def evaluate_change_control_blockers(
         if kind == "change_control_record":
             if bool(payload.get("recertification_required", False)):
                 has_change_requiring_recert = True
+                change_id = str(payload.get("change_id", "")).strip()
+                if change_id:
+                    required_change_ids.add(change_id)
             if bool(payload.get("unknown_scope", False)):
                 _append_blocker(blockers, "unrecorded_material_change")
             dependency_refs = payload.get("dependency_index_refs", ())
@@ -2348,6 +2385,7 @@ def evaluate_change_control_blockers(
                 _append_blocker(blockers, "unrecorded_material_change")
         if kind == "recertification_report":
             has_recertification_report = True
+            recert_change_ids.append(str(payload.get("change_id", "")).strip())
             try:
                 expires = datetime.fromisoformat(
                     str(payload.get("production_expires_at_utc", "")).replace(
@@ -2412,6 +2450,15 @@ def evaluate_change_control_blockers(
                 _append_blocker(blockers, "production_approval_expired")
     if has_change_requiring_recert and not has_recertification_report:
         _append_blocker(blockers, "recertification_report_missing")
+    # Defect 3 — when both sides are present, the recertification_report
+    # must reference (via change_id) one of the change_control_record
+    # entries that required recertification. A stale or missing change_id
+    # means the report does not certify any of the actual changes.
+    if has_change_requiring_recert and has_recertification_report:
+        if required_change_ids and not any(
+            cid in required_change_ids for cid in recert_change_ids if cid
+        ):
+            _append_blocker(blockers, "recertification_report_missing")
     return tuple(blockers)
 
 

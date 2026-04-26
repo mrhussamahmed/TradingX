@@ -483,3 +483,58 @@ def test_recertification_with_unresolved_incidents_caps_at_paper_trading() -> No
     assert "reconciliation_incident_unresolved" in codes
     cap = strictest_state_cap(blockers)
     assert cap == PromotionState.PAPER_TRADING
+
+
+def test_recertification_report_with_stale_run_refs_blocks_live_probe_promotion() -> (
+    None
+):
+    """Defect 3 — recertification.run_refs must cover every live_probe_run_record.
+
+    A bundle whose live_probe_run_record reports run-id ``run-real`` but
+    whose recertification report only references ``run-stale`` does not
+    certify the actual probe run, so post-probe recertification cannot
+    be considered satisfied.
+    """
+
+    run = build_live_probe_run_record(
+        run_id="run-real",
+        plan_id="lp-001",
+        strategy_id="trend-following-v1",
+        status="pass",
+        order_count=20,
+        fill_count=20,
+        filled_notional=Decimal("800"),
+        session_count=2,
+        reconciliation_cycle_count=4,
+        slippage_summary_ref="cas://slip-001",
+        quote_quality_summary_ref="cas://qq-001",
+        limit_breach_count=0,
+        rollback_triggered=False,
+        success_criteria_met=True,
+        minimum_activity_met=True,
+        evidence_refs=["cas://run-evidence-001"],
+        started_at_utc=NOW,
+        completed_at_utc=NOW + timedelta(hours=1),
+    )
+    stale_recert = build_live_probe_recertification_report(
+        report_id="rec-003",
+        strategy_id="trend-following-v1",
+        run_refs=["run-stale"],
+        incident_refs=[],
+        unresolved_incident_refs=[],
+        minimum_activity_status="met",
+        drill_status="fresh",
+        broker_timeout_status="defined",
+        idempotency_status="complete",
+        reconciliation_status="complete",
+        cost_observation_refs=["cas://cost-001"],
+        approved_at_utc=NOW,
+        approver="ops-lead",
+        generated_at_utc=NOW,
+    )
+    blockers = evaluate_live_probe_blockers(
+        artifact_payloads=(run, stale_recert)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "post_probe_recertification_missing" in codes
+
