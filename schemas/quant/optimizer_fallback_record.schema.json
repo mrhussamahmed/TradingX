@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Optimizer Fallback Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "record_id",
+    "strategy_id",
+    "fallback_reason",
+    "fallback_at_utc",
+    "static_blueprint_ref",
+    "operator_alert_ref",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "optimizer_fallback_record"},
+    "record_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "fallback_reason": {"type": "string"},
+    "fallback_at_utc": {"type": "string", "format": "utc-datetime"},
+    "static_blueprint_ref": {"type": "string"},
+    "operator_alert_ref": {"type": "string"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

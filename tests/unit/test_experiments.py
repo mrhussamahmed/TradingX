@@ -46,6 +46,9 @@ def _registration(**overrides: object) -> dict[str, object]:
         "registration_sequence": 1,
         "selection_influence": True,
         "arrival_timestamp_policy": "decision_timestamp",
+        "forecast_model_hash": "sha256:" + "d" * 64,
+        "feature_manifest_hash": "sha256:" + "e" * 64,
+        "sizing_policy_hash": "sha256:" + "f" * 64,
     }
     payload.update(overrides)
     return payload

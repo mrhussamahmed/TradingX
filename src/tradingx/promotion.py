@@ -370,6 +370,19 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("short_legal_mechanics_missing", PromotionState.RESEARCH_ONLY),
     ("instrument_package_missing", PromotionState.RESEARCH_ONLY),
     ("optimizer_or_sizing_lockbox_missing", PromotionState.PAPER_SHADOW),
+    ("tail_risk_missing", PromotionState.PAPER_SHADOW),
+    ("applicable_baseline_excluded", PromotionState.PAPER_SHADOW),
+    ("paired_oos_utility_failed", PromotionState.PAPER_SHADOW),
+    ("no_alpha_pipeline_edge", PromotionState.PAPER_SHADOW),
+    ("optimizer_perturbation_unstable", PromotionState.PAPER_SHADOW),
+    ("covariance_drift_unresolved", PromotionState.PAPER_SHADOW),
+    ("turnover_cap_exceeded", PromotionState.PAPER_SHADOW),
+    ("expected_return_not_promotion_valid", PromotionState.PAPER_SHADOW),
+    ("expected_return_uncertainty_uncalibrated", PromotionState.PAPER_SHADOW),
+    ("feature_timestamp_unauditable", PromotionState.PAPER_SHADOW),
+    ("hard_exposure_caps_missing", PromotionState.PAPER_SHADOW),
+    ("kelly_gate_incomplete", PromotionState.PAPER_SHADOW),
+    ("sizing_property_violated", PromotionState.PAPER_SHADOW),
     ("drift_monitor_spec_missing", PromotionState.PAPER_SHADOW),
     ("capacity_extrapolation_risk", PromotionState.PAPER_SHADOW),
     ("unsupported_side", PromotionState.RESEARCH_ONLY),
@@ -1112,6 +1125,14 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "execution_cost_observation",
         "cost_model_report",
         "capacity_curve_report",
+        "portfolio_utility_definition",
+        "optimizer_validation_report",
+        "optimizer_fallback_record",
+        "forecast_model_manifest",
+        "feature_manifest",
+        "label_definition",
+        "expected_return_report",
+        "sizing_policy",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1271,6 +1292,14 @@ def _evaluate_verified_decision_blockers(
     for blocker in evaluate_cost_capacity_blockers(
         artifact_payloads=artifact_payloads,
         decision_payload=decision_payload,
+    ):
+        _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_portfolio_optimizer_blockers(
+        artifact_payloads=artifact_payloads,
+    ):
+        _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_forecast_sizing_blockers(
+        artifact_payloads=artifact_payloads,
     ):
         _append_blocker(blockers, blocker.code)
 
@@ -1459,6 +1488,251 @@ def evaluate_cost_capacity_blockers(
             _append_blocker(blockers, "execution_semantics_incomplete")
         if not has_capacity_curve_report:
             _append_blocker(blockers, "capacity_lower_bound_missing")
+    return tuple(blockers)
+
+
+_TAIL_RISK_TERMS: frozenset[str] = frozenset(
+    {
+        "cvar",
+        "expected_shortfall",
+        "downside_semivariance",
+        "left_tail_penalty",
+        "tail_event_stress",
+    }
+)
+_REQUIRED_OPTIMIZER_BASELINES: frozenset[str] = frozenset(
+    {
+        "no_trade",
+        "current_holdings",
+        "static_sleeve_budget",
+        "equal_weight",
+        "inverse_volatility",
+        "equal_risk_contribution",
+        "current_non_optimized_allocation",
+    }
+)
+_VALID_NO_ALPHA_STATUSES: frozenset[str] = frozenset({"null_passed"})
+_VALID_EXPECTED_RETURN_STATUSES: frozenset[str] = frozenset(
+    {"promotion_valid", "uncertainty_penalized"}
+)
+
+
+def evaluate_portfolio_optimizer_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    """Wave 6 portfolio/optimizer enforcement.
+
+    Re-derives blockers from raw fields so a payload with
+    ``promotion_valid=true`` and ``blocker_codes=[]`` cannot mask a real
+    optimizer/utility violation.
+    """
+
+    blockers: list[Blocker] = []
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in {
+            "portfolio_utility_definition",
+            "optimizer_validation_report",
+            "optimizer_fallback_record",
+        }:
+            continue
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+        if kind == "portfolio_utility_definition":
+            if not str(payload.get("pre_experiment_approval_ref", "")).strip():
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+            if not str(payload.get("threshold_justification_ref", "")).strip():
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+            justification = payload.get("lambda_justification_refs", {})
+            if isinstance(justification, Mapping) and not justification:
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+            tail_components_raw = payload.get("tail_risk_components", ())
+            if isinstance(tail_components_raw, Sequence) and not isinstance(
+                tail_components_raw, str | bytes
+            ):
+                tail_lower = {str(item).lower() for item in tail_components_raw}
+                if not tail_lower & _TAIL_RISK_TERMS:
+                    _append_blocker(blockers, "tail_risk_missing")
+            else:
+                _append_blocker(blockers, "tail_risk_missing")
+        if kind == "optimizer_validation_report":
+            lockbox = _normal_form(payload.get("lockbox_status"))
+            if lockbox not in {"frozen", "nested_validation"}:
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+            no_alpha_status = _normal_form(payload.get("no_alpha_pipeline_status"))
+            if no_alpha_status not in _VALID_NO_ALPHA_STATUSES:
+                _append_blocker(blockers, "no_alpha_pipeline_edge")
+            if _normal_form(payload.get("perturbation_status")) == "unstable":
+                _append_blocker(blockers, "optimizer_perturbation_unstable")
+            if (
+                _normal_form(payload.get("covariance_drift_status"))
+                == "drift_unresolved"
+            ):
+                _append_blocker(blockers, "covariance_drift_unresolved")
+            if _normal_form(payload.get("turnover_status")) == "exceeds_cap":
+                _append_blocker(blockers, "turnover_cap_exceeded")
+            try:
+                max_turnover = Decimal(
+                    str(payload.get("max_adjacent_decision_turnover", "0"))
+                )
+                observed = Decimal(str(payload.get("observed_adjacent_turnover", "0")))
+                if max_turnover > Decimal("0") and observed > max_turnover:
+                    _append_blocker(blockers, "turnover_cap_exceeded")
+            except InvalidOperation:
+                _append_blocker(blockers, "turnover_cap_exceeded")
+            er_status = _normal_form(payload.get("expected_return_status"))
+            if er_status not in _VALID_EXPECTED_RETURN_STATUSES:
+                _append_blocker(blockers, "expected_return_not_promotion_valid")
+            if er_status == "uncertainty_penalized":
+                # The optimizer is consuming uncertainty-penalized inputs;
+                # surface the calibration cap directly rather than relying on
+                # a separately-bundled expected_return_report.
+                _append_blocker(blockers, "expected_return_uncertainty_uncalibrated")
+            try:
+                lower_ci = Decimal(str(payload.get("paired_oos_utility_lower_ci", "0")))
+                threshold = Decimal(
+                    str(payload.get("paired_oos_utility_threshold", "0"))
+                )
+                if lower_ci <= threshold:
+                    _append_blocker(blockers, "paired_oos_utility_failed")
+            except InvalidOperation:
+                _append_blocker(blockers, "paired_oos_utility_failed")
+            cost_capacity_refs = payload.get("cost_capacity_report_refs", ())
+            if (
+                not isinstance(cost_capacity_refs, Sequence)
+                or isinstance(cost_capacity_refs, str | bytes)
+                or not cost_capacity_refs
+            ):
+                _append_blocker(blockers, "execution_semantics_incomplete")
+            tested_baselines = payload.get("tested_baselines", ())
+            excluded = payload.get("excluded_baselines", ())
+            approvals = payload.get("excluded_baseline_approval_refs", {})
+            tested_set = (
+                {str(item) for item in tested_baselines}
+                if isinstance(tested_baselines, Sequence)
+                and not isinstance(tested_baselines, str | bytes)
+                else set()
+            )
+            excluded_set = (
+                {str(item) for item in excluded}
+                if isinstance(excluded, Sequence)
+                and not isinstance(excluded, str | bytes)
+                else set()
+            )
+            approvals_map = (
+                {str(key): str(value) for key, value in approvals.items()}
+                if isinstance(approvals, Mapping)
+                else {}
+            )
+            for required_baseline in _REQUIRED_OPTIMIZER_BASELINES:
+                approved = bool(approvals_map.get(required_baseline, "").strip())
+                in_excluded = required_baseline in excluded_set
+                in_tested = required_baseline in tested_set
+                if in_excluded and not approved:
+                    _append_blocker(blockers, "applicable_baseline_excluded")
+                    break
+                if not in_tested and not (in_excluded and approved):
+                    # Required baseline silently omitted from tested set
+                    # without an approved exclusion is still a violation.
+                    _append_blocker(blockers, "applicable_baseline_excluded")
+                    break
+        if kind == "optimizer_fallback_record":
+            if not str(payload.get("static_blueprint_ref", "")).strip():
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+            if not str(payload.get("operator_alert_ref", "")).strip():
+                _append_blocker(blockers, "optimizer_or_sizing_lockbox_missing")
+    return tuple(blockers)
+
+
+def evaluate_forecast_sizing_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    """Wave 6 forecast/sizing enforcement (Milestone 7)."""
+
+    blockers: list[Blocker] = []
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in {
+            "forecast_model_manifest",
+            "feature_manifest",
+            "label_definition",
+            "expected_return_report",
+            "sizing_policy",
+        }:
+            continue
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+        if kind == "feature_manifest":
+            audit = _normal_form(payload.get("leakage_audit_status"))
+            if audit in {"feature_after_decision", "label_overlap", "not_audited"}:
+                _append_blocker(blockers, "feature_timestamp_unauditable")
+            source = _normal_form(payload.get("timestamp_source"))
+            if source in {"unspecified", ""}:
+                _append_blocker(blockers, "feature_timestamp_unauditable")
+        if kind == "label_definition":
+            overlap = _normal_form(payload.get("overlap_status"))
+            if overlap == "overlapping_unhandled":
+                _append_blocker(blockers, "feature_timestamp_unauditable")
+        if kind == "forecast_model_manifest":
+            if not bool(payload.get("uncertainty_calibrated", False)):
+                _append_blocker(blockers, "expected_return_uncertainty_uncalibrated")
+            if (
+                not str(payload.get("feature_manifest_ref", "")).strip()
+                or not str(payload.get("label_definition_ref", "")).strip()
+            ):
+                _append_blocker(blockers, "feature_timestamp_unauditable")
+        if kind == "expected_return_report":
+            if not bool(payload.get("uncertainty_calibrated", False)):
+                _append_blocker(blockers, "expected_return_uncertainty_uncalibrated")
+            if _normal_form(payload.get("calibration_status")) == "uncalibrated":
+                _append_blocker(blockers, "expected_return_uncertainty_uncalibrated")
+            try:
+                oos = Decimal(str(payload.get("oos_utility_after_costs", "0")))
+                no_forecast = Decimal(
+                    str(payload.get("no_forecast_baseline_utility", "0"))
+                )
+                heuristic = Decimal(str(payload.get("heuristic_baseline_utility", "0")))
+                if oos <= no_forecast or oos <= heuristic:
+                    _append_blocker(blockers, "expected_return_not_promotion_valid")
+            except InvalidOperation:
+                _append_blocker(blockers, "expected_return_not_promotion_valid")
+        if kind == "sizing_policy":
+            for cap_field in (
+                "position_cap",
+                "sleeve_cap",
+                "gross_exposure_cap",
+                "net_exposure_cap",
+                "leverage_cap",
+                "order_cap",
+                "participation_cap",
+                "drawdown_budget",
+            ):
+                try:
+                    if Decimal(str(payload.get(cap_field, "0"))) <= Decimal("0"):
+                        _append_blocker(blockers, "hard_exposure_caps_missing")
+                        break
+                except InvalidOperation:
+                    _append_blocker(blockers, "hard_exposure_caps_missing")
+                    break
+            # Default to "Kelly enabled" if missing so the evaluator fails
+            # closed even when payload omits the flag.
+            kelly_disabled = bool(payload.get("kelly_disabled", False))
+            kelly_gate = bool(payload.get("kelly_gate_complete", False))
+            if not kelly_disabled and not kelly_gate:
+                _append_blocker(blockers, "kelly_gate_incomplete")
+            try:
+                if (
+                    Decimal(str(payload.get("max_kelly_multiplier", "0")))
+                    > Decimal("1")
+                    and not kelly_gate
+                ):
+                    _append_blocker(blockers, "kelly_gate_incomplete")
+            except InvalidOperation:
+                pass
     return tuple(blockers)
 
 
@@ -2716,6 +2990,8 @@ __all__ = [
     "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
     "evaluate_cost_capacity_blockers",
+    "evaluate_forecast_sizing_blockers",
+    "evaluate_portfolio_optimizer_blockers",
     "evaluate_provenance_blockers",
     "evaluate_statistical_evidence_blockers",
     "load_state_action_contracts",

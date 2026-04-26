@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Expected Return Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "forecast_model_ref",
+    "mu_hat",
+    "sigma_mu",
+    "uncertainty_penalized_mu",
+    "uncertainty_calibrated",
+    "prediction_interval_coverage",
+    "calibration_window",
+    "calibration_status",
+    "oos_utility_after_costs",
+    "no_forecast_baseline_utility",
+    "heuristic_baseline_utility",
+    "feature_ablation_status",
+    "regime_split_status",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "expected_return_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "forecast_model_ref": {"type": "string"},
+    "mu_hat": {"type": "string"},
+    "sigma_mu": {"type": "string"},
+    "uncertainty_penalized_mu": {"type": "string"},
+    "uncertainty_calibrated": {"type": "boolean"},
+    "prediction_interval_coverage": {"type": "string"},
+    "calibration_window": {"type": "string"},
+    "calibration_status": {
+      "type": "string",
+      "enum": ["calibrated", "uncalibrated", "not_evaluated"]
+    },
+    "oos_utility_after_costs": {"type": "string"},
+    "no_forecast_baseline_utility": {"type": "string"},
+    "heuristic_baseline_utility": {"type": "string"},
+    "feature_ablation_status": {"type": "string"},
+    "regime_split_status": {"type": "string"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "uncertainty_penalized", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

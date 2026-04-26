@@ -26,13 +26,14 @@ Committed waves:
 - Wave 2: `7d2baa9` - `TradingX quant hardening: complete Wave 2 - Mandate And Allocation Governance`
 - Wave 3: `4a5da71` - `TradingX quant hardening: complete Wave 3 - Experiment Registration And Data Provenance`
 - Wave 4: `be2c55b` - `TradingX quant hardening: complete Wave 4 - Statistical Evidence Engine`
-- Wave 5: `<this commit>` - `TradingX quant hardening: complete Wave 5 - Cost, Quote Quality, And Capacity`
+- Wave 5: `add6368` - `TradingX quant hardening: complete Wave 5 - Cost, Quote Quality, And Capacity`
+- Wave 6: `<this commit>` - `TradingX quant hardening: complete Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing`
 
 ## Active wave status
 
-- Wave 5 - Cost, Quote Quality, And Capacity is implemented, validated,
-  and committed.
-- Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing is next.
+- Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing is
+  implemented, validated, and committed.
+- Wave 7 - Short-Side Capability And Financing is next.
 - Wave 5 reports:
   - `docs/reports/wave5_cost_quote_capacity_implementation_report.md`
   - `docs/reports/wave5_cost_quote_capacity_handoff.md`

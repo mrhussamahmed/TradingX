@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Optimizer Validation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "utility_definition_ref",
+    "candidate_baselines",
+    "tested_baselines",
+    "excluded_baselines",
+    "excluded_baseline_approval_refs",
+    "lockbox_status",
+    "paired_oos_utility_lower_ci",
+    "paired_oos_utility_threshold",
+    "no_alpha_pipeline_status",
+    "perturbation_status",
+    "covariance_drift_status",
+    "turnover_status",
+    "max_adjacent_decision_turnover",
+    "observed_adjacent_turnover",
+    "cost_capacity_report_refs",
+    "expected_return_status",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "optimizer_validation_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "utility_definition_ref": {"type": "string"},
+    "candidate_baselines": {"type": "array", "items": {"type": "string"}},
+    "tested_baselines": {"type": "array", "items": {"type": "string"}},
+    "excluded_baselines": {"type": "array", "items": {"type": "string"}},
+    "excluded_baseline_approval_refs": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "lockbox_status": {
+      "type": "string",
+      "enum": ["frozen", "nested_validation", "missing"]
+    },
+    "paired_oos_utility_lower_ci": {"type": "string"},
+    "paired_oos_utility_threshold": {"type": "string"},
+    "no_alpha_pipeline_status": {
+      "type": "string",
+      "enum": ["null_passed", "null_edge_detected", "not_run"]
+    },
+    "perturbation_status": {
+      "type": "string",
+      "enum": ["stable", "unstable", "not_run"]
+    },
+    "covariance_drift_status": {
+      "type": "string",
+      "enum": ["nominal", "drift_unresolved", "not_evaluated"]
+    },
+    "turnover_status": {
+      "type": "string",
+      "enum": ["within_cap", "exceeds_cap", "unspecified"]
+    },
+    "max_adjacent_decision_turnover": {"type": "string"},
+    "observed_adjacent_turnover": {"type": "string"},
+    "cost_capacity_report_refs": {"type": "array", "items": {"type": "string"}},
+    "expected_return_status": {
+      "type": "string",
+      "enum": ["promotion_valid", "uncertainty_penalized", "not_promotion_valid"]
+    },
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

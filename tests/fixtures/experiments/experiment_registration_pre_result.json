@@ -30,5 +30,8 @@
   "output_capture_artifact_ref": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "registration_sequence": 1,
   "selection_influence": true,
-  "arrival_timestamp_policy": "decision_timestamp"
+  "arrival_timestamp_policy": "decision_timestamp",
+  "forecast_model_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "feature_manifest_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "sizing_policy_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 }

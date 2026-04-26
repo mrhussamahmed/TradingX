@@ -34,7 +34,10 @@
     "output_capture_artifact_ref",
     "registration_sequence",
     "selection_influence",
-    "arrival_timestamp_policy"
+    "arrival_timestamp_policy",
+    "forecast_model_hash",
+    "feature_manifest_hash",
+    "sizing_policy_hash"
   ],
   "properties": {
     "schema_version": {"type": "string", "const": "1.0"},
@@ -89,6 +92,9 @@
         "first_observable_quote",
         "decision_with_publication_lag"
       ]
-    }
+    },
+    "forecast_model_hash": {"type": "string"},
+    "feature_manifest_hash": {"type": "string"},
+    "sizing_policy_hash": {"type": "string"}
   }
 }
