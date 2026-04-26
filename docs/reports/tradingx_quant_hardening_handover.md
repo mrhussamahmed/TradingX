@@ -28,16 +28,21 @@ Committed waves:
 - Wave 4: `be2c55b` - `TradingX quant hardening: complete Wave 4 - Statistical Evidence Engine`
 - Wave 5: `add6368` - `TradingX quant hardening: complete Wave 5 - Cost, Quote Quality, And Capacity`
 - Wave 6: `eac6ce5` - `TradingX quant hardening: complete Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing`
-- Wave 7: previous commit - `TradingX quant hardening: complete Wave 7 - Short-Side Capability And Financing`
-- Wave 8: previous commit - `TradingX quant hardening: complete Wave 8 - Live Probe And Operational Safety`
-- Wave 9: previous commit - `TradingX quant hardening: complete Wave 9 - Recertification And Change Control`
-- Wave 10: `<this commit>` - `TradingX quant hardening: complete Wave 10 - Legacy Path Retirement And Hardening`
+- Wave 7: `4b9d944` - `TradingX quant hardening: complete Wave 7 - Short-Side Capability And Financing`
+- Wave 8: `10930a9` - `TradingX quant hardening: complete Wave 8 - Live Probe And Operational Safety`
+- Wave 9: `ca39dde` - `TradingX quant hardening: complete Wave 9 - Recertification And Change Control`
+- Wave 10: `a9bfc8a` - `TradingX quant hardening: complete Wave 10 - Legacy Path Retirement And Hardening`
+- Final: `<this commit>` - `TradingX quant hardening: complete final integrated review and merge readiness`
 
 ## Active wave status
 
-- Wave 10 - Legacy Path Retirement And Hardening is implemented,
-  validated, and committed.
-- Final - Integrated Review And Merge Readiness is next.
+- All eleven waves (0–10) plus the Final integrated review are
+  implemented, validated, reviewed, and committed locally.
+- Branch: `codex/tradingx-quant-hardening`. Local only — not pushed,
+  not merged into `main`/`master`.
+- See `docs/reports/tradingx_quant_hardening_final_summary.md` and
+  `docs/reports/tradingx_quant_hardening_final_integrated_review.md`
+  for the merge-readiness package.
 - Wave 5 reports:
   - `docs/reports/wave5_cost_quote_capacity_implementation_report.md`
   - `docs/reports/wave5_cost_quote_capacity_handoff.md`
