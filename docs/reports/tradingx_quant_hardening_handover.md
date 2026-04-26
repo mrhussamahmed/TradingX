@@ -29,13 +29,14 @@ Committed waves:
 - Wave 5: `add6368` - `TradingX quant hardening: complete Wave 5 - Cost, Quote Quality, And Capacity`
 - Wave 6: `eac6ce5` - `TradingX quant hardening: complete Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing`
 - Wave 7: previous commit - `TradingX quant hardening: complete Wave 7 - Short-Side Capability And Financing`
-- Wave 8: `<this commit>` - `TradingX quant hardening: complete Wave 8 - Live Probe And Operational Safety`
+- Wave 8: previous commit - `TradingX quant hardening: complete Wave 8 - Live Probe And Operational Safety`
+- Wave 9: `<this commit>` - `TradingX quant hardening: complete Wave 9 - Recertification And Change Control`
 
 ## Active wave status
 
-- Wave 8 - Live Probe And Operational Safety is implemented,
+- Wave 9 - Recertification And Change Control is implemented,
   validated, and committed.
-- Wave 9 - Recertification And Change Control is next.
+- Wave 10 - Legacy Path Retirement And Hardening is next.
 - Wave 5 reports:
   - `docs/reports/wave5_cost_quote_capacity_implementation_report.md`
   - `docs/reports/wave5_cost_quote_capacity_handoff.md`

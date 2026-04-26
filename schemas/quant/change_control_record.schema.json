@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Change Control Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "change_id",
+    "change_type",
+    "change_scope",
+    "unknown_scope",
+    "affected_strategies",
+    "affected_evidence_refs",
+    "dependency_index_refs",
+    "materiality_class",
+    "automatic_classification",
+    "manual_classification",
+    "classifier_confidence",
+    "classifier_version",
+    "change_hash",
+    "git_shas",
+    "creator",
+    "replay_required",
+    "recertification_required",
+    "schema_compatibility_status",
+    "approval_ref",
+    "created_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "change_control_record"},
+    "change_id": {"type": "string"},
+    "change_type": {"type": "string"},
+    "change_scope": {"type": "string"},
+    "unknown_scope": {"type": "boolean"},
+    "affected_strategies": {"type": "array", "items": {"type": "string"}},
+    "affected_evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "dependency_index_refs": {"type": "array", "items": {"type": "string"}},
+    "materiality_class": {
+      "type": "string",
+      "enum": ["minor", "material", "critical"]
+    },
+    "automatic_classification": {"type": "string"},
+    "manual_classification": {"type": "string"},
+    "classifier_confidence": {"type": "string"},
+    "classifier_version": {"type": "string"},
+    "change_hash": {"type": "string"},
+    "git_shas": {"type": "array", "items": {"type": "string"}},
+    "creator": {"type": "string"},
+    "replay_required": {"type": "boolean"},
+    "recertification_required": {"type": "boolean"},
+    "schema_compatibility_status": {
+      "type": "string",
+      "enum": ["compatible", "breaking_with_migration", "breaking_no_migration"]
+    },
+    "approval_ref": {"type": "string"},
+    "created_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

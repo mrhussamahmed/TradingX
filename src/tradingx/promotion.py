@@ -405,6 +405,9 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("reconciliation_incident_unresolved", PromotionState.PAPER_TRADING),
     ("manual_exception_disabled_core_control", PromotionState.DISABLED),
     ("post_probe_recertification_missing", PromotionState.TINY_LIVE_PROBE),
+    ("production_approval_expired", PromotionState.PAPER_TRADING),
+    ("next_review_due_passed", PromotionState.PAPER_TRADING),
+    ("recertification_report_missing", PromotionState.PAPER_TRADING),
     ("drift_monitor_spec_missing", PromotionState.PAPER_SHADOW),
     ("capacity_extrapolation_risk", PromotionState.PAPER_SHADOW),
     ("unsupported_side", PromotionState.RESEARCH_ONLY),
@@ -1169,6 +1172,12 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "broker_timeout_state_transition",
         "runtime_override_event",
         "reconciliation_incident",
+        "change_control_record",
+        "replay_equivalence_report",
+        "recertification_report",
+        "drift_monitor_spec",
+        "drift_monitor_report",
+        "production_decay_event",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1343,6 +1352,10 @@ def _evaluate_verified_decision_blockers(
     ):
         _append_blocker(blockers, blocker.code)
     for blocker in evaluate_live_probe_blockers(
+        artifact_payloads=artifact_payloads,
+    ):
+        _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_change_control_blockers(
         artifact_payloads=artifact_payloads,
     ):
         _append_blocker(blockers, blocker.code)
@@ -2068,6 +2081,122 @@ def evaluate_live_probe_blockers(
     # the bundle cannot satisfy production eligibility (Milestone 9).
     if has_run_record and not has_recertification:
         _append_blocker(blockers, "post_probe_recertification_missing")
+    return tuple(blockers)
+
+
+def evaluate_change_control_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    """Wave 9 recertification and change-control enforcement."""
+
+    blockers: list[Blocker] = []
+    now = datetime.now(UTC)
+    has_change_requiring_recert = False
+    has_recertification_report = False
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in {
+            "change_control_record",
+            "replay_equivalence_report",
+            "recertification_report",
+            "drift_monitor_spec",
+            "drift_monitor_report",
+            "production_decay_event",
+        }:
+            continue
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+        if kind == "change_control_record":
+            if bool(payload.get("recertification_required", False)):
+                has_change_requiring_recert = True
+            if bool(payload.get("unknown_scope", False)):
+                _append_blocker(blockers, "unrecorded_material_change")
+            dependency_refs = payload.get("dependency_index_refs", ())
+            if (
+                not isinstance(dependency_refs, Sequence)
+                or isinstance(dependency_refs, str | bytes)
+                or not dependency_refs
+            ):
+                _append_blocker(blockers, "dependency_scope_unresolved")
+            if (
+                _normal_form(payload.get("schema_compatibility_status"))
+                == "breaking_no_migration"
+            ):
+                _append_blocker(blockers, "unrecorded_material_change")
+            if _normal_form(payload.get("materiality_class")) == "critical":
+                _append_blocker(blockers, "unrecorded_material_change")
+        if kind == "replay_equivalence_report":
+            equivalence = _normal_form(payload.get("equivalence_status"))
+            if equivalence in {"non_equivalent", "indeterminate"}:
+                _append_blocker(blockers, "unrecorded_material_change")
+        if kind == "recertification_report":
+            has_recertification_report = True
+            try:
+                expires = datetime.fromisoformat(
+                    str(payload.get("production_expires_at_utc", "")).replace(
+                        "Z", "+00:00"
+                    )
+                )
+                if expires.astimezone(UTC) <= now:
+                    _append_blocker(blockers, "production_approval_expired")
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "production_approval_expired")
+            for review_field in (
+                "next_operational_review_due_utc",
+                "next_statistical_review_due_utc",
+            ):
+                try:
+                    due = datetime.fromisoformat(
+                        str(payload.get(review_field, "")).replace("Z", "+00:00")
+                    )
+                    if due.astimezone(UTC) <= now:
+                        _append_blocker(blockers, "next_review_due_passed")
+                        break
+                except (ValueError, TypeError):
+                    _append_blocker(blockers, "next_review_due_passed")
+                    break
+            if not str(payload.get("authority_boundary_ref", "")).strip():
+                _append_blocker(blockers, "authority_boundary_missing")
+            if _normal_form(payload.get("approval_status")) != "approved":
+                _append_blocker(blockers, "recertification_report_missing")
+            if _normal_form(payload.get("freshness_status")) == "stale":
+                _append_blocker(blockers, "stale_sources")
+            if _normal_form(payload.get("drift_status")) == "active":
+                _append_blocker(blockers, "drift_alarm_live")
+            if _normal_form(payload.get("incident_status")) in {
+                "open",
+                "active",
+            }:
+                _append_blocker(blockers, "reconciliation_incident_unresolved")
+        if kind == "drift_monitor_spec":
+            try:
+                expires = datetime.fromisoformat(
+                    str(payload.get("expires_at_utc", "")).replace("Z", "+00:00")
+                )
+                if expires.astimezone(UTC) <= now:
+                    _append_blocker(blockers, "drift_monitor_spec_missing")
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "drift_monitor_spec_missing")
+            monitored = payload.get("monitored_variables", ())
+            if (
+                not isinstance(monitored, Sequence)
+                or isinstance(monitored, str | bytes)
+                or not monitored
+            ):
+                _append_blocker(blockers, "drift_monitor_spec_missing")
+        if kind == "drift_monitor_report":
+            recommendation = _normal_form(payload.get("demotion_recommendation"))
+            if recommendation in {"demote_to_paper_shadow", "halt"}:
+                _append_blocker(blockers, "drift_alarm_live")
+        if kind == "production_decay_event":
+            previous_state = _normal_form(payload.get("previous_state"))
+            new_state = _normal_form(payload.get("new_state"))
+            if previous_state != new_state:
+                _append_blocker(blockers, "production_approval_expired")
+    if has_change_requiring_recert and not has_recertification_report:
+        _append_blocker(blockers, "recertification_report_missing")
     return tuple(blockers)
 
 
@@ -3345,6 +3474,7 @@ __all__ = [
     "check_projection_drift",
     "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
+    "evaluate_change_control_blockers",
     "evaluate_cost_capacity_blockers",
     "evaluate_forecast_sizing_blockers",
     "evaluate_live_probe_blockers",
