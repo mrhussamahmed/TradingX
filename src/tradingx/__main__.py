@@ -177,6 +177,116 @@ def _run_with_runtime_lock(
     return exit_code
 
 
+_WAVE_ARTIFACT_EVALUATORS: dict[str, str] = {
+    # Wave 6 — portfolio / optimizer / forecast / sizing
+    "portfolio-utility": "evaluate_portfolio_optimizer_blockers",
+    "optimizer-validation": "evaluate_portfolio_optimizer_blockers",
+    "optimizer-fallback": "evaluate_portfolio_optimizer_blockers",
+    "forecast-manifest": "evaluate_forecast_sizing_blockers",
+    "sizing-policy": "evaluate_forecast_sizing_blockers",
+    # Wave 7 — short side
+    "short-capability": "evaluate_short_blockers",
+    "borrow-snapshot": "evaluate_short_blockers",
+    "short-financing": "evaluate_short_blockers",
+    "short-risk-report": "evaluate_short_blockers",
+    # Wave 8 — live probe & operational safety
+    "live-probe-plan": "evaluate_live_probe_blockers",
+    "live-probe-run": "evaluate_live_probe_blockers",
+    "live-probe-recertification": "evaluate_live_probe_blockers",
+    # Wave 9 — change control / recertification
+    "change-control": "evaluate_change_control_blockers",
+    "replay-equivalence": "evaluate_change_control_blockers",
+    "recertification": "evaluate_change_control_blockers",
+    "drift-monitor-spec": "evaluate_change_control_blockers",
+    # Wave 10 — legacy retirement
+    "legacy-migration-report": "evaluate_change_control_blockers",
+}
+
+
+def _run_wave_artifact_check(command: str, refs: list[str]) -> int:
+    """Defect 8 — generic Wave 4-10 artifact CLI dispatcher.
+
+    Loads each ``--ref`` path as JSON, runs the matching evaluator from
+    :mod:`tradingx.promotion`, prints a canonical JSON payload listing
+    blocker codes per artifact, and returns ``1`` if any blockers were
+    emitted (``0`` otherwise).
+    """
+
+    from tradingx import promotion as _promotion
+
+    if not refs:
+        print(
+            json.dumps(
+                {
+                    "command": command,
+                    "blocker_codes": ["missing_sources"],
+                    "error": "at least one --ref must be supplied",
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    payloads: list[dict[str, object]] = []
+    for ref in refs:
+        try:
+            payload = json.loads(Path(ref).read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            print(
+                json.dumps(
+                    {
+                        "command": command,
+                        "ref": ref,
+                        "blocker_codes": ["authority_artifact_invalid"],
+                        "error": str(exc),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        if not isinstance(payload, dict):
+            print(
+                json.dumps(
+                    {
+                        "command": command,
+                        "ref": ref,
+                        "blocker_codes": ["authority_artifact_invalid"],
+                        "error": "payload is not a JSON object",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        payloads.append(payload)
+    evaluator_name = _WAVE_ARTIFACT_EVALUATORS.get(command)
+    if evaluator_name is None:
+        print(
+            json.dumps(
+                {
+                    "command": command,
+                    "blocker_codes": ["authority_artifact_invalid"],
+                    "error": f"no evaluator registered for {command}",
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    evaluator = getattr(_promotion, evaluator_name)
+    blockers = evaluator(artifact_payloads=tuple(payloads))
+    blocker_codes = [blocker.code for blocker in blockers]
+    print(
+        json.dumps(
+            {
+                "command": command,
+                "evaluator": evaluator_name,
+                "ref_count": len(refs),
+                "blocker_codes": blocker_codes,
+            },
+            sort_keys=True,
+        )
+    )
+    return 1 if blocker_codes else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tradingx")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -500,6 +610,38 @@ def build_parser() -> argparse.ArgumentParser:
     web_parser.add_argument("--env-file", default=".env")
     web_parser.add_argument("--host", default=None)
     web_parser.add_argument("--port", type=int, default=None)
+
+    # Defect 8 — Wave 4-10 artifact CLI subcommands.
+    # Each accepts --ref <path> (repeatable) pointing to an artifact JSON
+    # file, runs the matching evaluator, prints canonical JSON, and exits
+    # non-zero when the evaluator emits any blocker_codes.
+    for _name in (
+        "portfolio-utility",
+        "optimizer-validation",
+        "optimizer-fallback",
+        "forecast-manifest",
+        "sizing-policy",
+        "short-capability",
+        "borrow-snapshot",
+        "short-financing",
+        "short-risk-report",
+        "live-probe-plan",
+        "live-probe-run",
+        "live-probe-recertification",
+        "change-control",
+        "replay-equivalence",
+        "recertification",
+        "drift-monitor-spec",
+        "legacy-migration-report",
+    ):
+        wave_parser = subparsers.add_parser(_name)
+        wave_parser.add_argument(
+            "--ref",
+            dest="refs",
+            action="append",
+            default=[],
+            help="Path to an artifact JSON file. May be specified multiple times.",
+        )
     return parser
 
 
@@ -1530,6 +1672,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             port=args.port or config.web.port,
         )
         return 0
+
+    # Defect 8 — Wave 4-10 artifact CLI subcommand dispatcher.
+    if args.command in {
+        "portfolio-utility",
+        "optimizer-validation",
+        "optimizer-fallback",
+        "forecast-manifest",
+        "sizing-policy",
+        "short-capability",
+        "borrow-snapshot",
+        "short-financing",
+        "short-risk-report",
+        "live-probe-plan",
+        "live-probe-run",
+        "live-probe-recertification",
+        "change-control",
+        "replay-equivalence",
+        "recertification",
+        "drift-monitor-spec",
+        "legacy-migration-report",
+    }:
+        return _run_wave_artifact_check(args.command, list(args.refs or []))
 
     config = TradingConfig.from_env_file(Path(args.env_file))
     log_dir = (
