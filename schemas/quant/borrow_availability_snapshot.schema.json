@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Borrow Availability Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "snapshot_id",
+    "symbol",
+    "broker_id",
+    "broker_mode",
+    "shortable",
+    "easy_to_borrow",
+    "hard_to_borrow",
+    "threshold_security_status",
+    "borrow_rate_bps",
+    "fee_timestamp_utc",
+    "locate_id",
+    "locate_documentation_ref",
+    "locate_status",
+    "locate_expiry_utc",
+    "source",
+    "snapshot_at_utc",
+    "is_stale",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "borrow_availability_snapshot"},
+    "snapshot_id": {"type": "string"},
+    "symbol": {"type": "string"},
+    "broker_id": {"type": "string"},
+    "broker_mode": {
+      "type": "string",
+      "enum": ["paper", "live", "live_probe"]
+    },
+    "shortable": {"type": "boolean"},
+    "easy_to_borrow": {"type": "boolean"},
+    "hard_to_borrow": {"type": "boolean"},
+    "threshold_security_status": {
+      "type": "string",
+      "enum": ["clean", "threshold_security", "unknown"]
+    },
+    "borrow_rate_bps": {"type": "string", "format": "decimal-string"},
+    "fee_timestamp_utc": {"type": "string", "format": "utc-datetime"},
+    "locate_id": {"type": "string"},
+    "locate_documentation_ref": {"type": "string"},
+    "locate_status": {
+      "type": "string",
+      "enum": ["active", "expired", "missing", "unknown"]
+    },
+    "locate_expiry_utc": {"type": "string"},
+    "source": {"type": "string"},
+    "snapshot_at_utc": {"type": "string", "format": "utc-datetime"},
+    "is_stale": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

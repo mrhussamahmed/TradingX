@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Short Runtime Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "event_id",
+    "event_type",
+    "strategy_id",
+    "symbol",
+    "broker_id",
+    "broker_mode",
+    "occurred_at_utc",
+    "details",
+    "reconciled",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "short_runtime_event"},
+    "event_id": {"type": "string"},
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "order_marking_rejected",
+        "locate_missing",
+        "locate_expired",
+        "threshold_security_status_changed",
+        "close_out_required",
+        "borrow_unavailable",
+        "fee_spike",
+        "recall",
+        "forced_buy_in",
+        "margin_breach",
+        "dividend_liability",
+        "short_rejected",
+        "shortability_changed",
+        "broker_initiated_cover_detected",
+        "ex_dividend_risk",
+        "corporate_action_risk"
+      ]
+    },
+    "strategy_id": {"type": "string"},
+    "symbol": {"type": "string"},
+    "broker_id": {"type": "string"},
+    "broker_mode": {
+      "type": "string",
+      "enum": ["paper", "live", "live_probe"]
+    },
+    "occurred_at_utc": {"type": "string", "format": "utc-datetime"},
+    "details": {"type": "string"},
+    "reconciled": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

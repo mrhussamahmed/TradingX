@@ -383,6 +383,13 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("hard_exposure_caps_missing", PromotionState.PAPER_SHADOW),
     ("kelly_gate_incomplete", PromotionState.PAPER_SHADOW),
     ("sizing_property_violated", PromotionState.PAPER_SHADOW),
+    ("borrow_snapshot_stale", PromotionState.PAPER_SHADOW),
+    ("locate_documentation_missing", PromotionState.PAPER_SHADOW),
+    ("locate_expired", PromotionState.PAPER_SHADOW),
+    ("paper_live_short_semantics_mismatch", PromotionState.PAPER_SHADOW),
+    ("live_probe_short_evidence_missing", PromotionState.TINY_LIVE_PROBE),
+    ("broker_initiated_cover_unreconciled", PromotionState.PAPER_TRADING),
+    ("legacy_short_evidence", PromotionState.RESEARCH_ONLY),
     ("drift_monitor_spec_missing", PromotionState.PAPER_SHADOW),
     ("capacity_extrapolation_risk", PromotionState.PAPER_SHADOW),
     ("unsupported_side", PromotionState.RESEARCH_ONLY),
@@ -1133,6 +1140,11 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "label_definition",
         "expected_return_report",
         "sizing_policy",
+        "short_capability_manifest",
+        "borrow_availability_snapshot",
+        "short_financing_model",
+        "short_risk_report",
+        "short_runtime_event",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1302,6 +1314,10 @@ def _evaluate_verified_decision_blockers(
         artifact_payloads=artifact_payloads,
     ):
         _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_short_blockers(
+        artifact_payloads=artifact_payloads,
+    ):
+        _append_blocker(blockers, blocker.code)
 
     target_weights_raw = decision_payload.get("target_weights", {})
     if not isinstance(target_weights_raw, Mapping):
@@ -1310,11 +1326,7 @@ def _evaluate_verified_decision_blockers(
     has_negative_weight = any(
         Decimal(str(weight)) < Decimal("0") for weight in target_weights.values()
     )
-    if has_negative_weight and not _has_kind_with_flag(
-        artifact_payloads,
-        kind="short_capability_package",
-        flag="short_enabled",
-    ):
+    if has_negative_weight and not _has_short_authority(artifact_payloads):
         _append_blocker(blockers, "unsupported_side")
         _append_blocker(blockers, "short_support_missing")
 
@@ -1733,6 +1745,131 @@ def evaluate_forecast_sizing_blockers(
                     _append_blocker(blockers, "kelly_gate_incomplete")
             except InvalidOperation:
                 pass
+    return tuple(blockers)
+
+
+def evaluate_short_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    """Wave 7 short-side enforcement.
+
+    Re-derives blockers from raw fields so a tampered payload claiming
+    ``blocker_codes=[]`` cannot bypass enforcement.
+    """
+
+    blockers: list[Blocker] = []
+    manifest_requires_probe = False
+    has_short_risk_report_with_probe = False
+    has_manifest = False
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in {
+            "short_capability_manifest",
+            "borrow_availability_snapshot",
+            "short_financing_model",
+            "short_risk_report",
+            "short_runtime_event",
+        }:
+            continue
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+        if kind == "short_capability_manifest":
+            has_manifest = True
+            broker_mode = _normal_form(payload.get("broker_mode"))
+            # A manifest declared for a real broker mode requires a live
+            # probe regardless of the self-asserted flag — operators cannot
+            # opt out of live-probe validation by setting
+            # `live_probe_required=False` while pointing at a live broker.
+            if broker_mode in {"live", "live_probe"} or bool(
+                payload.get("live_probe_required", False)
+            ):
+                manifest_requires_probe = True
+            if not bool(payload.get("short_runtime_supported", False)):
+                _append_blocker(blockers, "short_support_missing")
+            for required_field in (
+                "threshold_security_handling",
+                "close_out_handling",
+                "order_marking_policy",
+            ):
+                if not str(payload.get(required_field, "")).strip():
+                    _append_blocker(blockers, "short_legal_mechanics_missing")
+                    break
+            if _normal_form(payload.get("paper_live_match_status")) in {
+                "mismatched",
+                "unverified",
+            }:
+                _append_blocker(blockers, "paper_live_short_semantics_mismatch")
+        if kind == "borrow_availability_snapshot":
+            if bool(payload.get("is_stale", False)):
+                _append_blocker(blockers, "borrow_snapshot_stale")
+            locate_status = _normal_form(payload.get("locate_status"))
+            if locate_status in {"missing", "unknown", ""}:
+                _append_blocker(blockers, "locate_documentation_missing")
+            if locate_status == "expired":
+                _append_blocker(blockers, "locate_expired")
+            if not str(payload.get("locate_documentation_ref", "")).strip():
+                _append_blocker(blockers, "locate_documentation_missing")
+            if _normal_form(payload.get("threshold_security_status")) == "unknown":
+                _append_blocker(blockers, "short_legal_mechanics_missing")
+        if kind == "short_risk_report":
+            if _normal_form(payload.get("borrow_coverage_status")) == "missing":
+                _append_blocker(blockers, "short_support_missing")
+            if (
+                _normal_form(payload.get("historical_borrow_coverage_status"))
+                == "missing"
+            ):
+                _append_blocker(blockers, "legacy_short_evidence")
+            if _normal_form(payload.get("order_marking_status")) in {
+                "incorrect",
+                "unsupported",
+            }:
+                _append_blocker(blockers, "short_legal_mechanics_missing")
+            if _normal_form(payload.get("locate_documentation_status")) == "missing":
+                _append_blocker(blockers, "locate_documentation_missing")
+            if _normal_form(payload.get("locate_expiry_status")) in {
+                "expired",
+                "missing",
+            }:
+                _append_blocker(blockers, "locate_expired")
+            if _normal_form(payload.get("threshold_security_status")) in {
+                "unhandled",
+                "unknown",
+            }:
+                _append_blocker(blockers, "short_legal_mechanics_missing")
+            if _normal_form(payload.get("close_out_status")) == "unhandled":
+                _append_blocker(blockers, "short_legal_mechanics_missing")
+            if _normal_form(payload.get("paper_live_semantics_status")) in {
+                "mismatched",
+                "unverified",
+            }:
+                _append_blocker(blockers, "paper_live_short_semantics_mismatch")
+            evidence_refs = payload.get("live_probe_evidence_refs", ())
+            valid_refs = (
+                isinstance(evidence_refs, Sequence)
+                and not isinstance(evidence_refs, str | bytes)
+                and any(isinstance(ref, str) and ref.strip() for ref in evidence_refs)
+            )
+            if not valid_refs:
+                _append_blocker(blockers, "live_probe_short_evidence_missing")
+            else:
+                has_short_risk_report_with_probe = True
+        if kind == "short_runtime_event":
+            event_type = _normal_form(payload.get("event_type"))
+            reconciled = bool(payload.get("reconciled", False))
+            if event_type == "broker_initiated_cover_detected" and not reconciled:
+                _append_blocker(blockers, "broker_initiated_cover_unreconciled")
+            if event_type == "order_marking_rejected":
+                _append_blocker(blockers, "short_legal_mechanics_missing")
+            if event_type in {"locate_missing", "locate_expired"}:
+                _append_blocker(blockers, "locate_documentation_missing")
+    if (
+        has_manifest
+        and manifest_requires_probe
+        and not has_short_risk_report_with_probe
+    ):
+        _append_blocker(blockers, "live_probe_short_evidence_missing")
     return tuple(blockers)
 
 
@@ -2606,6 +2743,27 @@ def _has_kind_with_flag(
     )
 
 
+def _has_short_authority(
+    payloads: tuple[Mapping[str, object], ...],
+) -> bool:
+    """Negative weights are allowed only when a Wave 7 short capability
+    manifest with `short_runtime_supported=True` is present (or a legacy
+    `short_capability_package`-style payload with `short_enabled=True`).
+    """
+
+    if _has_kind_with_flag(
+        payloads,
+        kind="short_capability_package",
+        flag="short_enabled",
+    ):
+        return True
+    return any(
+        str(payload.get("kind", "")) == "short_capability_manifest"
+        and bool(payload.get("short_runtime_supported", False))
+        for payload in payloads
+    )
+
+
 def _state_action_contracts_from_payloads(
     payloads: tuple[Mapping[str, object], ...],
 ) -> dict[str, dict[str, object]] | None:
@@ -2993,6 +3151,7 @@ __all__ = [
     "evaluate_forecast_sizing_blockers",
     "evaluate_portfolio_optimizer_blockers",
     "evaluate_provenance_blockers",
+    "evaluate_short_blockers",
     "evaluate_statistical_evidence_blockers",
     "load_state_action_contracts",
     "load_promotion_decision",

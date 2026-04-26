@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Short Risk Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "broker_id",
+    "broker_mode",
+    "symbols_tested",
+    "borrow_coverage_status",
+    "historical_borrow_coverage_status",
+    "order_marking_status",
+    "locate_documentation_status",
+    "locate_expiry_status",
+    "threshold_security_status",
+    "close_out_status",
+    "fee_stress_status",
+    "margin_stress_status",
+    "portfolio_margin_status",
+    "recall_stress_status",
+    "dividend_stress_status",
+    "ex_dividend_status",
+    "corporate_action_status",
+    "forced_buy_in_status",
+    "paper_live_semantics_status",
+    "live_probe_evidence_refs",
+    "constraint_status",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "short_risk_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "broker_id": {"type": "string"},
+    "broker_mode": {
+      "type": "string",
+      "enum": ["paper", "live", "live_probe"]
+    },
+    "symbols_tested": {"type": "array", "items": {"type": "string"}},
+    "borrow_coverage_status": {
+      "type": "string",
+      "enum": ["complete", "partial", "missing"]
+    },
+    "historical_borrow_coverage_status": {
+      "type": "string",
+      "enum": ["complete", "partial", "missing"]
+    },
+    "order_marking_status": {
+      "type": "string",
+      "enum": ["correct", "incorrect", "unsupported"]
+    },
+    "locate_documentation_status": {
+      "type": "string",
+      "enum": ["complete", "missing"]
+    },
+    "locate_expiry_status": {
+      "type": "string",
+      "enum": ["complete", "expired", "missing"]
+    },
+    "threshold_security_status": {
+      "type": "string",
+      "enum": ["handled", "unhandled", "unknown"]
+    },
+    "close_out_status": {
+      "type": "string",
+      "enum": ["handled", "unhandled"]
+    },
+    "fee_stress_status": {"type": "string"},
+    "margin_stress_status": {"type": "string"},
+    "portfolio_margin_status": {"type": "string"},
+    "recall_stress_status": {"type": "string"},
+    "dividend_stress_status": {"type": "string"},
+    "ex_dividend_status": {"type": "string"},
+    "corporate_action_status": {"type": "string"},
+    "forced_buy_in_status": {"type": "string"},
+    "paper_live_semantics_status": {
+      "type": "string",
+      "enum": ["matched", "mismatched", "unverified"]
+    },
+    "live_probe_evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "constraint_status": {"type": "string"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}
