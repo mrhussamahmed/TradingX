@@ -175,6 +175,9 @@ _SUPPORTED_SCHEMA_KEYS = {
     "const",
     "items",
     "format",
+    "pattern",
+    "title",
+    "$schema",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "quant"
 
@@ -281,6 +284,14 @@ def _validate_against_schema(
     if isinstance(enum_values, Sequence) and not isinstance(enum_values, str | bytes):
         if value not in enum_values:
             raise SchemaValidationError(f"{path} has invalid enum value {value!r}")
+    pattern = schema.get("pattern")
+    if pattern is not None and isinstance(value, str):
+        import re
+
+        if not re.search(str(pattern), value):
+            raise SchemaValidationError(
+                f"{path} does not match pattern {pattern!r}"
+            )
     format_name = schema.get("format")
     if format_name is not None:
         _validate_format(value, str(format_name), path=path)

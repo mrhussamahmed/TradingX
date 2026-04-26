@@ -33,11 +33,26 @@
     "run_refs": {"type": "array", "items": {"type": "string"}},
     "incident_refs": {"type": "array", "items": {"type": "string"}},
     "unresolved_incident_refs": {"type": "array", "items": {"type": "string"}},
-    "minimum_activity_status": {"type": "string"},
-    "drill_status": {"type": "string"},
-    "broker_timeout_status": {"type": "string"},
-    "idempotency_status": {"type": "string"},
-    "reconciliation_status": {"type": "string"},
+    "minimum_activity_status": {
+      "type": "string",
+      "enum": ["met", "unmet"]
+    },
+    "drill_status": {
+      "type": "string",
+      "enum": ["fresh", "stale"]
+    },
+    "broker_timeout_status": {
+      "type": "string",
+      "enum": ["defined", "undefined"]
+    },
+    "idempotency_status": {
+      "type": "string",
+      "enum": ["complete", "incomplete"]
+    },
+    "reconciliation_status": {
+      "type": "string",
+      "enum": ["complete", "incomplete"]
+    },
     "cost_observation_refs": {"type": "array", "items": {"type": "string"}},
     "production_eligible": {"type": "boolean"},
     "approved_at_utc": {"type": "string", "format": "utc-datetime"},

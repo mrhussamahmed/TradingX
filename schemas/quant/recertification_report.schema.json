@@ -43,14 +43,26 @@
     "authority_boundary_ref": {"type": "string"},
     "risk_accepted": {"type": "boolean"},
     "evidence_refs": {"type": "array", "items": {"type": "string"}},
-    "freshness_status": {"type": "string"},
+    "freshness_status": {
+      "type": "string",
+      "enum": ["fresh", "stale"]
+    },
     "statistical_status": {"type": "string"},
     "cost_capacity_status": {"type": "string"},
     "optimizer_status": {"type": "string"},
     "live_probe_status": {"type": "string"},
-    "drift_status": {"type": "string"},
-    "incident_status": {"type": "string"},
-    "approval_status": {"type": "string"},
+    "drift_status": {
+      "type": "string",
+      "enum": ["nominal", "inactive", "active"]
+    },
+    "incident_status": {
+      "type": "string",
+      "enum": ["resolved", "open", "active"]
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": ["approved", "pending", "rejected"]
+    },
     "approver": {"type": "string"},
     "production_expires_at_utc": {"type": "string", "format": "utc-datetime"},
     "next_operational_review_due_utc": {"type": "string", "format": "utc-datetime"},

@@ -8,9 +8,32 @@
     "schema_version": {"type": "string", "const": "1.0"},
     "kind": {"type": "string", "const": "promotion_decision"},
     "strategy_id": {"type": "string"},
-    "requested_state": {"type": "string"},
-    "max_state": {"type": "string"},
-    "target_weights": {"type": "object"},
+    "requested_state": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
+    },
+    "max_state": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
+    },
+    "target_weights": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^-?\\d+(\\.\\d+)?$"}
+    },
     "blocker_codes": {"type": "array", "items": {"type": "string"}}
   }
 }

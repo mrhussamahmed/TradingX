@@ -21,10 +21,26 @@
       "type": "string"
     },
     "requested_state": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
     },
     "max_state": {
-      "type": "string"
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
     },
     "artifact_store_root": {"type": "string"},
     "replay_store_root": {"type": "string"},
