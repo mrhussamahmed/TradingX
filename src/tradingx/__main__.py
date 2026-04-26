@@ -27,7 +27,18 @@ from tradingx.data import (
     build_default_market_data_gateway,
     build_market_data_gateway_for_mode,
 )
+from tradingx.data_fingerprint import (
+    build_dataset_manifest,
+    compare_dataset_manifests,
+    invalidate_evidence_from_restatement,
+    load_json_object,
+)
 from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
+from tradingx.experiments import (
+    ExperimentLedger,
+    build_trial_universe_manifest,
+    resolve_metric_visibility_context,
+)
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.journal import SqliteOmsJournal
@@ -283,6 +294,70 @@ def build_parser() -> argparse.ArgumentParser:
     gate_parser.add_argument("--artifact-root", default="artifacts/validation")
     gate_parser.add_argument("--universe", default=None)
     gate_parser.add_argument("--benchmark-adjusted", action="store_true")
+    gate_parser.add_argument("--experiment-id", default=None)
+    gate_parser.add_argument("--run-id", default=None)
+    gate_parser.add_argument("--promotion-decision-scope", default=None)
+    gate_parser.add_argument("--metric-release-token", default=None)
+    gate_parser.add_argument("--dataset-manifest-id", default=None)
+    gate_parser.add_argument("--experiment-ledger-root", default=None)
+    gate_parser.add_argument("--dataset-manifest-file", default=None)
+
+    register_experiment_parser = subparsers.add_parser("register-experiment")
+    register_experiment_parser.add_argument("--ledger-root", required=True)
+    register_experiment_parser.add_argument("--registration-file", required=True)
+
+    start_experiment_run_parser = subparsers.add_parser("start-experiment-run")
+    start_experiment_run_parser.add_argument("--ledger-root", required=True)
+    start_experiment_run_parser.add_argument("--run-file", required=True)
+
+    complete_experiment_run_parser = subparsers.add_parser("complete-experiment-run")
+    complete_experiment_run_parser.add_argument("--ledger-root", required=True)
+    complete_experiment_run_parser.add_argument("--run-file", required=True)
+
+    trial_universe_parser = subparsers.add_parser("trial-universe")
+    trial_universe_parser.add_argument("--ledger-root", required=True)
+    trial_universe_parser.add_argument("--promotion-decision-scope", required=True)
+    trial_universe_parser.add_argument("--output-file", default=None)
+
+    dataset_manifest_parser = subparsers.add_parser("dataset-manifest")
+    dataset_manifest_parser.add_argument("--dataset-id", required=True)
+    dataset_manifest_parser.add_argument("--vendor", default="unknown")
+    dataset_manifest_parser.add_argument("--symbols", required=True)
+    dataset_manifest_parser.add_argument("--window-start", required=True)
+    dataset_manifest_parser.add_argument("--window-end", required=True)
+    dataset_manifest_parser.add_argument(
+        "--raw-payload-ref", action="append", default=[]
+    )
+    dataset_manifest_parser.add_argument(
+        "--normalized-frame-ref",
+        action="append",
+        default=[],
+    )
+    dataset_manifest_parser.add_argument("--pit-universe-ref", required=True)
+    dataset_manifest_parser.add_argument("--pit-symbol-map-ref", required=True)
+    dataset_manifest_parser.add_argument("--delisting-inputs-ref", required=True)
+    dataset_manifest_parser.add_argument("--vendor-observation-ref", required=True)
+    dataset_manifest_parser.add_argument("--vendor-availability-ref", required=True)
+    dataset_manifest_parser.add_argument("--normalization-code-hash", required=True)
+    dataset_manifest_parser.add_argument("--normalization-policy-hash", required=True)
+    dataset_manifest_parser.add_argument("--corporate-action-hash", required=True)
+    dataset_manifest_parser.add_argument("--benchmark-hash", required=True)
+    dataset_manifest_parser.add_argument("--cash-curve-hash", required=True)
+    dataset_manifest_parser.add_argument("--output-file", default=None)
+
+    compare_dataset_parser = subparsers.add_parser("compare-dataset")
+    compare_dataset_parser.add_argument("--old", required=True)
+    compare_dataset_parser.add_argument("--new", required=True)
+    compare_dataset_parser.add_argument(
+        "--old-raw-unavailable",
+        action="store_true",
+    )
+    compare_dataset_parser.add_argument("--output-file", default=None)
+
+    invalidate_evidence_parser = subparsers.add_parser("invalidate-evidence")
+    invalidate_evidence_parser.add_argument("--restatement-report", required=True)
+    invalidate_evidence_parser.add_argument("--dependency-index", default=None)
+    invalidate_evidence_parser.add_argument("--output-file", default=None)
 
     gate3_report_parser = subparsers.add_parser("gate3-report")
     gate3_report_parser.add_argument("--env-file", default=".env")
@@ -819,6 +894,115 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "register-experiment":
+        ledger = ExperimentLedger(ledger_root=Path(args.ledger_root))
+        payload = load_json_object(Path(args.registration_file))
+        ledger.append_registration(payload)
+        print(
+            json.dumps(
+                _serialize({"status": "registered", "registration": payload}),
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    if args.command in {"start-experiment-run", "complete-experiment-run"}:
+        ledger = ExperimentLedger(ledger_root=Path(args.ledger_root))
+        payload = load_json_object(Path(args.run_file))
+        ledger.append_run_record(payload)
+        print(
+            json.dumps(
+                _serialize({"status": "recorded", "run": payload}), sort_keys=True
+            )
+        )
+        return 0
+
+    if args.command == "trial-universe":
+        ledger = ExperimentLedger(ledger_root=Path(args.ledger_root))
+        manifest = build_trial_universe_manifest(
+            promotion_decision_scope=args.promotion_decision_scope,
+            registrations=ledger.registrations(),
+            run_records=ledger.run_records(),
+            amendments=ledger.amendments(),
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(manifest), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(manifest), sort_keys=True))
+        return 0
+
+    if args.command == "dataset-manifest":
+        manifest = build_dataset_manifest(
+            dataset_id=args.dataset_id,
+            vendor=args.vendor,
+            symbols=tuple(
+                item.strip() for item in args.symbols.split(",") if item.strip()
+            ),
+            window_start_utc=args.window_start,
+            window_end_utc=args.window_end,
+            raw_payload_refs=tuple(args.raw_payload_ref),
+            normalized_frame_refs=tuple(args.normalized_frame_ref),
+            point_in_time_universe_membership_ref=args.pit_universe_ref,
+            point_in_time_symbol_mapping_ref=args.pit_symbol_map_ref,
+            delisting_return_inputs_ref=args.delisting_inputs_ref,
+            vendor_observation_timestamp_ref=args.vendor_observation_ref,
+            vendor_availability_timestamp_ref=args.vendor_availability_ref,
+            normalization_code_hash=args.normalization_code_hash,
+            normalization_policy_hash=args.normalization_policy_hash,
+            corporate_action_hash=args.corporate_action_hash,
+            benchmark_hash=args.benchmark_hash,
+            cash_curve_hash=args.cash_curve_hash,
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(manifest), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(manifest), sort_keys=True))
+        return 0
+
+    if args.command == "compare-dataset":
+        report = compare_dataset_manifests(
+            old_manifest=load_json_object(Path(args.old)),
+            new_manifest=load_json_object(Path(args.new)),
+            old_raw_payload_available=not args.old_raw_unavailable,
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(report), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
+    if args.command == "invalidate-evidence":
+        dependency_index = (
+            load_json_object(Path(args.dependency_index))
+            if args.dependency_index
+            else None
+        )
+        report = invalidate_evidence_from_restatement(
+            restatement_report=load_json_object(Path(args.restatement_report)),
+            dependency_index=dependency_index,
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(report), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
     if args.command == "gate-report":
         config = TradingConfig.from_env_file(Path(args.env_file))
         controller = build_default_gate_validation_controller(
@@ -839,38 +1023,63 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.universe
             else config.runtime.symbol_universe
         )
+        metric_visibility_context = None
+        if args.experiment_id:
+            metric_visibility_context, resolved_dataset_manifest_id = (
+                resolve_metric_visibility_context(
+                    experiment_id=args.experiment_id,
+                    run_id=args.run_id or "",
+                    promotion_decision_scope=args.promotion_decision_scope or "",
+                    metric_release_token_ref=args.metric_release_token or "",
+                    ledger=(
+                        ExperimentLedger(ledger_root=Path(args.experiment_ledger_root))
+                        if args.experiment_ledger_root
+                        else None
+                    ),
+                    dataset_manifest_path=(
+                        Path(args.dataset_manifest_file)
+                        if args.dataset_manifest_file
+                        else None
+                    ),
+                    dataset_manifest_id=args.dataset_manifest_id,
+                )
+            )
+            if resolved_dataset_manifest_id:
+                args.dataset_manifest_id = resolved_dataset_manifest_id
         gate_result = controller.generate_gate_report(
             gate_id=args.gate,
             benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
             universe=universe,
+            metric_visibility_context=metric_visibility_context,
+            dataset_manifest_id=args.dataset_manifest_id,
         )
         print(json.dumps(_serialize(gate_result), sort_keys=True))
         return 0
 
     if args.command == "gate3-report":
         validation_store = FilesystemArtifactStore(Path(args.validation_artifact_root))
-        report = build_gate3_readiness_report(
+        gate3_readiness_report = build_gate3_readiness_report(
             paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
             validation_store=validation_store,
         )
-        validation_store.write_gate3_readiness_report(report)
-        print(json.dumps(_serialize(report), sort_keys=True))
+        validation_store.write_gate3_readiness_report(gate3_readiness_report)
+        print(json.dumps(_serialize(gate3_readiness_report), sort_keys=True))
         return 0
 
     if args.command == "gate3-package":
         validation_store = FilesystemArtifactStore(Path(args.validation_artifact_root))
-        report = build_gate3_readiness_report(
+        gate3_readiness_report = build_gate3_readiness_report(
             paper_store=FilesystemArtifactStore(Path(args.paper_artifact_root)),
             validation_store=validation_store,
         )
-        validation_store.write_gate3_readiness_report(report)
-        package = build_gate3_promotion_package(report)
+        validation_store.write_gate3_readiness_report(gate3_readiness_report)
+        package = build_gate3_promotion_package(gate3_readiness_report)
         validation_store.write_gate3_promotion_package(package)
         print(
             json.dumps(
-                _serialize({"report": report, "package": package}),
+                _serialize({"report": gate3_readiness_report, "package": package}),
                 sort_keys=True,
             )
         )

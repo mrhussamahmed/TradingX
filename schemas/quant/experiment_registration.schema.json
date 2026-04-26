@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Experiment Registration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "experiment_id",
+    "research_program_id",
+    "selection_family_id",
+    "promotion_decision_scope",
+    "study_id",
+    "strategy_id",
+    "strategy_config_hash",
+    "study_definition_hash",
+    "feature_set_hash",
+    "label_definition_hash",
+    "benchmark_family_hash",
+    "cost_model_hash",
+    "dataset_fingerprint",
+    "objective",
+    "loss_function",
+    "registered_at_utc",
+    "registered_by",
+    "pre_result_registration_status",
+    "metric_visibility_policy",
+    "outside_exploration_attestation_ref",
+    "code_git_sha",
+    "script_or_notebook_hash",
+    "immutable_source_artifact_ref",
+    "metric_vault_policy_ref",
+    "metric_release_token_ref",
+    "output_capture_artifact_ref",
+    "registration_sequence",
+    "selection_influence"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "experiment_registration"},
+    "experiment_id": {"type": "string"},
+    "research_program_id": {"type": "string"},
+    "selection_family_id": {"type": "string"},
+    "promotion_decision_scope": {"type": "string"},
+    "study_id": {"type": "string"},
+    "parent_experiment_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "strategy_config_hash": {"type": "string", "format": "content-addressed-ref"},
+    "study_definition_hash": {"type": "string", "format": "content-addressed-ref"},
+    "feature_set_hash": {"type": "string", "format": "content-addressed-ref"},
+    "label_definition_hash": {"type": "string", "format": "content-addressed-ref"},
+    "benchmark_family_hash": {"type": "string", "format": "content-addressed-ref"},
+    "cost_model_hash": {"type": "string", "format": "content-addressed-ref"},
+    "dataset_fingerprint": {"type": "string"},
+    "objective": {"type": "string"},
+    "loss_function": {"type": "string"},
+    "registered_at_utc": {"type": "string", "format": "utc-datetime"},
+    "registered_by": {"type": "string"},
+    "pre_result_registration_status": {
+      "type": "string",
+      "enum": ["pre_result", "post_result_registered", "prior_metric_exposure_unknown"]
+    },
+    "metric_visibility_policy": {"type": "string"},
+    "outside_exploration_attestation_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "code_git_sha": {"type": "string"},
+    "script_or_notebook_hash": {"type": "string", "format": "content-addressed-ref"},
+    "immutable_source_artifact_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "metric_vault_policy_ref": {"type": "string", "format": "content-addressed-ref"},
+    "metric_release_token_ref": {"type": "string", "format": "content-addressed-ref"},
+    "output_capture_artifact_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "registration_sequence": {"type": "integer"},
+    "selection_influence": {"type": "boolean"}
+  }
+}

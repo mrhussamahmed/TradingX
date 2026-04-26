@@ -21,6 +21,7 @@ from tradingx.authority import (
     validate_quant_artifact,
     verify_approval_signature,
 )
+from tradingx.data_fingerprint import dataset_manifest_blocker_codes
 
 LEGACY_NON_AUTHORITY_STATUS = "legacy_non_authority"
 NOT_RUNTIME_APPLICABLE = "not_runtime_applicable"
@@ -199,6 +200,7 @@ _STATISTICAL_BLOCKER_CODES = {
 }
 _AUTHORITY_BLOCKER_CODES = {
     "authority_artifact_invalid",
+    "ledger_integrity_violation",
     "ledger_key_worm_controls_missing",
     "state_action_contract_missing",
     "replay_path_missing",
@@ -339,6 +341,7 @@ def _record(
 
 _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("authority_artifact_invalid", PromotionState.DISABLED),
+    ("ledger_integrity_violation", PromotionState.DISABLED),
     ("ledger_key_worm_controls_missing", PromotionState.DISABLED),
     ("state_action_contract_missing", PromotionState.DISABLED),
     ("replay_path_missing", PromotionState.RESEARCH_ONLY),
@@ -571,6 +574,10 @@ for _code, _fixture, _red_test in (
 
 def evaluate_authority_artifact_invalid() -> str:
     return "authority_artifact_invalid"
+
+
+def evaluate_ledger_integrity_violation() -> str:
+    return "ledger_integrity_violation"
 
 
 def evaluate_ledger_key_worm_controls_missing() -> str:
@@ -1087,6 +1094,17 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         validate_quant_artifact(payload, schema=_schema("approval_record"))
     elif kind in {"strategy_capability_manifest", "promotion_evidence"}:
         validate_quant_artifact(payload, schema=_schema(kind))
+    elif kind in {
+        "experiment_registration",
+        "experiment_run_record",
+        "experiment_amendment_record",
+        "trial_universe_manifest",
+        "dataset_manifest",
+        "data_restatement_report",
+        "evidence_dependency_index",
+        "evidence_invalidation_report",
+    }:
+        validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
         schema_name = _MANDATE_ARTIFACT_SCHEMA_NAMES[kind]
         validate_quant_artifact(payload, schema=_schema(schema_name))
@@ -1235,6 +1253,8 @@ def _evaluate_verified_decision_blockers(
 
     if replay_missing:
         _append_blocker(blockers, "replay_path_missing")
+    for blocker in evaluate_provenance_blockers(artifact_payloads=artifact_payloads):
+        _append_blocker(blockers, blocker.code)
 
     target_weights_raw = decision_payload.get("target_weights", {})
     if not isinstance(target_weights_raw, Mapping):
@@ -1267,6 +1287,36 @@ def _append_blocker(blockers: list[Blocker], code: str) -> None:
         raise AuthorityLedgerError(f"unknown blocker code {code}")
     if code not in {blocker.code for blocker in blockers}:
         blockers.append(Blocker(code))
+
+
+def evaluate_provenance_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    blockers: list[Blocker] = []
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind == "trial_universe_manifest":
+            for code in _string_sequence(payload.get("blocker_codes", ())):
+                if code in BLOCKER_REGISTRY:
+                    _append_blocker(blockers, code)
+            status = _normal_form(payload.get("status"))
+            if status == "contaminated":
+                _append_blocker(blockers, "trial_lineage_contaminated")
+            elif status == "incomplete":
+                _append_blocker(blockers, "trial_universe_incomplete")
+        elif kind == "dataset_manifest":
+            for code in dataset_manifest_blocker_codes(payload):
+                _append_blocker(blockers, code)
+        elif kind == "data_restatement_report":
+            evidence_status = _normal_form(payload.get("evidence_status"))
+            if evidence_status in {"stale", "manual_review_required"}:
+                _append_blocker(blockers, "stale_sources")
+            elif evidence_status == "invalid":
+                _append_blocker(blockers, "replay_path_missing")
+        elif kind == "evidence_invalidation_report":
+            _append_blocker(blockers, "replay_path_missing")
+    return tuple(blockers)
 
 
 @dataclass(frozen=True)
@@ -2506,6 +2556,7 @@ __all__ = [
     "check_projection_drift",
     "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
+    "evaluate_provenance_blockers",
     "load_state_action_contracts",
     "load_promotion_decision",
     "state_allows",

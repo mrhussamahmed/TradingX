@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Trial Universe Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "promotion_decision_scope",
+    "status",
+    "blocker_codes",
+    "registered_experiment_ids",
+    "run_ids",
+    "orphan_run_experiment_ids",
+    "trial_statistics",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "trial_universe_manifest"},
+    "promotion_decision_scope": {"type": "string"},
+    "status": {"type": "string", "enum": ["complete", "incomplete", "contaminated"]},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "audit_flags": {"type": "array", "items": {"type": "string"}},
+    "registered_experiment_ids": {"type": "array", "items": {"type": "string"}},
+    "run_ids": {"type": "array", "items": {"type": "string"}},
+    "orphan_run_experiment_ids": {"type": "array", "items": {"type": "string"}},
+    "cited_artifact_ids": {"type": "array", "items": {"type": "string"}},
+    "missing_run_experiment_ids": {"type": "array", "items": {"type": "string"}},
+    "trial_statistics": {"type": "object"},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

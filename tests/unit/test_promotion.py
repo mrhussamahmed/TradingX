@@ -948,6 +948,34 @@ def test_taxable_production_with_negative_lower_bound_fails_expected_wealth(
     assert decision.blocker_codes == ("net_edge_lower_bound_below_threshold",)
 
 
+def test_experiment_and_dataset_provenance_blockers_cap_promotion() -> None:
+    blockers = promotion.evaluate_provenance_blockers(
+        artifact_payloads=(
+            {
+                "schema_version": "1.0",
+                "kind": "trial_universe_manifest",
+                "promotion_decision_scope": "scope-prod-001",
+                "status": "contaminated",
+                "blocker_codes": ["trial_lineage_contaminated"],
+            },
+            {
+                "schema_version": "1.0",
+                "kind": "dataset_manifest",
+                "dataset_id": "dataset-spy-v1",
+                "status": "replay_input_missing",
+                "blocker_codes": ["replay_path_missing"],
+            },
+        )
+    )
+
+    assert "trial_lineage_contaminated" in tuple(blocker.code for blocker in blockers)
+    assert "replay_path_missing" in tuple(blocker.code for blocker in blockers)
+    assert "point_in_time_data_incomplete" in tuple(
+        blocker.code for blocker in blockers
+    )
+    assert promotion.strictest_state_cap(blockers) == PromotionState.RESEARCH_ONLY
+
+
 def test_tax_exempt_production_without_lower_bound_report_is_not_live_capable(
     tmp_path,
 ) -> None:

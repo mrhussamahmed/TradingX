@@ -33,6 +33,7 @@ from tradingx.execution import (
     OrderRejected,
     classify_order_rejection_reason,
 )
+from tradingx.experiments import MetricVisibilityContext
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.live_enablement import (
     build_trading_client_for_mode,
@@ -1495,8 +1496,29 @@ class GateValidationController:
         window_start_utc: datetime,
         window_end_utc: datetime,
         universe: tuple[str, ...],
+        metric_visibility_context: MetricVisibilityContext | None = None,
+        dataset_manifest_id: str | None = None,
     ) -> GateReportResult:
         candidates = build_mandatory_candidate_registry(universe)
+        metrics_blocked = (
+            metric_visibility_context is not None
+            and metric_visibility_context.promotion_valid
+            and not metric_visibility_context.is_released
+        )
+        if metrics_blocked:
+            report = build_gate_report(
+                gate_id=gate_id,
+                bars_by_symbol={},
+                candidates=candidates,
+                benchmark_stack_payload=benchmark_stack_payload,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+                gate1_pbo_payload=None,
+                trials_ledger=None,
+                metric_visibility_context=metric_visibility_context,
+                dataset_manifest_id=dataset_manifest_id,
+            )
+            return self._persist_gate_report_result(report, gate_id=gate_id)
         required_symbols = {candidate.benchmark_symbol for candidate in candidates} | {
             symbol for candidate in candidates for symbol in candidate.universe
         }
@@ -1538,7 +1560,17 @@ class GateValidationController:
             window_end_utc=window_end_utc,
             gate1_pbo_payload=gate1_pbo_payload,
             trials_ledger=self._trials_ledger,
+            metric_visibility_context=metric_visibility_context,
+            dataset_manifest_id=dataset_manifest_id,
         )
+        return self._persist_gate_report_result(report, gate_id=gate_id)
+
+    def _persist_gate_report_result(
+        self,
+        report: Any,
+        *,
+        gate_id: str,
+    ) -> GateReportResult:
         report_path = self._artifacts.write_validation_report(report)
         self._metrics.record_evidence_artifact("validation_report")
         assessment = GateAssessment(
@@ -1547,6 +1579,12 @@ class GateValidationController:
             evidence_refs=(str(report_path),),
             decision_summary=report.summary,
             recorded_at_utc=datetime.now(UTC),
+            promotion_valid=report.promotion_valid,
+            evidence_class=report.evidence_class,
+            blocker_codes=report.blocker_codes,
+            experiment_id=report.experiment_id,
+            run_id=report.run_id,
+            dataset_manifest_id=report.dataset_manifest_id,
         )
         assessment_path = self._artifacts.write_gate_assessment(assessment)
         self._metrics.record_evidence_artifact("gate_assessment")

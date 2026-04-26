@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Experiment Run Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "run_id",
+    "experiment_id",
+    "promotion_decision_scope",
+    "lifecycle_status",
+    "started_at_utc",
+    "metrics_visibility_status",
+    "metric_vault_release_status",
+    "metrics_visible_at_utc",
+    "metric_release_token_ref",
+    "immutable_stdout_stderr_hash",
+    "notebook_output_hash",
+    "result_artifact_hash",
+    "termination_reason_code",
+    "termination_stage",
+    "partial_metric_payload_hash",
+    "conservative_imputation_policy",
+    "cancellation_sensitivity_status"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "experiment_run_record"},
+    "run_id": {"type": "string"},
+    "experiment_id": {"type": "string"},
+    "promotion_decision_scope": {"type": "string"},
+    "lifecycle_status": {
+      "type": "string",
+      "enum": ["started", "completed", "failed", "canceled"]
+    },
+    "started_at_utc": {"type": "string", "format": "utc-datetime"},
+    "completed_at_utc": {"type": "string"},
+    "metrics_visible_at_utc": {"type": "string"},
+    "metrics_visibility_status": {
+      "type": "string",
+      "enum": ["sealed", "released", "not_applicable"]
+    },
+    "metric_vault_release_status": {
+      "type": "string",
+      "enum": ["pending", "released", "not_applicable"]
+    },
+    "metric_release_token_ref": {"type": "string", "format": "content-addressed-ref"},
+    "immutable_stdout_stderr_hash": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "notebook_output_hash": {"type": "string", "format": "content-addressed-ref"},
+    "result_artifact_hash": {"type": "string", "format": "content-addressed-ref"},
+    "termination_reason_code": {"type": "string"},
+    "termination_stage": {"type": "string"},
+    "partial_metric_payload_hash": {"type": "string"},
+    "conservative_imputation_policy": {"type": "string"},
+    "cancellation_sensitivity_status": {"type": "string"}
+  }
+}

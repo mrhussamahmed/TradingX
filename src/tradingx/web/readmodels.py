@@ -12,6 +12,10 @@ from typing import Protocol
 
 from tradingx.config import TradingConfig
 from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
+from tradingx.experiments import (
+    metric_visibility_context_from_payload,
+    sanitize_metric_payload,
+)
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS
@@ -720,7 +724,10 @@ class LocalWebReadModel:
         paper_payloads = self._paper_store.list_artifact_payloads(category)
         if paper_payloads:
             return paper_payloads
-        return self._validation_store.list_artifact_payloads(category)
+        return [
+            self._sanitize_validation_payload(payload, surface=f"web_list_{category}")
+            for payload in self._validation_store.list_artifact_payloads(category)
+        ]
 
     def list_config_proposals(self) -> tuple[ConfigProposal, ...]:
         proposal_dir = self._repo_root / "config" / "proposals"
@@ -2511,15 +2518,33 @@ class LocalWebReadModel:
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
         generated_at = datetime.now(UTC)
-        evaluation_payloads = self._validation_store.list_artifact_payloads(
-            "evaluation_evidence"
-        )
-        validation_reports = self._validation_store.list_artifact_payloads(
-            "validation_reports"
-        )
-        gate_assessments = self._validation_store.list_artifact_payloads(
-            "gate_assessments"
-        )
+        evaluation_payloads = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_evaluation_evidence",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "evaluation_evidence"
+            )
+        ]
+        validation_reports = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_validation_reports",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "validation_reports"
+            )
+        ]
+        gate_assessments = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_gate_assessments",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "gate_assessments"
+            )
+        ]
         candidate_statuses: dict[str, dict[str, str]] = {}
         for report in validation_reports:
             for candidate in self._ensure_list(report.get("candidate_results", [])):
@@ -2933,6 +2958,18 @@ class LocalWebReadModel:
         if isinstance(value, dict):
             return {str(key): item for key, item in value.items()}
         return {}
+
+    def _sanitize_validation_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        surface: str,
+    ) -> dict[str, object]:
+        return sanitize_metric_payload(
+            payload,
+            context=metric_visibility_context_from_payload(payload),
+            surface=surface,
+        )
 
     def _ensure_scalar_mapping(self, value: object) -> dict[str, ScalarValue]:
         if not isinstance(value, dict):

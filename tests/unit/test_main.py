@@ -361,6 +361,8 @@ class FakeGateValidationController:
         window_start_utc: datetime,
         window_end_utc: datetime,
         universe: tuple[str, ...],
+        metric_visibility_context=None,
+        dataset_manifest_id: str | None = None,
     ):
         self.called_with = {
             "gate_id": gate_id,
@@ -368,6 +370,8 @@ class FakeGateValidationController:
             "window_start_utc": window_start_utc,
             "window_end_utc": window_end_utc,
             "universe": universe,
+            "metric_visibility_context": metric_visibility_context,
+            "dataset_manifest_id": dataset_manifest_id,
         }
         return {
             "report": {
@@ -1290,8 +1294,268 @@ def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:
         "window_start_utc": datetime(2026, 4, 1, tzinfo=UTC),
         "window_end_utc": datetime(2026, 4, 17, tzinfo=UTC),
         "universe": ("SPY", "QQQ"),
+        "metric_visibility_context": None,
+        "dataset_manifest_id": None,
     }
     assert payload["gate_assessment"]["status"] == "pass"
+
+
+def test_gate_report_cli_threads_registered_metric_visibility_context(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    from tradingx.experiments import ExperimentLedger
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_DATA_ROOT=data\n"
+        "TRADINGX_ARTIFACT_ROOT=artifacts\n"
+        "TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ\n",
+        encoding="utf-8",
+    )
+    benchmark_stack_file = tmp_path / "benchmark-stack.json"
+    benchmark_stack_file.write_text(
+        json.dumps(
+            {
+                "hurdle_returns": ["0.0001", "0.0001", "0.0001"],
+                "opportunity_cost_returns": ["0.0002", "0.0002", "0.0002"],
+                "opportunity_cost_weights": [
+                    {"symbol": "SPY", "weight": "0.6"},
+                    {"symbol": "AGG", "weight": "0.4"},
+                ],
+                "operating_constraint": {
+                    "max_drawdown_design": "0.15",
+                    "max_drawdown_halt": "0.25",
+                    "cdar_threshold": "0.08",
+                    "cdar_confidence": "0.95",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_controller = FakeGateValidationController()
+    monkeypatch.setattr(
+        cli,
+        "build_default_gate_validation_controller",
+        lambda config, artifact_root: fake_controller,
+    )
+    ledger = ExperimentLedger(ledger_root=tmp_path / "experiments")
+    registration = json.loads(
+        Path(
+            "tests/fixtures/experiments/experiment_registration_pre_result.json"
+        ).read_text(encoding="utf-8")
+    )
+    completed_run = json.loads(
+        Path("tests/fixtures/experiments/experiment_run_completed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    started_run = dict(completed_run)
+    started_run["lifecycle_status"] = "started"
+    started_run["termination_reason_code"] = "started"
+    ledger.append_registration(registration)
+    ledger.append_run_record(started_run)
+    ledger.append_run_record(completed_run)
+
+    exit_code = cli.main(
+        [
+            "gate-report",
+            "--env-file",
+            str(env_file),
+            "--gate",
+            "1",
+            "--benchmark-stack-file",
+            str(benchmark_stack_file),
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+            "--experiment-id",
+            "exp-001",
+            "--run-id",
+            "run-001",
+            "--promotion-decision-scope",
+            "scope-prod-001",
+            "--metric-release-token",
+            "sha256:" + "b" * 64,
+            "--dataset-manifest-id",
+            "dataset-spy-v1",
+            "--experiment-ledger-root",
+            str(tmp_path / "experiments"),
+            "--dataset-manifest-file",
+            "tests/fixtures/data_fingerprints/dataset_manifest_complete.json",
+        ]
+    )
+
+    assert exit_code == 0
+    _ = json.loads(capsys.readouterr().out)
+    context = fake_controller.called_with["metric_visibility_context"]
+    assert context.experiment_id == "exp-001"
+    assert context.is_released is True
+    assert fake_controller.called_with["dataset_manifest_id"] == "dataset-spy-v1"
+
+
+def test_gate_report_cli_fake_metric_context_fails_closed(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_SYMBOL_UNIVERSE=SPY,QQQ\n",
+        encoding="utf-8",
+    )
+    benchmark_stack_file = tmp_path / "benchmark-stack.json"
+    benchmark_stack_file.write_text(
+        json.dumps(
+            {
+                "hurdle_returns": ["0.0001"],
+                "opportunity_cost_returns": ["0.0002"],
+                "opportunity_cost_weights": [
+                    {"symbol": "SPY", "weight": "0.6"},
+                    {"symbol": "AGG", "weight": "0.4"},
+                ],
+                "operating_constraint": {
+                    "max_drawdown_design": "0.15",
+                    "max_drawdown_halt": "0.25",
+                    "cdar_threshold": "0.08",
+                    "cdar_confidence": "0.95",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_controller = FakeGateValidationController()
+    monkeypatch.setattr(
+        cli,
+        "build_default_gate_validation_controller",
+        lambda config, artifact_root: fake_controller,
+    )
+
+    exit_code = cli.main(
+        [
+            "gate-report",
+            "--env-file",
+            str(env_file),
+            "--gate",
+            "1",
+            "--benchmark-stack-file",
+            str(benchmark_stack_file),
+            "--window-start",
+            "2026-04-01",
+            "--window-end",
+            "2026-04-17",
+            "--experiment-id",
+            "exp-fake",
+            "--run-id",
+            "run-fake",
+            "--promotion-decision-scope",
+            "scope-prod-001",
+            "--metric-release-token",
+            "sha256:" + "9" * 64,
+            "--dataset-manifest-id",
+            "dataset-fake",
+        ]
+    )
+
+    assert exit_code == 0
+    _ = json.loads(capsys.readouterr().out)
+    context = fake_controller.called_with["metric_visibility_context"]
+    assert context.is_released is False
+    assert "trial_lineage_contaminated" in context.blocker_codes
+    assert "point_in_time_data_incomplete" in context.blocker_codes
+
+
+def test_compare_dataset_cli_marks_manual_review_when_old_raw_unavailable(
+    tmp_path,
+    capsys,
+) -> None:
+    old_manifest = json.loads(
+        Path(
+            "tests/fixtures/data_fingerprints/dataset_manifest_complete.json"
+        ).read_text(encoding="utf-8")
+    )
+    new_manifest = dict(old_manifest)
+    new_manifest["dataset_id"] = "dataset-spy-v2"
+    new_manifest["normalized_frame_hashes"] = ["sha256:" + "b" * 64]
+    old_path = tmp_path / "old.json"
+    new_path = tmp_path / "new.json"
+    old_path.write_text(json.dumps(old_manifest), encoding="utf-8")
+    new_path.write_text(json.dumps(new_manifest), encoding="utf-8")
+
+    exit_code = cli.main(
+        [
+            "compare-dataset",
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+            "--old-raw-unavailable",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["manual_review_required"] is True
+    assert payload["required_action"] == "replay_required"
+
+
+def test_experiment_run_cli_appends_started_then_completed_lifecycle(
+    tmp_path,
+    capsys,
+) -> None:
+    completed_run = json.loads(
+        Path("tests/fixtures/experiments/experiment_run_completed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    started_run = dict(completed_run)
+    started_run["lifecycle_status"] = "started"
+    started_run["termination_reason_code"] = "started"
+    started_path = tmp_path / "run-started.json"
+    completed_path = tmp_path / "run-completed.json"
+    started_path.write_text(json.dumps(started_run), encoding="utf-8")
+    completed_path.write_text(json.dumps(completed_run), encoding="utf-8")
+
+    assert (
+        cli.main(
+            [
+                "start-experiment-run",
+                "--ledger-root",
+                str(tmp_path / "experiments"),
+                "--run-file",
+                str(started_path),
+            ]
+        )
+        == 0
+    )
+    _ = capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                "complete-experiment-run",
+                "--ledger-root",
+                str(tmp_path / "experiments"),
+                "--run-file",
+                str(completed_path),
+            ]
+        )
+        == 0
+    )
+    _ = json.loads(capsys.readouterr().out)
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "experiments" / "experiment_run_records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [row["lifecycle_status"] for row in rows] == ["started", "completed"]
 
 
 def test_main_prepares_benchmark_closes_artifact(monkeypatch, tmp_path, capsys) -> None:
@@ -1460,6 +1724,12 @@ def test_gate_report_parser_defaults() -> None:
     assert args.artifact_root == "artifacts/validation"
     assert args.universe is None
     assert args.benchmark_adjusted is False
+    assert args.experiment_id is None
+    assert args.run_id is None
+    assert args.metric_release_token is None
+    assert args.dataset_manifest_id is None
+    assert args.experiment_ledger_root is None
+    assert args.dataset_manifest_file is None
 
 
 def test_prepare_benchmark_closes_parser_defaults() -> None:

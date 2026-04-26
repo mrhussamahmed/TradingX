@@ -27,6 +27,7 @@ from tradingx.controller import (
     build_default_paper_trading_controller,
 )
 from tradingx.data import AlpacaRegularHoursCalendar, build_market_data_gateway_for_mode
+from tradingx.experiments import ExperimentLedger, resolve_metric_visibility_context
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.historical import HistoricalWarmupService
 from tradingx.live_enablement import (
@@ -534,6 +535,12 @@ class LocalWebActionRunner:
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
+        experiment_id: str | None = None,
+        run_id: str | None = None,
+        promotion_decision_scope: str | None = None,
+        metric_release_token: str | None = None,
+        dataset_manifest_id: str | None = None,
+        dataset_manifest_file: str | None = None,
     ) -> WebActionResult:
         benchmark_path = self._resolve_artifact_path(Path(benchmark_stack_file))
         controller = build_default_gate_validation_controller(
@@ -543,20 +550,42 @@ class LocalWebActionRunner:
         window_start_utc = datetime.fromisoformat(window_start).replace(tzinfo=UTC)
         window_end_utc = datetime.fromisoformat(window_end).replace(tzinfo=UTC)
         benchmark_stack_payload = load_benchmark_stack_payload(benchmark_path)
+        metric_visibility_context = None
+        if experiment_id:
+            metric_visibility_context, resolved_dataset_manifest_id = (
+                resolve_metric_visibility_context(
+                    experiment_id=experiment_id,
+                    run_id=run_id or "",
+                    promotion_decision_scope=promotion_decision_scope or "",
+                    metric_release_token_ref=metric_release_token or "",
+                    ledger=ExperimentLedger(
+                        ledger_root=self._config.runtime.artifact_root / "experiments"
+                    ),
+                    dataset_manifest_path=(
+                        self._resolve_artifact_path(Path(dataset_manifest_file))
+                        if dataset_manifest_file
+                        else None
+                    ),
+                    dataset_manifest_id=dataset_manifest_id,
+                )
+            )
+            if resolved_dataset_manifest_id:
+                dataset_manifest_id = resolved_dataset_manifest_id
         result = controller.generate_gate_report(
             gate_id=gate,
             benchmark_stack_payload=benchmark_stack_payload,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
             universe=universe or self._config.runtime.symbol_universe,
+            metric_visibility_context=metric_visibility_context,
+            dataset_manifest_id=dataset_manifest_id,
         )
         return WebActionResult(
             action_id=f"action-{uuid.uuid4()}",
             action_type="gate_report",
             status="completed",
             message=(
-                f"Generated Gate {gate} report "
-                f"({LEGACY_NON_AUTHORITY_STATUS})."
+                f"Generated Gate {gate} report " f"({LEGACY_NON_AUTHORITY_STATUS})."
             ),
             evidence_refs=tuple(str(path) for path in result.artifact_paths),
         )
@@ -762,8 +791,7 @@ class LocalWebActionRunner:
             action_type="gate3_report",
             status="completed",
             message=(
-                "Gate 3 readiness report generated "
-                f"({LEGACY_NON_AUTHORITY_STATUS})."
+                "Gate 3 readiness report generated " f"({LEGACY_NON_AUTHORITY_STATUS})."
             ),
             evidence_refs=(str(output_path),),
         )

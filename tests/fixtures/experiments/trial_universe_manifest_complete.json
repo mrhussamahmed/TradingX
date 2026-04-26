@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "kind": "trial_universe_manifest",
+  "promotion_decision_scope": "scope-prod-001",
+  "status": "complete",
+  "blocker_codes": [],
+  "audit_flags": [],
+  "registered_experiment_ids": ["exp-001"],
+  "run_ids": ["run-001"],
+  "orphan_run_experiment_ids": [],
+  "cited_artifact_ids": [],
+  "missing_run_experiment_ids": [],
+  "trial_statistics": {
+    "registered_trial_count": 1,
+    "metric_bearing_trial_count": 1,
+    "effective_independent_trial_count": "1.00",
+    "trial_correlation_estimate": "0",
+    "selection_rule": "promotion_decision_scope_registered_universe",
+    "selected_strategy_rank": null,
+    "trial_sharpe_mean": null,
+    "trial_sharpe_variance": null,
+    "trial_return_skewness": null,
+    "trial_return_kurtosis": null,
+    "failed_or_canceled_count": 0,
+    "failed_run_treatment": "rank_and_effective_trial_penalty",
+    "failed_run_effective_trial_penalty": "0.00",
+    "full_cpcv_pbo_matrix_ref": "",
+    "selection_audit_required": false
+  },
+  "generated_at_utc": "2026-04-26T08:30:00Z"
+}

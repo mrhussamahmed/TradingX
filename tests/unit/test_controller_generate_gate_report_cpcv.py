@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -157,6 +158,44 @@ def test_gate_validation_controller_writes_cpcv_trials_for_gate_1(tmp_path) -> N
     assert result.report.gate_id == "1"
     assert evidence_report["counts"]["cpcv_trials"] == 90
     assert evidence_report["counts"]["pbo_reports"] == 0
+
+
+def test_gate_validation_controller_unreleased_context_writes_no_metric_artifacts(
+    tmp_path,
+) -> None:
+    from tradingx.experiments import MetricVisibilityContext
+
+    store = FilesystemArtifactStore(tmp_path)
+    controller = GateValidationController(
+        artifacts=store,
+        market_data=FakeHistoricalMarketDataGateway(),
+    )
+
+    result = controller.generate_gate_report(
+        gate_id="1",
+        benchmark_stack_payload=_benchmark_stack_payload(periods=200),
+        window_start_utc=datetime(2023, 1, 3, tzinfo=UTC),
+        window_end_utc=datetime(2023, 6, 19, tzinfo=UTC),
+        universe=("SPY", "QQQ"),
+        metric_visibility_context=MetricVisibilityContext(
+            experiment_id="exp-001",
+            run_id="run-001",
+            promotion_decision_scope="scope-prod-001",
+            promotion_valid=True,
+            metric_vault_release_status="pending",
+            metric_release_token_ref="",
+        ),
+    )
+
+    encoded = json.dumps(
+        store.list_artifact_payloads("validation_reports")
+        + store.list_artifact_payloads("gate_assessments"),
+        sort_keys=True,
+    )
+    assert result.report.promotion_valid is False
+    assert "trial_lineage_contaminated" in result.report.blocker_codes
+    assert "candidate_metrics" not in encoded
+    assert store.build_operator_evidence_report()["counts"]["cpcv_trials"] == 0
 
 
 def test_gate_validation_controller_does_not_write_cpcv_trials_for_gate_2(

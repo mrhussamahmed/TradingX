@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -222,6 +223,77 @@ def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
     assert snapshot.document_summary["session_count"] == 1
     assert documents[0].kind == "handover"
     assert proposals[0].proposal_id == "proposal-1"
+
+
+def test_local_web_read_model_redacts_unreleased_promotion_metrics(tmp_path) -> None:
+    validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")
+    validation_store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="evidence-unreleased",
+            candidate_id="trend-following-v1",
+            window_start_utc=datetime(2026, 1, 1, tzinfo=UTC),
+            window_end_utc=datetime(2026, 4, 1, tzinfo=UTC),
+            benchmark_metrics={"sharpe": "SENTINEL-9.8765"},
+            candidate_metrics={"sharpe": "SENTINEL-9.8765"},
+            adversarial_checks=("cost_sensitivity_pass",),
+            recommendation="promote",
+            assumptions=(),
+        )
+    )
+    evidence_path = (
+        tmp_path
+        / "artifacts"
+        / "validation"
+        / "evaluation_evidence"
+        / "evidence-unreleased.json"
+    )
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    payload["metric_visibility_context"] = {
+        "promotion_valid": True,
+        "metric_vault_release_status": "pending",
+        "metric_release_token_ref": "",
+        "experiment_id": "exp-001",
+        "run_id": "run-001",
+        "promotion_decision_scope": "scope-prod-001",
+    }
+    evidence_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=validation_store,
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(
+            _minimal_runtime_state(datetime(2026, 4, 26, tzinfo=UTC))
+        ),
+    )
+
+    research = read_model.build_research_snapshot()
+    evidence = read_model.list_evidence("evaluation_evidence")
+    encoded = json.dumps(
+        {"research": research, "evidence": evidence},
+        default=str,
+        sort_keys=True,
+    )
+
+    assert "SENTINEL-9.8765" not in encoded
+    assert research.candidate_summaries[0].candidate_metrics == {}
 
 
 def test_local_web_read_model_lists_artifact_payloads_by_category(tmp_path) -> None:
