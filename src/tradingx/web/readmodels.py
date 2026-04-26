@@ -14,6 +14,7 @@ from tradingx.config import TradingConfig
 from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
@@ -170,6 +171,18 @@ class LocalWebReadModel:
             )
         )
         alerts = tuple(incident.summary for incident in self.list_incidents()[:5])
+        gate_statuses = {
+            str(key): str(value)
+            for key, value in self._ensure_mapping(
+                validation_summary.get("latest_gate_statuses", {})
+            ).items()
+        }
+        recommendations = {
+            str(key): int(str(value))
+            for key, value in self._ensure_mapping(
+                validation_summary.get("evaluation_recommendations", {})
+            ).items()
+        }
         return DashboardSnapshot(
             generated_at_utc=datetime.now(UTC),
             service_status=self._service_manager.get_state(),
@@ -193,23 +206,22 @@ class LocalWebReadModel:
             },
             positions=positions,
             alerts=alerts,
-            gate_statuses={
-                str(key): str(value)
-                for key, value in self._ensure_mapping(
-                    validation_summary.get("latest_gate_statuses", {})
-                ).items()
-            },
-            recommendations={
-                str(key): int(str(value))
-                for key, value in self._ensure_mapping(
-                    validation_summary.get("evaluation_recommendations", {})
-                ).items()
-            },
+            gate_statuses=gate_statuses,
+            recommendations=recommendations,
             document_summary={
                 "session_count": len(
                     [record for record in document_records if record.kind == "handover"]
                 ),
                 "latest_state": latest_state_preview,
+                "v5_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+                "gate_validation_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+                "recommendation_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+            },
+            gate_authority_statuses={
+                key: LEGACY_NON_AUTHORITY_STATUS for key in gate_statuses
+            },
+            recommendation_authority_statuses={
+                key: LEGACY_NON_AUTHORITY_STATUS for key in recommendations
             },
         )
 

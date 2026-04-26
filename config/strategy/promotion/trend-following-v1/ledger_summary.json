@@ -1,0 +1,17 @@
+{
+  "approval_ref": "sha256:b546f4f359646f40f2a56fbf13f554ad4057f89aac59babfe27c3f4e5af456a7",
+  "artifact_refs": [
+    "sha256:77dcaf0070d941d2df18b86a30df152f9cc93ce136a06931b9525fc55df282ee",
+    "sha256:9f26f22468815e417d81978aa528ef5e4bf88a6fcb99bbb6f706a76d69e10a0b",
+    "sha256:cb37b9f520a8c2327ac5230c3ca73d1f553d6edc5ba002cbf08a39adacea17d8",
+    "sha256:0bc6284c9441adc551b4c19f80c545136dc1dcdd354c2c512ae6d7734ed4a8db"
+  ],
+  "fixture_root": false,
+  "ledger_hash": "sha256:7e6e08e02bdd1d5916f63127cd4150ac18d30d7ed4c6d3ffefb9de713c28f1c7",
+  "payload_hash": "sha256:e46f231cbd499ec555bfa42ce991f89aa6c8e200ceda58f42b396f4e65312873",
+  "replay_refs": [
+    "sha256:fbaea071c87f39ba0496c776c0c1060a5d97dd21faa179886f4d608256ba9a1b"
+  ],
+  "signature_prefix": "hmac",
+  "strategy_id": "trend-following-v1"
+}

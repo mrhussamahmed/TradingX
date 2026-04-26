@@ -67,7 +67,10 @@ class FakeTradingClient:
 
 def test_submit_and_wait_for_fill() -> None:
     client = FakeTradingClient()
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     submitted = gateway.submit_market_order("SPY", Decimal("1"), OrderSide.BUY)
     filled = gateway.wait_for_fill(
@@ -84,7 +87,10 @@ def test_submit_and_wait_for_fill() -> None:
 
 def test_submit_marketable_limit_order_uses_limit_order_request() -> None:
     client = FakeTradingClient()
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     submitted = gateway.submit_marketable_limit_order(
         "SPY",
@@ -103,7 +109,10 @@ def test_submit_marketable_limit_order_uses_limit_order_request() -> None:
 
 def test_find_order_by_client_id_returns_none_when_broker_has_no_match() -> None:
     client = FakeTradingClient()
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     existing = gateway.find_order_by_client_id("cid-missing")
 
@@ -117,7 +126,10 @@ def test_find_order_by_client_id_returns_existing_order_when_present() -> None:
         status="accepted",
         client_order_id="cid-existing",
     )
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     existing = gateway.find_order_by_client_id("cid-existing")
 
@@ -128,7 +140,10 @@ def test_find_order_by_client_id_returns_existing_order_when_present() -> None:
 
 def test_submit_oco_exit_order_uses_complex_exit_group() -> None:
     client = FakeTradingClient()
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     submitted = gateway.submit_oco_exit_order(
         "SPY",
@@ -170,7 +185,10 @@ class FakeClosePositionTradingClient:
 
 def test_close_position_submits_and_waits_for_fill() -> None:
     client = FakeClosePositionTradingClient()
-    gateway = AlpacaPaperExecutionGateway(trading_client=client)
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=client,
+        legacy_paper_non_authority=True,
+    )
 
     submitted = gateway.close_position("SPY")
     filled = gateway.wait_for_fill(
@@ -191,7 +209,10 @@ class ErrorTradingClient:
 
 
 def test_submit_order_sanitizes_broker_error_details() -> None:
-    gateway = AlpacaPaperExecutionGateway(trading_client=ErrorTradingClient())
+    gateway = AlpacaPaperExecutionGateway(
+        trading_client=ErrorTradingClient(),
+        legacy_paper_non_authority=True,
+    )
 
     with pytest.raises(OrderRejected, match="potential wash trade detected"):
         gateway.submit_market_order("SPY", Decimal("1"), OrderSide.BUY)

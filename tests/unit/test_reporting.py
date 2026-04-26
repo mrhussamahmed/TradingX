@@ -147,7 +147,8 @@ def test_build_gate_decision_brief_combines_validation_and_paper_evidence(
 
     assert brief.gate_id == "1"
     assert brief.status == "pass"
-    assert "advance" in brief.required_operator_action.lower()
+    assert "legacy non-authority" in brief.required_operator_action.lower()
+    assert "v5 promotion decision" in brief.required_operator_action.lower()
     assert brief.latest_open_positions == ("SPY",)
     assert brief.blocked_trade_count == 2
     assert brief.reconciliation_failure_count == 1

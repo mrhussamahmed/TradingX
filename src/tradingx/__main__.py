@@ -40,6 +40,11 @@ from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
 from tradingx.process_lock import RuntimeLockError, runtime_process_lock
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+    evaluate_promotion_manifest,
+)
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.risk_free import (
@@ -85,6 +90,22 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, list):
         return [_serialize(item) for item in value]
     return value
+
+
+def _format_promotion_summary(payload: dict[str, object]) -> str:
+    blocker_codes = payload.get("blocker_codes", [])
+    if isinstance(blocker_codes, list) and blocker_codes:
+        blocker_summary = ", ".join(str(item) for item in blocker_codes)
+    else:
+        blocker_summary = "none"
+    return "\n".join(
+        (
+            f"strategy_id: {payload['strategy_id']}",
+            f"requested_state: {payload['requested_state']}",
+            f"max_state: {payload['max_state']}",
+            f"blocker_codes: {blocker_summary}",
+        )
+    )
 
 
 def _runtime_lock_path(config: TradingConfig) -> Path:
@@ -183,6 +204,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     live_disable_parser = subparsers.add_parser("live-disable-status")
     live_disable_parser.add_argument("--env-file", default=".env")
+
+    promotion_parser = subparsers.add_parser("promotion-check")
+    promotion_parser.add_argument("--strategy-id", required=True)
+    promotion_parser.add_argument(
+        "--artifact-root",
+        default="config/strategy/promotion",
+    )
+    promotion_parser.add_argument(
+        "--format",
+        choices=("json", "summary"),
+        default="json",
+    )
 
     evidence_parser = subparsers.add_parser("evidence-report")
     evidence_parser.add_argument("--artifact-root", default="artifacts/paper_loop")
@@ -341,6 +374,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    if args.command == "promotion-check":
+        artifact_root = Path(args.artifact_root)
+        candidate_root = artifact_root / args.strategy_id
+        if candidate_root.exists():
+            artifact_root = candidate_root
+        promotion_decision = evaluate_promotion_manifest(artifact_root)
+        promotion_payload = promotion_decision.to_json()
+        if promotion_payload["strategy_id"] != args.strategy_id:
+            promotion_payload = {
+                "schema_version": "1.0",
+                "strategy_id": args.strategy_id,
+                "requested_state": "disabled",
+                "max_state": "disabled",
+                "blocker_codes": ["authority_artifact_invalid"],
+                "artifact_refs": [],
+                "ledger_sequence": None,
+                "ledger_hash": None,
+                "mismatched_artifact_strategy_id": promotion_payload["strategy_id"],
+            }
+            exit_code = 1
+        else:
+            exit_code = 0
+        if args.format == "summary":
+            print(_format_promotion_summary(promotion_payload))
+        else:
+            print(json.dumps(_serialize(promotion_payload), sort_keys=True))
+        return exit_code
+
     if args.command == "config-summary":
         config = TradingConfig.from_env_file(Path(args.env_file))
         print(json.dumps(config.to_safe_summary(), sort_keys=True))
@@ -434,6 +495,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         activation_gateway = LocalActivationGateway(
             store=operator_store,
             runtime_snapshot_store=runtime_store,
+            promotion_decision_provider=build_artifact_promotion_decision_provider(
+                config.runtime.artifact_root / "quant" / "promotion"
+            ),
+            required_promotion_state=PromotionState.PAPER_TRADING,
+            projection_root=Path("config/strategy/promotion"),
         )
         activation, _snapshot = activation_gateway.load_or_create_active_records(
             symbols
@@ -512,6 +578,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             activation_gateway = LocalActivationGateway(
                 store=operator_store,
                 runtime_snapshot_store=runtime_store,
+                promotion_decision_provider=build_artifact_promotion_decision_provider(
+                    config.runtime.artifact_root / "quant" / "promotion"
+                ),
+                required_promotion_state=PromotionState.PAPER_TRADING,
+                projection_root=Path("config/strategy/promotion"),
             )
             activation, snapshot = activation_gateway.load_or_create_active_records(
                 symbols
@@ -708,7 +779,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             window_start_utc,
             window_end_utc,
         )
-        payload = benchmark_stack.materialize(session_dates=session_dates)
+        benchmark_stack_payload = benchmark_stack.materialize(
+            session_dates=session_dates
+        )
         output_file = (
             Path(args.output_file)
             if args.output_file is not None
@@ -721,13 +794,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{window_end_utc.date().isoformat()}.json"
             )
         )
-        write_benchmark_stack_payload(output_file, payload)
+        write_benchmark_stack_payload(output_file, benchmark_stack_payload)
         print(
             json.dumps(
                 _serialize(
                     {
                         "output_file": output_file,
-                        "benchmark_stack": payload,
+                        "benchmark_stack": benchmark_stack_payload,
                     }
                 ),
                 sort_keys=True,
@@ -925,7 +998,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "launch-control-center":
         config = TradingConfig.from_env_file(Path(args.env_file))
         try:
-            payload = launch_control_center(
+            launch_result = launch_control_center(
                 config=config,
                 repo_root=Path.cwd(),
                 env_file=Path(args.env_file),
@@ -941,7 +1014,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 1
-        print(json.dumps(_serialize(payload), sort_keys=True))
+        print(json.dumps(_serialize(launch_result), sort_keys=True))
         return 0
 
     if args.command == "web":

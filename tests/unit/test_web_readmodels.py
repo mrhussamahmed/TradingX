@@ -205,6 +205,20 @@ def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
     assert snapshot.account_summary["cash"] == "10025.00"
     assert snapshot.gate_statuses["1"] == "pass"
     assert snapshot.recommendations["promote_candidate"] == 1
+    assert snapshot.gate_authority_statuses["1"] == "legacy_non_authority"
+    assert (
+        snapshot.recommendation_authority_statuses["promote_candidate"]
+        == "legacy_non_authority"
+    )
+    assert snapshot.document_summary["v5_authority_status"] == "legacy_non_authority"
+    assert (
+        snapshot.document_summary["gate_validation_authority_status"]
+        == "legacy_non_authority"
+    )
+    assert (
+        snapshot.document_summary["recommendation_authority_status"]
+        == "legacy_non_authority"
+    )
     assert snapshot.document_summary["session_count"] == 1
     assert documents[0].kind == "handover"
     assert proposals[0].proposal_id == "proposal-1"

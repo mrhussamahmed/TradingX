@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX State Action Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "contracts"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "state_action_contract"},
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ],
+      "properties": {
+        "disabled": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "research_only": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "paper_shadow": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "paper_trading": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "tiny_live_probe": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "production": {
+          "type": "object",
+          "required": [
+            "data_access",
+            "broker_access",
+            "order_permission",
+            "capital_ceiling",
+            "short_permission",
+            "required_runtime_controls",
+            "route_constraints",
+            "disallowed_actions"
+          ],
+          "properties": {
+            "data_access": {"type": "string"},
+            "broker_access": {"type": "string"},
+            "order_permission": {"type": "string"},
+            "capital_ceiling": {"type": "string", "format": "decimal-string"},
+            "short_permission": {"type": "string"},
+            "required_runtime_controls": {"type": "array", "items": {"type": "string"}},
+            "route_constraints": {
+              "type": "object",
+              "required": ["allowed_routes", "max_order_notional"],
+              "properties": {
+                "allowed_routes": {"type": "array", "items": {"type": "string"}},
+                "max_order_notional": {"type": "string", "format": "decimal-string"}
+              }
+            },
+            "disallowed_actions": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    }
+  }
+}

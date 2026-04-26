@@ -5,14 +5,18 @@ from decimal import Decimal
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from tradingx.features.regime import classify_regime
 from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
 from tradingx.portfolio.construction import build_portfolio_target_weight_history
-from tradingx.portfolio.live_construction import build_portfolio_cycle_target_weights
+from tradingx.portfolio.live_construction import (
+    UnsupportedPortfolioCycleTargetWeights,
+    build_portfolio_cycle_target_weights,
+)
 from tradingx.sleeves.trend import TrendSleeve
 from tradingx.sleeves.vol_managed_beta import VolManagedBetaSleeve
-from tradingx.types import RegimeSnapshot, SleeveContext
+from tradingx.types import RegimeSnapshot, SleeveContext, SleeveTrade
 
 
 def _bars(n: int = 400, seed: int = 7) -> pd.DataFrame:
@@ -236,3 +240,40 @@ def test_cycle_aggregate_equals_sum_of_decomposition_within_tolerance() -> None:
             start=Decimal("0"),
         )
         assert abs(weight - decomposition_sum) < Decimal("1e-9")
+
+
+def test_negative_sleeve_target_fails_before_aggregation() -> None:
+    from tradingx.portfolio.live_construction import (
+        _build_portfolio_cycle_target_weights_from_trades,
+    )
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp-short",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="mean-reversion-v1",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        UnsupportedPortfolioCycleTargetWeights,
+        match="unsupported_side",
+    ):
+        _build_portfolio_cycle_target_weights_from_trades(
+            blueprint=blueprint,
+            sleeve_trades_by_id={
+                "mean-reversion-v1": (
+                    SleeveTrade(
+                        sleeve_id="mean-reversion-v1",
+                        symbol="SPY",
+                        side="sell_short",
+                        target_weight_of_sleeve_budget=Decimal("-0.25"),
+                        rationale="short_signal",
+                        regime="risk_on",
+                    ),
+                )
+            },
+        )

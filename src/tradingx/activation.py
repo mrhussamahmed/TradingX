@@ -9,6 +9,13 @@ from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio.blueprint import PortfolioBlueprint, effective_strategy_id
+from tradingx.promotion import (
+    PromotionDecision,
+    PromotionState,
+    check_projection_drift,
+    state_allows,
+    validate_state_action_contracts,
+)
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
@@ -38,6 +45,11 @@ class LocalActivationGateway:
         snapshot_store: ApprovedWeightSnapshotStore | None = None,
         now_provider: Callable[[], datetime] | None = None,
         strategy_id_validator: Callable[[str], bool] | None = None,
+        promotion_decision_provider: Callable[[str], PromotionDecision] | None = None,
+        required_promotion_state: PromotionState | None = None,
+        projection_root: Path | None = None,
+        legacy_non_authority_mode: bool = False,
+        state_action_contracts: dict[str, dict[str, object]] | None = None,
     ) -> None:
         self._store = store
         self._runtime_snapshot_store = runtime_snapshot_store or store
@@ -48,6 +60,11 @@ class LocalActivationGateway:
         )
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._strategy_id_validator = strategy_id_validator
+        self._promotion_decision_provider = promotion_decision_provider
+        self._required_promotion_state = required_promotion_state
+        self._projection_root = projection_root
+        self._legacy_non_authority_mode = legacy_non_authority_mode
+        self._state_action_contracts = state_action_contracts
 
     def load_or_create_active_records(
         self,
@@ -67,9 +84,11 @@ class LocalActivationGateway:
                 notes="Default local trading appliance activation.",
             )
             self._validate_strategy_id(activation.strategy_id)
+            self._enforce_promotion_authority(activation.strategy_id)
             self._store.write_strategy_activation_record(activation)
         else:
             self._validate_strategy_id(activation.strategy_id)
+            self._enforce_promotion_authority(activation.strategy_id)
 
         snapshot = self.get_latest_snapshot(strategy_id=activation.strategy_id)
         if snapshot is None:
@@ -127,6 +146,7 @@ class LocalActivationGateway:
         for budget in blueprint.sleeve_budgets:
             strategy_id = effective_strategy_id(budget)
             self._validate_strategy_id(strategy_id)
+            self._enforce_promotion_authority(strategy_id)
             try:
                 snapshot = self._snapshot_store.load_by_strategy_id(strategy_id)
             except ApprovedWeightSnapshotNotFoundError as exc:
@@ -232,6 +252,68 @@ class LocalActivationGateway:
             raise ValueError(
                 "Strategy activation "
                 f"{strategy_id} is not resolvable by the runtime planner."
+            )
+
+    def _enforce_promotion_authority(self, strategy_id: str) -> None:
+        if (
+            self._promotion_decision_provider is None
+            or self._required_promotion_state is None
+        ):
+            if self._legacy_non_authority_mode:
+                return
+            raise ValueError(
+                "Strategy activation refused because V5 promotion authority is "
+                "not configured (authority_artifact_invalid)."
+            )
+        decision = self._promotion_decision_provider(strategy_id)
+        if self._projection_root is not None:
+            drift = check_projection_drift(
+                self._projection_root / f"{strategy_id}.json",
+                decision,
+            )
+            if drift.detected:
+                raise ValueError(
+                    "Strategy activation refused due to projection drift: "
+                    f"{drift.reason} ({drift.blocker_code})."
+                )
+        if not state_allows(decision.max_state, self._required_promotion_state):
+            blocker_codes = ", ".join(decision.blocker_codes) or "none"
+            artifact_refs = ", ".join(decision.artifact_refs) or "none"
+            raise ValueError(
+                "Strategy activation refused because promotion capped at "
+                f"{decision.max_state.value}; requested "
+                f"{self._required_promotion_state.value}; blockers="
+                f"{blocker_codes}; artifact_refs={artifact_refs}."
+            )
+        self._enforce_state_action_contract(decision)
+
+    def _enforce_state_action_contract(self, decision: PromotionDecision) -> None:
+        contracts = self._state_action_contracts or decision.state_action_contracts
+        if contracts is None:
+            raise ValueError(
+                "Strategy activation refused because state_action_contract_missing."
+            )
+        try:
+            validate_state_action_contracts(contracts)
+        except ValueError as exc:
+            raise ValueError(
+                "Strategy activation refused because state_action_contract_missing."
+            ) from exc
+        required_state = self._required_promotion_state
+        if required_state is None:
+            return
+        required_contract = contracts.get(required_state.value)
+        if not required_contract:
+            raise ValueError(
+                "Strategy activation refused because state_action_contract_missing."
+            )
+        disallowed_actions = required_contract.get("disallowed_actions", ())
+        if (
+            isinstance(disallowed_actions, tuple | list)
+            and "activation" in disallowed_actions
+        ):
+            raise ValueError(
+                "Strategy activation refused because state_action_contract_missing."
             )
 
     def _now(self) -> datetime:

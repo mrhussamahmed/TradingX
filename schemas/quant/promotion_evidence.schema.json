@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Promotion Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "strategy_id", "evidence_class", "artifact_refs"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "promotion_evidence"},
+    "strategy_id": {"type": "string"},
+    "evidence_class": {"type": "string"},
+    "artifact_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}}
+  }
+}

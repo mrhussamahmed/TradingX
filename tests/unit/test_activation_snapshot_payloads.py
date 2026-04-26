@@ -54,6 +54,7 @@ def test_load_or_create_active_records_mirrors_snapshot_to_runtime_store(
             {"baseline-long-only-v1": _snapshot("baseline-long-only-v1", "snap-1")}
         ),
         strategy_id_validator=lambda _: True,
+        legacy_non_authority_mode=True,
     )
 
     _activation, snapshot = gateway.load_or_create_active_records(("SPY",))
@@ -84,6 +85,7 @@ def test_load_or_activate_blueprint_backfills_runtime_snapshot_on_reuse(
         snapshot_store=_SnapshotStore({"trend-following-v1": snapshot}),
         strategy_id_validator=lambda _: True,
         now_provider=lambda: datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
+        legacy_non_authority_mode=True,
     )
 
     record = gateway.load_or_activate_blueprint(

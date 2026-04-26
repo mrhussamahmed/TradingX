@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Ledger Key Management Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "root_id", "worm_controls"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "ledger_key_management_policy"},
+    "root_id": {"type": "string"},
+    "worm_controls": {"type": "boolean"}
+  }
+}

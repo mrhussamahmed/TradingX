@@ -10,6 +10,10 @@ from tradingx.sleeves.base import SleeveProtocol
 from tradingx.types import SleeveContext, SleeveTargetWeights, SleeveTrade
 
 
+class UnsupportedPortfolioCycleTargetWeights(ValueError):
+    """Raised when cycle weights would hide unsupported exposure semantics."""
+
+
 def build_portfolio_cycle_target_weights(
     *,
     blueprint: PortfolioBlueprint,
@@ -37,6 +41,18 @@ def _build_portfolio_cycle_target_weights_from_trades(
     }
     contributions: dict[str, dict[str, Decimal]] = {}
     for sleeve_id, trades in sleeve_trades_by_id.items():
+        negative_trades = tuple(
+            trade
+            for trade in trades
+            if trade.target_weight_of_sleeve_budget < Decimal("0")
+        )
+        if negative_trades:
+            symbols = ", ".join(sorted({trade.symbol for trade in negative_trades}))
+            raise UnsupportedPortfolioCycleTargetWeights(
+                "unsupported_side: negative sleeve target weights are not supported "
+                "by the current long-only portfolio cycle path "
+                f"for sleeve {sleeve_id!r}: {symbols}."
+            )
         contributions[sleeve_id] = {
             trade.symbol: trade.target_weight_of_sleeve_budget
             for trade in trades
@@ -101,4 +117,7 @@ def _rescale_to_aggregate(
     return result
 
 
-__all__ = ("build_portfolio_cycle_target_weights",)
+__all__ = (
+    "UnsupportedPortfolioCycleTargetWeights",
+    "build_portfolio_cycle_target_weights",
+)

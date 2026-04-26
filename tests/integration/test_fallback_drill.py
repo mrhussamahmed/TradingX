@@ -209,6 +209,7 @@ def test_operator_halt_narrows_blueprint_after_three_cycles(tmp_path) -> None:
         snapshot_store=_SnapshotStore(),
         now_provider=lambda: datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
         strategy_id_validator=lambda _: True,
+        legacy_non_authority_mode=True,
     )
     blueprint_path = tmp_path / "bp-default.json"
     _write_blueprint(blueprint_path)
@@ -267,6 +268,7 @@ def test_rollback_reactivates_original_blueprint_after_narrowing(tmp_path) -> No
         snapshot_store=_SnapshotStore(),
         now_provider=lambda: datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
         strategy_id_validator=lambda _: True,
+        legacy_non_authority_mode=True,
     )
     blueprint_path = tmp_path / "bp-default.json"
     _write_blueprint(blueprint_path)

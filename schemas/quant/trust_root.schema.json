@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Quant Trust Root",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "root_id",
+    "trusted_keys",
+    "key_scopes",
+    "revoked_keys",
+    "not_before_utc",
+    "not_after_utc"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "root_id": {
+      "type": "string"
+    },
+    "trusted_keys": {
+      "type": "object"
+    },
+    "key_scopes": {
+      "type": "object"
+    },
+    "revoked_keys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "not_before_utc": {
+      "type": "string",
+      "format": "utc-datetime"
+    },
+    "not_after_utc": {
+      "type": "string",
+      "format": "utc-datetime"
+    },
+    "fixture_root": {"type": "boolean"}
+  }
+}

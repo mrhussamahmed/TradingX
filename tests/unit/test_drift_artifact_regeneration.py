@@ -82,6 +82,7 @@ class _DriftRegenerationFixture:
         self.activation_gateway = LocalActivationGateway(
             store=self.operator_platform_store,
             strategy_id_validator=lambda _: True,
+            legacy_non_authority_mode=True,
         )
         self.operator_control_store = OperatorControlStore(self.data_root / "control")
         self.blueprint = DriftMonitorBlueprint(blueprint_id="drift-default-v1")

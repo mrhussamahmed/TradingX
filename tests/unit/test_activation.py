@@ -30,6 +30,7 @@ def test_local_activation_gateway_loads_committed_weights_outside_repo_cwd(
     gateway = LocalActivationGateway(
         store=FilesystemArtifactStore(tmp_path / "operator_platform"),
         strategy_id_validator=registry.can_resolve,
+        legacy_non_authority_mode=True,
     )
 
     activation, snapshot = gateway.load_or_create_active_records(("SPY",))

@@ -1,0 +1,17 @@
+{
+  "approval_ref": "sha256:a5e02ba32b060892f09ff830120786e6b03bdd603d49a8e32973d80441ea288f",
+  "artifact_refs": [
+    "sha256:77dcaf0070d941d2df18b86a30df152f9cc93ce136a06931b9525fc55df282ee",
+    "sha256:9f26f22468815e417d81978aa528ef5e4bf88a6fcb99bbb6f706a76d69e10a0b",
+    "sha256:cb37b9f520a8c2327ac5230c3ca73d1f553d6edc5ba002cbf08a39adacea17d8",
+    "sha256:0bc6284c9441adc551b4c19f80c545136dc1dcdd354c2c512ae6d7734ed4a8db"
+  ],
+  "fixture_root": true,
+  "ledger_hash": "sha256:de74b4e2e93921077305ad5ddb7e9ced34e16b247c37b05fabd96a0e61f68e9c",
+  "payload_hash": "sha256:e46f231cbd499ec555bfa42ce991f89aa6c8e200ceda58f42b396f4e65312873",
+  "replay_refs": [
+    "sha256:fbaea071c87f39ba0496c776c0c1060a5d97dd21faa179886f4d608256ba9a1b"
+  ],
+  "signature_prefix": "fixture",
+  "strategy_id": "trend-following-v1"
+}

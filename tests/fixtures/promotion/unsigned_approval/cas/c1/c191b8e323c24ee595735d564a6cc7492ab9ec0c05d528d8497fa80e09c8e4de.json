@@ -1,0 +1,1 @@
+{"benchmark_id":"benchmark:spy-total-return","description":"Benchmark policy for SPY long-only paper-shadow comparison.","kind":"benchmark_policy","schema_version":"1.0","strategy_id":"trend-following-v1"}

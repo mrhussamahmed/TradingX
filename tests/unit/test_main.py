@@ -40,6 +40,86 @@ from tradingx.types import (
 )
 
 
+def test_promotion_check_reports_blockers_from_fixture_artifacts(capsys) -> None:
+    exit_code = cli.main(
+        (
+            "promotion-check",
+            "--strategy-id",
+            "trend-following-v1",
+            "--artifact-root",
+            "tests/fixtures/promotion/key_policy_missing",
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["strategy_id"] == "trend-following-v1"
+    assert payload["max_state"] == "disabled"
+    assert payload["blocker_codes"] == ["ledger_key_worm_controls_missing"]
+
+
+def test_promotion_check_summary_format_reports_state_and_blockers(capsys) -> None:
+    exit_code = cli.main(
+        (
+            "promotion-check",
+            "--strategy-id",
+            "trend-following-v1",
+            "--artifact-root",
+            "tests/fixtures/promotion/paper_shadow_placeholder",
+            "--format",
+            "summary",
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "strategy_id: trend-following-v1" in output
+    assert "max_state: paper_shadow" in output
+    assert "blocker_codes: none" in output
+
+
+def test_promotion_check_default_artifact_root_reports_research_blockers(
+    capsys,
+) -> None:
+    exit_code = cli.main(
+        (
+            "promotion-check",
+            "--strategy-id",
+            "trend-following-v1",
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["strategy_id"] == "trend-following-v1"
+    assert payload["max_state"] == "research_only"
+    assert payload["blocker_codes"] == [
+        "utility_definition_missing",
+        "tax_account_financing_unspecified",
+        "jurisdiction_account_use_unknown",
+        "instrument_package_missing",
+    ]
+
+
+def test_promotion_check_wrong_strategy_artifact_fails_closed(capsys) -> None:
+    exit_code = cli.main(
+        (
+            "promotion-check",
+            "--strategy-id",
+            "mean-reversion-v1",
+            "--artifact-root",
+            "tests/fixtures/promotion/paper_shadow_placeholder",
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["strategy_id"] == "mean-reversion-v1"
+    assert payload["max_state"] == "disabled"
+    assert payload["blocker_codes"] == ["authority_artifact_invalid"]
+    assert payload["mismatched_artifact_strategy_id"] == "trend-following-v1"
+
+
 class FakeController:
     def run_paper_roundtrip(
         self,
@@ -744,9 +824,12 @@ def test_main_runtime_plan_command_writes_plan_artifact(
                 open_orders=(),
             )
 
+    activation_kwargs: list[dict[str, object]] = []
+
     class FakeActivationGateway:
-        def __init__(self, *, store, runtime_snapshot_store=None) -> None:
+        def __init__(self, *, store, runtime_snapshot_store=None, **kwargs) -> None:
             del store, runtime_snapshot_store
+            activation_kwargs.append(kwargs)
 
         def load_or_create_active_records(self, symbols):
             del symbols
@@ -817,6 +900,9 @@ def test_main_runtime_plan_command_writes_plan_artifact(
     payload = json.loads(capsys.readouterr().out)
     assert payload["strategy_id"] == "trend-following-v1"
     assert Path(payload["artifact_path"]).exists()
+    assert activation_kwargs
+    assert activation_kwargs[0]["promotion_decision_provider"] is not None
+    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
 
 
 def test_main_runtime_plan_command_reports_blocked_research_strategy(
@@ -856,8 +942,8 @@ def test_main_runtime_plan_command_reports_blocked_research_strategy(
             )
 
     class FakeActivationGateway:
-        def __init__(self, *, store, runtime_snapshot_store=None) -> None:
-            del store, runtime_snapshot_store
+        def __init__(self, *, store, runtime_snapshot_store=None, **kwargs) -> None:
+            del store, runtime_snapshot_store, kwargs
 
         def load_or_create_active_records(self, symbols):
             del symbols
@@ -1004,6 +1090,11 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
         decision_reason="Top-ranked eligible opportunity.",
     )
     fake_service = FakeRuntimeService()
+    activation_kwargs: list[dict[str, object]] = []
+
+    def fake_activation_gateway(**kwargs):
+        activation_kwargs.append(kwargs)
+        return FakeRuntimeActivationGateway(activation, snapshot)
 
     monkeypatch.setattr(
         cli,
@@ -1014,7 +1105,7 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     monkeypatch.setattr(
         cli,
         "LocalActivationGateway",
-        lambda **kwargs: FakeRuntimeActivationGateway(activation, snapshot),
+        fake_activation_gateway,
         raising=False,
     )
     monkeypatch.setattr(
@@ -1071,6 +1162,9 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     )
     assert payload["service_result"] is None
     assert fake_service.called_with is None
+    assert activation_kwargs
+    assert activation_kwargs[0]["promotion_decision_provider"] is not None
+    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
 
 
 def test_main_prints_live_disable_status(tmp_path, capsys) -> None:

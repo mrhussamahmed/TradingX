@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -935,6 +935,8 @@ class DashboardSnapshot:
     gate_statuses: dict[str, str]
     recommendations: dict[str, int]
     document_summary: dict[str, str | int]
+    gate_authority_statuses: dict[str, str] = field(default_factory=dict)
+    recommendation_authority_statuses: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

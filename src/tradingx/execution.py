@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,12 @@ from alpaca.trading.requests import (
     TakeProfitRequest,
 )
 
+from tradingx.promotion import (
+    PromotionDecision,
+    PromotionState,
+    state_allows,
+    validate_state_action_route,
+)
 from tradingx.types import ExecutionLifecycleRecord, OrderRecord
 
 REJECTED_STATUSES = {"canceled", "expired", "rejected", "suspended"}
@@ -85,6 +92,55 @@ class OrderTimeout(RuntimeError):
     """Raised when an order does not fill before the timeout expires."""
 
 
+class OrderRouteAuthorityError(RuntimeError):
+    """Raised when an order-capable route lacks V5 authority."""
+
+
+class OrderRouteAuthorityGuard:
+    def __init__(
+        self,
+        *,
+        decision_provider: Callable[[str], PromotionDecision],
+        required_state: PromotionState,
+        route_label: str,
+        state_action_contracts: dict[str, dict[str, object]] | None = None,
+    ) -> None:
+        self._decision_provider = decision_provider
+        self._required_state = required_state
+        self._route_label = route_label
+        self._state_action_contracts = state_action_contracts
+
+    def assert_authorized(self, strategy_id: str | None) -> None:
+        if strategy_id is None:
+            raise OrderRouteAuthorityError(
+                f"{self._route_label} is non-V5-authorized without strategy id."
+            )
+        decision: PromotionDecision = self._decision_provider(strategy_id)
+        if not state_allows(decision.max_state, self._required_state):
+            blocker_codes = ", ".join(decision.blocker_codes) or "none"
+            artifact_refs = ", ".join(decision.artifact_refs) or "none"
+            raise OrderRouteAuthorityError(
+                f"{self._route_label} for {strategy_id} is capped at "
+                f"{decision.max_state.value}; requires {self._required_state.value}; "
+                f"blockers={blocker_codes}; artifact_refs={artifact_refs}."
+            )
+        contracts = self._state_action_contracts or decision.state_action_contracts
+        if contracts is None:
+            raise OrderRouteAuthorityError(
+                "state_action_contract_missing: route contract is absent."
+            )
+        try:
+            validate_state_action_route(
+                contracts,
+                state=self._required_state,
+                route_label=self._route_label,
+            )
+        except ValueError as exc:
+            raise OrderRouteAuthorityError(
+                "state_action_contract_missing: route contract is invalid."
+            ) from exc
+
+
 class AlpacaPaperExecutionGateway:
     """Submit and monitor Alpaca paper orders.
 
@@ -94,8 +150,29 @@ class AlpacaPaperExecutionGateway:
         (retrieved 2026-04-17)
     """
 
-    def __init__(self, trading_client: TradingClient) -> None:
+    def __init__(
+        self,
+        trading_client: TradingClient,
+        *,
+        authority_guard: OrderRouteAuthorityGuard | None = None,
+        strategy_id: str | None = None,
+        legacy_paper_non_authority: bool = False,
+    ) -> None:
         self._trading_client = trading_client
+        self._authority_guard = authority_guard
+        self._strategy_id = strategy_id
+        self._legacy_paper_non_authority = legacy_paper_non_authority
+
+    @property
+    def v5_order_authorized(self) -> bool:
+        return self._authority_guard is not None
+
+    def assert_v5_order_authority(self) -> None:
+        if self._authority_guard is None:
+            raise OrderRouteAuthorityError(
+                "Order route is non-V5-authorized legacy paper execution."
+            )
+        self._authority_guard.assert_authorized(self._strategy_id)
 
     def submit_market_order(
         self,
@@ -105,6 +182,7 @@ class AlpacaPaperExecutionGateway:
         *,
         client_order_id: str | None = None,
     ) -> OrderRecord:
+        self._assert_order_route_authority_if_configured()
         order_request = MarketOrderRequest(
             symbol=symbol,
             qty=float(quantity),
@@ -149,6 +227,7 @@ class AlpacaPaperExecutionGateway:
         time_in_force: TimeInForce,
         client_order_id: str | None = None,
     ) -> OrderRecord:
+        self._assert_order_route_authority_if_configured()
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=float(quantity),
@@ -176,6 +255,7 @@ class AlpacaPaperExecutionGateway:
         take_profit_limit: Decimal,
         stop_price: Decimal,
     ) -> OrderRecord:
+        self._assert_order_route_authority_if_configured()
         order_request = LimitOrderRequest(
             symbol=symbol,
             qty=float(quantity),
@@ -203,6 +283,7 @@ class AlpacaPaperExecutionGateway:
         source: https://alpaca.markets/sdks/python/api_reference/trading/positions.html
             (retrieved 2026-04-17)
         """
+        self._assert_order_route_authority_if_configured()
         try:
             raw_order = self._trading_client.close_position(symbol)
         except Exception as error:
@@ -289,6 +370,16 @@ class AlpacaPaperExecutionGateway:
         ):
             raise OrderRejected("All OCO exit legs were canceled before fill.")
         return None
+
+    def _assert_order_route_authority_if_configured(self) -> None:
+        if self._legacy_paper_non_authority:
+            return
+        if self._authority_guard is None:
+            raise OrderRouteAuthorityError(
+                "Order route is non-V5-authorized and not explicitly labeled "
+                "legacy paper non-authority."
+            )
+        self._authority_guard.assert_authorized(self._strategy_id)
 
 
 def sum_per_sleeve_notional(

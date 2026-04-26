@@ -241,6 +241,7 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
     monkeypatch, tmp_path
 ) -> None:
     service_manager_instances: list[object] = []
+    activation_kwargs: list[dict[str, object]] = []
 
     class RecordingServiceManager:
         def __init__(self, *, config, service_builder=None) -> None:
@@ -281,7 +282,7 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
     monkeypatch.setattr(
         web_runtime,
         "LocalActivationGateway",
-        lambda *args, **kwargs: object(),
+        lambda *args, **kwargs: activation_kwargs.append(kwargs) or object(),
     )
     monkeypatch.setattr(
         web_runtime,
@@ -313,6 +314,9 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
         action_runner._runtime_host_manager.service_manager
         is service_manager_instances[0]
     )
+    assert activation_kwargs
+    assert activation_kwargs[0]["promotion_decision_provider"] is not None
+    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
@@ -385,6 +389,8 @@ def test_local_web_action_runner_generates_gate3_artifacts(tmp_path) -> None:
 
     assert report.status == "completed"
     assert package.status == "completed"
+    assert "legacy_non_authority" in report.message
+    assert "legacy_non_authority" in package.message
     assert recovery.status in {"completed", "pending"}
     assert alert.status in {"completed", "pending"}
     assert (tmp_path / "artifacts" / "validation" / "gate3_reports").exists()

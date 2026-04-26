@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Approval Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "payload_hash",
+    "scope",
+    "signature_ref",
+    "operator_identity_ref",
+    "role_registry_ref",
+    "authority_boundary_ref",
+    "risk_accepted",
+    "signed_at_utc",
+    "expires_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "approval"},
+    "payload_hash": {"type": "string", "format": "sha256"},
+    "scope": {"type": "string"},
+    "signature_ref": {"type": "string"},
+    "operator_identity_ref": {"type": "string"},
+    "role_registry_ref": {"type": "string"},
+    "authority_boundary_ref": {"type": "string"},
+    "risk_accepted": {"type": "boolean"},
+    "signed_at_utc": {"type": "string", "format": "utc-datetime"},
+    "expires_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

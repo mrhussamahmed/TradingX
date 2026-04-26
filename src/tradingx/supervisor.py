@@ -179,7 +179,10 @@ class AlpacaPaperBrokerOperator:
         self._trading_client = trading_client
         self._market_data = market_data
         self._portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
-        self._execution_gateway = AlpacaPaperExecutionGateway(trading_client)
+        self._execution_gateway = AlpacaPaperExecutionGateway(
+            trading_client,
+            legacy_paper_non_authority=True,
+        )
         self._sleep_fn = sleep_fn or time.sleep
         self._monotonic_fn = monotonic_fn or time.monotonic
 

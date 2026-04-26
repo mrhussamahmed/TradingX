@@ -36,6 +36,11 @@ from tradingx.live_enablement import (
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.promotion import (
+    LEGACY_NON_AUTHORITY_STATUS,
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+)
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.risk_free import build_default_risk_free_series
@@ -549,7 +554,10 @@ class LocalWebActionRunner:
             action_id=f"action-{uuid.uuid4()}",
             action_type="gate_report",
             status="completed",
-            message=f"Generated Gate {gate} report.",
+            message=(
+                f"Generated Gate {gate} report "
+                f"({LEGACY_NON_AUTHORITY_STATUS})."
+            ),
             evidence_refs=tuple(str(path) for path in result.artifact_paths),
         )
 
@@ -587,7 +595,7 @@ class LocalWebActionRunner:
             action_id=f"action-{uuid.uuid4()}",
             action_type="decision_report",
             status="completed",
-            message=alert.summary,
+            message=f"{alert.summary} ({LEGACY_NON_AUTHORITY_STATUS}).",
             evidence_refs=brief.evidence_refs,
         )
 
@@ -753,7 +761,10 @@ class LocalWebActionRunner:
             action_id=f"action-{uuid.uuid4()}",
             action_type="gate3_report",
             status="completed",
-            message="Gate 3 readiness report generated.",
+            message=(
+                "Gate 3 readiness report generated "
+                f"({LEGACY_NON_AUTHORITY_STATUS})."
+            ),
             evidence_refs=(str(output_path),),
         )
 
@@ -769,7 +780,10 @@ class LocalWebActionRunner:
             action_id=f"action-{uuid.uuid4()}",
             action_type="gate3_package",
             status="completed",
-            message="Gate 3 promotion package generated.",
+            message=(
+                "Gate 3 promotion package generated "
+                f"({LEGACY_NON_AUTHORITY_STATUS})."
+            ),
             evidence_refs=(str(report_path), str(package_path)),
         )
 
@@ -977,6 +991,11 @@ def build_default_local_web_components(
     activation_gateway = LocalActivationGateway(
         store=FilesystemArtifactStore(operator_store_root),
         runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
+        promotion_decision_provider=build_artifact_promotion_decision_provider(
+            config.runtime.artifact_root / "quant" / "promotion"
+        ),
+        required_promotion_state=PromotionState.PAPER_TRADING,
+        projection_root=Path("config/strategy/promotion"),
     )
     runtime_host_manager = LocalRuntimeHostManager(
         config=config,

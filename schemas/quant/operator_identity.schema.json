@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Operator Identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "operator_id", "role_refs"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "operator_id": {"type": "string"},
+    "role_refs": {"type": "array", "items": {"type": "string"}}
+  }
+}

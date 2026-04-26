@@ -71,6 +71,7 @@ def _gateway(
         strategy_id_validator=lambda _: True,
         snapshot_store=snapshot_store,
         now_provider=lambda: datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
+        legacy_non_authority_mode=True,
     )
 
 

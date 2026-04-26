@@ -1687,7 +1687,10 @@ def build_default_controller(config: TradingConfig) -> RoundTripController:
             api_key=config.paper_credentials.api_key,
             api_secret=config.paper_credentials.api_secret,
         ),
-        execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
+        execution=AlpacaPaperExecutionGateway(
+            trading_client=trading_client,
+            legacy_paper_non_authority=True,
+        ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),
     )
@@ -1718,7 +1721,10 @@ def build_default_trading_loop_controller(
     )
     return PaperTradingLoopController(
         market_data=market_data_gateway,
-        execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
+        execution=AlpacaPaperExecutionGateway(
+            trading_client=trading_client,
+            legacy_paper_non_authority=True,
+        ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),
         strategy=DeterministicBaselineStrategy(),

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Promotion Decision Ledger Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sequence", "previous_hash", "payload", "payload_hash", "artifact_refs", "replay_refs", "writer_identity", "approval_refs", "ledger_hash"],
+  "properties": {
+    "sequence": {"type": "integer"},
+    "previous_hash": {},
+    "payload": {"type": "object"},
+    "payload_hash": {"type": "string", "format": "sha256"},
+    "artifact_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "replay_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "writer_identity": {"type": "string"},
+    "approval_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "ledger_hash": {"type": "string", "format": "sha256"}
+  }
+}
