@@ -30,13 +30,14 @@ Committed waves:
 - Wave 6: `eac6ce5` - `TradingX quant hardening: complete Wave 6 - Portfolio Utility, Optimizer, Forecasts, And Sizing`
 - Wave 7: previous commit - `TradingX quant hardening: complete Wave 7 - Short-Side Capability And Financing`
 - Wave 8: previous commit - `TradingX quant hardening: complete Wave 8 - Live Probe And Operational Safety`
-- Wave 9: `<this commit>` - `TradingX quant hardening: complete Wave 9 - Recertification And Change Control`
+- Wave 9: previous commit - `TradingX quant hardening: complete Wave 9 - Recertification And Change Control`
+- Wave 10: `<this commit>` - `TradingX quant hardening: complete Wave 10 - Legacy Path Retirement And Hardening`
 
 ## Active wave status
 
-- Wave 9 - Recertification And Change Control is implemented,
+- Wave 10 - Legacy Path Retirement And Hardening is implemented,
   validated, and committed.
-- Wave 10 - Legacy Path Retirement And Hardening is next.
+- Final - Integrated Review And Merge Readiness is next.
 - Wave 5 reports:
   - `docs/reports/wave5_cost_quote_capacity_implementation_report.md`
   - `docs/reports/wave5_cost_quote_capacity_handoff.md`

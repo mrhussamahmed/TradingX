@@ -408,6 +408,7 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("production_approval_expired", PromotionState.PAPER_TRADING),
     ("next_review_due_passed", PromotionState.PAPER_TRADING),
     ("recertification_report_missing", PromotionState.PAPER_TRADING),
+    ("legacy_artifacts_detected", PromotionState.PAPER_SHADOW),
     ("drift_monitor_spec_missing", PromotionState.PAPER_SHADOW),
     ("capacity_extrapolation_risk", PromotionState.PAPER_SHADOW),
     ("unsupported_side", PromotionState.RESEARCH_ONLY),
