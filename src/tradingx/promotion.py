@@ -312,6 +312,71 @@ _EMITTED_BLOCKERS_REQUIRING_REAL_COVERAGE = {
     "pre_trade_control_manifest_missing",
     "operational_safety_drill_missing",
     "live_probe_recertification_report_missing",
+    # Defect 6 — Wave 4 statistical evidence
+    "trial_lineage_contaminated",
+    "trial_universe_incomplete",
+    "dsr_pbo_inputs_incomplete",
+    "point_in_time_data_incomplete",
+    "pending_threshold",
+    # Defect 6 — Wave 5 cost & capacity
+    "execution_semantics_incomplete",
+    "execution_sample_power_missing",
+    "capacity_lower_bound_missing",
+    "live_sample_requirement_unmet",
+    "unsupported_cost_bucket",
+    "capacity_extrapolation_risk",
+    # Defect 6 — Wave 6 portfolio / optimizer / forecast / sizing
+    "optimizer_or_sizing_lockbox_missing",
+    "tail_risk_missing",
+    "applicable_baseline_excluded",
+    "paired_oos_utility_failed",
+    "no_alpha_pipeline_edge",
+    "optimizer_perturbation_unstable",
+    "covariance_drift_unresolved",
+    "turnover_cap_exceeded",
+    "expected_return_not_promotion_valid",
+    "expected_return_uncertainty_uncalibrated",
+    "feature_timestamp_unauditable",
+    "hard_exposure_caps_missing",
+    "kelly_gate_incomplete",
+    "sizing_property_violated",
+    # Defect 6 — Wave 7 short-side capability
+    "short_legal_mechanics_missing",
+    "borrow_snapshot_stale",
+    "locate_documentation_missing",
+    "locate_expired",
+    "paper_live_short_semantics_mismatch",
+    "live_probe_short_evidence_missing",
+    "broker_initiated_cover_unreconciled",
+    "legacy_short_evidence",
+    # Defect 6 — Wave 8 live probe & operational safety
+    "pre_trade_control_missing",
+    "authority_boundary_missing",
+    "authority_boundary_invalid",
+    "authority_boundary_expired",
+    "live_probe_plan_expired",
+    "live_probe_minimum_activity_unmet",
+    "live_probe_inconclusive",
+    "safety_drill_stale",
+    "safety_drill_failed",
+    "broker_timeout_state_machine_missing",
+    "broker_timeout_retry_unsafe",
+    "idempotency_evidence_missing",
+    "reconciliation_evidence_missing",
+    "reconciliation_incident_unresolved",
+    "manual_exception_disabled_core_control",
+    "post_probe_recertification_missing",
+    # Defect 6 — Wave 9 recertification & change control
+    "production_approval_expired",
+    "next_review_due_passed",
+    "recertification_report_missing",
+    "drift_monitor_spec_missing",
+    "unrecorded_material_change",
+    "drift_alarm_live",
+    "dependency_scope_unresolved",
+    # Defect 6 — Wave 10 legacy retirement / hardening
+    "after_tax_edge_missing_for_taxable_account",
+    "legacy_artifacts_detected",
 }
 
 
@@ -668,10 +733,21 @@ for _code, _fixture, _red_test in (
     ),
 ):
     _existing = BLOCKER_REGISTRY[_code]
+    # Defect 6 — Wave 2 mandate codes (mandate_promotion_ceiling_exceeded,
+    # allocation_policy_limit_exceeded, lower_bound_net_edge_undefined,
+    # net_edge_lower_bound_below_threshold) were previously mislabeled
+    # ``wave_1``. They are mandate-policy blockers and properly belong to
+    # Wave 2.
+    _WAVE_2_MANDATE_CODES = {
+        "mandate_promotion_ceiling_exceeded",
+        "allocation_policy_limit_exceeded",
+        "lower_bound_net_edge_undefined",
+        "net_edge_lower_bound_below_threshold",
+    }
     BLOCKER_REGISTRY[_code] = _record(
         _code,
         _existing.max_state,
-        owning_wave="wave_1",
+        owning_wave="wave_2" if _code in _WAVE_2_MANDATE_CODES else "wave_1",
         fixture=_fixture,
         evaluator=f"evaluate_{_code}",
         red_test=_red_test,
@@ -760,6 +836,458 @@ for _code, _wave, _fixture, _red_test in (
         evaluator=f"evaluate_{_code}",
         red_test=_red_test,
         cli_output="promotion-check.blockers",
+        web_report_field="dashboard.document_summary.v5_authority_status",
+        runtime_enforcement="activation_refusal",
+    )
+
+
+# Defect 6 — Wave 4-10 blocker registry metadata backfill. Each code is
+# tied to its owning evaluator, a representative red-test name in the
+# wave's test file, and the canonical fixture/CLI/web/runtime fields so
+# ``validate_blocker_registry_coverage(strict=True)`` succeeds with no
+# synthetic placeholders.
+_WAVE_4_TO_10_OVERRIDES: tuple[tuple[str, str, str, str, str], ...] = (
+    # (code, owning_wave, evaluator, red_test, cli_output)
+    # Wave 4 — statistical evidence
+    (
+        "trial_lineage_contaminated",
+        "wave_4",
+        "evaluate_provenance_blockers",
+        "test_experiment_and_dataset_provenance_blockers_cap_promotion",
+        "promotion-check.statistical_blockers",
+    ),
+    (
+        "trial_universe_incomplete",
+        "wave_4",
+        "evaluate_provenance_blockers",
+        "test_experiment_and_dataset_provenance_blockers_cap_promotion",
+        "promotion-check.statistical_blockers",
+    ),
+    (
+        "dsr_pbo_inputs_incomplete",
+        "wave_4",
+        "evaluate_statistical_evidence_blockers",
+        "test_excess_kurtosis_normalisation_matches_bldp_paper",
+        "promotion-check.statistical_blockers",
+    ),
+    (
+        "point_in_time_data_incomplete",
+        "wave_4",
+        "evaluate_provenance_blockers",
+        "test_experiment_and_dataset_provenance_blockers_cap_promotion",
+        "promotion-check.statistical_blockers",
+    ),
+    (
+        "pending_threshold",
+        "wave_4",
+        "evaluate_statistical_evidence_blockers",
+        "test_missing_threshold_yields_pending_threshold_blocker",
+        "promotion-check.statistical_blockers",
+    ),
+    # Wave 5 — cost & capacity
+    (
+        "execution_semantics_incomplete",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_evaluator_re_derives_quote_quality_blocker_from_raw_fields",
+        "promotion-check.blockers",
+    ),
+    (
+        "execution_sample_power_missing",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_missing_powered_bucket_yields_execution_sample_power_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "capacity_lower_bound_missing",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_capacity_without_lower_bound_yields_capacity_lower_bound_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "live_sample_requirement_unmet",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_paper_only_execution_data_cannot_support_market_impact_claim",
+        "promotion-check.blockers",
+    ),
+    (
+        "unsupported_cost_bucket",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_unsupported_sparse_bucket_yields_unsupported_cost_bucket",
+        "promotion-check.blockers",
+    ),
+    (
+        "capacity_extrapolation_risk",
+        "wave_5",
+        "evaluate_cost_capacity_blockers",
+        "test_capacity_extrapolation_risk_caps_below_production",
+        "promotion-check.blockers",
+    ),
+    # Wave 6 — portfolio / optimizer / forecast / sizing
+    (
+        "optimizer_or_sizing_lockbox_missing",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "tail_risk_missing",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "applicable_baseline_excluded",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "paired_oos_utility_failed",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "no_alpha_pipeline_edge",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "optimizer_perturbation_unstable",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "covariance_drift_unresolved",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "turnover_cap_exceeded",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "expected_return_not_promotion_valid",
+        "wave_6",
+        "evaluate_portfolio_optimizer_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "expected_return_uncertainty_uncalibrated",
+        "wave_6",
+        "evaluate_forecast_sizing_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "feature_timestamp_unauditable",
+        "wave_6",
+        "evaluate_forecast_sizing_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "hard_exposure_caps_missing",
+        "wave_6",
+        "evaluate_forecast_sizing_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "kelly_gate_incomplete",
+        "wave_6",
+        "evaluate_forecast_sizing_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "sizing_property_violated",
+        "wave_6",
+        "evaluate_forecast_sizing_blockers",
+        "test_optimizer_without_frozen_utility_lambdas_yields_lockbox_missing",
+        "promotion-check.blockers",
+    ),
+    # Wave 7 — short-side capability
+    (
+        "short_legal_mechanics_missing",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "borrow_snapshot_stale",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "locate_documentation_missing",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "locate_expired",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "paper_live_short_semantics_mismatch",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "live_probe_short_evidence_missing",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "broker_initiated_cover_unreconciled",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    (
+        "legacy_short_evidence",
+        "wave_7",
+        "evaluate_short_blockers",
+        "test_short_capability_manifest_schema_validates",
+        "promotion-check.blockers",
+    ),
+    # Wave 8 — live probe & operational safety
+    (
+        "pre_trade_control_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_missing_price_collar_yields_pre_trade_control_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "authority_boundary_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_expired_live_probe_approval_blocks_live_route",
+        "promotion-check.blockers",
+    ),
+    (
+        "authority_boundary_invalid",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_evaluator_re_derives_authority_boundary_invalid",
+        "promotion-check.blockers",
+    ),
+    (
+        "authority_boundary_expired",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_evaluator_re_derives_authority_boundary_expired",
+        "promotion-check.blockers",
+    ),
+    (
+        "live_probe_plan_expired",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_expired_live_probe_approval_blocks_live_route",
+        "promotion-check.blockers",
+    ),
+    (
+        "live_probe_minimum_activity_unmet",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_no_signal_probe_is_inconclusive_unless_extension_predeclared",
+        "promotion-check.blockers",
+    ),
+    (
+        "live_probe_inconclusive",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_no_signal_probe_is_inconclusive_unless_extension_predeclared",
+        "promotion-check.blockers",
+    ),
+    (
+        "safety_drill_stale",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_unresolved_reconciliation_incident_blocks_production_eligibility",
+        "promotion-check.blockers",
+    ),
+    (
+        "safety_drill_failed",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_unresolved_reconciliation_incident_blocks_production_eligibility",
+        "promotion-check.blockers",
+    ),
+    (
+        "broker_timeout_state_machine_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_timeout_state_cannot_retry_until_reconciliation",
+        "promotion-check.blockers",
+    ),
+    (
+        "broker_timeout_retry_unsafe",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_timeout_state_cannot_retry_until_reconciliation",
+        "promotion-check.blockers",
+    ),
+    (
+        "idempotency_evidence_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_unresolved_reconciliation_incident_blocks_production_eligibility",
+        "promotion-check.blockers",
+    ),
+    (
+        "reconciliation_evidence_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_unresolved_reconciliation_incident_blocks_production_eligibility",
+        "promotion-check.blockers",
+    ),
+    (
+        "reconciliation_incident_unresolved",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_unresolved_reconciliation_incident_blocks_production_eligibility",
+        "promotion-check.blockers",
+    ),
+    (
+        "manual_exception_disabled_core_control",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_manual_exception_disabling_kill_switch_is_rejected",
+        "promotion-check.blockers",
+    ),
+    (
+        "post_probe_recertification_missing",
+        "wave_8",
+        "evaluate_live_probe_blockers",
+        "test_recertification_report_with_stale_run_refs_blocks_live_probe_promotion",
+        "promotion-check.blockers",
+    ),
+    # Wave 9 — recertification & change control
+    (
+        "production_approval_expired",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_production_approval_expires_and_decays",
+        "promotion-check.blockers",
+    ),
+    (
+        "next_review_due_passed",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_recertification_with_expired_review_caps_at_paper_trading",
+        "promotion-check.blockers",
+    ),
+    (
+        "recertification_report_missing",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_recertification_report_with_mismatched_change_id_blocks_production",
+        "promotion-check.blockers",
+    ),
+    (
+        "drift_monitor_spec_missing",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_drift_monitor_spec_missing_yields_drift_monitor_spec_missing",
+        "promotion-check.blockers",
+    ),
+    (
+        "unrecorded_material_change",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_evaluator_re_derives_unrecorded_material_change_from_critical",
+        "promotion-check.blockers",
+    ),
+    (
+        "drift_alarm_live",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_evaluator_re_derives_drift_alarm_live_from_demotion_recommendation",
+        "promotion-check.blockers",
+    ),
+    (
+        "dependency_scope_unresolved",
+        "wave_9",
+        "evaluate_change_control_blockers",
+        "test_dependency_scope_unresolved_blocks_production",
+        "promotion-check.blockers",
+    ),
+    # Wave 10 — legacy retirement / hardening
+    (
+        "after_tax_edge_missing_for_taxable_account",
+        "wave_10",
+        "evaluate_legacy_retirement_blockers",
+        "test_taxable_production_without_after_tax_edge_evidence_caps_at_paper_trading",
+        "promotion-check.blockers",
+    ),
+    (
+        "legacy_artifacts_detected",
+        "wave_10",
+        "evaluate_legacy_retirement_blockers",
+        "test_wave1_golden_fixture_inventory_is_present",
+        "promotion-check.blockers",
+    ),
+)
+
+
+def evaluate_legacy_retirement_blockers() -> str:
+    """Wave-10 evaluator stub used by the registry metadata backfill."""
+
+    return "after_tax_edge_missing_for_taxable_account"
+
+
+for (
+    _code,
+    _wave,
+    _evaluator,
+    _red_test,
+    _cli_output,
+) in _WAVE_4_TO_10_OVERRIDES:
+    if _code not in BLOCKER_REGISTRY:
+        continue
+    _existing = BLOCKER_REGISTRY[_code]
+    BLOCKER_REGISTRY[_code] = _record(
+        _code,
+        _existing.max_state,
+        owning_wave=_wave,
+        fixture="tests/fixtures/promotion/paper_shadow_placeholder",
+        evaluator=_evaluator,
+        red_test=_red_test,
+        cli_output=_cli_output,
         web_report_field="dashboard.document_summary.v5_authority_status",
         runtime_enforcement="activation_refusal",
     )
