@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Sequence
+import random
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import cast
 
 import numpy as np
@@ -26,6 +29,15 @@ DEFAULT_AUTOCORRELATION_LAGS = 5
 DEFAULT_PERIODS_PER_YEAR = 252
 PAPER_PERIODS_PER_YEAR = 250
 FloatArray = npt.NDArray[np.float64]
+DEFAULT_BOOTSTRAP_SEED = 2026
+DEFAULT_BOOTSTRAP_RESAMPLES = 500
+DEFAULT_BLOCK_LENGTHS = (5, 10, 20)
+DEFAULT_REQUIRED_BENCHMARKS = (
+    "cash",
+    "sixty_forty",
+    "static_sleeve_baseline",
+    "no_trade",
+)
 
 
 def naive_annualized_sharpe_ratio(
@@ -213,6 +225,312 @@ def conditional_drawdown_at_risk(
     return sum(worst_tail) / len(worst_tail)
 
 
+def effective_sample_size_hac(
+    returns: Sequence[float],
+    *,
+    max_lag: int = DEFAULT_AUTOCORRELATION_LAGS,
+) -> tuple[float, tuple[dict[str, object], ...]]:
+    values = cast(FloatArray, np.asarray(list(returns), dtype=float))
+    n_observations = int(values.size)
+    if n_observations <= 1:
+        return float(n_observations), ()
+    lag_count = min(max(max_lag, 0), n_observations - 1)
+    lag_sensitivity: list[dict[str, object]] = []
+    autocorrelation_penalty = 0.0
+    for lag in range(1, lag_count + 1):
+        correlation = _lagged_autocorrelation(values, lag)
+        absolute_correlation = 0.0 if correlation is None else abs(correlation)
+        autocorrelation_penalty += absolute_correlation
+        lag_effective_sample_size = n_observations / (
+            1.0 + (2.0 * autocorrelation_penalty)
+        )
+        lag_sensitivity.append(
+            {
+                "lag": lag,
+                "autocorrelation": (
+                    "0" if correlation is None else _decimal_string(correlation)
+                ),
+                "effective_sample_size": _decimal_string(
+                    min(float(n_observations), lag_effective_sample_size)
+                ),
+            }
+        )
+    effective_sample_size = n_observations / (1.0 + (2.0 * autocorrelation_penalty))
+    return (
+        min(float(n_observations), effective_sample_size),
+        tuple(lag_sensitivity),
+    )
+
+
+def build_power_analysis_report(
+    *,
+    strategy_id: str,
+    returns: Sequence[float],
+    minimum_effective_sample_size: int,
+    max_lag: int = DEFAULT_AUTOCORRELATION_LAGS,
+    generated_at_utc: datetime | None = None,
+) -> dict[str, object]:
+    effective_sample_size, lag_sensitivity = effective_sample_size_hac(
+        returns,
+        max_lag=max_lag,
+    )
+    status = (
+        "powered"
+        if effective_sample_size >= float(minimum_effective_sample_size)
+        else "underpowered"
+    )
+    return {
+        "schema_version": "1.0",
+        "kind": "power_analysis_report",
+        "strategy_id": strategy_id,
+        "n_observations": len(returns),
+        "effective_sample_size": _decimal_string(effective_sample_size),
+        "minimum_effective_sample_size": minimum_effective_sample_size,
+        "max_lag": max_lag,
+        "lag_sensitivity": list(lag_sensitivity),
+        "status": status,
+        "blocker_codes": ([] if status == "powered" else ["dsr_pbo_inputs_incomplete"]),
+        "generated_at_utc": _utc_iso(generated_at_utc),
+    }
+
+
+def build_threshold_justification(
+    *,
+    strategy_id: str,
+    metric_name: str,
+    threshold_value: Decimal | str | None,
+    rationale: str,
+    justification_ref: str,
+    generated_at_utc: datetime | None = None,
+) -> dict[str, object]:
+    status = "valid" if threshold_value not in {None, ""} else "pending_threshold"
+    return {
+        "schema_version": "1.0",
+        "kind": "threshold_justification",
+        "strategy_id": strategy_id,
+        "metric_name": metric_name,
+        "threshold_value": "" if threshold_value is None else str(threshold_value),
+        "rationale": rationale,
+        "justification_ref": justification_ref,
+        "status": status,
+        "blocker_codes": [] if status == "valid" else ["pending_threshold"],
+        "generated_at_utc": _utc_iso(generated_at_utc),
+    }
+
+
+def build_stationary_block_bootstrap_report(
+    *,
+    strategy_id: str,
+    returns: Sequence[float],
+    random_seed: int = DEFAULT_BOOTSTRAP_SEED,
+    block_lengths: Sequence[int] = DEFAULT_BLOCK_LENGTHS,
+    n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
+    tail_tolerance: float = 0.01,
+    generated_at_utc: datetime | None = None,
+) -> dict[str, object]:
+    if n_resamples <= 0:
+        raise ValueError("n_resamples must be positive.")
+    values = tuple(float(value) for value in returns)
+    sensitivity: list[dict[str, object]] = []
+    tail_spreads: list[float] = []
+    for block_length in block_lengths:
+        if block_length <= 0:
+            raise ValueError("block lengths must be positive.")
+        resampled_means = _stationary_bootstrap_means(
+            values,
+            block_length=block_length,
+            n_resamples=n_resamples,
+            random_seed=random_seed + block_length,
+        )
+        p05 = _percentile_float(resampled_means, 5.0)
+        p50 = _percentile_float(resampled_means, 50.0)
+        p95 = _percentile_float(resampled_means, 95.0)
+        tail_spreads.append(abs(p95 - p05))
+        sensitivity.append(
+            {
+                "block_length": block_length,
+                "mean_return_p05": _decimal_string(p05),
+                "mean_return_p50": _decimal_string(p50),
+                "mean_return_p95": _decimal_string(p95),
+            }
+        )
+    max_tail_spread = max(tail_spreads, default=float("inf"))
+    stable = bool(values) and max_tail_spread <= tail_tolerance
+    status = "stable" if stable else "unstable"
+    return {
+        "schema_version": "1.0",
+        "kind": "bootstrap_report",
+        "strategy_id": strategy_id,
+        "random_seed": random_seed,
+        "n_resamples": n_resamples,
+        "block_length_sensitivity": sensitivity,
+        "tail_stability_threshold": _decimal_string(tail_tolerance),
+        "tail_stability_status": status,
+        "blocker_codes": [] if stable else ["dsr_pbo_inputs_incomplete"],
+        "generated_at_utc": _utc_iso(generated_at_utc),
+    }
+
+
+def build_paired_benchmark_uncertainty_report(
+    *,
+    strategy_id: str,
+    candidate_returns: Sequence[float],
+    benchmark_returns_by_name: Mapping[str, Sequence[float]],
+    required_benchmarks: Sequence[str] = DEFAULT_REQUIRED_BENCHMARKS,
+    confidence_level: Decimal | str = Decimal("0.95"),
+    generated_at_utc: datetime | None = None,
+) -> dict[str, object]:
+    candidate = tuple(float(value) for value in candidate_returns)
+    missing = [
+        name for name in required_benchmarks if name not in benchmark_returns_by_name
+    ]
+    comparisons: list[dict[str, object]] = []
+    for name in required_benchmarks:
+        if name not in benchmark_returns_by_name:
+            continue
+        benchmark = tuple(float(value) for value in benchmark_returns_by_name[name])
+        if len(benchmark) != len(candidate) or len(candidate) < 2:
+            missing.append(name)
+            continue
+        paired_diff = [
+            left - right for left, right in zip(candidate, benchmark, strict=True)
+        ]
+        mean_diff = float(np.mean(paired_diff))
+        std_error = float(np.std(paired_diff, ddof=1)) / math.sqrt(len(paired_diff))
+        lower_bound = mean_diff - (1.96 * std_error)
+        comparisons.append(
+            {
+                "benchmark_name": name,
+                "mean_excess_return": _decimal_string(mean_diff),
+                "lower_confidence_bound": _decimal_string(lower_bound),
+                "sample_size": len(paired_diff),
+                "supports_positive_edge": lower_bound > 0.0,
+            }
+        )
+    status = "complete" if not missing else "incomplete"
+    return {
+        "schema_version": "1.0",
+        "kind": "paired_benchmark_uncertainty_report",
+        "strategy_id": strategy_id,
+        "confidence_level": str(confidence_level),
+        "required_benchmarks": list(required_benchmarks),
+        "missing_benchmarks": sorted(set(missing)),
+        "comparisons": comparisons,
+        "status": status,
+        "blocker_codes": [] if status == "complete" else ["dsr_pbo_inputs_incomplete"],
+        "generated_at_utc": _utc_iso(generated_at_utc),
+    }
+
+
+def classify_statistical_evidence(payload: Mapping[str, object]) -> dict[str, object]:
+    kind = str(payload.get("kind", ""))
+    if kind in {
+        "threshold_justification",
+        "power_analysis_report",
+        "bootstrap_report",
+        "paired_benchmark_uncertainty_report",
+        "statistical_validation_report",
+    }:
+        return {
+            "classification": "wave4_statistical_evidence",
+            "blocker_codes": list(
+                _as_string_sequence(payload.get("blocker_codes", ()))
+            ),
+        }
+    metric_markers = {
+        "candidate_metrics",
+        "benchmark_metrics",
+        "deflated_sharpe_ratio",
+        "pbo_value",
+        "pbo_report_id",
+    }
+    if metric_markers.intersection(payload):
+        return {
+            "classification": "legacy_statistical_evidence",
+            "blocker_codes": ["legacy_statistical_evidence"],
+        }
+    return {"classification": "non_statistical", "blocker_codes": []}
+
+
+def build_statistical_validation_report(
+    *,
+    strategy_id: str,
+    threshold_justification: Mapping[str, object] | None,
+    power_report: Mapping[str, object] | None,
+    bootstrap_report: Mapping[str, object] | None,
+    paired_benchmark_report: Mapping[str, object] | None,
+    trial_universe_manifest: Mapping[str, object] | None,
+    pbo_report: Mapping[str, object] | None,
+    generated_at_utc: datetime | None = None,
+) -> dict[str, object]:
+    blocker_codes: list[str] = []
+    component_status: dict[str, str] = {}
+    for name, payload, missing_blocker in (
+        ("threshold", threshold_justification, "pending_threshold"),
+        ("power", power_report, "dsr_pbo_inputs_incomplete"),
+        ("bootstrap", bootstrap_report, "dsr_pbo_inputs_incomplete"),
+        ("paired_benchmark", paired_benchmark_report, "dsr_pbo_inputs_incomplete"),
+    ):
+        if payload is None:
+            component_status[name] = "missing"
+            _append_unique(blocker_codes, missing_blocker)
+            continue
+        component_status[name] = str(
+            payload.get("status", payload.get("tail_stability_status", ""))
+        )
+        for code in _as_string_sequence(payload.get("blocker_codes", ())):
+            _append_unique(blocker_codes, code)
+    trial_stats = (
+        trial_universe_manifest.get("trial_statistics", {})
+        if isinstance(trial_universe_manifest, Mapping)
+        else {}
+    )
+    if not isinstance(trial_stats, Mapping):
+        trial_stats = {}
+    dsr_required_fields = (
+        "effective_independent_trial_count",
+        "trial_correlation_estimate",
+        "selection_rule",
+        "selected_strategy_rank",
+        "trial_sharpe_mean",
+        "trial_sharpe_variance",
+        "trial_return_skewness",
+        "trial_return_kurtosis",
+        "failed_run_treatment",
+        "full_cpcv_pbo_matrix_ref",
+    )
+    missing_dsr_fields = [
+        field
+        for field in dsr_required_fields
+        if _missing_stat_field(trial_stats, field)
+    ]
+    if missing_dsr_fields:
+        _append_unique(blocker_codes, "dsr_pbo_inputs_incomplete")
+    if pbo_report is None or _missing_stat_field(pbo_report, "full_cpcv_matrix_ref"):
+        _append_unique(blocker_codes, "dsr_pbo_inputs_incomplete")
+    status = "valid" if not blocker_codes else "incomplete"
+    return {
+        "schema_version": "1.0",
+        "kind": "statistical_validation_report",
+        "strategy_id": strategy_id,
+        "status": status,
+        "evidence_class": "promotion_valid" if status == "valid" else "exploratory",
+        "promotion_valid": status == "valid",
+        "blocker_codes": blocker_codes,
+        "component_status": component_status,
+        "missing_dsr_fields": missing_dsr_fields,
+        "pbo_report_id": (
+            "" if pbo_report is None else str(pbo_report.get("report_id", ""))
+        ),
+        "full_cpcv_matrix_ref": (
+            ""
+            if pbo_report is None
+            else str(pbo_report.get("full_cpcv_matrix_ref", ""))
+        ),
+        "generated_at_utc": _utc_iso(generated_at_utc),
+    }
+
+
 def calmar_ratio(
     returns: Sequence[float],
     *,
@@ -229,6 +547,76 @@ def calmar_ratio(
     if mdd == 0.0:
         return float("inf") if annualized > 0.0 else 0.0
     return float(annualized / mdd)
+
+
+def _stationary_bootstrap_means(
+    values: tuple[float, ...],
+    *,
+    block_length: int,
+    n_resamples: int,
+    random_seed: int,
+) -> tuple[float, ...]:
+    if not values:
+        return ()
+    random_state = random.Random(random_seed)
+    n_observations = len(values)
+    means: list[float] = []
+    for _ in range(n_resamples):
+        sample: list[float] = []
+        while len(sample) < n_observations:
+            start = random_state.randrange(n_observations)
+            for offset in range(block_length):
+                if len(sample) == n_observations:
+                    break
+                sample.append(values[(start + offset) % n_observations])
+        means.append(float(sum(sample) / len(sample)))
+    return tuple(means)
+
+
+def _percentile_float(values: Sequence[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(value) for value in values)
+    rank = (percentile / 100.0) * (len(ordered) - 1)
+    lower = int(math.floor(rank))
+    upper = int(math.ceil(rank))
+    if lower == upper:
+        return ordered[lower]
+    fraction = rank - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _decimal_string(value: float) -> str:
+    if not math.isfinite(value):
+        return "0"
+    return str(Decimal(str(value)).normalize())
+
+
+def _utc_iso(value: datetime | None) -> str:
+    timestamp = value or datetime.now(UTC)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC).isoformat()
+
+
+def _as_string_sequence(value: object) -> tuple[str, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return tuple(str(item) for item in value)
+    return ()
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _missing_stat_field(payload: Mapping[str, object], field: str) -> bool:
+    value = payload.get(field)
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
 
 
 def _excess_returns(
@@ -267,7 +655,14 @@ __all__ = (
     "DEFAULT_PERIODS_PER_YEAR",
     "PAPER_PERIODS_PER_YEAR",
     "calmar_ratio",
+    "build_paired_benchmark_uncertainty_report",
+    "build_power_analysis_report",
+    "build_stationary_block_bootstrap_report",
+    "build_statistical_validation_report",
+    "build_threshold_justification",
+    "classify_statistical_evidence",
     "deflated_sharpe_ratio",
+    "effective_sample_size_hac",
     "expected_max_sharpe",
     "conditional_drawdown_at_risk",
     "lo_adjusted_sharpe_ratio",

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Paired Benchmark Uncertainty Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "confidence_level",
+    "required_benchmarks",
+    "missing_benchmarks",
+    "comparisons",
+    "status",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "paired_benchmark_uncertainty_report"},
+    "strategy_id": {"type": "string"},
+    "confidence_level": {"type": "string"},
+    "required_benchmarks": {"type": "array", "items": {"type": "string"}},
+    "missing_benchmarks": {"type": "array", "items": {"type": "string"}},
+    "comparisons": {"type": "array", "items": {"type": "object"}},
+    "status": {"type": "string", "enum": ["complete", "incomplete"]},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

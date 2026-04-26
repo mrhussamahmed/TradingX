@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Statistical Validation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "status",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "component_status",
+    "missing_dsr_fields",
+    "pbo_report_id",
+    "full_cpcv_matrix_ref",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "statistical_validation_report"},
+    "strategy_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["valid", "incomplete"]},
+    "evidence_class": {"type": "string", "enum": ["promotion_valid", "exploratory"]},
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "component_status": {"type": "object"},
+    "missing_dsr_fields": {"type": "array", "items": {"type": "string"}},
+    "pbo_report_id": {"type": "string"},
+    "full_cpcv_matrix_ref": {"type": "string"},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

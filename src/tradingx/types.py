@@ -175,6 +175,7 @@ class PBOReport:
     metric_name: str
     random_seed: int
     generated_at_utc: datetime
+    full_cpcv_matrix_ref: str = ""
 
 
 @dataclass(frozen=True)

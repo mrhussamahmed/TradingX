@@ -74,6 +74,7 @@ from tradingx.service import (
     build_runtime_host_trading_service,
 )
 from tradingx.snapshots import ContentAddressedSnapshotStore
+from tradingx.stats import build_statistical_validation_report
 from tradingx.supervisor import build_default_operator_supervisor
 from tradingx.types import BotRuntimeState
 from tradingx.validation import (
@@ -358,6 +359,16 @@ def build_parser() -> argparse.ArgumentParser:
     invalidate_evidence_parser.add_argument("--restatement-report", required=True)
     invalidate_evidence_parser.add_argument("--dependency-index", default=None)
     invalidate_evidence_parser.add_argument("--output-file", default=None)
+
+    statistical_report_parser = subparsers.add_parser("statistical-report")
+    statistical_report_parser.add_argument("--strategy-id", required=True)
+    statistical_report_parser.add_argument("--threshold-justification", required=True)
+    statistical_report_parser.add_argument("--power-report", required=True)
+    statistical_report_parser.add_argument("--bootstrap-report", required=True)
+    statistical_report_parser.add_argument("--paired-benchmark-report", required=True)
+    statistical_report_parser.add_argument("--trial-universe-manifest", required=True)
+    statistical_report_parser.add_argument("--pbo-report", required=True)
+    statistical_report_parser.add_argument("--output-file", default=None)
 
     gate3_report_parser = subparsers.add_parser("gate3-report")
     gate3_report_parser.add_argument("--env-file", default=".env")
@@ -992,6 +1003,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = invalidate_evidence_from_restatement(
             restatement_report=load_json_object(Path(args.restatement_report)),
             dependency_index=dependency_index,
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(report), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
+    if args.command == "statistical-report":
+        report = build_statistical_validation_report(
+            strategy_id=args.strategy_id,
+            threshold_justification=load_json_object(
+                Path(args.threshold_justification)
+            ),
+            power_report=load_json_object(Path(args.power_report)),
+            bootstrap_report=load_json_object(Path(args.bootstrap_report)),
+            paired_benchmark_report=load_json_object(
+                Path(args.paired_benchmark_report)
+            ),
+            trial_universe_manifest=load_json_object(
+                Path(args.trial_universe_manifest)
+            ),
+            pbo_report=load_json_object(Path(args.pbo_report)),
         )
         if args.output_file:
             output_file = Path(args.output_file)

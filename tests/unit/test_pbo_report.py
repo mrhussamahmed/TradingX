@@ -31,6 +31,7 @@ def _report() -> PBOReport:
         metric_name="lo_adjusted_sharpe",
         random_seed=2026,
         generated_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+        full_cpcv_matrix_ref="cas://validation/full-cpcv-matrix.json",
     )
 
 
@@ -50,6 +51,8 @@ def test_write_and_load_pbo_report_roundtrip(tmp_path: Path) -> None:
 
     assert written_path.parent.name == "pbo_reports"
     assert loaded == report
+    assert loaded is not None
+    assert loaded.full_cpcv_matrix_ref == "cas://validation/full-cpcv-matrix.json"
 
 
 def test_load_pbo_report_returns_none_when_missing(tmp_path: Path) -> None:

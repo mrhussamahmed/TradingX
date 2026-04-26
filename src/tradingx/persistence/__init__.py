@@ -1360,6 +1360,7 @@ class FilesystemArtifactStore:
             metric_name=str(payload["metric_name"]),
             random_seed=int(payload["random_seed"]),
             generated_at_utc=datetime.fromisoformat(str(payload["generated_at_utc"])),
+            full_cpcv_matrix_ref=str(payload.get("full_cpcv_matrix_ref", "")),
         )
 
     def build_operator_evidence_report(self) -> dict[str, object]:

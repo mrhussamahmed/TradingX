@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Bootstrap Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "random_seed",
+    "n_resamples",
+    "block_length_sensitivity",
+    "tail_stability_threshold",
+    "tail_stability_status",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "bootstrap_report"},
+    "strategy_id": {"type": "string"},
+    "random_seed": {"type": "integer"},
+    "n_resamples": {"type": "integer"},
+    "block_length_sensitivity": {"type": "array", "items": {"type": "object"}},
+    "tail_stability_threshold": {"type": "string"},
+    "tail_stability_status": {"type": "string", "enum": ["stable", "unstable"]},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

@@ -1103,6 +1103,11 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "data_restatement_report",
         "evidence_dependency_index",
         "evidence_invalidation_report",
+        "threshold_justification",
+        "power_analysis_report",
+        "bootstrap_report",
+        "paired_benchmark_uncertainty_report",
+        "statistical_validation_report",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1255,6 +1260,10 @@ def _evaluate_verified_decision_blockers(
         _append_blocker(blockers, "replay_path_missing")
     for blocker in evaluate_provenance_blockers(artifact_payloads=artifact_payloads):
         _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_statistical_evidence_blockers(
+        artifact_payloads=artifact_payloads
+    ):
+        _append_blocker(blockers, blocker.code)
 
     target_weights_raw = decision_payload.get("target_weights", {})
     if not isinstance(target_weights_raw, Mapping):
@@ -1316,6 +1325,33 @@ def evaluate_provenance_blockers(
                 _append_blocker(blockers, "replay_path_missing")
         elif kind == "evidence_invalidation_report":
             _append_blocker(blockers, "replay_path_missing")
+    return tuple(blockers)
+
+
+def evaluate_statistical_evidence_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    blockers: list[Blocker] = []
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind in {
+            "threshold_justification",
+            "power_analysis_report",
+            "bootstrap_report",
+            "paired_benchmark_uncertainty_report",
+            "statistical_validation_report",
+        }:
+            for code in _string_sequence(payload.get("blocker_codes", ())):
+                if code in BLOCKER_REGISTRY:
+                    _append_blocker(blockers, code)
+        if kind == "statistical_validation_report":
+            if _normal_form(payload.get("evidence_class")) == "legacy":
+                _append_blocker(blockers, "legacy_statistical_evidence")
+            if not bool(payload.get("promotion_valid", False)):
+                for code in _string_sequence(payload.get("blocker_codes", ())):
+                    if code in BLOCKER_REGISTRY:
+                        _append_blocker(blockers, code)
     return tuple(blockers)
 
 
@@ -2557,6 +2593,7 @@ __all__ = [
     "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
     "evaluate_provenance_blockers",
+    "evaluate_statistical_evidence_blockers",
     "load_state_action_contracts",
     "load_promotion_decision",
     "state_allows",

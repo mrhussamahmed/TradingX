@@ -581,6 +581,101 @@ def test_parser_exposes_market_day_scheduler_command() -> None:
     assert "run-market-scheduler" in choices
 
 
+def test_main_runs_statistical_report_command(tmp_path, capsys) -> None:
+    def write_payload(name: str, payload: dict[str, object]) -> Path:
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        return path
+
+    threshold = write_payload(
+        "threshold",
+        {
+            "kind": "threshold_justification",
+            "status": "valid",
+            "blocker_codes": [],
+        },
+    )
+    power = write_payload(
+        "power",
+        {
+            "kind": "power_analysis_report",
+            "status": "powered",
+            "blocker_codes": [],
+        },
+    )
+    bootstrap = write_payload(
+        "bootstrap",
+        {
+            "kind": "bootstrap_report",
+            "tail_stability_status": "stable",
+            "blocker_codes": [],
+        },
+    )
+    paired = write_payload(
+        "paired",
+        {
+            "kind": "paired_benchmark_uncertainty_report",
+            "status": "complete",
+            "blocker_codes": [],
+        },
+    )
+    trial_manifest = write_payload(
+        "trial_manifest",
+        {
+            "kind": "trial_universe_manifest",
+            "trial_statistics": {
+                "effective_independent_trial_count": 42,
+                "trial_correlation_estimate": "0.30",
+                "selection_rule": "max_oos_sharpe_after_cpcv",
+                "selected_strategy_rank": 1,
+                "trial_sharpe_mean": "0.05",
+                "trial_sharpe_variance": "0.20",
+                "trial_return_skewness": "-0.10",
+                "trial_return_kurtosis": "3.50",
+                "failed_run_treatment": "failed_runs_counted_as_trials",
+                "full_cpcv_pbo_matrix_ref": "cas://matrix/full-cpcv.json",
+            },
+        },
+    )
+    pbo = write_payload(
+        "pbo",
+        {
+            "report_id": "pbo-eval-1",
+            "full_cpcv_matrix_ref": "cas://matrix/full-cpcv.json",
+        },
+    )
+    output = tmp_path / "reports" / "statistical.json"
+
+    exit_code = cli.main(
+        (
+            "statistical-report",
+            "--strategy-id",
+            "trend-following-v1",
+            "--threshold-justification",
+            str(threshold),
+            "--power-report",
+            str(power),
+            "--bootstrap-report",
+            str(bootstrap),
+            "--paired-benchmark-report",
+            str(paired),
+            "--trial-universe-manifest",
+            str(trial_manifest),
+            "--pbo-report",
+            str(pbo),
+            "--output-file",
+            str(output),
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    written = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["kind"] == "statistical_validation_report"
+    assert payload["promotion_valid"] is True
+    assert payload == written
+
+
 def test_main_prints_safe_config_summary(tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
