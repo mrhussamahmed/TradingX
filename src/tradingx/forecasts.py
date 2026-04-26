@@ -322,8 +322,82 @@ def assert_sizing_monotonicity(
     return tuple(violations)
 
 
+class SizingPolicyViolation(RuntimeError):
+    """Raised when a runtime sizing decision violates monotonicity.
+
+    Defect 7 — the runtime sizing engine MUST refuse to ship a decision
+    whose size has increased while the underlying conditions worsened.
+    Callers that catch this exception are expected to:
+      - emit ``sizing_property_violated`` into the next decision payload
+      - hold the trade and surface the violation through promotion-check
+    """
+
+    def __init__(self, violations: tuple[str, ...]) -> None:
+        super().__init__(
+            "sizing-policy violation: " + ", ".join(violations)
+        )
+        self.violations = violations
+
+
+def enforce_sizing_monotonicity_runtime(
+    *,
+    prior_decision: Mapping[str, object] | None,
+    candidate_decision: Mapping[str, object],
+) -> tuple[Mapping[str, object], tuple[str, ...]]:
+    """Runtime gate around :func:`assert_sizing_monotonicity`.
+
+    Compares the prior decision (or a zero-sized baseline if absent) with
+    the candidate decision. Raises :class:`SizingPolicyViolation` when
+    the candidate increases size while one of the monotonicity inputs
+    (cost / uncertainty / capacity / drawdown / negative penalised edge)
+    has worsened. Returns the mutated candidate (with
+    ``sizing_property_violated`` added to ``blocker_codes``) and the
+    tuple of violation codes for downstream propagation.
+
+    Defect 7 wires this into ``sizing.py`` and ``risk.py`` so the
+    monotonicity property is enforced AT RUNTIME, not just in offline
+    artifact validation.
+    """
+
+    base_size = Decimal(
+        str((prior_decision or {}).get("size", "0") if prior_decision else "0")
+    )
+    candidate_size = Decimal(str(candidate_decision.get("size", "0")))
+    higher_cost = bool(candidate_decision.get("higher_cost", False))
+    higher_uncertainty = bool(candidate_decision.get("higher_uncertainty", False))
+    lower_capacity = bool(candidate_decision.get("lower_capacity", False))
+    worse_drawdown = bool(candidate_decision.get("worse_drawdown", False))
+    negative_penalized_edge = bool(
+        candidate_decision.get("negative_penalized_edge", False)
+    )
+    explicit_short_allowed = bool(
+        candidate_decision.get("explicit_short_allowed", False)
+    )
+    violations = assert_sizing_monotonicity(
+        base_size=base_size,
+        candidate_size=candidate_size,
+        higher_cost=higher_cost,
+        higher_uncertainty=higher_uncertainty,
+        lower_capacity=lower_capacity,
+        worse_drawdown=worse_drawdown,
+        negative_penalized_edge=negative_penalized_edge,
+        explicit_short_allowed=explicit_short_allowed,
+    )
+    if not violations:
+        return candidate_decision, ()
+    next_payload = dict(candidate_decision)
+    blocker_codes = list(next_payload.get("blocker_codes", []) or [])
+    for code in violations:
+        if code not in blocker_codes:
+            blocker_codes.append(code)
+    next_payload["blocker_codes"] = blocker_codes
+    raise SizingPolicyViolation(violations)
+
+
 __all__ = (
     "assert_sizing_monotonicity",
+    "enforce_sizing_monotonicity_runtime",
+    "SizingPolicyViolation",
     "build_expected_return_report",
     "build_feature_manifest",
     "build_forecast_model_manifest",
