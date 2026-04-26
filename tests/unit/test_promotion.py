@@ -381,10 +381,369 @@ def _common_authority_fields(kind: str) -> dict[str, object]:
     }
 
 
+def _authority_capable_artifact_stubs(
+    *,
+    omit: set[str] | None = None,
+) -> tuple[dict[str, object], ...]:
+    """Schema-conformant stubs covering Wave 4-10 required kinds.
+
+    Each payload satisfies its kind's schema (additionalProperties:false) and
+    is built so that the per-kind evaluator emits no incidental blockers. The
+    stubs exist so Wave 2 mandate-isolation tests can request
+    paper_trading/production states without tripping the Defect-1 missing-kind
+    blockers — and so the new tests can omit one stub at a time to assert that
+    a specific *_missing blocker fires.
+    """
+
+    omitted = omit or set()
+    far_future = "2099-12-31T00:00:00Z"
+    near_past = "2026-01-01T00:00:00Z"
+    stubs: dict[str, dict[str, object]] = {
+        "statistical_validation_report": {
+            "schema_version": "1.0",
+            "kind": "statistical_validation_report",
+            "strategy_id": "trend-following-v1",
+            "status": "valid",
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "component_status": {
+                "threshold": "valid",
+                "power": "valid",
+                "bootstrap": "valid",
+                "paired_benchmark": "valid",
+            },
+            "missing_dsr_fields": [],
+            "pbo_report_id": "stub-pbo-report",
+            "full_cpcv_matrix_ref": "stub-cpcv-matrix",
+            "generated_at_utc": near_past,
+        },
+        "cost_model_report": {
+            "schema_version": "1.0",
+            "kind": "cost_model_report",
+            "report_id": "stub-cost-model",
+            "strategy_id": "trend-following-v1",
+            "model_version": "1.0",
+            "cost_feature_hash": "sha256:stub",
+            "bucket_assignment_policy": "vol_x_spread",
+            "training_dataset_ref": "stub-dataset",
+            "sample_window_start_utc": near_past,
+            "sample_window_end_utc": near_past,
+            "bucket_definitions": ["vol_low_spread_low"],
+            "minimum_bucket_sample_size": 100,
+            "bucket_power_target": "0.80",
+            "bucket_confidence": "0.95",
+            "powered_bucket_coverage": {"vol_low_spread_low": True},
+            "sparse_bucket_fallback_policy": "global_adverse_p90",
+            "clean_estimate_bps": "8",
+            "all_events_stress_bps": "12",
+            "adverse_p90_bps": "15",
+            "adverse_p95_bps": "20",
+            "bucket_sample_sizes": {"vol_low_spread_low": 200},
+            "unsupported_buckets": [],
+            "non_fill_opportunity_cost_bps": "2",
+            "queue_adverse_selection_bps": "1",
+            "counterfactual_quality": "high",
+            "paper_observation_count": 0,
+            "live_probe_observation_count": 1,
+            "live_observation_count": 0,
+            "minimum_live_sample_requirement": 1,
+            "calibration_source": "live_probe_calibration",
+            "impact_claim_status": "supported_clean_with_runtime_no_trade",
+            "runtime_no_trade_rule_enforced": True,
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "generated_at_utc": near_past,
+        },
+        "capacity_curve_report": {
+            "schema_version": "1.0",
+            "kind": "capacity_curve_report",
+            "report_id": "stub-capacity",
+            "strategy_id": "trend-following-v1",
+            "target_capital_scale": "1000000",
+            "tested_scales": ["100000", "500000", "1000000"],
+            "validated_range_min": "100000",
+            "validated_range_max": "2000000",
+            "max_participation_rate": "0.05",
+            "expected_turnover": "2.0",
+            "orders_per_day": "50",
+            "rebalance_frequency": "daily",
+            "annualized_cost_drag_by_scale": {"1000000": "0.001"},
+            "capacity_under_turnover_assumption": "1500000",
+            "lower_bound_capacity_curve": {"1000000": "1000000"},
+            "expected_cost_curve": {"1000000": "0.001"},
+            "net_edge_curve": {"1000000": "0.01"},
+            "lower_bound_net_edge_by_scale": {"1000000": "0.005"},
+            "lower_bound_capacity_limit": "1500000",
+            "capacity_extrapolation_risk": False,
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "generated_at_utc": near_past,
+        },
+        "portfolio_utility_definition": {
+            "schema_version": "1.0",
+            "kind": "portfolio_utility_definition",
+            "utility_id": "stub-utility",
+            "strategy_id": "trend-following-v1",
+            "lambda_values": {"risk_aversion": "1.0"},
+            "lambda_justification_refs": {"risk_aversion": "stub-ref"},
+            "pre_experiment_approval_ref": "stub-approval",
+            "freeze_at_utc": near_past,
+            "change_policy": "frozen_until_recertification",
+            "objective_hierarchy": ["return", "risk"],
+            "tail_risk_components": ["cvar"],
+            "return_components": ["expected_return"],
+            "risk_components": ["variance"],
+            "drawdown_components": ["max_drawdown"],
+            "cost_components": ["transaction_cost"],
+            "capacity_components": ["capacity_curve"],
+            "liquidity_components": ["liquidity_runway"],
+            "constraint_components": ["position_cap"],
+            "threshold_justification_ref": "stub-threshold",
+            "approver": "stub-approver",
+            "approved_at_utc": near_past,
+            "blocker_codes": [],
+        },
+        "optimizer_validation_report": {
+            "schema_version": "1.0",
+            "kind": "optimizer_validation_report",
+            "report_id": "stub-optimizer",
+            "strategy_id": "trend-following-v1",
+            "utility_definition_ref": "stub-utility",
+            "candidate_baselines": [
+                "no_trade",
+                "current_holdings",
+                "static_sleeve_budget",
+                "equal_weight",
+                "inverse_volatility",
+                "equal_risk_contribution",
+                "current_non_optimized_allocation",
+            ],
+            "tested_baselines": [
+                "no_trade",
+                "current_holdings",
+                "static_sleeve_budget",
+                "equal_weight",
+                "inverse_volatility",
+                "equal_risk_contribution",
+                "current_non_optimized_allocation",
+            ],
+            "excluded_baselines": [],
+            "excluded_baseline_approval_refs": {},
+            "lockbox_status": "frozen",
+            "paired_oos_utility_lower_ci": "0.01",
+            "paired_oos_utility_threshold": "0",
+            "no_alpha_pipeline_status": "null_passed",
+            "perturbation_status": "stable",
+            "covariance_drift_status": "nominal",
+            "turnover_status": "within_cap",
+            "max_adjacent_decision_turnover": "1",
+            "observed_adjacent_turnover": "0.1",
+            "cost_capacity_report_refs": ["stub-cost-capacity"],
+            "expected_return_status": "promotion_valid",
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "generated_at_utc": near_past,
+        },
+        "sizing_policy": {
+            "schema_version": "1.0",
+            "kind": "sizing_policy",
+            "policy_id": "stub-sizing",
+            "strategy_id": "trend-following-v1",
+            "sizing_method": "vol_target",
+            "target_volatility": "0.10",
+            "position_cap": "0.05",
+            "sleeve_cap": "0.10",
+            "gross_exposure_cap": "1.0",
+            "net_exposure_cap": "1.0",
+            "leverage_cap": "1.0",
+            "order_cap": "1000",
+            "participation_cap": "0.10",
+            "drawdown_budget": "0.20",
+            "cost_model_ref": "stub-cost-model",
+            "capacity_curve_ref": "stub-capacity",
+            "kelly_disabled": True,
+            "kelly_gate_complete": False,
+            "max_kelly_multiplier": "1",
+            "freeze_at_utc": near_past,
+            "sizing_policy_hash": "sha256:stub",
+            "approved_at_utc": near_past,
+            "approver": "stub-approver",
+            "blocker_codes": [],
+        },
+        "live_probe_plan": {
+            "schema_version": "1.0",
+            "kind": "live_probe_plan",
+            "plan_id": "stub-plan",
+            "strategy_id": "trend-following-v1",
+            "broker_id": "stub-broker",
+            "broker_mode": "live_probe",
+            "symbols": ["SPY"],
+            "capital_limit": "1000",
+            "loss_limit": "100",
+            "order_count_limit": 100,
+            "participation_limit": "0.05",
+            "spread_limit_bps": "100",
+            "duration_seconds": 3600,
+            "minimum_order_count": 1,
+            "minimum_filled_notional": "100",
+            "minimum_reconciliation_cycles": 1,
+            "minimum_sessions": 1,
+            "no_signal_outcome_policy": "inconclusive",
+            "start_criteria": ["operator_approval"],
+            "success_criteria": ["minimum_activity_met"],
+            "rollback_criteria": ["loss_limit_breached"],
+            "flatten_policy": "flatten_on_rollback",
+            "kill_switch_required": True,
+            "pre_trade_control_manifest_ref": "stub-pre-trade",
+            "authority_boundary_ref": "stub-authority-boundary",
+            "approved_at_utc": near_past,
+            "expires_at_utc": far_future,
+            "blocker_codes": [],
+        },
+        "authority_boundary": {
+            "schema_version": "1.0",
+            "kind": "authority_boundary",
+            "boundary_id": "stub-authority-boundary",
+            "approval_type": "single_signer",
+            "identity_provider": "stub-idp",
+            "operator_identity_ids": ["operator:local-a"],
+            "role_registry_version": "role-registry:local-v1",
+            "role": "operator",
+            "scope": "live_probe",
+            "write_authorization_status": "authorized",
+            "max_exception_duration_seconds": 3600,
+            "second_approver_required": False,
+            "approvers": ["operator:local-a"],
+            "canonical_approval_payload_hash": "sha256:stub",
+            "signatures": ["sig:stub"],
+            "approved_at_utc": near_past,
+            "expires_at_utc": far_future,
+            "blocker_codes": [],
+        },
+        "pre_trade_control_manifest": {
+            "schema_version": "1.0",
+            "kind": "pre_trade_control_manifest",
+            "manifest_id": "stub-pre-trade",
+            "strategy_id": "trend-following-v1",
+            "broker_id": "stub-broker",
+            "broker_mode": "live_probe",
+            "price_collar_bps": "100",
+            "fat_finger_notional_limit": "10000",
+            "fat_finger_share_limit": "1000",
+            "max_open_orders": 10,
+            "max_order_rate_per_minute": 60,
+            "duplicate_prevention_enabled": True,
+            "idempotency_key_policy": "uuid_v4",
+            "cancel_on_disconnect": True,
+            "self_trade_prevention": "enabled",
+            "buying_power_precheck": True,
+            "margin_precheck": True,
+            "locate_precheck_for_shorts": True,
+            "reject_on_missing_control": True,
+            "control_owner": "stub-operator",
+            "drill_refs": ["stub-drill"],
+            "approved_at_utc": near_past,
+            "expires_at_utc": far_future,
+            "blocker_codes": [],
+        },
+        "operational_safety_drill": {
+            "schema_version": "1.0",
+            "kind": "operational_safety_drill",
+            "drill_id": "stub-drill",
+            "drill_type": "kill_switch",
+            "expected_behavior": "kill_switch_engages",
+            "observed_behavior": "kill_switch_engaged",
+            "passed": True,
+            "executed_at_utc": near_past,
+            "freshness_window_seconds": 86400,
+            "valid_until_utc": far_future,
+            "is_stale": False,
+            "evidence_refs": ["stub-evidence"],
+            "blocker_codes": [],
+        },
+        "live_probe_recertification_report": {
+            "schema_version": "1.0",
+            "kind": "live_probe_recertification_report",
+            "report_id": "stub-live-probe-recert",
+            "strategy_id": "trend-following-v1",
+            "run_refs": ["stub-live-probe-run"],
+            "incident_refs": [],
+            "unresolved_incident_refs": [],
+            "minimum_activity_status": "met",
+            "drill_status": "fresh",
+            "broker_timeout_status": "defined",
+            "idempotency_status": "complete",
+            "reconciliation_status": "complete",
+            "cost_observation_refs": ["stub-cost-observation"],
+            "production_eligible": True,
+            "approved_at_utc": near_past,
+            "approver": "stub-approver",
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "generated_at_utc": near_past,
+        },
+        "recertification_report": {
+            "schema_version": "1.0",
+            "kind": "recertification_report",
+            "report_id": "stub-recert",
+            "strategy_id": "trend-following-v1",
+            "production_state_before": "tiny_live_probe",
+            "production_state_after": "production",
+            "reason": "stub-recertification",
+            "authority_boundary_ref": "stub-authority-boundary",
+            "risk_accepted": True,
+            "evidence_refs": ["stub-evidence"],
+            "freshness_status": "fresh",
+            "statistical_status": "fresh",
+            "cost_capacity_status": "fresh",
+            "optimizer_status": "fresh",
+            "live_probe_status": "fresh",
+            "drift_status": "inactive",
+            "incident_status": "resolved",
+            "approval_status": "approved",
+            "approver": "stub-approver",
+            "production_expires_at_utc": far_future,
+            "next_operational_review_due_utc": far_future,
+            "next_statistical_review_due_utc": far_future,
+            "evidence_class": "promotion_valid",
+            "promotion_valid": True,
+            "blocker_codes": [],
+            "generated_at_utc": near_past,
+        },
+        "drift_monitor_spec": {
+            "schema_version": "1.0",
+            "kind": "drift_monitor_spec",
+            "spec_id": "stub-drift",
+            "strategy_id": "trend-following-v1",
+            "monitored_variables": ["sharpe", "drawdown"],
+            "reference_window": "60_days",
+            "live_window": "20_days",
+            "thresholds": {"sharpe": "0.5"},
+            "regime_labels": ["normal"],
+            "multiple_testing_policy": "bonferroni",
+            "alert_latency_seconds": 60,
+            "missing_data_policy": "fail_closed",
+            "minimum_sample_requirement": 20,
+            "demotion_rules": ["demote_on_double_breach"],
+            "operator_notification_path": "operator:local-a",
+            "expires_at_utc": far_future,
+            "blocker_codes": [],
+        },
+    }
+    return tuple(payload for kind, payload in stubs.items() if kind not in omitted)
+
+
 def _wave2_mandate_artifacts(
     *,
     omit: set[str] | None = None,
     overrides: dict[str, dict[str, object]] | None = None,
+    omit_stubs: set[str] | None = None,
+    include_stubs: bool = True,
 ) -> tuple[dict[str, object], ...]:
     omitted = omit or set()
     payloads: list[dict[str, object]] = list(_minimal_authority_artifacts())
@@ -627,6 +986,10 @@ def _wave2_mandate_artifacts(
     for kind, payload in by_kind.items():
         if kind not in omitted:
             payloads.append(payload)
+    if include_stubs:
+        payloads.extend(
+            _authority_capable_artifact_stubs(omit=omit_stubs)
+        )
     return tuple(payloads)
 
 
@@ -1082,6 +1445,230 @@ def test_tax_exempt_production_with_complete_lower_bound_report_can_pass(
     assert decision.blocker_codes == ()
 
 
+def test_production_request_without_statistical_validation_report_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"statistical_validation_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "statistical_validation_report_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_cost_model_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"cost_model_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "cost_model_report_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_optimizer_validation_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"optimizer_validation_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "optimizer_validation_report_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_recertification_report_blocks_production(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"recertification_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "recertification_report_missing" in decision.blocker_codes
+    assert not promotion.state_allows(
+        decision.max_state,
+        PromotionState.PRODUCTION,
+    )
+
+
+def test_production_request_without_live_probe_recertification_blocks_production(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"live_probe_recertification_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "live_probe_recertification_report_missing" in decision.blocker_codes
+    assert not promotion.state_allows(
+        decision.max_state,
+        PromotionState.PRODUCTION,
+    )
+
+
+def test_production_request_without_capacity_curve_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"capacity_curve_report"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "capacity_curve_report_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_portfolio_utility_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"portfolio_utility_definition"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "portfolio_utility_definition_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_sizing_policy_caps_at_paper_shadow(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"sizing_policy"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "sizing_policy_missing" in decision.blocker_codes
+    assert decision.max_state == PromotionState.PAPER_SHADOW
+
+
+def test_production_request_without_live_probe_plan_caps_at_paper_trading(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"live_probe_plan"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "live_probe_plan_missing" in decision.blocker_codes
+    assert not promotion.state_allows(
+        decision.max_state,
+        PromotionState.TINY_LIVE_PROBE,
+    )
+
+
+def test_production_request_without_pre_trade_control_caps_at_paper_trading(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"pre_trade_control_manifest"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "pre_trade_control_manifest_missing" in decision.blocker_codes
+    assert not promotion.state_allows(
+        decision.max_state,
+        PromotionState.TINY_LIVE_PROBE,
+    )
+
+
+def test_production_request_without_operational_safety_drill_caps_at_paper_trading(
+    tmp_path,
+) -> None:
+    bundle_root = tmp_path / "promotion" / "trend-following-v1"
+    _write_hmac_signed_bundle(
+        bundle_root,
+        artifact_payloads=_wave2_mandate_artifacts(
+            omit_stubs={"operational_safety_drill"},
+        ),
+        requested_state="production",
+        max_state="production",
+    )
+
+    decision = evaluate_promotion_manifest(bundle_root)
+
+    assert "operational_safety_drill_missing" in decision.blocker_codes
+    assert not promotion.state_allows(
+        decision.max_state,
+        PromotionState.TINY_LIVE_PROBE,
+    )
+
+
 def test_signed_capital_allocation_policy_exports_runtime_limit(tmp_path) -> None:
     bundle_root = tmp_path / "promotion" / "trend-following-v1"
     _write_hmac_signed_bundle(
@@ -1529,32 +2116,58 @@ def test_wave2_mandate_schemas_validate_minimal_authority_artifacts() -> None:
         validate_quant_artifact(payloads[kind], schema=_schema(schema_name))
 
 
+_PRODUCTION_MISSING_KIND_BLOCKERS = (
+    "authority_boundary_missing",
+    "capacity_curve_report_missing",
+    "cost_model_report_missing",
+    "drift_monitor_spec_missing",
+    "live_probe_plan_missing",
+    "live_probe_recertification_report_missing",
+    "operational_safety_drill_missing",
+    "optimizer_validation_report_missing",
+    "portfolio_utility_definition_missing",
+    "pre_trade_control_manifest_missing",
+    "recertification_report_missing",
+    "sizing_policy_missing",
+    "statistical_validation_report_missing",
+)
+
+
 def test_wave2_fixture_bundles_replay_from_disk() -> None:
+    # The on-disk wave-2 mandate fixtures pre-date Defect 1 and therefore do
+    # not bundle wave 4-10 stub artifacts. Production-targeted bundles now
+    # surface every missing kind via the Defect-1 *_missing blockers in
+    # addition to the existing mandate concern. Each fixture exposes its
+    # signature concern alongside the new missing-kind blockers.
     expected = {
         "valid": ("paper_shadow", ()),
         "external_capital_unknown": (
             "disabled",
-            ("external_capital_compliance_unknown",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS
+            + ("external_capital_compliance_unknown",),
         ),
         "materiality_policy_missing": (
             "paper_shadow",
-            ("strategy_materiality_policy_missing",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS
+            + ("strategy_materiality_policy_missing",),
         ),
         "empty_approval_refs": (
             "disabled",
-            ("authority_artifact_invalid", "utility_definition_missing"),
+            _PRODUCTION_MISSING_KIND_BLOCKERS
+            + ("authority_artifact_invalid", "utility_definition_missing"),
         ),
         "unsigned_duplicate_role": (
             "research_only",
-            ("capital_role_research_only",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS + ("capital_role_research_only",),
         ),
         "signed_duplicate_conflict": (
             "disabled",
-            ("authority_artifact_invalid",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS + ("authority_artifact_invalid",),
         ),
         "tax_exempt_missing_edge": (
             "research_only",
-            ("lower_bound_net_edge_undefined",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS
+            + ("lower_bound_net_edge_undefined",),
         ),
     }
     for fixture_name, (max_state, blocker_codes) in expected.items():

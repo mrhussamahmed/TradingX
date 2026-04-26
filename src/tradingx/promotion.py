@@ -138,6 +138,54 @@ _FIRST_SLICE_REQUIRED_ARTIFACT_BLOCKERS = {
     "jurisdiction_account_use": "jurisdiction_account_use_unknown",
     "instrument_package": "instrument_package_missing",
 }
+# Defect 1 — required artifact kinds for each capable promotion state.
+# Maps each requested_state to the artifact kinds the bundle MUST contain.
+# A missing kind emits the "<kind>_missing" blocker code (or the existing
+# blocker code in _REQUIRED_KIND_TO_BLOCKER_CODE_OVERRIDES).
+_PAPER_TRADING_REQUIRED_KINDS: frozenset[str] = frozenset(
+    {
+        "statistical_validation_report",
+        "cost_model_report",
+        "capacity_curve_report",
+        "portfolio_utility_definition",
+        "optimizer_validation_report",
+        "sizing_policy",
+    }
+)
+_TINY_LIVE_PROBE_REQUIRED_KINDS: frozenset[str] = (
+    _PAPER_TRADING_REQUIRED_KINDS
+    | frozenset(
+        {
+            "live_probe_plan",
+            "authority_boundary",
+            "pre_trade_control_manifest",
+            "operational_safety_drill",
+        }
+    )
+)
+_PRODUCTION_REQUIRED_KINDS: frozenset[str] = (
+    _TINY_LIVE_PROBE_REQUIRED_KINDS
+    | frozenset(
+        {
+            "live_probe_recertification_report",
+            "recertification_report",
+            "drift_monitor_spec",
+        }
+    )
+)
+_REQUIRED_KIND_BY_REQUESTED_STATE: dict[str, frozenset[str]] = {
+    "paper_trading": _PAPER_TRADING_REQUIRED_KINDS,
+    "tiny_live_probe": _TINY_LIVE_PROBE_REQUIRED_KINDS,
+    "production": _PRODUCTION_REQUIRED_KINDS,
+}
+# A few existing blocker codes already cover specific missing-kind cases.
+# Map kind → existing blocker code so the new check reuses them rather than
+# inventing a parallel code with the same semantics.
+_REQUIRED_KIND_TO_BLOCKER_CODE_OVERRIDES: dict[str, str] = {
+    "authority_boundary": "authority_boundary_missing",
+    "recertification_report": "recertification_report_missing",
+    "drift_monitor_spec": "drift_monitor_spec_missing",
+}
 _FIRST_SLICE_EQUIVALENT_KINDS = {
     "placeholder_mandate": ("investment_mandate",),
     "benchmark_policy": ("benchmark_policy",),
@@ -252,6 +300,18 @@ _EMITTED_BLOCKERS_REQUIRING_REAL_COVERAGE = {
     "short_support_missing",
     "legacy_statistical_evidence",
     "stale_sources",
+    # Defect 1 — required-kind blockers must surface fixture/red-test/runtime
+    # coverage so empty bundles cannot silently bypass authority enforcement.
+    "statistical_validation_report_missing",
+    "cost_model_report_missing",
+    "capacity_curve_report_missing",
+    "portfolio_utility_definition_missing",
+    "optimizer_validation_report_missing",
+    "sizing_policy_missing",
+    "live_probe_plan_missing",
+    "pre_trade_control_manifest_missing",
+    "operational_safety_drill_missing",
+    "live_probe_recertification_report_missing",
 }
 
 
@@ -480,6 +540,20 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("max_concurrent_positions_reached", PromotionState.PAPER_TRADING),
     ("same_session_reentry_cooldown", PromotionState.PAPER_TRADING),
     ("total_deployed_cap_reached", PromotionState.PAPER_TRADING),
+    # Defect 1 — required-kind blockers for capable promotion states.
+    # paper_trading-required artifacts cap at PAPER_SHADOW when missing.
+    ("statistical_validation_report_missing", PromotionState.PAPER_SHADOW),
+    ("cost_model_report_missing", PromotionState.PAPER_SHADOW),
+    ("capacity_curve_report_missing", PromotionState.PAPER_SHADOW),
+    ("portfolio_utility_definition_missing", PromotionState.PAPER_SHADOW),
+    ("optimizer_validation_report_missing", PromotionState.PAPER_SHADOW),
+    ("sizing_policy_missing", PromotionState.PAPER_SHADOW),
+    # tiny_live_probe-only required artifacts cap at PAPER_TRADING.
+    ("live_probe_plan_missing", PromotionState.PAPER_TRADING),
+    ("pre_trade_control_manifest_missing", PromotionState.PAPER_TRADING),
+    ("operational_safety_drill_missing", PromotionState.PAPER_TRADING),
+    # production-only required artifact caps at TINY_LIVE_PROBE.
+    ("live_probe_recertification_report_missing", PromotionState.TINY_LIVE_PROBE),
 )
 
 BLOCKER_REGISTRY: dict[str, BlockerRegistryRecord] = {
@@ -611,6 +685,86 @@ for _code, _fixture, _red_test in (
     )
 
 
+# Defect 1 — required-kind blocker registry overrides. Each new "*_missing"
+# code carries real owning_wave/evaluator/red_test/fixture/cli_output/
+# web_report_field/runtime_enforcement metadata so coverage validation cannot
+# silently regress.
+for _code, _wave, _fixture, _red_test in (
+    (
+        "statistical_validation_report_missing",
+        "wave_4",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_statistical_validation_report_caps_at_paper_shadow",
+    ),
+    (
+        "cost_model_report_missing",
+        "wave_5",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_cost_model_caps_at_paper_shadow",
+    ),
+    (
+        "capacity_curve_report_missing",
+        "wave_5",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_capacity_curve_caps_at_paper_shadow",
+    ),
+    (
+        "portfolio_utility_definition_missing",
+        "wave_6",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_portfolio_utility_caps_at_paper_shadow",
+    ),
+    (
+        "optimizer_validation_report_missing",
+        "wave_6",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_optimizer_validation_caps_at_paper_shadow",
+    ),
+    (
+        "sizing_policy_missing",
+        "wave_6",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_sizing_policy_caps_at_paper_shadow",
+    ),
+    (
+        "live_probe_plan_missing",
+        "wave_8",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_live_probe_plan_caps_at_paper_trading",
+    ),
+    (
+        "pre_trade_control_manifest_missing",
+        "wave_8",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_pre_trade_control_caps_at_paper_trading",
+    ),
+    (
+        "operational_safety_drill_missing",
+        "wave_8",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_operational_safety_drill_caps_at_paper_trading",
+    ),
+    (
+        "live_probe_recertification_report_missing",
+        "wave_9",
+        "tests/fixtures/promotion/paper_shadow_placeholder",
+        "test_production_request_without_live_probe_recertification_blocks_production",
+    ),
+):
+    _existing = BLOCKER_REGISTRY[_code]
+    BLOCKER_REGISTRY[_code] = _record(
+        _code,
+        _existing.max_state,
+        owning_wave=_wave,
+        fixture=_fixture,
+        evaluator=f"evaluate_{_code}",
+        red_test=_red_test,
+        cli_output="promotion-check.blockers",
+        web_report_field="dashboard.document_summary.v5_authority_status",
+        runtime_enforcement="activation_refusal",
+    )
+
+
 def evaluate_authority_artifact_invalid() -> str:
     return "authority_artifact_invalid"
 
@@ -697,6 +851,49 @@ def evaluate_legacy_statistical_evidence() -> str:
 
 def evaluate_stale_sources() -> str:
     return "stale_sources"
+
+
+# Defect 1 evaluator stubs. Each returns the canonical blocker code emitted by
+# `_evaluate_verified_decision_blockers` when the corresponding artifact kind
+# is absent from a paper_trading/tiny_live_probe/production-targeted bundle.
+def evaluate_statistical_validation_report_missing() -> str:
+    return "statistical_validation_report_missing"
+
+
+def evaluate_cost_model_report_missing() -> str:
+    return "cost_model_report_missing"
+
+
+def evaluate_capacity_curve_report_missing() -> str:
+    return "capacity_curve_report_missing"
+
+
+def evaluate_portfolio_utility_definition_missing() -> str:
+    return "portfolio_utility_definition_missing"
+
+
+def evaluate_optimizer_validation_report_missing() -> str:
+    return "optimizer_validation_report_missing"
+
+
+def evaluate_sizing_policy_missing() -> str:
+    return "sizing_policy_missing"
+
+
+def evaluate_live_probe_plan_missing() -> str:
+    return "live_probe_plan_missing"
+
+
+def evaluate_pre_trade_control_manifest_missing() -> str:
+    return "pre_trade_control_manifest_missing"
+
+
+def evaluate_operational_safety_drill_missing() -> str:
+    return "operational_safety_drill_missing"
+
+
+def evaluate_live_probe_recertification_report_missing() -> str:
+    return "live_probe_recertification_report_missing"
 
 
 def _schema(name: str) -> dict[str, object]:
@@ -1307,6 +1504,23 @@ def _evaluate_verified_decision_blockers(
             kind=required_kind,
             strategy_id=strategy_id,
         ):
+            _append_blocker(blockers, blocker_code)
+    # Defect 1 — every capable promotion state requires a specific authority
+    # artifact set. A bundle that omits any required kind cannot reach that
+    # state regardless of what other artifacts assert. The new blocker caps
+    # the decision at the state immediately below the request.
+    requested_state_value = str(decision_payload.get("requested_state", ""))
+    required_kinds = _REQUIRED_KIND_BY_REQUESTED_STATE.get(
+        requested_state_value, frozenset()
+    )
+    if required_kinds:
+        present_kinds = {str(payload.get("kind", "")) for payload in artifact_payloads}
+        for required_kind in sorted(required_kinds):
+            if required_kind in present_kinds:
+                continue
+            blocker_code = _REQUIRED_KIND_TO_BLOCKER_CODE_OVERRIDES.get(
+                required_kind, f"{required_kind}_missing"
+            )
             _append_blocker(blockers, blocker_code)
     _append_mandate_blockers(
         blockers,

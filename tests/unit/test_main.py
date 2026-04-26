@@ -126,8 +126,27 @@ def test_promotion_check_replays_wave2_mandate_fixture_bundle(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["max_state"] == "disabled"
-    assert payload["blocker_codes"] == ["external_capital_compliance_unknown"]
+    # The mandate fixture predates Defect 1 and ships without wave 4-10 stub
+    # artifacts, so a production-targeted bundle now surfaces every required
+    # kind missing alongside the existing mandate concern.
+    assert "external_capital_compliance_unknown" in payload["blocker_codes"]
     assert payload["mandate_blocker_codes"] == ["external_capital_compliance_unknown"]
+    expected_missing_kinds = {
+        "authority_boundary_missing",
+        "capacity_curve_report_missing",
+        "cost_model_report_missing",
+        "drift_monitor_spec_missing",
+        "live_probe_plan_missing",
+        "live_probe_recertification_report_missing",
+        "operational_safety_drill_missing",
+        "optimizer_validation_report_missing",
+        "portfolio_utility_definition_missing",
+        "pre_trade_control_manifest_missing",
+        "recertification_report_missing",
+        "sizing_policy_missing",
+        "statistical_validation_report_missing",
+    }
+    assert expected_missing_kinds <= set(payload["blocker_codes"])
 
 
 def test_promotion_check_wrong_strategy_artifact_fails_closed(capsys) -> None:
