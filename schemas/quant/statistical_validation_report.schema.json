@@ -22,7 +22,7 @@
     "kind": {"type": "string", "const": "statistical_validation_report"},
     "strategy_id": {"type": "string"},
     "status": {"type": "string", "enum": ["valid", "incomplete"]},
-    "evidence_class": {"type": "string", "enum": ["promotion_valid", "exploratory"]},
+    "evidence_class": {"type": "string", "enum": ["promotion_valid", "exploratory", "legacy"]},
     "promotion_valid": {"type": "boolean"},
     "blocker_codes": {"type": "array", "items": {"type": "string"}},
     "component_status": {"type": "object"},

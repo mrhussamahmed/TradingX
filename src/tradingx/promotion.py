@@ -605,6 +605,11 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("max_concurrent_positions_reached", PromotionState.PAPER_TRADING),
     ("same_session_reentry_cooldown", PromotionState.PAPER_TRADING),
     ("total_deployed_cap_reached", PromotionState.PAPER_TRADING),
+    # Defect 14 — distinguish parse-error from expired.
+    ("live_probe_plan_invalid", PromotionState.PAPER_TRADING),
+    ("production_approval_invalid", PromotionState.PAPER_TRADING),
+    ("next_review_invalid", PromotionState.PAPER_TRADING),
+    ("drift_monitor_spec_invalid", PromotionState.PAPER_SHADOW),
     # Defect 1 — required-kind blockers for capable promotion states.
     # paper_trading-required artifacts cap at PAPER_SHADOW when missing.
     ("statistical_validation_report_missing", PromotionState.PAPER_SHADOW),
@@ -1543,11 +1548,21 @@ def blocker_registry_coverage_rows() -> tuple[dict[str, str], ...]:
 
 
 def _red_test_exists(repo_root: Path, red_test: str) -> bool:
+    """Defect 13 — anchored test-name discovery.
+
+    Earlier versions used a substring search, so a registry red_test of
+    ``test_foo`` would match ``test_foo_baseline_helper`` even though
+    only the latter existed. Now we require an anchored pattern
+    ``def\\s+test_<name>\\b`` so the registry value must point at an
+    exact pytest test name.
+    """
+
     test_root = repo_root / "tests"
     if not test_root.exists():
         return False
+    pattern = re.compile(r"^\s*def\s+" + re.escape(red_test) + r"\b", re.MULTILINE)
     return any(
-        red_test in path.read_text(encoding="utf-8")
+        pattern.search(path.read_text(encoding="utf-8"))
         for path in test_root.rglob("test_*.py")
         if path.is_file() and path.name != "test_blocker_registry.py"
     )
@@ -2122,6 +2137,28 @@ def _evaluate_verified_decision_blockers(
         raise AuthorityLedgerError("blocker_codes must be an array")
     for code in blocker_codes_raw:
         _append_blocker(blockers, str(code))
+    # Defect 11 — Stage 13 under-reporting check.
+    # If the operator's payload claimed a blocker that the evaluators
+    # never derived AND that claimed code carries a stricter max_state
+    # than the strictest derived blocker, surface
+    # ``authority_artifact_invalid`` so we cannot under-report by
+    # inflating the payload list. The check fires only when the payload
+    # claims STRICTER caps than the derived ones, i.e. when the derived
+    # state would be MORE permissive than the payload claims.
+    derived_codes = {b.code for b in blockers if b.code in BLOCKER_REGISTRY}
+    payload_codes = {
+        str(code)
+        for code in blocker_codes_raw
+        if str(code) in BLOCKER_REGISTRY
+    }
+    extra_payload_codes = payload_codes - derived_codes
+    if extra_payload_codes:
+        derived_state_cap = strictest_state_cap(tuple(blockers))
+        for code in extra_payload_codes:
+            payload_state = BLOCKER_REGISTRY[code].max_state
+            if _STATE_ORDER[payload_state] < _STATE_ORDER[derived_state_cap]:
+                _append_blocker(blockers, "authority_artifact_invalid")
+                break
     return tuple(blockers)
 
 
@@ -2748,14 +2785,16 @@ def evaluate_live_probe_blockers(
             if not bool(payload.get("passed", True)):
                 _append_blocker(blockers, "safety_drill_failed")
         if kind == "live_probe_plan":
+            # Defect 14 — distinguish unparseable from expired.
             try:
                 expires = datetime.fromisoformat(
                     str(payload.get("expires_at_utc", "")).replace("Z", "+00:00")
                 )
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "live_probe_plan_invalid")
+            else:
                 if expires.astimezone(UTC) <= now:
                     _append_blocker(blockers, "live_probe_plan_expired")
-            except (ValueError, TypeError):
-                _append_blocker(blockers, "live_probe_plan_expired")
             if not str(payload.get("pre_trade_control_manifest_ref", "")).strip():
                 _append_blocker(blockers, "pre_trade_control_missing")
             if not str(payload.get("authority_boundary_ref", "")).strip():
@@ -2914,16 +2953,18 @@ def evaluate_change_control_blockers(
         if kind == "recertification_report":
             has_recertification_report = True
             recert_change_ids.append(str(payload.get("change_id", "")).strip())
+            # Defect 14 — distinguish parse error from expired.
             try:
                 expires = datetime.fromisoformat(
                     str(payload.get("production_expires_at_utc", "")).replace(
                         "Z", "+00:00"
                     )
                 )
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "production_approval_invalid")
+            else:
                 if expires.astimezone(UTC) <= now:
                     _append_blocker(blockers, "production_approval_expired")
-            except (ValueError, TypeError):
-                _append_blocker(blockers, "production_approval_expired")
             for review_field in (
                 "next_operational_review_due_utc",
                 "next_statistical_review_due_utc",
@@ -2932,10 +2973,10 @@ def evaluate_change_control_blockers(
                     due = datetime.fromisoformat(
                         str(payload.get(review_field, "")).replace("Z", "+00:00")
                     )
-                    if due.astimezone(UTC) <= now:
-                        _append_blocker(blockers, "next_review_due_passed")
-                        break
                 except (ValueError, TypeError):
+                    _append_blocker(blockers, "next_review_invalid")
+                    break
+                if due.astimezone(UTC) <= now:
                     _append_blocker(blockers, "next_review_due_passed")
                     break
             if not str(payload.get("authority_boundary_ref", "")).strip():
@@ -2952,14 +2993,16 @@ def evaluate_change_control_blockers(
             }:
                 _append_blocker(blockers, "reconciliation_incident_unresolved")
         if kind == "drift_monitor_spec":
+            # Defect 14 — distinguish parse error from expired.
             try:
                 expires = datetime.fromisoformat(
                     str(payload.get("expires_at_utc", "")).replace("Z", "+00:00")
                 )
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "drift_monitor_spec_invalid")
+            else:
                 if expires.astimezone(UTC) <= now:
                     _append_blocker(blockers, "drift_monitor_spec_missing")
-            except (ValueError, TypeError):
-                _append_blocker(blockers, "drift_monitor_spec_missing")
             monitored = payload.get("monitored_variables", ())
             if (
                 not isinstance(monitored, Sequence)

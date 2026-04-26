@@ -617,12 +617,29 @@ def build_statistical_validation_report(
     if pbo_report is None or _missing_stat_field(pbo_report, "full_cpcv_matrix_ref"):
         _append_unique(blocker_codes, "dsr_pbo_inputs_incomplete")
     status = "valid" if not blocker_codes else "incomplete"
+    # Defect 12 — emit ``legacy`` evidence_class when the classifier
+    # determines the inputs are legacy (pre-Wave-4) rather than just
+    # incomplete. Previously the schema didn't allow ``legacy`` so the
+    # builder fell through to ``exploratory``, hiding legacy-evidence
+    # bundles from operators.
+    classifier = classify_statistical_evidence(
+        {
+            "kind": "statistical_validation_report",
+            "blocker_codes": blocker_codes,
+        }
+    )
+    if str(classifier.get("classification", "")) == "legacy_statistical_evidence":
+        evidence_class = "legacy"
+    elif status == "valid":
+        evidence_class = "promotion_valid"
+    else:
+        evidence_class = "exploratory"
     return {
         "schema_version": "1.0",
         "kind": "statistical_validation_report",
         "strategy_id": strategy_id,
         "status": status,
-        "evidence_class": "promotion_valid" if status == "valid" else "exploratory",
+        "evidence_class": evidence_class,
         "promotion_valid": status == "valid",
         "blocker_codes": blocker_codes,
         "component_status": component_status,
