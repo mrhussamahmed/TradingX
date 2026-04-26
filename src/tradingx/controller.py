@@ -31,7 +31,12 @@ from tradingx.data import (
 from tradingx.execution import (
     AlpacaPaperExecutionGateway,
     OrderRejected,
+    OrderRouteAuthorityGuard,
     classify_order_rejection_reason,
+)
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
 )
 from tradingx.experiments import MetricVisibilityContext
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
@@ -1715,23 +1720,19 @@ class GateValidationController:
 
 
 def build_default_controller(config: TradingConfig) -> RoundTripController:
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
+    """Backwards-compatible alias for the legacy paper roundtrip controller.
+
+    The legacy non-V5 paper roundtrip lives in
+    :mod:`tradingx.legacy_paper_roundtrip` so the ``legacy_paper_non_authority``
+    flag is concentrated in a single, clearly-labeled legacy module
+    (Defect 2).
+    """
+
+    from tradingx.legacy_paper_roundtrip import (
+        build_legacy_paper_roundtrip_controller,
     )
-    return RoundTripController(
-        market_data=AlpacaMarketDataGateway.from_credentials(
-            api_key=config.paper_credentials.api_key,
-            api_secret=config.paper_credentials.api_secret,
-        ),
-        execution=AlpacaPaperExecutionGateway(
-            trading_client=trading_client,
-            legacy_paper_non_authority=True,
-        ),
-        portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
-        risk=PaperOnlyRiskEngine(config),
-    )
+
+    return build_legacy_paper_roundtrip_controller(config)
 
 
 def build_default_paper_trading_controller(
@@ -1740,10 +1741,57 @@ def build_default_paper_trading_controller(
     return build_default_trading_loop_controller(config, broker_mode="paper")
 
 
+def _required_state_for_broker_mode(broker_mode: str) -> PromotionState:
+    """Map a broker_mode label onto the V5 promotion state it requires.
+
+    Defect 2 requires production runtime routes to enforce the matching
+    promotion state — not the historical paper-non-authority bypass.
+    """
+
+    normalized = broker_mode.strip().lower()
+    if normalized == "live":
+        return PromotionState.PRODUCTION
+    if normalized == "live_probe":
+        return PromotionState.TINY_LIVE_PROBE
+    return PromotionState.PAPER_TRADING
+
+
+def _route_label_for_broker_mode(broker_mode: str) -> str:
+    normalized = broker_mode.strip().lower()
+    if normalized == "live":
+        return "live_order"
+    if normalized == "live_probe":
+        return "live_probe_order"
+    return "paper_order"
+
+
+def _build_default_authority_guard(
+    config: TradingConfig,
+    *,
+    broker_mode: str,
+) -> OrderRouteAuthorityGuard:
+    """Wire the V5 authority guard for a runtime route.
+
+    Sources the promotion decision from
+    ``config.runtime.artifact_root / "promotion"``. Bundles that are
+    missing or fail authority validation will fail-closed at order
+    submission via :class:`OrderRouteAuthorityError`.
+    """
+
+    promotion_root = config.runtime.artifact_root / "promotion"
+    decision_provider = build_artifact_promotion_decision_provider(promotion_root)
+    return OrderRouteAuthorityGuard(
+        decision_provider=decision_provider,
+        required_state=_required_state_for_broker_mode(broker_mode),
+        route_label=_route_label_for_broker_mode(broker_mode),
+    )
+
+
 def build_default_trading_loop_controller(
     config: TradingConfig,
     *,
     broker_mode: str | None = None,
+    strategy_id: str = "trend-following-v1",
 ) -> PaperTradingLoopController:
     decision = resolve_broker_mode(config, explicit_mode=broker_mode)
     trading_client = build_trading_client_for_mode(config, decision)
@@ -1757,11 +1805,16 @@ def build_default_trading_loop_controller(
         git_sha=_resolve_git_sha(),
         dry_run=config.runtime.dry_run,
     )
+    authority_guard = _build_default_authority_guard(
+        config,
+        broker_mode=decision.effective_mode,
+    )
     return PaperTradingLoopController(
         market_data=market_data_gateway,
         execution=AlpacaPaperExecutionGateway(
             trading_client=trading_client,
-            legacy_paper_non_authority=True,
+            authority_guard=authority_guard,
+            strategy_id=strategy_id,
         ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),

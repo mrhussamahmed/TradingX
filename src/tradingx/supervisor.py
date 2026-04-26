@@ -18,7 +18,14 @@ from alpaca.trading.requests import GetOrdersRequest
 
 from tradingx.config import TradingConfig
 from tradingx.data import AlpacaMarketDataGateway, build_market_data_gateway_for_mode
-from tradingx.execution import AlpacaPaperExecutionGateway
+from tradingx.execution import (
+    AlpacaPaperExecutionGateway,
+    OrderRouteAuthorityGuard,
+)
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+)
 from tradingx.journal import SqliteOmsJournal
 from tradingx.live_enablement import (
     build_trading_client_for_mode,
@@ -173,15 +180,23 @@ class AlpacaPaperBrokerOperator:
         trading_client: TradingClient,
         *,
         market_data: AlpacaMarketDataGateway,
+        authority_guard: OrderRouteAuthorityGuard | None = None,
+        strategy_id: str | None = None,
         sleep_fn: Callable[[float], None] | None = None,
         monotonic_fn: Callable[[], float] | None = None,
     ) -> None:
         self._trading_client = trading_client
         self._market_data = market_data
         self._portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)
+        # Defect 2 — production paper-broker operators must be wired with a
+        # V5 authority guard. The legacy_paper_non_authority bypass has been
+        # removed from this code path; callers that still need the legacy
+        # smoke-test behavior should use
+        # ``tradingx.legacy_paper_roundtrip.build_legacy_paper_roundtrip_controller``.
         self._execution_gateway = AlpacaPaperExecutionGateway(
             trading_client,
-            legacy_paper_non_authority=True,
+            authority_guard=authority_guard,
+            strategy_id=strategy_id,
         )
         self._sleep_fn = sleep_fn or time.sleep
         self._monotonic_fn = monotonic_fn or time.monotonic
