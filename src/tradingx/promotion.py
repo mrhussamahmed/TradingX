@@ -390,6 +390,21 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("live_probe_short_evidence_missing", PromotionState.TINY_LIVE_PROBE),
     ("broker_initiated_cover_unreconciled", PromotionState.PAPER_TRADING),
     ("legacy_short_evidence", PromotionState.RESEARCH_ONLY),
+    ("authority_boundary_missing", PromotionState.PAPER_TRADING),
+    ("authority_boundary_invalid", PromotionState.PAPER_TRADING),
+    ("authority_boundary_expired", PromotionState.PAPER_TRADING),
+    ("live_probe_plan_expired", PromotionState.PAPER_TRADING),
+    ("live_probe_minimum_activity_unmet", PromotionState.TINY_LIVE_PROBE),
+    ("live_probe_inconclusive", PromotionState.TINY_LIVE_PROBE),
+    ("safety_drill_stale", PromotionState.PAPER_TRADING),
+    ("safety_drill_failed", PromotionState.PAPER_TRADING),
+    ("broker_timeout_state_machine_missing", PromotionState.TINY_LIVE_PROBE),
+    ("broker_timeout_retry_unsafe", PromotionState.PAPER_TRADING),
+    ("idempotency_evidence_missing", PromotionState.PAPER_TRADING),
+    ("reconciliation_evidence_missing", PromotionState.PAPER_TRADING),
+    ("reconciliation_incident_unresolved", PromotionState.PAPER_TRADING),
+    ("manual_exception_disabled_core_control", PromotionState.DISABLED),
+    ("post_probe_recertification_missing", PromotionState.TINY_LIVE_PROBE),
     ("drift_monitor_spec_missing", PromotionState.PAPER_SHADOW),
     ("capacity_extrapolation_risk", PromotionState.PAPER_SHADOW),
     ("unsupported_side", PromotionState.RESEARCH_ONLY),
@@ -1145,6 +1160,15 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "short_financing_model",
         "short_risk_report",
         "short_runtime_event",
+        "authority_boundary",
+        "pre_trade_control_manifest",
+        "operational_safety_drill",
+        "live_probe_plan",
+        "live_probe_run_record",
+        "live_probe_recertification_report",
+        "broker_timeout_state_transition",
+        "runtime_override_event",
+        "reconciliation_incident",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1315,6 +1339,10 @@ def _evaluate_verified_decision_blockers(
     ):
         _append_blocker(blockers, blocker.code)
     for blocker in evaluate_short_blockers(
+        artifact_payloads=artifact_payloads,
+    ):
+        _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_live_probe_blockers(
         artifact_payloads=artifact_payloads,
     ):
         _append_blocker(blockers, blocker.code)
@@ -1870,6 +1898,176 @@ def evaluate_short_blockers(
         and not has_short_risk_report_with_probe
     ):
         _append_blocker(blockers, "live_probe_short_evidence_missing")
+    return tuple(blockers)
+
+
+def evaluate_live_probe_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+) -> tuple[Blocker, ...]:
+    """Wave 8 live-probe and operational-safety enforcement.
+
+    Re-derives blockers from raw fields so a tampered payload claiming
+    ``blocker_codes=[]`` cannot bypass enforcement.
+    """
+
+    blockers: list[Blocker] = []
+    now = datetime.now(UTC)
+    has_run_record = False
+    has_recertification = False
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in {
+            "authority_boundary",
+            "pre_trade_control_manifest",
+            "operational_safety_drill",
+            "live_probe_plan",
+            "live_probe_run_record",
+            "live_probe_recertification_report",
+            "broker_timeout_state_transition",
+            "runtime_override_event",
+            "reconciliation_incident",
+        }:
+            continue
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+        if kind == "authority_boundary":
+            if _normal_form(payload.get("write_authorization_status")) != "authorized":
+                _append_blocker(blockers, "authority_boundary_invalid")
+            try:
+                expires = datetime.fromisoformat(
+                    str(payload.get("expires_at_utc", "")).replace("Z", "+00:00")
+                )
+                if expires.astimezone(UTC) <= now:
+                    _append_blocker(blockers, "authority_boundary_expired")
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "authority_boundary_invalid")
+            if bool(payload.get("second_approver_required", False)):
+                approvers = payload.get("approvers", ())
+                signatures = payload.get("signatures", ())
+                if (
+                    not isinstance(approvers, Sequence)
+                    or isinstance(approvers, str | bytes)
+                    or len(list(approvers)) < 2
+                    or not isinstance(signatures, Sequence)
+                    or isinstance(signatures, str | bytes)
+                    or len(list(signatures)) < 2
+                ):
+                    _append_blocker(blockers, "authority_boundary_invalid")
+        if kind == "pre_trade_control_manifest":
+            for cap_field in (
+                "price_collar_bps",
+                "fat_finger_notional_limit",
+                "fat_finger_share_limit",
+            ):
+                try:
+                    if Decimal(str(payload.get(cap_field, "0"))) <= Decimal("0"):
+                        _append_blocker(blockers, "pre_trade_control_missing")
+                        break
+                except InvalidOperation:
+                    _append_blocker(blockers, "pre_trade_control_missing")
+                    break
+            if _coerce_int(payload.get("max_open_orders", 0)) <= 0:
+                _append_blocker(blockers, "pre_trade_control_missing")
+            if _coerce_int(payload.get("max_order_rate_per_minute", 0)) <= 0:
+                _append_blocker(blockers, "pre_trade_control_missing")
+            if not bool(payload.get("duplicate_prevention_enabled", False)):
+                _append_blocker(blockers, "pre_trade_control_missing")
+            if not bool(payload.get("cancel_on_disconnect", False)):
+                _append_blocker(blockers, "pre_trade_control_missing")
+            if not bool(payload.get("reject_on_missing_control", False)):
+                _append_blocker(blockers, "pre_trade_control_missing")
+        if kind == "operational_safety_drill":
+            if bool(payload.get("is_stale", False)):
+                _append_blocker(blockers, "safety_drill_stale")
+            if not bool(payload.get("passed", True)):
+                _append_blocker(blockers, "safety_drill_failed")
+        if kind == "live_probe_plan":
+            try:
+                expires = datetime.fromisoformat(
+                    str(payload.get("expires_at_utc", "")).replace("Z", "+00:00")
+                )
+                if expires.astimezone(UTC) <= now:
+                    _append_blocker(blockers, "live_probe_plan_expired")
+            except (ValueError, TypeError):
+                _append_blocker(blockers, "live_probe_plan_expired")
+            if not str(payload.get("pre_trade_control_manifest_ref", "")).strip():
+                _append_blocker(blockers, "pre_trade_control_missing")
+            if not str(payload.get("authority_boundary_ref", "")).strip():
+                _append_blocker(blockers, "authority_boundary_missing")
+            if not bool(payload.get("kill_switch_required", False)):
+                _append_blocker(blockers, "pre_trade_control_missing")
+        if kind == "live_probe_run_record":
+            has_run_record = True
+            if not bool(payload.get("minimum_activity_met", False)):
+                _append_blocker(blockers, "live_probe_minimum_activity_unmet")
+                # Without minimum activity met, the run is inconclusive
+                # regardless of any self-reported status (Milestone 9).
+                _append_blocker(blockers, "live_probe_inconclusive")
+            run_status = _normal_form(payload.get("status"))
+            if run_status in {"inconclusive", "fail", "rolled_back"}:
+                _append_blocker(blockers, "live_probe_inconclusive")
+        if kind == "live_probe_recertification_report":
+            has_recertification = True
+            unresolved = payload.get("unresolved_incident_refs", ())
+            if (
+                isinstance(unresolved, Sequence)
+                and not isinstance(unresolved, str | bytes)
+                and unresolved
+            ):
+                _append_blocker(blockers, "reconciliation_incident_unresolved")
+            if _normal_form(payload.get("minimum_activity_status")) != "met":
+                _append_blocker(blockers, "live_probe_minimum_activity_unmet")
+            if _normal_form(payload.get("drill_status")) != "fresh":
+                _append_blocker(blockers, "safety_drill_stale")
+            if _normal_form(payload.get("broker_timeout_status")) != "defined":
+                _append_blocker(blockers, "broker_timeout_state_machine_missing")
+            if _normal_form(payload.get("idempotency_status")) != "complete":
+                _append_blocker(blockers, "idempotency_evidence_missing")
+            if _normal_form(payload.get("reconciliation_status")) != "complete":
+                _append_blocker(blockers, "reconciliation_evidence_missing")
+        if kind == "broker_timeout_state_transition":
+            retry_permitted = bool(payload.get("retry_permitted", False))
+            reconciliation_required = bool(
+                payload.get("reconciliation_required", False)
+            )
+            to_state = _normal_form(payload.get("to_state"))
+            if retry_permitted and reconciliation_required and to_state != "recovered":
+                _append_blocker(blockers, "broker_timeout_retry_unsafe")
+        if kind == "runtime_override_event":
+            disabled = payload.get("disabled_controls_requested", ())
+            if (
+                isinstance(disabled, Sequence)
+                and not isinstance(disabled, str | bytes)
+                and disabled
+            ):
+                _append_blocker(blockers, "manual_exception_disabled_core_control")
+            action_str = str(payload.get("action", "")).lower().strip()
+            if action_str in {
+                "disable_kill_switch",
+                "bypass_kill_switch",
+                "bypass_pre_trade_control",
+                "disable_pre_trade_control",
+                "disable_reconciliation",
+                "bypass_reconciliation",
+                "disable_drawdown_limit",
+                "bypass_drawdown_limit",
+                "disable_idempotency",
+                "bypass_idempotency",
+                "disable_cancel_on_disconnect",
+            }:
+                _append_blocker(blockers, "manual_exception_disabled_core_control")
+            if not str(payload.get("authority_boundary_ref", "")).strip():
+                _append_blocker(blockers, "authority_boundary_missing")
+        if kind == "reconciliation_incident":
+            if _normal_form(payload.get("status")) != "resolved":
+                _append_blocker(blockers, "reconciliation_incident_unresolved")
+    # If a live-probe run record is present in the bundle, a matching
+    # post-probe recertification report MUST also be bundled. Otherwise
+    # the bundle cannot satisfy production eligibility (Milestone 9).
+    if has_run_record and not has_recertification:
+        _append_blocker(blockers, "post_probe_recertification_missing")
     return tuple(blockers)
 
 
@@ -3149,6 +3347,7 @@ __all__ = [
     "evaluate_promotion_manifest",
     "evaluate_cost_capacity_blockers",
     "evaluate_forecast_sizing_blockers",
+    "evaluate_live_probe_blockers",
     "evaluate_portfolio_optimizer_blockers",
     "evaluate_provenance_blockers",
     "evaluate_short_blockers",

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Reconciliation Incident",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "incident_id",
+    "strategy_id",
+    "severity",
+    "status",
+    "summary",
+    "first_observed_at_utc",
+    "resolved_at_utc",
+    "resolution_action",
+    "evidence_refs",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "reconciliation_incident"},
+    "incident_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "severity": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "acknowledged", "resolved", "wont_fix"]
+    },
+    "summary": {"type": "string"},
+    "first_observed_at_utc": {"type": "string", "format": "utc-datetime"},
+    "resolved_at_utc": {"type": "string"},
+    "resolution_action": {"type": "string"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

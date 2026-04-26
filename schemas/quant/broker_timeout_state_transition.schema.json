@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Broker Timeout State Transition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "transition_id",
+    "order_id",
+    "intent_id",
+    "idempotency_key",
+    "retry_sequence",
+    "dedupe_window_seconds",
+    "from_state",
+    "to_state",
+    "trigger",
+    "reconciliation_required",
+    "retry_permitted",
+    "transition_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "broker_timeout_state_transition"},
+    "transition_id": {"type": "string"},
+    "order_id": {"type": "string"},
+    "intent_id": {"type": "string"},
+    "idempotency_key": {"type": "string"},
+    "retry_sequence": {"type": "integer"},
+    "dedupe_window_seconds": {"type": "integer"},
+    "from_state": {
+      "type": "string",
+      "enum": [
+        "submit_unknown",
+        "ack_unknown",
+        "fill_unknown",
+        "cancel_unknown",
+        "reconcile_required",
+        "safe_halted",
+        "recovered"
+      ]
+    },
+    "to_state": {
+      "type": "string",
+      "enum": [
+        "submit_unknown",
+        "ack_unknown",
+        "fill_unknown",
+        "cancel_unknown",
+        "reconcile_required",
+        "safe_halted",
+        "recovered"
+      ]
+    },
+    "trigger": {"type": "string"},
+    "reconciliation_required": {"type": "boolean"},
+    "retry_permitted": {"type": "boolean"},
+    "transition_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

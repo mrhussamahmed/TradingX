@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Live Probe Recertification Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "run_refs",
+    "incident_refs",
+    "unresolved_incident_refs",
+    "minimum_activity_status",
+    "drill_status",
+    "broker_timeout_status",
+    "idempotency_status",
+    "reconciliation_status",
+    "cost_observation_refs",
+    "production_eligible",
+    "approved_at_utc",
+    "approver",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "live_probe_recertification_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "run_refs": {"type": "array", "items": {"type": "string"}},
+    "incident_refs": {"type": "array", "items": {"type": "string"}},
+    "unresolved_incident_refs": {"type": "array", "items": {"type": "string"}},
+    "minimum_activity_status": {"type": "string"},
+    "drill_status": {"type": "string"},
+    "broker_timeout_status": {"type": "string"},
+    "idempotency_status": {"type": "string"},
+    "reconciliation_status": {"type": "string"},
+    "cost_observation_refs": {"type": "array", "items": {"type": "string"}},
+    "production_eligible": {"type": "boolean"},
+    "approved_at_utc": {"type": "string", "format": "utc-datetime"},
+    "approver": {"type": "string"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}
