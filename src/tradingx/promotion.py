@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from tradingx.authority import (
     AuthorityLedger,
     AuthorityLedgerError,
     AuthorityLedgerRecord,
+    ContentAddressedRef,
     FileContentAddressedStore,
     TrustRoot,
     TrustRootError,
@@ -112,6 +113,8 @@ _CLI_OUTPUT_FIELDS = {
     "promotion-check.blockers",
     "promotion-check.max_state",
     "promotion-check.artifact_refs",
+    "promotion-check.mandate_blockers",
+    "promotion-check.statistical_blockers",
 }
 _WEB_REPORT_FIELDS = {
     "dashboard.document_summary.v5_authority_status",
@@ -134,6 +137,93 @@ _FIRST_SLICE_REQUIRED_ARTIFACT_BLOCKERS = {
     "jurisdiction_account_use": "jurisdiction_account_use_unknown",
     "instrument_package": "instrument_package_missing",
 }
+_FIRST_SLICE_EQUIVALENT_KINDS = {
+    "placeholder_mandate": ("investment_mandate",),
+    "benchmark_policy": ("benchmark_policy",),
+    "wealth_thesis": ("wealth_thesis",),
+    "utility_definition": (
+        "investment_mandate",
+        "strategy_capital_role",
+        "wealth_thesis",
+    ),
+    "allocation_policy": ("capital_allocation_policy",),
+    "tax_account_policy": ("investment_mandate",),
+    "jurisdiction_account_use": ("jurisdiction_account_use_manifest",),
+    "instrument_package": ("instrument_support_package",),
+}
+_MANDATE_ARTIFACT_SCHEMA_NAMES = {
+    "investment_mandate": "investment_mandate",
+    "benchmark_policy": "benchmark_policy",
+    "jurisdiction_account_use_manifest": "jurisdiction_account_use_manifest",
+    "instrument_support_package": "instrument_support_package",
+    "strategy_capital_role": "strategy_capital_role",
+    "wealth_thesis": "wealth_thesis",
+    "capital_allocation_policy": "capital_allocation_policy",
+    "lower_bound_net_edge_spec": "lower_bound_net_edge_spec",
+    "strategy_materiality_policy": "strategy_materiality_policy",
+}
+_MANDATE_REQUIRED_ARTIFACT_BLOCKERS = {
+    "investment_mandate": "utility_definition_missing",
+    "benchmark_policy": "utility_definition_missing",
+    "strategy_capital_role": "utility_definition_missing",
+    "wealth_thesis": "utility_definition_missing",
+    "capital_allocation_policy": "utility_definition_missing",
+    "lower_bound_net_edge_spec": "utility_definition_missing",
+    "jurisdiction_account_use_manifest": "jurisdiction_account_use_unknown",
+    "instrument_support_package": "instrument_package_missing",
+    "strategy_materiality_policy": "strategy_materiality_policy_missing",
+}
+_MANDATE_BLOCKER_CODES = {
+    "utility_definition_missing",
+    "tax_account_financing_unspecified",
+    "jurisdiction_account_use_unknown",
+    "external_capital_compliance_unknown",
+    "after_tax_edge_missing_for_taxable_account",
+    "instrument_package_missing",
+    "strategy_materiality_policy_missing",
+    "capital_role_inactive",
+    "capital_role_research_only",
+    "benchmark_policy_not_ex_ante",
+    "mandate_promotion_ceiling_exceeded",
+    "allocation_policy_limit_exceeded",
+}
+_STATISTICAL_BLOCKER_CODES = {
+    "lower_bound_net_edge_undefined",
+    "net_edge_lower_bound_below_threshold",
+    "trial_lineage_contaminated",
+    "trial_universe_incomplete",
+    "dsr_pbo_inputs_incomplete",
+    "point_in_time_data_incomplete",
+    "legacy_statistical_evidence",
+    "pending_threshold",
+}
+_AUTHORITY_BLOCKER_CODES = {
+    "authority_artifact_invalid",
+    "ledger_key_worm_controls_missing",
+    "state_action_contract_missing",
+    "replay_path_missing",
+}
+_UNKNOWN_DECLARATIONS = {
+    "",
+    "unknown",
+    "unspecified",
+    "not_declared",
+    "missing",
+    "unresolved",
+    "none",
+}
+_EXTERNAL_ACCOUNT_USES = {
+    "advisory",
+    "client",
+    "client_advisory",
+    "external_capital",
+    "fund",
+    "retirement",
+}
+_FIXTURE_MARKERS = ("fixture", "test-only", "test_only")
+_LOWER_BOUND_REQUIRED_STRESS_INPUTS = frozenset(
+    {"cost", "slippage", "tax", "financing", "capacity"}
+)
 _AUTHORITY_EVIDENCE_ARTIFACT_KINDS = {
     "strategy_capability_manifest",
     "promotion_evidence",
@@ -147,6 +237,15 @@ _EMITTED_BLOCKERS_REQUIRING_REAL_COVERAGE = {
     "jurisdiction_account_use_unknown",
     "utility_definition_missing",
     "instrument_package_missing",
+    "external_capital_compliance_unknown",
+    "strategy_materiality_policy_missing",
+    "capital_role_inactive",
+    "capital_role_research_only",
+    "benchmark_policy_not_ex_ante",
+    "mandate_promotion_ceiling_exceeded",
+    "allocation_policy_limit_exceeded",
+    "lower_bound_net_edge_undefined",
+    "net_edge_lower_bound_below_threshold",
     "unsupported_side",
     "short_support_missing",
     "legacy_statistical_evidence",
@@ -249,6 +348,11 @@ _REGISTRY_SEEDS: tuple[tuple[str, PromotionState], ...] = (
     ("external_capital_compliance_unknown", PromotionState.DISABLED),
     ("utility_definition_missing", PromotionState.RESEARCH_ONLY),
     ("strategy_materiality_policy_missing", PromotionState.PAPER_SHADOW),
+    ("capital_role_inactive", PromotionState.DISABLED),
+    ("capital_role_research_only", PromotionState.RESEARCH_ONLY),
+    ("benchmark_policy_not_ex_ante", PromotionState.RESEARCH_ONLY),
+    ("mandate_promotion_ceiling_exceeded", PromotionState.RESEARCH_ONLY),
+    ("allocation_policy_limit_exceeded", PromotionState.PAPER_SHADOW),
     ("lower_bound_net_edge_undefined", PromotionState.RESEARCH_ONLY),
     ("net_edge_lower_bound_below_threshold", PromotionState.RESEARCH_ONLY),
     ("trial_lineage_contaminated", PromotionState.RESEARCH_ONLY),
@@ -382,6 +486,51 @@ for _code, _fixture, _red_test in (
         "test_missing_first_slice_evidence_recomputes_blockers_from_artifacts",
     ),
     (
+        "external_capital_compliance_unknown",
+        "tests/fixtures/mandate/external_capital_unknown",
+        "test_external_capital_unknown_disables_promotion",
+    ),
+    (
+        "strategy_materiality_policy_missing",
+        "tests/fixtures/mandate/materiality_policy_missing",
+        "test_missing_strategy_materiality_policy_caps_at_paper_shadow",
+    ),
+    (
+        "capital_role_inactive",
+        "tests/fixtures/mandate/inactive_role",
+        "test_inactive_and_research_only_capital_roles_block_capital_promotion",
+    ),
+    (
+        "capital_role_research_only",
+        "tests/fixtures/mandate/research_only_role",
+        "test_inactive_and_research_only_capital_roles_block_capital_promotion",
+    ),
+    (
+        "benchmark_policy_not_ex_ante",
+        "tests/fixtures/mandate/non_ex_ante_benchmark",
+        "test_non_ex_ante_benchmark_policy_blocks_capital_promotion",
+    ),
+    (
+        "mandate_promotion_ceiling_exceeded",
+        "tests/fixtures/mandate/ceiling_exceeded",
+        "test_mandate_policy_ceiling_below_request_blocks_capital_promotion",
+    ),
+    (
+        "allocation_policy_limit_exceeded",
+        "tests/fixtures/mandate/allocation_limit_exceeded",
+        "test_allocation_policy_limit_exceeded_caps_at_paper_shadow",
+    ),
+    (
+        "lower_bound_net_edge_undefined",
+        "tests/fixtures/mandate/invalid_lower_bound_spec",
+        "test_invalid_lower_bound_spec_math_blocks_statistical_authority",
+    ),
+    (
+        "net_edge_lower_bound_below_threshold",
+        "tests/fixtures/mandate/net_edge_below_threshold",
+        "test_taxable_production_with_negative_lower_bound_fails_expected_wealth",
+    ),
+    (
         "unsupported_side",
         "tests/fixtures/promotion/unsupported_short_side",
         "test_negative_weight_without_short_package_blocks_before_long_only",
@@ -446,6 +595,42 @@ def evaluate_utility_definition_missing() -> str:
 
 def evaluate_instrument_package_missing() -> str:
     return "instrument_package_missing"
+
+
+def evaluate_external_capital_compliance_unknown() -> str:
+    return "external_capital_compliance_unknown"
+
+
+def evaluate_strategy_materiality_policy_missing() -> str:
+    return "strategy_materiality_policy_missing"
+
+
+def evaluate_capital_role_inactive() -> str:
+    return "capital_role_inactive"
+
+
+def evaluate_capital_role_research_only() -> str:
+    return "capital_role_research_only"
+
+
+def evaluate_benchmark_policy_not_ex_ante() -> str:
+    return "benchmark_policy_not_ex_ante"
+
+
+def evaluate_mandate_promotion_ceiling_exceeded() -> str:
+    return "mandate_promotion_ceiling_exceeded"
+
+
+def evaluate_allocation_policy_limit_exceeded() -> str:
+    return "allocation_policy_limit_exceeded"
+
+
+def evaluate_lower_bound_net_edge_undefined() -> str:
+    return "lower_bound_net_edge_undefined"
+
+
+def evaluate_net_edge_lower_bound_below_threshold() -> str:
+    return "net_edge_lower_bound_below_threshold"
 
 
 def evaluate_state_action_contract_missing() -> str:
@@ -525,9 +710,7 @@ def validate_blocker_registry_coverage(
                     f"{', '.join(synthetic_fields)}"
                 )
             if record.runtime_enforcement == NOT_RUNTIME_APPLICABLE:
-                raise ValueError(
-                    f"{code} has synthetic runtime enforcement coverage"
-                )
+                raise ValueError(f"{code} has synthetic runtime enforcement coverage")
         if record.fixture != NOT_RUNTIME_APPLICABLE:
             fixture_path = repo_root / record.fixture
             if not fixture_path.exists():
@@ -658,10 +841,29 @@ class PromotionDecision:
     ledger_sequence: int | None
     ledger_hash: str | None
     state_action_contracts: dict[str, dict[str, object]] | None = None
+    strategy_allocation_limits: tuple[dict[str, str], ...] = ()
 
     @property
     def blocker_codes(self) -> tuple[str, ...]:
         return tuple(blocker.code for blocker in self.blockers)
+
+    @property
+    def mandate_blocker_codes(self) -> tuple[str, ...]:
+        return tuple(
+            code for code in self.blocker_codes if code in _MANDATE_BLOCKER_CODES
+        )
+
+    @property
+    def statistical_blocker_codes(self) -> tuple[str, ...]:
+        return tuple(
+            code for code in self.blocker_codes if code in _STATISTICAL_BLOCKER_CODES
+        )
+
+    @property
+    def authority_blocker_codes(self) -> tuple[str, ...]:
+        return tuple(
+            code for code in self.blocker_codes if code in _AUTHORITY_BLOCKER_CODES
+        )
 
     @property
     def decision_hash(self) -> str:
@@ -674,6 +876,12 @@ class PromotionDecision:
             "requested_state": self.requested_state.value,
             "max_state": self.max_state.value,
             "blocker_codes": list(self.blocker_codes),
+            "mandate_blocker_codes": list(self.mandate_blocker_codes),
+            "statistical_blocker_codes": list(self.statistical_blocker_codes),
+            "authority_blocker_codes": list(self.authority_blocker_codes),
+            "strategy_allocation_limits": [
+                dict(limit) for limit in self.strategy_allocation_limits
+            ],
             "artifact_refs": list(self.artifact_refs),
             "ledger_sequence": self.ledger_sequence,
             "ledger_hash": self.ledger_hash,
@@ -699,9 +907,7 @@ def evaluate_promotion_manifest(root: Path) -> PromotionDecision:
     if not isinstance(payload, dict):
         raise ValueError("promotion manifest must be a JSON object")
     strategy_id = str(payload.get("strategy_id", "unknown"))
-    requested_state = _state_from_value(
-        str(payload.get("requested_state", "disabled"))
-    )
+    requested_state = _state_from_value(str(payload.get("requested_state", "disabled")))
     try:
         validate_quant_artifact(payload, schema=_schema("promotion_manifest"))
         decision = _evaluate_authority_bundle(root=root, manifest=payload)
@@ -746,7 +952,8 @@ def _evaluate_authority_bundle(
         raise TrustRootError("trust root must be an object")
     validate_quant_artifact(trust_root_payload, schema=_schema("trust_root"))
     trust_root = TrustRoot.from_json(trust_root_payload)
-    if trust_root.fixture_root and not _is_allowed_fixture_root(root):
+    fixture_mode = _is_allowed_fixture_root(root)
+    if trust_root.fixture_root and not fixture_mode:
         raise TrustRootError(
             "fixture trust roots are only accepted under tests/fixtures"
         )
@@ -767,6 +974,7 @@ def _evaluate_authority_bundle(
         artifact_store=artifact_store,
         trust_root=trust_root,
         payload_hash=record.payload_hash,
+        fixture_mode=fixture_mode,
     )
     decision_payload = record.payload
     validate_quant_artifact(decision_payload, schema=_schema("promotion_decision"))
@@ -779,8 +987,13 @@ def _evaluate_authority_bundle(
     blockers = _evaluate_verified_decision_blockers(
         decision_payload=decision_payload,
         artifact_payloads=artifact_payloads,
+        artifact_store=artifact_store,
+        replay_store=replay_store,
+        trust_root=trust_root,
+        ledger_sequence=record.sequence,
         state_action_contracts=state_action_contracts,
         replay_missing=replay_missing,
+        fixture_mode=fixture_mode,
     )
     max_state = (
         strictest_state_cap(blockers)
@@ -791,6 +1004,15 @@ def _evaluate_authority_bundle(
     )
     if not state_allows(max_state, requested_state):
         max_state = strictest_state_cap(blockers) if blockers else max_state
+    strategy_allocation_limits = _verified_strategy_allocation_limits(
+        artifact_payloads,
+        artifact_store=artifact_store,
+        replay_store=replay_store,
+        trust_root=trust_root,
+        ledger_sequence=record.sequence,
+        strategy_id=strategy_id,
+        fixture_mode=fixture_mode,
+    )
     return PromotionDecision(
         strategy_id=strategy_id,
         requested_state=requested_state,
@@ -800,6 +1022,7 @@ def _evaluate_authority_bundle(
         ledger_sequence=record.sequence,
         ledger_hash=record.ledger_hash,
         state_action_contracts=state_action_contracts,
+        strategy_allocation_limits=strategy_allocation_limits,
     )
 
 
@@ -864,6 +1087,9 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         validate_quant_artifact(payload, schema=_schema("approval_record"))
     elif kind in {"strategy_capability_manifest", "promotion_evidence"}:
         validate_quant_artifact(payload, schema=_schema(kind))
+    elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
+        schema_name = _MANDATE_ARTIFACT_SCHEMA_NAMES[kind]
+        validate_quant_artifact(payload, schema=_schema(schema_name))
     else:
         validate_quant_artifact(payload, schema=_schema("content_addressed_artifact"))
 
@@ -886,6 +1112,7 @@ def _verify_approval_refs(
     artifact_store: FileContentAddressedStore,
     trust_root: TrustRoot,
     payload_hash: str,
+    fixture_mode: bool,
 ) -> None:
     if not approval_refs:
         raise AuthorityLedgerError("approval refs are required")
@@ -894,48 +1121,82 @@ def _verify_approval_refs(
         validate_quant_artifact(approval_payload, schema=_schema("approval_record"))
         if str(approval_payload.get("payload_hash", "")) != payload_hash:
             raise AuthorityLedgerError("approval payload hash mismatch")
+        if not fixture_mode:
+            for field in (
+                "operator_identity_ref",
+                "role_registry_ref",
+                "authority_boundary_ref",
+            ):
+                if _contains_fixture_marker(str(approval_payload.get(field, ""))):
+                    raise AuthorityLedgerError(
+                        f"{field} uses a fixture/test-only authority marker"
+                    )
         if str(approval_payload.get("scope", "")) != "promotion_decision":
             raise AuthorityLedgerError(
                 "approval scope does not cover promotion_decision"
             )
-        if not bool(approval_payload.get("risk_accepted", False)):
-            raise AuthorityLedgerError("approval risk acceptance is missing")
-        signed_at = datetime.fromisoformat(
-            str(approval_payload["signed_at_utc"]).replace("Z", "+00:00")
-        ).astimezone(UTC)
-        expires_at = datetime.fromisoformat(
-            str(approval_payload["expires_at_utc"]).replace("Z", "+00:00")
-        ).astimezone(UTC)
-        verified_at = datetime.now(UTC)
-        if signed_at > expires_at:
-            raise AuthorityLedgerError("approval signed_at_utc is after expiry")
-        if signed_at > verified_at:
-            raise AuthorityLedgerError("approval signed_at_utc is in the future")
-        if not (
-            trust_root.not_before_utc.astimezone(UTC)
-            <= signed_at
-            <= trust_root.not_after_utc.astimezone(UTC)
-        ):
-            raise AuthorityLedgerError(
-                "approval signed_at_utc is outside trust-root validity bounds"
-            )
-        if expires_at < verified_at:
-            raise AuthorityLedgerError("approval record is expired")
-        verify_approval_signature(
-            payload_hash=payload_hash,
-            signature_ref=str(approval_payload.get("signature_ref", "")),
+        _verify_approval_payload(
+            approval_payload,
             trust_root=trust_root,
+            payload_hash=payload_hash,
             required_scope="promotion_decision",
-            verified_at_utc=verified_at,
         )
+
+
+def _verify_approval_payload(
+    approval_payload: Mapping[str, object],
+    *,
+    trust_root: TrustRoot,
+    payload_hash: str,
+    required_scope: str,
+) -> None:
+    if str(approval_payload.get("payload_hash", "")) != payload_hash:
+        raise AuthorityLedgerError("approval payload hash mismatch")
+    if str(approval_payload.get("scope", "")) != required_scope:
+        raise AuthorityLedgerError(f"approval scope does not cover {required_scope}")
+    if not bool(approval_payload.get("risk_accepted", False)):
+        raise AuthorityLedgerError("approval risk acceptance is missing")
+    signed_at = datetime.fromisoformat(
+        str(approval_payload["signed_at_utc"]).replace("Z", "+00:00")
+    ).astimezone(UTC)
+    expires_at = datetime.fromisoformat(
+        str(approval_payload["expires_at_utc"]).replace("Z", "+00:00")
+    ).astimezone(UTC)
+    verified_at = datetime.now(UTC)
+    if signed_at > expires_at:
+        raise AuthorityLedgerError("approval signed_at_utc is after expiry")
+    if signed_at > verified_at:
+        raise AuthorityLedgerError("approval signed_at_utc is in the future")
+    if not (
+        trust_root.not_before_utc.astimezone(UTC)
+        <= signed_at
+        <= trust_root.not_after_utc.astimezone(UTC)
+    ):
+        raise AuthorityLedgerError(
+            "approval signed_at_utc is outside trust-root validity bounds"
+        )
+    if expires_at < verified_at:
+        raise AuthorityLedgerError("approval record is expired")
+    verify_approval_signature(
+        payload_hash=payload_hash,
+        signature_ref=str(approval_payload.get("signature_ref", "")),
+        trust_root=trust_root,
+        required_scope=required_scope,
+        verified_at_utc=verified_at,
+    )
 
 
 def _evaluate_verified_decision_blockers(
     *,
     decision_payload: Mapping[str, object],
     artifact_payloads: tuple[Mapping[str, object], ...],
+    artifact_store: FileContentAddressedStore,
+    replay_store: FileContentAddressedStore,
+    trust_root: TrustRoot,
+    ledger_sequence: int,
     state_action_contracts: dict[str, dict[str, object]] | None,
     replay_missing: bool,
+    fixture_mode: bool,
 ) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
     strategy_id = str(decision_payload.get("strategy_id", ""))
@@ -947,12 +1208,22 @@ def _evaluate_verified_decision_blockers(
         ):
             _append_blocker(blockers, "authority_artifact_invalid")
     for required_kind, blocker_code in _FIRST_SLICE_REQUIRED_ARTIFACT_BLOCKERS.items():
-        if not _has_valid_evidence_artifact(
+        if not _has_first_slice_required_artifact(
             artifact_payloads,
             kind=required_kind,
             strategy_id=strategy_id,
         ):
             _append_blocker(blockers, blocker_code)
+    _append_mandate_blockers(
+        blockers,
+        artifact_payloads=artifact_payloads,
+        artifact_store=artifact_store,
+        replay_store=replay_store,
+        trust_root=trust_root,
+        ledger_sequence=ledger_sequence,
+        decision_payload=decision_payload,
+        fixture_mode=fixture_mode,
+    )
     if not _has_kind_with_flag(
         artifact_payloads,
         kind="ledger_key_management_policy",
@@ -996,6 +1267,816 @@ def _append_blocker(blockers: list[Blocker], code: str) -> None:
         raise AuthorityLedgerError(f"unknown blocker code {code}")
     if code not in {blocker.code for blocker in blockers}:
         blockers.append(Blocker(code))
+
+
+@dataclass(frozen=True)
+class _MandateAuthorityStatus:
+    valid_payloads: Mapping[str, Mapping[str, object]]
+    authority_invalid: bool = False
+    replay_missing: bool = False
+
+    @property
+    def valid_kinds(self) -> frozenset[str]:
+        return frozenset(self.valid_payloads)
+
+
+def _mandate_authority_status(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    artifact_store: FileContentAddressedStore,
+    replay_store: FileContentAddressedStore,
+    trust_root: TrustRoot,
+    ledger_sequence: int,
+    strategy_id: str,
+    fixture_mode: bool,
+) -> _MandateAuthorityStatus:
+    valid_payloads: dict[str, Mapping[str, object]] = {}
+    authority_invalid = False
+    replay_missing = False
+    for payload in payloads:
+        kind = str(payload.get("kind", ""))
+        if kind not in _MANDATE_ARTIFACT_SCHEMA_NAMES:
+            continue
+        if str(payload.get("strategy_id", "")) != strategy_id:
+            continue
+        if not _has_authority_metadata(payload):
+            continue
+        status = _verify_mandate_artifact_authority(
+            payload,
+            artifact_store=artifact_store,
+            replay_store=replay_store,
+            trust_root=trust_root,
+            ledger_sequence=ledger_sequence,
+            fixture_mode=fixture_mode,
+        )
+        if status.authority_invalid:
+            authority_invalid = True
+            continue
+        if status.replay_missing:
+            replay_missing = True
+            continue
+        if kind in valid_payloads:
+            authority_invalid = True
+            continue
+        valid_payloads[kind] = payload
+    return _MandateAuthorityStatus(
+        valid_payloads=valid_payloads,
+        authority_invalid=authority_invalid,
+        replay_missing=replay_missing,
+    )
+
+
+def _verify_mandate_artifact_authority(
+    payload: Mapping[str, object],
+    *,
+    artifact_store: FileContentAddressedStore,
+    replay_store: FileContentAddressedStore,
+    trust_root: TrustRoot,
+    ledger_sequence: int,
+    fixture_mode: bool,
+) -> _MandateAuthorityStatus:
+    try:
+        if _has_missing_mandate_replay(payload, replay_store=replay_store):
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                replay_missing=True,
+            )
+        expected_hash = _mandate_payload_hash(payload)
+        if str(payload.get("payload_hash", "")) != expected_hash:
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                authority_invalid=True,
+            )
+        if int(str(payload.get("ledger_sequence", ""))) != ledger_sequence:
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                authority_invalid=True,
+            )
+        authority_ref = str(payload.get("authority_ref", ""))
+        if authority_ref not in {trust_root.root_id, f"authority:{trust_root.root_id}"}:
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                authority_invalid=True,
+            )
+        approval_refs = _string_sequence(payload.get("approval_record_refs", ()))
+        if not approval_refs:
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                authority_invalid=True,
+            )
+        for approval_ref in approval_refs:
+            approval_payload = artifact_store.read_ref_uri(approval_ref)
+            validate_quant_artifact(approval_payload, schema=_schema("approval_record"))
+            if not fixture_mode:
+                for field in (
+                    "operator_identity_ref",
+                    "role_registry_ref",
+                    "authority_boundary_ref",
+                ):
+                    if _contains_fixture_marker(str(approval_payload.get(field, ""))):
+                        return _MandateAuthorityStatus(
+                            valid_payloads={},
+                            authority_invalid=True,
+                        )
+            for field in (
+                "operator_identity_ref",
+                "role_registry_ref",
+                "authority_boundary_ref",
+            ):
+                if not str(approval_payload.get(field, "")).strip():
+                    return _MandateAuthorityStatus(
+                        valid_payloads={},
+                        authority_invalid=True,
+                    )
+            _verify_approval_payload(
+                approval_payload,
+                trust_root=trust_root,
+                payload_hash=expected_hash,
+                required_scope="mandate_artifact",
+            )
+        replay_refs = _string_sequence(payload.get("replay_input_refs", ()))
+        if not replay_refs:
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                replay_missing=True,
+            )
+        for replay_ref in replay_refs:
+            replay_store.read_ref_uri(replay_ref)
+    except (
+        AuthorityLedgerError,
+        TrustRootError,
+        FileNotFoundError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ):
+        if _has_missing_mandate_replay(payload, replay_store=replay_store):
+            return _MandateAuthorityStatus(
+                valid_payloads={},
+                replay_missing=True,
+            )
+        return _MandateAuthorityStatus(
+            valid_payloads={},
+            authority_invalid=True,
+        )
+    return _MandateAuthorityStatus(valid_payloads={str(payload["kind"]): payload})
+
+
+def _has_missing_mandate_replay(
+    payload: Mapping[str, object],
+    *,
+    replay_store: FileContentAddressedStore,
+) -> bool:
+    try:
+        replay_refs = _string_sequence(payload.get("replay_input_refs", ()))
+        return not replay_refs or any(
+            not replay_store.verify(ContentAddressedRef.from_uri(ref))
+            for ref in replay_refs
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _mandate_payload_hash(payload: Mapping[str, object]) -> str:
+    hash_payload = {
+        str(key): value
+        for key, value in payload.items()
+        if str(key) not in {"payload_hash", "approval_record_refs"}
+    }
+    return canonical_payload_hash(hash_payload)
+
+
+def _append_mandate_blockers(
+    blockers: list[Blocker],
+    *,
+    artifact_payloads: tuple[Mapping[str, object], ...],
+    artifact_store: FileContentAddressedStore,
+    replay_store: FileContentAddressedStore,
+    trust_root: TrustRoot,
+    ledger_sequence: int,
+    decision_payload: Mapping[str, object],
+    fixture_mode: bool,
+) -> None:
+    strategy_id = str(decision_payload.get("strategy_id", ""))
+    requested_state = _state_from_value(str(decision_payload["requested_state"]))
+    mandate_status = _mandate_authority_status(
+        artifact_payloads,
+        artifact_store=artifact_store,
+        replay_store=replay_store,
+        trust_root=trust_root,
+        ledger_sequence=ledger_sequence,
+        strategy_id=strategy_id,
+        fixture_mode=fixture_mode,
+    )
+    if mandate_status.authority_invalid:
+        _append_blocker(blockers, "authority_artifact_invalid")
+    if mandate_status.replay_missing:
+        _append_blocker(blockers, "replay_path_missing")
+    if _fixture_placeholder_mandate_complete(
+        artifact_payloads,
+        strategy_id=strategy_id,
+        requested_state=requested_state,
+        fixture_mode=fixture_mode,
+    ):
+        return
+
+    for required_kind, blocker_code in _MANDATE_REQUIRED_ARTIFACT_BLOCKERS.items():
+        if required_kind not in mandate_status.valid_kinds:
+            _append_blocker(blockers, blocker_code)
+
+    if _tax_account_financing_unspecified(
+        mandate_status.valid_payloads,
+        strategy_id=strategy_id,
+    ):
+        _append_blocker(blockers, "tax_account_financing_unspecified")
+    if _jurisdiction_or_account_use_unknown(
+        mandate_status.valid_payloads,
+        strategy_id=strategy_id,
+    ):
+        _append_blocker(blockers, "jurisdiction_account_use_unknown")
+    if _external_capital_compliance_unknown(
+        mandate_status.valid_payloads,
+        strategy_id=strategy_id,
+    ):
+        _append_blocker(blockers, "external_capital_compliance_unknown")
+    if _simple_equity_instrument_package_missing(
+        mandate_status.valid_payloads,
+        strategy_id=strategy_id,
+    ):
+        _append_blocker(blockers, "instrument_package_missing")
+    _append_mandate_semantic_blockers(
+        blockers,
+        mandate_payloads=mandate_status.valid_payloads,
+        artifact_payloads=artifact_payloads,
+        decision_payload=decision_payload,
+        requested_state=requested_state,
+    )
+
+
+def _fixture_placeholder_mandate_complete(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    strategy_id: str,
+    requested_state: PromotionState,
+    fixture_mode: bool,
+) -> bool:
+    if not fixture_mode or not state_allows(
+        PromotionState.PAPER_SHADOW,
+        requested_state,
+    ):
+        return False
+    required_kinds = set(_FIRST_SLICE_REQUIRED_ARTIFACT_BLOCKERS)
+    return all(
+        _has_valid_evidence_artifact(payloads, kind=kind, strategy_id=strategy_id)
+        for kind in required_kinds
+    )
+
+
+def _has_first_slice_required_artifact(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    kind: str,
+    strategy_id: str,
+) -> bool:
+    if _has_valid_evidence_artifact(payloads, kind=kind, strategy_id=strategy_id):
+        return True
+    return any(
+        _has_valid_mandate_artifact(payloads, kind=equivalent, strategy_id=strategy_id)
+        for equivalent in _FIRST_SLICE_EQUIVALENT_KINDS.get(kind, ())
+    )
+
+
+def _has_valid_mandate_artifact(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    kind: str,
+    strategy_id: str,
+) -> bool:
+    payload = _first_strategy_artifact(payloads, kind=kind, strategy_id=strategy_id)
+    return payload is not None and _has_authority_metadata(payload)
+
+
+def _has_authority_metadata(payload: Mapping[str, object]) -> bool:
+    return all(
+        field in payload
+        for field in (
+            "artifact_uri",
+            "payload_hash",
+            "ledger_sequence",
+            "approval_record_refs",
+            "authority_ref",
+            "created_at_utc",
+            "replay_input_refs",
+        )
+    )
+
+
+def _first_strategy_artifact(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    kind: str,
+    strategy_id: str,
+) -> Mapping[str, object] | None:
+    for payload in payloads:
+        if str(payload.get("kind", "")) != kind:
+            continue
+        if str(payload.get("strategy_id", "")) != strategy_id:
+            continue
+        return payload
+    return None
+
+
+def _tax_account_financing_unspecified(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    del strategy_id
+    mandate = payloads.get("investment_mandate")
+    if mandate is None:
+        return False
+    taxable_status = _normal_form(mandate.get("taxable_or_tax_exempt_status"))
+    pre_tax_or_after_tax = _normal_form(mandate.get("pre_tax_or_after_tax"))
+    tax_account_type = _normal_form(mandate.get("tax_account_type"))
+    tax_assumptions = _normal_form(mandate.get("tax_assumptions"))
+    if (
+        _is_unknown(taxable_status)
+        or _is_unknown(pre_tax_or_after_tax)
+        or _is_unknown(tax_account_type)
+        or _is_unknown(tax_assumptions)
+    ):
+        return True
+    if taxable_status == "taxable" and not bool(mandate.get("tax_modeled", False)):
+        return True
+    if taxable_status == "taxable" and pre_tax_or_after_tax != "after_tax":
+        return True
+    return False
+
+
+def _jurisdiction_or_account_use_unknown(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    del strategy_id
+    manifest = payloads.get("jurisdiction_account_use_manifest")
+    if manifest is not None:
+        return any(
+            _is_unknown(manifest.get(field))
+            for field in (
+                "jurisdiction",
+                "account_use",
+                "broker_permission_status",
+                "margin_permission_status",
+                "instrument_eligibility_status",
+            )
+        )
+    return False
+
+
+def _external_capital_compliance_unknown(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    del strategy_id
+    manifest = payloads.get("jurisdiction_account_use_manifest")
+    if manifest is not None:
+        if not _is_external_account_use(manifest):
+            return False
+        return any(
+            _is_unknown(manifest.get(field))
+            for field in (
+                "fiduciary_duty_status",
+                "client_suitability_status",
+                "marketing_status",
+                "custody_status",
+                "record_retention_status",
+                "account_restriction_status",
+            )
+        )
+    return False
+
+
+def _simple_equity_instrument_package_missing(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    required = _required_instrument_classes(payloads, strategy_id=strategy_id)
+    if "simple_equity" not in required:
+        return False
+    supported = {
+        _instrument_class(
+            payload.get("instrument_class", payload.get("instrument_type"))
+        )
+        for kind, payload in payloads.items()
+        if kind == "instrument_support_package"
+    }
+    return "simple_equity" not in supported
+
+
+def _append_mandate_semantic_blockers(
+    blockers: list[Blocker],
+    *,
+    mandate_payloads: Mapping[str, Mapping[str, object]],
+    artifact_payloads: tuple[Mapping[str, object], ...],
+    decision_payload: Mapping[str, object],
+    requested_state: PromotionState,
+) -> None:
+    strategy_id = str(decision_payload.get("strategy_id", ""))
+    capital_role = mandate_payloads.get("strategy_capital_role")
+    if capital_role is not None:
+        role = _normal_form(capital_role.get("capital_role"))
+        if role == "inactive":
+            _append_blocker(blockers, "capital_role_inactive")
+        elif role == "research_only" and not state_allows(
+            PromotionState.RESEARCH_ONLY,
+            requested_state,
+        ):
+            _append_blocker(blockers, "capital_role_research_only")
+
+    benchmark = mandate_payloads.get("benchmark_policy")
+    if benchmark is not None and not bool(benchmark.get("ex_ante", False)):
+        _append_blocker(blockers, "benchmark_policy_not_ex_ante")
+
+    if _policy_ceiling_exceeded(
+        mandate_payloads,
+        strategy_id=strategy_id,
+        requested_state=requested_state,
+    ):
+        _append_blocker(blockers, "mandate_promotion_ceiling_exceeded")
+
+    if _allocation_policy_limit_exceeded(
+        mandate_payloads,
+        strategy_id=strategy_id,
+        decision_payload=decision_payload,
+        requested_state=requested_state,
+    ):
+        _append_blocker(blockers, "allocation_policy_limit_exceeded")
+
+    if _lower_bound_spec_invalid(mandate_payloads, strategy_id=strategy_id):
+        _append_blocker(blockers, "lower_bound_net_edge_undefined")
+
+    expected_wealth_code = _expected_wealth_blocker(
+        mandate_payloads,
+        artifact_payloads=artifact_payloads,
+        strategy_id=strategy_id,
+        requested_state=requested_state,
+    )
+    if expected_wealth_code:
+        _append_blocker(blockers, expected_wealth_code)
+
+
+def _policy_ceiling_exceeded(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+    requested_state: PromotionState,
+) -> bool:
+    del strategy_id
+    ceilings: list[PromotionState] = []
+    jurisdiction = payloads.get("jurisdiction_account_use_manifest")
+    if jurisdiction is not None:
+        ceiling = _optional_state(jurisdiction.get("live_trading_ceiling"))
+        if ceiling is not None:
+            ceilings.append(ceiling)
+    for kind, payload in payloads.items():
+        if kind != "instrument_support_package":
+            continue
+        ceiling = _optional_state(payload.get("promotion_ceiling"))
+        if ceiling is not None:
+            ceilings.append(ceiling)
+    return any(not state_allows(ceiling, requested_state) for ceiling in ceilings)
+
+
+def _allocation_policy_limit_exceeded(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+    decision_payload: Mapping[str, object],
+    requested_state: PromotionState,
+) -> bool:
+    del strategy_id
+    if state_allows(PromotionState.PAPER_SHADOW, requested_state):
+        return False
+    policy = payloads.get("capital_allocation_policy")
+    if policy is None:
+        return False
+    target_weights_raw = decision_payload.get("target_weights", {})
+    if not isinstance(target_weights_raw, Mapping):
+        raise AuthorityLedgerError("target_weights must be an object")
+    absolute_weights = [
+        abs(_decimal_value(weight)) for weight in target_weights_raw.values()
+    ]
+    if not absolute_weights:
+        return False
+    gross_weight = sum(absolute_weights, start=Decimal("0"))
+    max_strategy = _decimal_value(policy.get("max_strategy_allocation"))
+    max_sleeve = _decimal_value(policy.get("max_sleeve_allocation"))
+    initial_allocation = _decimal_value(policy.get("initial_allocation"))
+    if gross_weight > max_strategy or gross_weight > max_sleeve:
+        return True
+    if requested_state in {PromotionState.TINY_LIVE_PROBE, PromotionState.PRODUCTION}:
+        return gross_weight > initial_allocation
+    return False
+
+
+def _lower_bound_spec_invalid(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    del strategy_id
+    spec = payloads.get("lower_bound_net_edge_spec")
+    if spec is None:
+        return False
+    try:
+        confidence = _decimal_value(spec.get("confidence_level"))
+        sample_size = int(str(spec.get("minimum_effective_sample_size", "")))
+    except (InvalidOperation, ValueError):
+        return True
+    if confidence <= Decimal("0") or confidence >= Decimal("1"):
+        return True
+    if sample_size <= 0:
+        return True
+    if _is_unknown(spec.get("benchmark_pairing")):
+        return True
+    if (
+        _is_unknown(spec.get("serial_dependence_correction"))
+        or _normal_form(spec.get("serial_dependence_correction")) == "none"
+    ):
+        return True
+    if (
+        _is_unknown(spec.get("fat_tail_treatment"))
+        or _normal_form(spec.get("fat_tail_treatment")) == "none"
+    ):
+        return True
+    try:
+        stress_inputs = {
+            _normal_form(item)
+            for item in _string_sequence(spec.get("stress_inputs", ()))
+        }
+    except ValueError:
+        return True
+    if not _LOWER_BOUND_REQUIRED_STRESS_INPUTS <= stress_inputs:
+        return True
+    estimator = _normal_form(spec.get("estimator_family"))
+    prior_policy = _normal_form(spec.get("prior_policy"))
+    if "bayes" in estimator and (
+        _is_unknown(prior_policy) or "sensitivity" not in prior_policy
+    ):
+        return True
+    return False
+
+
+def _expected_wealth_blocker(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    artifact_payloads: tuple[Mapping[str, object], ...],
+    strategy_id: str,
+    requested_state: PromotionState,
+) -> str | None:
+    if not state_allows(requested_state, PromotionState.TINY_LIVE_PROBE):
+        return None
+    if _mandate_hard_caps_below_live(payloads, strategy_id=strategy_id):
+        return None
+    mandate = payloads.get("investment_mandate")
+    if mandate is None:
+        return None
+    if _tax_account_financing_unspecified(payloads, strategy_id=strategy_id):
+        return None
+    taxable_status = _normal_form(mandate.get("taxable_or_tax_exempt_status"))
+    report = _first_strategy_artifact(
+        artifact_payloads,
+        kind="lower_bound_net_edge_report",
+        strategy_id=strategy_id,
+    )
+    if report is None:
+        return (
+            "after_tax_edge_missing_for_taxable_account"
+            if taxable_status == "taxable"
+            else "lower_bound_net_edge_undefined"
+        )
+    if (
+        taxable_status == "taxable"
+        and _normal_form(report.get("pre_tax_or_after_tax")) != "after_tax"
+    ):
+        return "after_tax_edge_missing_for_taxable_account"
+    spec = payloads.get("lower_bound_net_edge_spec")
+    if _lower_bound_report_undefined(
+        report=report,
+        spec=spec,
+        mandate=mandate,
+    ):
+        return "lower_bound_net_edge_undefined"
+    try:
+        lower_bound = _decimal_value(report.get("lower_bound_net_edge"))
+        threshold = _decimal_value(report.get("pass_threshold"))
+    except (InvalidOperation, ValueError):
+        return "lower_bound_net_edge_undefined"
+    if lower_bound < threshold:
+        return "net_edge_lower_bound_below_threshold"
+    return None
+
+
+def _lower_bound_report_undefined(
+    *,
+    report: Mapping[str, object],
+    spec: Mapping[str, object] | None,
+    mandate: Mapping[str, object],
+) -> bool:
+    if spec is None:
+        return True
+    for field in (
+        "lower_bound_spec_ref",
+        "lower_bound_spec_hash",
+        "estimator_family",
+        "confidence_level",
+        "return_horizon",
+        "benchmark_pairing",
+        "serial_dependence_correction",
+        "fat_tail_treatment",
+        "minimum_effective_sample_size",
+        "pre_tax_or_after_tax",
+        "taxable_or_tax_exempt_status",
+        "stress_inputs",
+        "lower_bound_net_edge",
+        "pass_threshold",
+    ):
+        if field not in report or _is_unknown(report.get(field)):
+            return True
+    if str(report.get("lower_bound_spec_ref", "")) != str(spec.get("artifact_uri", "")):
+        return True
+    if str(report.get("lower_bound_spec_hash", "")) != str(
+        spec.get("payload_hash", "")
+    ):
+        return True
+    for field in (
+        "estimator_family",
+        "return_horizon",
+        "benchmark_pairing",
+        "serial_dependence_correction",
+        "fat_tail_treatment",
+    ):
+        if _normal_form(report.get(field)) != _normal_form(spec.get(field)):
+            return True
+    try:
+        if _decimal_value(report.get("confidence_level")) != _decimal_value(
+            spec.get("confidence_level")
+        ):
+            return True
+        if _decimal_value(report.get("pass_threshold")) != _decimal_value(
+            spec.get("pass_threshold")
+        ):
+            return True
+        report_sample = int(str(report.get("minimum_effective_sample_size", "")))
+        spec_sample = int(str(spec.get("minimum_effective_sample_size", "")))
+    except (InvalidOperation, ValueError):
+        return True
+    if report_sample < spec_sample:
+        return True
+    taxable_status = _normal_form(mandate.get("taxable_or_tax_exempt_status"))
+    if _normal_form(report.get("taxable_or_tax_exempt_status")) != taxable_status:
+        return True
+    mandate_edge_basis = _normal_form(mandate.get("pre_tax_or_after_tax"))
+    if (
+        mandate_edge_basis
+        and not _is_unknown(mandate_edge_basis)
+        and _normal_form(report.get("pre_tax_or_after_tax")) != mandate_edge_basis
+    ):
+        return True
+    try:
+        stress_inputs = {
+            _normal_form(item)
+            for item in _string_sequence(report.get("stress_inputs", ()))
+        }
+    except ValueError:
+        return True
+    return not _LOWER_BOUND_REQUIRED_STRESS_INPUTS <= stress_inputs
+
+
+def _verified_strategy_allocation_limits(
+    payloads: tuple[Mapping[str, object], ...],
+    *,
+    artifact_store: FileContentAddressedStore,
+    replay_store: FileContentAddressedStore,
+    trust_root: TrustRoot,
+    ledger_sequence: int,
+    strategy_id: str,
+    fixture_mode: bool,
+) -> tuple[dict[str, str], ...]:
+    mandate_status = _mandate_authority_status(
+        payloads,
+        artifact_store=artifact_store,
+        replay_store=replay_store,
+        trust_root=trust_root,
+        ledger_sequence=ledger_sequence,
+        strategy_id=strategy_id,
+        fixture_mode=fixture_mode,
+    )
+    policy = mandate_status.valid_payloads.get("capital_allocation_policy")
+    if policy is None:
+        return ()
+    return (
+        {
+            "strategy_id": strategy_id,
+            "max_strategy_allocation": str(
+                _decimal_value(policy.get("max_strategy_allocation"))
+            ),
+        },
+    )
+
+
+def _mandate_hard_caps_below_live(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> bool:
+    del strategy_id
+    policy = payloads.get("capital_allocation_policy")
+    if (
+        policy is not None
+        and _decimal_value(policy.get("max_strategy_allocation")) == 0
+    ):
+        return True
+    for kind, field in (
+        ("jurisdiction_account_use_manifest", "live_trading_ceiling"),
+        ("instrument_support_package", "promotion_ceiling"),
+    ):
+        payload = payloads.get(kind)
+        if payload is None:
+            continue
+        ceiling = _optional_state(payload.get(field))
+        if ceiling is not None and not state_allows(
+            ceiling,
+            PromotionState.TINY_LIVE_PROBE,
+        ):
+            return True
+    return False
+
+
+def _required_instrument_classes(
+    payloads: Mapping[str, Mapping[str, object]],
+    *,
+    strategy_id: str,
+) -> set[str]:
+    del strategy_id
+    result: set[str] = set()
+    mandate = payloads.get("investment_mandate")
+    if mandate is not None:
+        instruments = mandate.get("allowed_instruments", ())
+        if isinstance(instruments, Sequence) and not isinstance(
+            instruments,
+            str | bytes,
+        ):
+            result.update(_instrument_class(item) for item in instruments)
+    return {item for item in result if item}
+
+
+def _instrument_class(value: object) -> str:
+    normalized = _normal_form(value)
+    if normalized in {"equity", "equity_etf", "simple_equity", "stock"}:
+        return "simple_equity"
+    return normalized
+
+
+def _is_external_account_use(payload: Mapping[str, object]) -> bool:
+    account_use = _normal_form(payload.get("account_use"))
+    classification = _normal_form(payload.get("classification"))
+    return account_use in _EXTERNAL_ACCOUNT_USES or any(
+        marker in classification for marker in _EXTERNAL_ACCOUNT_USES
+    )
+
+
+def _decimal_value(value: object) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"invalid decimal value {value!r}") from exc
+
+
+def _optional_state(value: object) -> PromotionState | None:
+    if _is_unknown(value):
+        return None
+    try:
+        return _state_from_value(str(value))
+    except ValueError:
+        return PromotionState.DISABLED
+
+
+def _normal_form(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _is_unknown(value: object) -> bool:
+    return _normal_form(value) in _UNKNOWN_DECLARATIONS
+
+
+def _contains_fixture_marker(value: str) -> bool:
+    normalized = _normal_form(value)
+    return any(marker in normalized for marker in _FIXTURE_MARKERS)
 
 
 def _has_valid_evidence_artifact(
@@ -1160,6 +2241,27 @@ def check_projection_drift(
     return ProjectionDrift(detected=False, blocker_code="", reason="")
 
 
+def classify_legacy_operator_artifact(
+    *,
+    artifact_type: str,
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    strategy_id = str(payload.get("strategy_id", "unknown"))
+    return {
+        "schema_version": "1.0",
+        "artifact_type": artifact_type,
+        "strategy_id": strategy_id,
+        "authority_status": LEGACY_NON_AUTHORITY_STATUS,
+        "evidence_class": LEGACY_NON_AUTHORITY_STATUS,
+        "v5_authority": False,
+        "migration_behavior": (
+            "Existing operator activation and approved-weight artifacts remain "
+            "diagnostic legacy records. They cannot authorize V5 promotion or "
+            "capital allocation without a signed promotion decision."
+        ),
+    }
+
+
 def validate_state_action_contracts(
     contracts: Mapping[str, Mapping[str, object]],
 ) -> None:
@@ -1234,12 +2336,12 @@ def _validate_state_action_contract_entry(
         )
     order_permission = str(contract["order_permission"])
     allowed_order_permissions = {
-            PromotionState.DISABLED: {"none"},
-            PromotionState.RESEARCH_ONLY: {"none"},
-            PromotionState.PAPER_SHADOW: {"none", "shadow_decisions"},
-            PromotionState.PAPER_TRADING: {"paper_orders"},
-            PromotionState.TINY_LIVE_PROBE: {"live_probe_orders"},
-            PromotionState.PRODUCTION: {"live_orders"},
+        PromotionState.DISABLED: {"none"},
+        PromotionState.RESEARCH_ONLY: {"none"},
+        PromotionState.PAPER_SHADOW: {"none", "shadow_decisions"},
+        PromotionState.PAPER_TRADING: {"paper_orders"},
+        PromotionState.TINY_LIVE_PROBE: {"live_probe_orders"},
+        PromotionState.PRODUCTION: {"live_orders"},
     }[state]
     if order_permission not in allowed_order_permissions:
         raise StateActionContractError(
@@ -1298,8 +2400,7 @@ def _validate_state_action_contract_entry(
         PromotionState.PAPER_SHADOW,
     } and capital_ceiling != Decimal("0"):
         raise StateActionContractError(
-            "state_action_contract_missing: "
-            f"{state.value} cannot allocate capital"
+            "state_action_contract_missing: " f"{state.value} cannot allocate capital"
         )
     _string_array(
         contract["required_runtime_controls"],
@@ -1342,6 +2443,12 @@ def _string_array(value: object, *, field: str) -> tuple[str, ...]:
         raise StateActionContractError(
             f"state_action_contract_missing: {field} must be an array"
         )
+    return tuple(str(item) for item in value)
+
+
+def _string_sequence(value: object) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        raise ValueError("expected an array of strings")
     return tuple(str(item) for item in value)
 
 
@@ -1397,6 +2504,7 @@ __all__ = [
     "blocker_registry_coverage_rows",
     "build_artifact_promotion_decision_provider",
     "check_projection_drift",
+    "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
     "load_state_action_contracts",
     "load_promotion_decision",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from tradingx.portfolio.blueprint import PortfolioBlueprint
+from tradingx.portfolio.blueprint import PortfolioBlueprint, StrategyAllocationLimit
 from tradingx.portfolio.construction import _combine_sleeve_weights
 from tradingx.sleeves.base import SleeveProtocol
 from tradingx.types import SleeveContext, SleeveTargetWeights, SleeveTrade
@@ -19,6 +19,7 @@ def build_portfolio_cycle_target_weights(
     blueprint: PortfolioBlueprint,
     sleeves_by_id: dict[str, SleeveProtocol],
     context_by_sleeve_id: dict[str, SleeveContext],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> tuple[dict[str, Decimal], tuple[SleeveTargetWeights, ...]]:
     sleeve_trades_by_id = {
         sleeve_id: sleeve.plan_for_bar(context_by_sleeve_id[sleeve_id])
@@ -27,6 +28,7 @@ def build_portfolio_cycle_target_weights(
     return _build_portfolio_cycle_target_weights_from_trades(
         blueprint=blueprint,
         sleeve_trades_by_id=sleeve_trades_by_id,
+        allocation_limits=allocation_limits,
     )
 
 
@@ -34,6 +36,7 @@ def _build_portfolio_cycle_target_weights_from_trades(
     *,
     blueprint: PortfolioBlueprint,
     sleeve_trades_by_id: dict[str, tuple[SleeveTrade, ...]],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> tuple[dict[str, Decimal], tuple[SleeveTargetWeights, ...]]:
     budget_by_sleeve_id = {
         budget.sleeve_id: budget.budget_fraction_of_equity
@@ -61,6 +64,7 @@ def _build_portfolio_cycle_target_weights_from_trades(
     aggregate = _combine_sleeve_weights(
         blueprint=blueprint,
         contributions=contributions,
+        allocation_limits=allocation_limits,
     )
     all_contributions_scaled = {
         sleeve_id: {

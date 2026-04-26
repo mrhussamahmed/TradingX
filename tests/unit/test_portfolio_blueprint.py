@@ -5,7 +5,12 @@ from decimal import Decimal
 
 import pytest
 
-from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+    validate_blueprint_allocation_limits,
+)
 
 
 def _sleeve(sleeve_id: str, budget: str, corr: str = "0.85") -> SleeveRiskBudget:
@@ -66,6 +71,37 @@ def test_blueprint_is_frozen() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         blueprint.blueprint_id = "bp-2"  # type: ignore[misc]
+
+
+def test_blueprint_allocation_policy_limit_rejects_excess_strategy_budget() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp-1",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="trend-sleeve-a",
+                strategy_id="trend-following-v1",
+                budget_fraction_of_equity=Decimal("0.04"),
+                max_correlation_with_other_sleeves=Decimal("0.5"),
+            ),
+            SleeveRiskBudget(
+                sleeve_id="trend-sleeve-b",
+                strategy_id="trend-following-v1",
+                budget_fraction_of_equity=Decimal("0.04"),
+                max_correlation_with_other_sleeves=Decimal("0.5"),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="allocation_policy_limit_exceeded"):
+        validate_blueprint_allocation_limits(
+            blueprint,
+            allocation_limits=(
+                StrategyAllocationLimit(
+                    strategy_id="trend-following-v1",
+                    max_strategy_allocation=Decimal("0.05"),
+                ),
+            ),
+        )
 
 
 def test_sleeve_risk_budget_strategy_id_defaults_to_none() -> None:

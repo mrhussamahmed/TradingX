@@ -76,6 +76,8 @@ def test_promotion_check_summary_format_reports_state_and_blockers(capsys) -> No
     assert "strategy_id: trend-following-v1" in output
     assert "max_state: paper_shadow" in output
     assert "blocker_codes: none" in output
+    assert "mandate_blocker_codes: none" in output
+    assert "statistical_blocker_codes: none" in output
 
 
 def test_promotion_check_default_artifact_root_reports_research_blockers(
@@ -98,7 +100,34 @@ def test_promotion_check_default_artifact_root_reports_research_blockers(
         "tax_account_financing_unspecified",
         "jurisdiction_account_use_unknown",
         "instrument_package_missing",
+        "strategy_materiality_policy_missing",
     ]
+    assert payload["mandate_blocker_codes"] == [
+        "utility_definition_missing",
+        "tax_account_financing_unspecified",
+        "jurisdiction_account_use_unknown",
+        "instrument_package_missing",
+        "strategy_materiality_policy_missing",
+    ]
+    assert payload["statistical_blocker_codes"] == []
+
+
+def test_promotion_check_replays_wave2_mandate_fixture_bundle(capsys) -> None:
+    exit_code = cli.main(
+        (
+            "promotion-check",
+            "--strategy-id",
+            "trend-following-v1",
+            "--artifact-root",
+            "tests/fixtures/mandate/external_capital_unknown",
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["max_state"] == "disabled"
+    assert payload["blocker_codes"] == ["external_capital_compliance_unknown"]
+    assert payload["mandate_blocker_codes"] == ["external_capital_compliance_unknown"]
 
 
 def test_promotion_check_wrong_strategy_artifact_fails_closed(capsys) -> None:

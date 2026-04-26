@@ -8,7 +8,11 @@ import pandas as pd
 import pytest
 
 from tradingx.features.regime import classify_regime
-from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+)
 from tradingx.portfolio.construction import build_portfolio_target_weight_history
 from tradingx.portfolio.live_construction import (
     UnsupportedPortfolioCycleTargetWeights,
@@ -272,6 +276,46 @@ def test_negative_sleeve_target_fails_before_aggregation() -> None:
                         side="sell_short",
                         target_weight_of_sleeve_budget=Decimal("-0.25"),
                         rationale="short_signal",
+                        regime="risk_on",
+                    ),
+                )
+            },
+        )
+
+
+def test_live_cycle_uses_blueprint_allocation_limits() -> None:
+    from tradingx.portfolio.live_construction import (
+        _build_portfolio_cycle_target_weights_from_trades,
+    )
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp-limited",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="trend-following-v1",
+                budget_fraction_of_equity=Decimal("0.10"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+        strategy_allocation_limits=(
+            StrategyAllocationLimit(
+                strategy_id="trend-following-v1",
+                max_strategy_allocation=Decimal("0.05"),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="allocation_policy_limit_exceeded"):
+        _build_portfolio_cycle_target_weights_from_trades(
+            blueprint=blueprint,
+            sleeve_trades_by_id={
+                "trend-following-v1": (
+                    SleeveTrade(
+                        sleeve_id="trend-following-v1",
+                        symbol="SPY",
+                        side="buy",
+                        target_weight_of_sleeve_budget=Decimal("0.5"),
+                        rationale="long_signal",
                         regime="risk_on",
                     ),
                 )

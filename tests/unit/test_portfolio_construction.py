@@ -9,7 +9,11 @@ import pandas as pd
 import pytest
 
 from tradingx.features.regime import classify_regime
-from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+)
 from tradingx.portfolio.construction import (
     PortfolioSimulationResult,
     _combine_sleeve_weights,
@@ -234,6 +238,32 @@ def test_combine_sleeve_weights_applies_row_gross_cap() -> None:
     result = _combine_sleeve_weights(blueprint=blueprint, contributions=contributions)
     gross = sum(abs(weight) for weight in result.values())
     assert abs(gross - Decimal("1.0")) < Decimal("1e-9")
+
+
+def test_combine_sleeve_weights_rejects_mandate_allocation_limit_breach() -> None:
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="a",
+                strategy_id="trend-following-v1",
+                budget_fraction_of_equity=Decimal("0.10"),
+                max_correlation_with_other_sleeves=Decimal("1.0"),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="allocation_policy_limit_exceeded"):
+        _combine_sleeve_weights(
+            blueprint=blueprint,
+            contributions={"a": {"SPY": Decimal("0.5")}},
+            allocation_limits=(
+                StrategyAllocationLimit(
+                    strategy_id="trend-following-v1",
+                    max_strategy_allocation=Decimal("0.05"),
+                ),
+            ),
+        )
 
 
 def test_combine_sleeve_weights_applies_row_net_cap_when_gross_does_not_bind() -> None:

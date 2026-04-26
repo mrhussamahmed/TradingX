@@ -93,19 +93,27 @@ def _serialize(value: Any) -> Any:
 
 
 def _format_promotion_summary(payload: dict[str, object]) -> str:
-    blocker_codes = payload.get("blocker_codes", [])
-    if isinstance(blocker_codes, list) and blocker_codes:
-        blocker_summary = ", ".join(str(item) for item in blocker_codes)
-    else:
-        blocker_summary = "none"
+    blocker_summary = _format_code_list(payload.get("blocker_codes", []))
+    mandate_summary = _format_code_list(payload.get("mandate_blocker_codes", []))
+    statistical_summary = _format_code_list(
+        payload.get("statistical_blocker_codes", [])
+    )
     return "\n".join(
         (
             f"strategy_id: {payload['strategy_id']}",
             f"requested_state: {payload['requested_state']}",
             f"max_state: {payload['max_state']}",
             f"blocker_codes: {blocker_summary}",
+            f"mandate_blocker_codes: {mandate_summary}",
+            f"statistical_blocker_codes: {statistical_summary}",
         )
     )
+
+
+def _format_code_list(value: object) -> str:
+    if isinstance(value, list) and value:
+        return ", ".join(str(item) for item in value)
+    return "none"
 
 
 def _runtime_lock_path(config: TradingConfig) -> Path:
@@ -388,6 +396,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "requested_state": "disabled",
                 "max_state": "disabled",
                 "blocker_codes": ["authority_artifact_invalid"],
+                "mandate_blocker_codes": [],
+                "statistical_blocker_codes": [],
+                "authority_blocker_codes": ["authority_artifact_invalid"],
                 "artifact_refs": [],
                 "ledger_sequence": None,
                 "ledger_hash": None,

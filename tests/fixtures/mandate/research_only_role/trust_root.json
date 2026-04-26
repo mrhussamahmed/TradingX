@@ -1,0 +1,1 @@
+{"fixture_root": false, "key_scopes": {"operator-key": ["promotion_decision", "mandate_artifact"]}, "not_after_utc": "2026-12-31T00:00:00+00:00", "not_before_utc": "2026-01-01T00:00:00+00:00", "revoked_keys": [], "root_id": "fixture-root", "schema_version": "1.0", "trusted_keys": {"operator-key": "secret"}}

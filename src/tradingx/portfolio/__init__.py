@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+    resolve_blueprint_allocation_limits,
+    validate_blueprint_allocation_limits,
+)
 from tradingx.portfolio.construction import (
     PortfolioSimulationResult,
     build_portfolio_target_weight_history,
@@ -42,9 +48,12 @@ __all__ = (
     "SleeveRiskBudget",
     "SleeveRuntimeConfig",
     "SleeveRuntimeController",
+    "StrategyAllocationLimit",
     "apply_cdar_soft_throttle",
     "apply_mdd_design_throttle",
     "build_portfolio_target_weight_history",
     "is_portfolio_hard_halted",
+    "resolve_blueprint_allocation_limits",
     "simulate_portfolio_returns",
+    "validate_blueprint_allocation_limits",
 )

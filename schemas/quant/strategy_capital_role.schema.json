@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Strategy Capital Role",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "artifact_uri",
+    "payload_hash",
+    "ledger_sequence",
+    "approval_record_refs",
+    "authority_ref",
+    "created_at_utc",
+    "replay_input_refs",
+    "capital_role"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "strategy_capital_role"},
+    "strategy_id": {"type": "string"},
+    "artifact_uri": {"type": "string"},
+    "payload_hash": {"type": "string", "format": "sha256"},
+    "ledger_sequence": {"type": "integer"},
+    "approval_record_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "authority_ref": {"type": "string"},
+    "created_at_utc": {"type": "string", "format": "utc-datetime"},
+    "replay_input_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "capital_role": {
+      "type": "string",
+      "enum": [
+        "growth_candidate",
+        "defensive_candidate",
+        "diversifier",
+        "cash_management",
+        "research_only",
+        "inactive"
+      ]
+    }
+  }
+}

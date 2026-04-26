@@ -17,6 +17,12 @@ class SleeveRiskBudget:
 
 
 @dataclass(frozen=True)
+class StrategyAllocationLimit:
+    strategy_id: str
+    max_strategy_allocation: Decimal
+
+
+@dataclass(frozen=True)
 class PortfolioBlueprint:
     blueprint_id: str
     sleeve_budgets: tuple[SleeveRiskBudget, ...]
@@ -28,6 +34,7 @@ class PortfolioBlueprint:
     cdar_soft_throttle_threshold: Decimal = Decimal("0.08")
     annualized_turnover_budget: Decimal = Decimal("3.0")
     sleeve_three_month_sharpe_floor: Decimal = Decimal("0.0")
+    strategy_allocation_limits: tuple[StrategyAllocationLimit, ...] = ()
 
     def __post_init__(self) -> None:
         total_budget = sum(
@@ -43,6 +50,41 @@ class PortfolioBlueprint:
 
 def effective_strategy_id(budget: SleeveRiskBudget) -> str:
     return budget.strategy_id or budget.sleeve_id
+
+
+def validate_blueprint_allocation_limits(
+    blueprint: PortfolioBlueprint,
+    *,
+    allocation_limits: tuple[StrategyAllocationLimit, ...],
+) -> None:
+    if not allocation_limits:
+        return
+    limit_by_strategy = {
+        limit.strategy_id: limit.max_strategy_allocation for limit in allocation_limits
+    }
+    budget_by_strategy: dict[str, Decimal] = {}
+    for budget in blueprint.sleeve_budgets:
+        strategy_id = effective_strategy_id(budget)
+        budget_by_strategy[strategy_id] = (
+            budget_by_strategy.get(strategy_id, Decimal("0"))
+            + budget.budget_fraction_of_equity
+        )
+    for strategy_id, budget_fraction in budget_by_strategy.items():
+        limit = limit_by_strategy.get(strategy_id)
+        if limit is not None and budget_fraction > limit:
+            raise ValueError(
+                "allocation_policy_limit_exceeded: "
+                f"{strategy_id} blueprint budget {budget_fraction} exceeds {limit}"
+            )
+
+
+def resolve_blueprint_allocation_limits(
+    blueprint: PortfolioBlueprint,
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None,
+) -> tuple[StrategyAllocationLimit, ...]:
+    if allocation_limits is not None:
+        return allocation_limits
+    return blueprint.strategy_allocation_limits
 
 
 def resolve_portfolio_blueprint_path(path: Path) -> Path:
@@ -67,6 +109,9 @@ def _portfolio_blueprint_from_payload(payload: dict[str, object]) -> PortfolioBl
     sleeve_budgets_payload = payload.get("sleeve_budgets")
     if not isinstance(sleeve_budgets_payload, list):
         raise ValueError("sleeve_budgets must be a list.")
+    allocation_limits_payload = payload.get("strategy_allocation_limits", [])
+    if not isinstance(allocation_limits_payload, list):
+        raise ValueError("strategy_allocation_limits must be a list.")
     return PortfolioBlueprint(
         blueprint_id=str(payload["blueprint_id"]),
         sleeve_budgets=tuple(
@@ -100,6 +145,14 @@ def _portfolio_blueprint_from_payload(payload: dict[str, object]) -> PortfolioBl
         ),
         sleeve_three_month_sharpe_floor=Decimal(
             str(payload.get("sleeve_three_month_sharpe_floor", "0.0"))
+        ),
+        strategy_allocation_limits=tuple(
+            StrategyAllocationLimit(
+                strategy_id=str(item["strategy_id"]),
+                max_strategy_allocation=Decimal(str(item["max_strategy_allocation"])),
+            )
+            for item in allocation_limits_payload
+            if isinstance(item, dict)
         ),
     )
 
@@ -155,7 +208,10 @@ def _split_key_value(line: str, *, path: Path) -> tuple[str, str]:
 __all__ = (
     "PortfolioBlueprint",
     "SleeveRiskBudget",
+    "StrategyAllocationLimit",
     "effective_strategy_id",
     "load_portfolio_blueprint",
     "resolve_portfolio_blueprint_path",
+    "resolve_blueprint_allocation_limits",
+    "validate_blueprint_allocation_limits",
 )

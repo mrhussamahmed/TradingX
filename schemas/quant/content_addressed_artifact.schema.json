@@ -16,6 +16,7 @@
     "description": {"type": "string"},
     "evidence_class": {"type": "string"},
     "artifact_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "artifact_kind": {"type": "string"},
     "mandate_id": {"type": "string"},
     "benchmark_id": {"type": "string"},
     "capital_role": {"type": "string"},
@@ -35,6 +36,20 @@
     "settlement_semantics": {"type": "string"},
     "corporate_action_semantics": {"type": "string"},
     "tax_semantics": {"type": "string"},
-    "risk_semantics": {"type": "string"}
+    "risk_semantics": {"type": "string"},
+    "lower_bound_spec_ref": {"type": "string"},
+    "lower_bound_spec_hash": {"type": "string", "format": "sha256"},
+    "pre_tax_or_after_tax": {"type": "string"},
+    "taxable_or_tax_exempt_status": {"type": "string"},
+    "estimator_family": {"type": "string"},
+    "confidence_level": {"type": "string", "format": "decimal-string"},
+    "return_horizon": {"type": "string"},
+    "benchmark_pairing": {"type": "string"},
+    "serial_dependence_correction": {"type": "string"},
+    "fat_tail_treatment": {"type": "string"},
+    "minimum_effective_sample_size": {"type": "integer"},
+    "stress_inputs": {"type": "array", "items": {"type": "string"}},
+    "lower_bound_net_edge": {"type": "string", "format": "decimal-string"},
+    "pass_threshold": {"type": "string", "format": "decimal-string"}
   }
 }

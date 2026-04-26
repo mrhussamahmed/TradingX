@@ -6,12 +6,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from tradingx.drift.sleeve_ledger import RESIDUAL_RESERVE_OWNER_ID
 from tradingx.features.regime import classify_regime
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.portfolio.blueprint import PortfolioBlueprint, load_portfolio_blueprint
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    StrategyAllocationLimit,
+    load_portfolio_blueprint,
+)
 from tradingx.portfolio.live_construction import build_portfolio_cycle_target_weights
 from tradingx.portfolio.sleeve_runtime import (
     DriftAlarmGatewayProtocol,
@@ -68,6 +72,11 @@ class ActivationGatewayProtocol(Protocol):
     ) -> tuple[StrategyActivationRecord, ApprovedWeightSnapshot]: ...
 
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None: ...
+
+    def get_strategy_allocation_limits(
+        self,
+        blueprint: PortfolioBlueprint,
+    ) -> tuple[StrategyAllocationLimit, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -385,6 +394,7 @@ class RuntimePortfolioPlanner:
             sleeve_id: sleeve.plan_for_bar(context_by_sleeve_id[sleeve_id])
             for sleeve_id, sleeve in sleeves_by_id.items()
         }
+        allocation_limits = self._strategy_allocation_limits_for_blueprint(blueprint)
         aggregate_target_weights, decomposition = build_portfolio_cycle_target_weights(
             blueprint=blueprint,
             sleeves_by_id={
@@ -395,6 +405,7 @@ class RuntimePortfolioPlanner:
                 for sleeve_id, trades in sleeve_trades_by_id.items()
             },
             context_by_sleeve_id=context_by_sleeve_id,
+            allocation_limits=allocation_limits,
         )
         sleeve_failure_reasons = _structural_failure_reasons(
             sleeve_trades_by_id=sleeve_trades_by_id
@@ -529,6 +540,24 @@ class RuntimePortfolioPlanner:
             per_sleeve_target_weights=decomposition,
             sleeve_failure_reasons=sleeve_failure_reasons,
         )
+
+    def _strategy_allocation_limits_for_blueprint(
+        self,
+        blueprint: PortfolioBlueprint,
+    ) -> tuple[StrategyAllocationLimit, ...] | None:
+        if self._activation_gateway is None:
+            return None
+        limit_provider = cast(
+            Callable[[PortfolioBlueprint], tuple[StrategyAllocationLimit, ...]] | None,
+            getattr(
+                self._activation_gateway,
+                "get_strategy_allocation_limits",
+                None,
+            ),
+        )
+        if limit_provider is None:
+            return None
+        return limit_provider(blueprint)
 
     def _candidate_for_strategy(
         self,

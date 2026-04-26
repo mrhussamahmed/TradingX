@@ -4,11 +4,15 @@ import dataclasses
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.portfolio.blueprint import PortfolioBlueprint, effective_strategy_id
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    StrategyAllocationLimit,
+    effective_strategy_id,
+)
 from tradingx.promotion import (
     PromotionDecision,
     PromotionState,
@@ -221,6 +225,40 @@ class LocalActivationGateway:
             return None
         return max(active, key=lambda record: record.approved_at_utc)
 
+    def get_strategy_allocation_limits(
+        self,
+        blueprint: PortfolioBlueprint,
+    ) -> tuple[StrategyAllocationLimit, ...]:
+        if self._promotion_decision_provider is None:
+            return blueprint.strategy_allocation_limits
+        limits: list[StrategyAllocationLimit] = []
+        for budget in blueprint.sleeve_budgets:
+            strategy_id = effective_strategy_id(budget)
+            decision = self._promotion_decision_provider(strategy_id)
+            if self._required_promotion_state is not None and not state_allows(
+                decision.max_state,
+                self._required_promotion_state,
+            ):
+                blocker_codes = ", ".join(decision.blocker_codes) or "none"
+                raise ValueError(
+                    "allocation_policy_limit_exceeded: promotion for "
+                    f"{strategy_id!r} is capped at {decision.max_state.value}; "
+                    f"blockers={blocker_codes}."
+                )
+            matching_limit = _decision_allocation_limit(
+                decision,
+                strategy_id=strategy_id,
+            )
+            if matching_limit is None:
+                raise ValueError(
+                    "allocation_policy_limit_exceeded: verified capital allocation "
+                    f"policy limit missing for {strategy_id!r}."
+                )
+            existing_strategy_ids = {limit.strategy_id for limit in limits}
+            if matching_limit.strategy_id not in existing_strategy_ids:
+                limits.append(matching_limit)
+        return tuple(limits)
+
     def supersede_active_blueprint(
         self,
         *,
@@ -340,6 +378,29 @@ class LocalActivationGateway:
         except FileNotFoundError:
             return False
         return True
+
+
+def _decision_allocation_limit(
+    decision: PromotionDecision,
+    *,
+    strategy_id: str,
+) -> StrategyAllocationLimit | None:
+    for raw_limit in decision.strategy_allocation_limits:
+        if str(raw_limit.get("strategy_id", "")) != strategy_id:
+            continue
+        try:
+            return StrategyAllocationLimit(
+                strategy_id=strategy_id,
+                max_strategy_allocation=Decimal(
+                    str(raw_limit["max_strategy_allocation"])
+                ),
+            )
+        except (InvalidOperation, KeyError, ValueError) as exc:
+            raise ValueError(
+                "allocation_policy_limit_exceeded: malformed verified capital "
+                f"allocation policy limit for {strategy_id!r}."
+            ) from exc
+    return None
 
 
 __all__ = ("BlueprintActivationValidationError", "LocalActivationGateway")
