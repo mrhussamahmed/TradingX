@@ -613,6 +613,9 @@ class ReplaySlippageSummary:
     status: str
     details: str
     generated_at_utc: datetime
+    quote_quality_state: str = ""
+    cost_evidence_class: str = "legacy_cost_evidence"
+    kind: str = "replay_slippage_summary"
 
 
 @dataclass(frozen=True)

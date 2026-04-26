@@ -456,6 +456,23 @@ def build_trial_universe_manifest(
             if not str(registration.get(field, "")).strip():
                 audit_flags.append(f"{field}_missing")
                 _append_unique_code(blocker_codes, "trial_lineage_contaminated")
+        if not str(registration.get("arrival_timestamp_policy", "")).strip():
+            audit_flags.append("arrival_timestamp_policy_missing")
+            _append_unique_code(blocker_codes, "trial_lineage_contaminated")
+
+    # Roadmap §Milestone 5 amendment: changing `arrival_timestamp_policy` must
+    # create a new study_id. Two registrations sharing study_id but disagreeing
+    # on policy contaminate the lineage.
+    policy_by_study: dict[str, set[str]] = {}
+    for registration in scoped_registrations:
+        study_id = str(registration.get("study_id", "")).strip()
+        policy = str(registration.get("arrival_timestamp_policy", "")).strip()
+        if not study_id or not policy:
+            continue
+        policy_by_study.setdefault(study_id, set()).add(policy)
+    if any(len(values) > 1 for values in policy_by_study.values()):
+        audit_flags.append("arrival_timestamp_policy_changed_within_study")
+        _append_unique_code(blocker_codes, "trial_lineage_contaminated")
 
     for run in scoped_runs:
         run_id = str(run.get("run_id", ""))

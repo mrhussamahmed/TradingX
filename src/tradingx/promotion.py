@@ -1108,6 +1108,10 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "bootstrap_report",
         "paired_benchmark_uncertainty_report",
         "statistical_validation_report",
+        "quote_quality_record",
+        "execution_cost_observation",
+        "cost_model_report",
+        "capacity_curve_report",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -1264,6 +1268,11 @@ def _evaluate_verified_decision_blockers(
         artifact_payloads=artifact_payloads
     ):
         _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_cost_capacity_blockers(
+        artifact_payloads=artifact_payloads,
+        decision_payload=decision_payload,
+    ):
+        _append_blocker(blockers, blocker.code)
 
     target_weights_raw = decision_payload.get("target_weights", {})
     if not isinstance(target_weights_raw, Mapping):
@@ -1352,6 +1361,104 @@ def evaluate_statistical_evidence_blockers(
                 for code in _string_sequence(payload.get("blocker_codes", ())):
                     if code in BLOCKER_REGISTRY:
                         _append_blocker(blockers, code)
+    return tuple(blockers)
+
+
+def evaluate_cost_capacity_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]],
+    decision_payload: Mapping[str, object] | None = None,
+) -> tuple[Blocker, ...]:
+    blockers: list[Blocker] = []
+    has_cost_model_report = False
+    has_capacity_curve_report = False
+    has_execution_observation = False
+    requested_state = ""
+    if decision_payload is not None:
+        requested_state = str(decision_payload.get("requested_state", ""))
+    for payload in artifact_payloads:
+        kind = str(payload.get("kind", ""))
+        if kind in {
+            "cost_model_report",
+            "capacity_curve_report",
+            "execution_cost_observation",
+            "quote_quality_record",
+        }:
+            for code in _string_sequence(payload.get("blocker_codes", ())):
+                if code in BLOCKER_REGISTRY:
+                    _append_blocker(blockers, code)
+        if kind == "cost_model_report":
+            has_cost_model_report = True
+            # Re-derive critical blockers from raw fields so that a payload
+            # asserting promotion_valid=true with mismatched fields cannot
+            # bypass enforcement.
+            unsupported_buckets = _string_sequence(
+                payload.get("unsupported_buckets", ())
+            )
+            fallback = _normal_form(payload.get("sparse_bucket_fallback_policy"))
+            if unsupported_buckets and fallback == "no_fallback":
+                _append_blocker(blockers, "unsupported_cost_bucket")
+            powered_coverage = payload.get("powered_bucket_coverage", {})
+            if isinstance(powered_coverage, Mapping):
+                if any(not bool(value) for value in powered_coverage.values()):
+                    _append_blocker(blockers, "execution_sample_power_missing")
+            paper_count = _coerce_int(payload.get("paper_observation_count", 0))
+            probe_count = _coerce_int(payload.get("live_probe_observation_count", 0))
+            live_count = _coerce_int(payload.get("live_observation_count", 0))
+            min_live = _coerce_int(payload.get("minimum_live_sample_requirement", 0))
+            total_count = paper_count + probe_count + live_count
+            if total_count <= 0:
+                _append_blocker(blockers, "execution_sample_power_missing")
+            if (probe_count + live_count) < min_live and min_live > 0:
+                _append_blocker(blockers, "live_sample_requirement_unmet")
+            if probe_count == 0 and live_count == 0 and paper_count > 0:
+                # Paper-only — cannot support market-impact claim regardless of
+                # the report's self-asserted impact_claim_status.
+                _append_blocker(blockers, "execution_sample_power_missing")
+            if _normal_form(payload.get("evidence_class")) == "legacy":
+                _append_blocker(blockers, "legacy_statistical_evidence")
+        if kind == "capacity_curve_report":
+            has_capacity_curve_report = True
+            if bool(payload.get("capacity_extrapolation_risk", False)):
+                _append_blocker(blockers, "capacity_extrapolation_risk")
+            for required_field in (
+                "lower_bound_capacity_curve",
+                "lower_bound_net_edge_by_scale",
+            ):
+                value = payload.get(required_field, None)
+                if not isinstance(value, Mapping) or not value:
+                    _append_blocker(blockers, "capacity_lower_bound_missing")
+            limit_str = str(payload.get("lower_bound_capacity_limit", ""))
+            try:
+                if not limit_str.strip() or Decimal(limit_str) <= Decimal("0"):
+                    _append_blocker(blockers, "capacity_lower_bound_missing")
+            except InvalidOperation:
+                _append_blocker(blockers, "capacity_lower_bound_missing")
+        if kind == "execution_cost_observation":
+            has_execution_observation = True
+        if kind == "quote_quality_record":
+            policy = _normal_form(payload.get("handling_policy"))
+            quality = _normal_form(payload.get("quality_status"))
+            bad_states = {"bad", "outage", "stale"}
+            if quality in bad_states and policy != "no_trade_on_bad_quote":
+                _append_blocker(blockers, "execution_semantics_incomplete")
+        if kind == "replay_slippage_summary" and not payload.get("quote_quality_state"):
+            _append_blocker(blockers, "legacy_statistical_evidence")
+    # When an authoritative bundle for paper_trading or above already supplies
+    # execution evidence, the bundle must include cost-model and capacity
+    # reports too. Bundles without any execution evidence are evaluated only
+    # for the artifacts they do provide so that tests focused on other
+    # blockers (e.g. mandate authority) remain isolated.
+    capable_state = requested_state in {
+        PromotionState.PAPER_TRADING.value,
+        PromotionState.TINY_LIVE_PROBE.value,
+        PromotionState.PRODUCTION.value,
+    }
+    if capable_state and has_execution_observation:
+        if not has_cost_model_report:
+            _append_blocker(blockers, "execution_semantics_incomplete")
+        if not has_capacity_curve_report:
+            _append_blocker(blockers, "capacity_lower_bound_missing")
     return tuple(blockers)
 
 
@@ -2538,6 +2645,22 @@ def _string_sequence(value: object) -> tuple[str, ...]:
     return tuple(str(item) for item in value)
 
 
+def _coerce_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return int(float(value))
+            except ValueError:
+                return 0
+    return 0
+
+
 def _canonical_decimal_field(value: object, *, field: str) -> Decimal:
     if not isinstance(value, str):
         raise StateActionContractError(
@@ -2592,6 +2715,7 @@ __all__ = [
     "check_projection_drift",
     "classify_legacy_operator_artifact",
     "evaluate_promotion_manifest",
+    "evaluate_cost_capacity_blockers",
     "evaluate_provenance_blockers",
     "evaluate_statistical_evidence_blockers",
     "load_state_action_contracts",

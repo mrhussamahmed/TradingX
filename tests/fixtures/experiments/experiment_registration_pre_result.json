@@ -29,5 +29,6 @@
   "metric_release_token_ref": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "output_capture_artifact_ref": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "registration_sequence": 1,
-  "selection_influence": true
+  "selection_influence": true,
+  "arrival_timestamp_policy": "decision_timestamp"
 }

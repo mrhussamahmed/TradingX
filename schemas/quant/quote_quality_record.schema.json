@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Quote Quality Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "record_id",
+    "symbol",
+    "quote_timestamp_utc",
+    "system_receive_at_utc",
+    "source",
+    "vendor",
+    "trading_session",
+    "bid_price",
+    "ask_price",
+    "mid_price",
+    "spread_bps",
+    "is_locked",
+    "is_crossed",
+    "is_stale",
+    "quote_age_milliseconds",
+    "latency_milliseconds",
+    "handling_policy",
+    "outage_adjacent",
+    "quality_status",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "quote_quality_record"},
+    "record_id": {"type": "string"},
+    "symbol": {"type": "string"},
+    "quote_timestamp_utc": {"type": "string", "format": "utc-datetime"},
+    "system_receive_at_utc": {"type": "string", "format": "utc-datetime"},
+    "source": {"type": "string"},
+    "vendor": {"type": "string"},
+    "trading_session": {
+      "type": "string",
+      "enum": ["pre_open", "regular", "after_hours", "closed", "auction"]
+    },
+    "bid_price": {"type": "string"},
+    "ask_price": {"type": "string"},
+    "mid_price": {"type": "string"},
+    "spread_bps": {"type": "string"},
+    "is_locked": {"type": "boolean"},
+    "is_crossed": {"type": "boolean"},
+    "is_stale": {"type": "boolean"},
+    "quote_age_milliseconds": {"type": "integer"},
+    "latency_milliseconds": {"type": "integer"},
+    "handling_policy": {
+      "type": "string",
+      "enum": ["no_trade_on_bad_quote", "trade_with_widened_cost", "unspecified"]
+    },
+    "outage_adjacent": {"type": "boolean"},
+    "quality_status": {
+      "type": "string",
+      "enum": ["good", "degraded", "bad", "outage", "stale"]
+    },
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -205,6 +205,8 @@ def _validate_schema_keywords(schema: Mapping[str, object]) -> None:
                     _validate_schema_keywords(nested)
         if key == "items" and isinstance(value, Mapping):
             _validate_schema_keywords(value)
+        if key == "additionalProperties" and isinstance(value, Mapping):
+            _validate_schema_keywords(value)
 
 
 def _validate_against_schema(
@@ -230,7 +232,8 @@ def _validate_against_schema(
         properties = schema.get("properties", {})
         if not isinstance(properties, Mapping):
             raise SchemaValidationError(f"{path}.properties must be an object")
-        if schema.get("additionalProperties") is False:
+        additional_properties = schema.get("additionalProperties")
+        if additional_properties is False:
             allowed = {str(key) for key in properties}
             for key in value:
                 if str(key) not in allowed:
@@ -240,6 +243,16 @@ def _validate_against_schema(
                 _validate_against_schema(
                     value[key],
                     nested_schema,
+                    path=f"{path}.{key}",
+                )
+        if isinstance(additional_properties, Mapping):
+            allowed = {str(key) for key in properties}
+            for key, nested_value in value.items():
+                if str(key) in allowed:
+                    continue
+                _validate_against_schema(
+                    nested_value,
+                    additional_properties,
                     path=f"{path}.{key}",
                 )
     elif expected_type == "string":
@@ -280,13 +293,9 @@ def _validate_format(value: object, format_name: str, *, path: str) -> None:
         try:
             decimal_value = Decimal(value)
         except InvalidOperation as exc:
-            raise SchemaValidationError(
-                f"{path} must be a decimal-string"
-            ) from exc
+            raise SchemaValidationError(f"{path} must be a decimal-string") from exc
         if value != _canonical_decimal_string(decimal_value):
-            raise SchemaValidationError(
-                f"{path} must be a canonical decimal-string"
-            )
+            raise SchemaValidationError(f"{path} must be a canonical decimal-string")
         return
     if format_name in {"sha256", "content-addressed-ref"}:
         if not isinstance(value, str) or not value.startswith("sha256:"):
@@ -716,8 +725,7 @@ class TrustRoot:
         return cls(
             root_id=str(payload["root_id"]),
             trusted_keys={
-                str(key): str(value)
-                for key, value in trusted_keys_raw.items()
+                str(key): str(value) for key, value in trusted_keys_raw.items()
             },
             key_scopes=key_scopes,
             revoked_keys=frozenset(str(item) for item in revoked_keys_raw),

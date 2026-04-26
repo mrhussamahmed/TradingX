@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Cost Model Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "model_version",
+    "cost_feature_hash",
+    "bucket_assignment_policy",
+    "training_dataset_ref",
+    "sample_window_start_utc",
+    "sample_window_end_utc",
+    "bucket_definitions",
+    "minimum_bucket_sample_size",
+    "bucket_power_target",
+    "bucket_confidence",
+    "powered_bucket_coverage",
+    "sparse_bucket_fallback_policy",
+    "clean_estimate_bps",
+    "all_events_stress_bps",
+    "adverse_p90_bps",
+    "adverse_p95_bps",
+    "bucket_sample_sizes",
+    "unsupported_buckets",
+    "non_fill_opportunity_cost_bps",
+    "queue_adverse_selection_bps",
+    "counterfactual_quality",
+    "paper_observation_count",
+    "live_probe_observation_count",
+    "live_observation_count",
+    "minimum_live_sample_requirement",
+    "calibration_source",
+    "impact_claim_status",
+    "runtime_no_trade_rule_enforced",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "cost_model_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "model_version": {"type": "string"},
+    "cost_feature_hash": {"type": "string"},
+    "bucket_assignment_policy": {"type": "string"},
+    "training_dataset_ref": {"type": "string"},
+    "sample_window_start_utc": {"type": "string", "format": "utc-datetime"},
+    "sample_window_end_utc": {"type": "string", "format": "utc-datetime"},
+    "bucket_definitions": {"type": "array", "items": {"type": "string"}},
+    "minimum_bucket_sample_size": {"type": "integer"},
+    "bucket_power_target": {"type": "string"},
+    "bucket_confidence": {"type": "string"},
+    "powered_bucket_coverage": {
+      "type": "object",
+      "additionalProperties": {"type": "boolean"}
+    },
+    "sparse_bucket_fallback_policy": {
+      "type": "string",
+      "enum": [
+        "parent_bucket",
+        "liquidity_class_bucket",
+        "global_adverse_p90",
+        "no_fallback"
+      ]
+    },
+    "clean_estimate_bps": {"type": "string"},
+    "all_events_stress_bps": {"type": "string"},
+    "adverse_p90_bps": {"type": "string"},
+    "adverse_p95_bps": {"type": "string"},
+    "bucket_sample_sizes": {
+      "type": "object",
+      "additionalProperties": {"type": "integer"}
+    },
+    "unsupported_buckets": {"type": "array", "items": {"type": "string"}},
+    "non_fill_opportunity_cost_bps": {"type": "string"},
+    "queue_adverse_selection_bps": {"type": "string"},
+    "counterfactual_quality": {
+      "type": "string",
+      "enum": ["high", "medium", "low", "none"]
+    },
+    "paper_observation_count": {"type": "integer"},
+    "live_probe_observation_count": {"type": "integer"},
+    "live_observation_count": {"type": "integer"},
+    "minimum_live_sample_requirement": {"type": "integer"},
+    "calibration_source": {"type": "string"},
+    "impact_claim_status": {
+      "type": "string",
+      "enum": [
+        "not_supported_paper_only",
+        "supported_clean_with_runtime_no_trade",
+        "supported_all_events_stress",
+        "blocked_unsupported_bucket",
+        "blocked_underpowered",
+        "blocked_live_sample_unmet",
+        "blocked_capacity"
+      ]
+    },
+    "runtime_no_trade_rule_enforced": {"type": "boolean"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

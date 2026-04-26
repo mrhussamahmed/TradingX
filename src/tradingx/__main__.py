@@ -14,6 +14,7 @@ from alpaca.trading.client import TradingClient
 
 from tradingx.activation import LocalActivationGateway
 from tradingx.alerts import build_gate_decision_alert
+from tradingx.authority import validate_quant_artifact as _validate_quant_artifact
 from tradingx.automation import build_default_market_day_automation_runner
 from tradingx.benchmark_stack import build_default_benchmark_stack
 from tradingx.config import TradingConfig
@@ -21,6 +22,11 @@ from tradingx.controller import (
     build_default_controller,
     build_default_gate_validation_controller,
     build_default_paper_trading_controller,
+)
+from tradingx.costs import (
+    build_capacity_curve_report,
+    build_cost_model_report,
+    build_quote_quality_record,
 )
 from tradingx.data import (
     AlpacaRegularHoursCalendar,
@@ -102,6 +108,18 @@ def _serialize(value: Any) -> Any:
     if isinstance(value, list):
         return [_serialize(item) for item in value]
     return value
+
+
+_QUANT_SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "quant"
+
+
+def _load_quant_schema(name: str) -> dict[str, object]:
+    payload = json.loads(
+        (_QUANT_SCHEMA_ROOT / f"{name}.schema.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(payload, dict):
+        raise ValueError(f"{name} schema must be an object")
+    return payload
 
 
 def _format_promotion_summary(payload: dict[str, object]) -> str:
@@ -370,6 +388,18 @@ def build_parser() -> argparse.ArgumentParser:
     statistical_report_parser.add_argument("--pbo-report", required=True)
     statistical_report_parser.add_argument("--output-file", default=None)
 
+    quote_quality_parser = subparsers.add_parser("quote-quality-report")
+    quote_quality_parser.add_argument("--inputs-file", required=True)
+    quote_quality_parser.add_argument("--output-file", default=None)
+
+    cost_model_parser = subparsers.add_parser("cost-model-report")
+    cost_model_parser.add_argument("--inputs-file", required=True)
+    cost_model_parser.add_argument("--output-file", default=None)
+
+    capacity_curve_parser = subparsers.add_parser("capacity-curve")
+    capacity_curve_parser.add_argument("--inputs-file", required=True)
+    capacity_curve_parser.add_argument("--output-file", default=None)
+
     gate3_report_parser = subparsers.add_parser("gate3-report")
     gate3_report_parser.add_argument("--env-file", default=".env")
     gate3_report_parser.add_argument(
@@ -408,6 +438,15 @@ def build_parser() -> argparse.ArgumentParser:
     replay_slippage_parser.add_argument(
         "--validation-artifact-root",
         default="artifacts/validation",
+    )
+    replay_slippage_parser.add_argument(
+        "--include-quote-quality",
+        action="store_true",
+        help=(
+            "Include quote-quality state in replay-slippage records and tag the "
+            "summary as Wave 5 cost-evidence-aware. Without this flag, the "
+            "summary is classified as legacy_cost_evidence."
+        ),
     )
 
     dry_run_report_parser = subparsers.add_parser("dry-run-report")
@@ -1040,6 +1079,214 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(_serialize(report), sort_keys=True))
         return 0
 
+    if args.command == "quote-quality-report":
+        inputs_any: Any = load_json_object(Path(args.inputs_file))
+        record = build_quote_quality_record(
+            record_id=str(inputs_any["record_id"]),
+            symbol=str(inputs_any["symbol"]),
+            quote_timestamp_utc=datetime.fromisoformat(
+                str(inputs_any["quote_timestamp_utc"]).replace("Z", "+00:00")
+            ),
+            system_receive_at_utc=datetime.fromisoformat(
+                str(inputs_any["system_receive_at_utc"]).replace("Z", "+00:00")
+            ),
+            source=str(inputs_any["source"]),
+            vendor=str(inputs_any["vendor"]),
+            trading_session=str(inputs_any["trading_session"]),
+            bid_price=Decimal(str(inputs_any["bid_price"])),
+            ask_price=Decimal(str(inputs_any["ask_price"])),
+            handling_policy=str(
+                inputs_any.get("handling_policy", "no_trade_on_bad_quote")
+            ),
+            quote_age_milliseconds=int(inputs_any.get("quote_age_milliseconds", 0)),
+            latency_milliseconds=int(inputs_any.get("latency_milliseconds", 0)),
+            is_locked=bool(inputs_any.get("is_locked", False)),
+            is_crossed=bool(inputs_any.get("is_crossed", False)),
+            is_stale=bool(inputs_any.get("is_stale", False)),
+            outage_adjacent=bool(inputs_any.get("outage_adjacent", False)),
+        )
+        _validate_quant_artifact(
+            record, schema=_load_quant_schema("quote_quality_record")
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(record), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(record), sort_keys=True))
+        return 0
+
+    if args.command == "cost-model-report":
+        inputs_any2: Any = load_json_object(Path(args.inputs_file))
+        report = build_cost_model_report(
+            report_id=str(inputs_any2["report_id"]),
+            strategy_id=str(inputs_any2["strategy_id"]),
+            model_version=str(inputs_any2["model_version"]),
+            cost_feature_hash=str(inputs_any2["cost_feature_hash"]),
+            bucket_assignment_policy=str(inputs_any2["bucket_assignment_policy"]),
+            training_dataset_ref=str(inputs_any2["training_dataset_ref"]),
+            sample_window_start_utc=datetime.fromisoformat(
+                str(inputs_any2["sample_window_start_utc"]).replace("Z", "+00:00")
+            ),
+            sample_window_end_utc=datetime.fromisoformat(
+                str(inputs_any2["sample_window_end_utc"]).replace("Z", "+00:00")
+            ),
+            bucket_definitions=tuple(
+                str(value) for value in inputs_any2.get("bucket_definitions", ())
+            ),
+            minimum_bucket_sample_size=int(
+                inputs_any2.get("minimum_bucket_sample_size", 0)
+            ),
+            bucket_power_target=Decimal(
+                str(inputs_any2.get("bucket_power_target", "0"))
+            ),
+            bucket_confidence=Decimal(str(inputs_any2.get("bucket_confidence", "0"))),
+            powered_bucket_coverage={
+                str(bucket): bool(value)
+                for bucket, value in dict(
+                    inputs_any2.get("powered_bucket_coverage", {})
+                ).items()
+            },
+            sparse_bucket_fallback_policy=str(
+                inputs_any2.get("sparse_bucket_fallback_policy", "no_fallback")
+            ),
+            clean_estimate_bps=Decimal(str(inputs_any2.get("clean_estimate_bps", "0"))),
+            all_events_stress_bps=Decimal(
+                str(inputs_any2.get("all_events_stress_bps", "0"))
+            ),
+            adverse_p90_bps=Decimal(str(inputs_any2.get("adverse_p90_bps", "0"))),
+            adverse_p95_bps=Decimal(str(inputs_any2.get("adverse_p95_bps", "0"))),
+            bucket_sample_sizes={
+                str(bucket): int(value)
+                for bucket, value in dict(
+                    inputs_any2.get("bucket_sample_sizes", {})
+                ).items()
+            },
+            unsupported_buckets=tuple(
+                str(bucket) for bucket in inputs_any2.get("unsupported_buckets", ())
+            ),
+            non_fill_opportunity_cost_bps=Decimal(
+                str(inputs_any2.get("non_fill_opportunity_cost_bps", "0"))
+            ),
+            queue_adverse_selection_bps=Decimal(
+                str(inputs_any2.get("queue_adverse_selection_bps", "0"))
+            ),
+            counterfactual_quality=str(
+                inputs_any2.get("counterfactual_quality", "medium")
+            ),
+            paper_observation_count=int(inputs_any2.get("paper_observation_count", 0)),
+            live_probe_observation_count=int(
+                inputs_any2.get("live_probe_observation_count", 0)
+            ),
+            live_observation_count=int(inputs_any2.get("live_observation_count", 0)),
+            minimum_live_sample_requirement=int(
+                inputs_any2.get("minimum_live_sample_requirement", 0)
+            ),
+            calibration_source=str(inputs_any2.get("calibration_source", "")),
+            runtime_no_trade_rule_enforced=bool(
+                inputs_any2.get("runtime_no_trade_rule_enforced", False)
+            ),
+            impact_claim_requested=bool(
+                inputs_any2.get("impact_claim_requested", False)
+            ),
+            generated_at_utc=(
+                datetime.fromisoformat(
+                    str(inputs_any2["generated_at_utc"]).replace("Z", "+00:00")
+                )
+                if "generated_at_utc" in inputs_any2
+                and str(inputs_any2["generated_at_utc"]).strip()
+                else None
+            ),
+        )
+        _validate_quant_artifact(report, schema=_load_quant_schema("cost_model_report"))
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(report), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
+    if args.command == "capacity-curve":
+        inputs_any3: Any = load_json_object(Path(args.inputs_file))
+        report = build_capacity_curve_report(
+            report_id=str(inputs_any3["report_id"]),
+            strategy_id=str(inputs_any3["strategy_id"]),
+            target_capital_scale=Decimal(str(inputs_any3["target_capital_scale"])),
+            tested_scales=tuple(
+                Decimal(str(scale)) for scale in inputs_any3.get("tested_scales", ())
+            ),
+            validated_range_min=Decimal(str(inputs_any3["validated_range_min"])),
+            validated_range_max=Decimal(str(inputs_any3["validated_range_max"])),
+            max_participation_rate=Decimal(str(inputs_any3["max_participation_rate"])),
+            expected_turnover=Decimal(str(inputs_any3["expected_turnover"])),
+            orders_per_day=Decimal(str(inputs_any3["orders_per_day"])),
+            rebalance_frequency=str(inputs_any3["rebalance_frequency"]),
+            annualized_cost_drag_by_scale={
+                str(scale): Decimal(str(value))
+                for scale, value in dict(
+                    inputs_any3.get("annualized_cost_drag_by_scale", {})
+                ).items()
+            },
+            capacity_under_turnover_assumption=Decimal(
+                str(inputs_any3.get("capacity_under_turnover_assumption", "0"))
+            ),
+            lower_bound_capacity_curve={
+                str(scale): Decimal(str(value))
+                for scale, value in dict(
+                    inputs_any3.get("lower_bound_capacity_curve", {})
+                ).items()
+            }
+            or None,
+            expected_cost_curve={
+                str(scale): Decimal(str(value))
+                for scale, value in dict(
+                    inputs_any3.get("expected_cost_curve", {})
+                ).items()
+            },
+            net_edge_curve={
+                str(scale): Decimal(str(value))
+                for scale, value in dict(inputs_any3.get("net_edge_curve", {})).items()
+            },
+            lower_bound_net_edge_by_scale={
+                str(scale): Decimal(str(value))
+                for scale, value in dict(
+                    inputs_any3.get("lower_bound_net_edge_by_scale", {})
+                ).items()
+            }
+            or None,
+            lower_bound_capacity_limit=(
+                Decimal(str(inputs_any3["lower_bound_capacity_limit"]))
+                if "lower_bound_capacity_limit" in inputs_any3
+                and str(inputs_any3["lower_bound_capacity_limit"]).strip()
+                else None
+            ),
+            generated_at_utc=(
+                datetime.fromisoformat(
+                    str(inputs_any3["generated_at_utc"]).replace("Z", "+00:00")
+                )
+                if "generated_at_utc" in inputs_any3
+                and str(inputs_any3["generated_at_utc"]).strip()
+                else None
+            ),
+        )
+        _validate_quant_artifact(
+            report, schema=_load_quant_schema("capacity_curve_report")
+        )
+        if args.output_file:
+            output_file = Path(args.output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(
+                json.dumps(_serialize(report), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        print(json.dumps(_serialize(report), sort_keys=True))
+        return 0
+
     if args.command == "gate-report":
         config = TradingConfig.from_env_file(Path(args.env_file))
         controller = build_default_gate_validation_controller(
@@ -1141,6 +1388,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             validation_store=FilesystemArtifactStore(
                 Path(args.validation_artifact_root)
             ),
+            include_quote_quality=bool(getattr(args, "include_quote_quality", False)),
         )
         print(json.dumps(_serialize(replay_result), sort_keys=True))
         return 0

@@ -33,7 +33,8 @@
     "metric_release_token_ref",
     "output_capture_artifact_ref",
     "registration_sequence",
-    "selection_influence"
+    "selection_influence",
+    "arrival_timestamp_policy"
   ],
   "properties": {
     "schema_version": {"type": "string", "const": "1.0"},
@@ -78,6 +79,16 @@
       "format": "content-addressed-ref"
     },
     "registration_sequence": {"type": "integer"},
-    "selection_influence": {"type": "boolean"}
+    "selection_influence": {"type": "boolean"},
+    "arrival_timestamp_policy": {
+      "type": "string",
+      "enum": [
+        "decision_timestamp",
+        "submit_timestamp",
+        "ack_timestamp",
+        "first_observable_quote",
+        "decision_with_publication_lag"
+      ]
+    }
   }
 }

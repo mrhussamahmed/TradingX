@@ -79,6 +79,7 @@ def generate_replay_slippage_evidence(
     *,
     paper_store: FilesystemArtifactStore,
     validation_store: FilesystemArtifactStore,
+    include_quote_quality: bool = False,
 ) -> ReplaySlippageGenerationResult:
     generated_at = datetime.now(UTC)
     record_paths: list[Path] = []
@@ -160,6 +161,19 @@ def generate_replay_slippage_evidence(
             "Replay generation requires execution artifacts with quote and ADV context."
         )
 
+    quote_quality_records_present = bool(
+        validation_store.list_artifact_payloads("quote_quality_records")
+    )
+    if include_quote_quality and records and quote_quality_records_present:
+        quote_quality_state = "captured"
+        cost_evidence_class = "wave5_cost_evidence"
+    else:
+        # `--include-quote-quality` cannot, by itself, lift the legacy
+        # classification. The validation store must hold actual
+        # `quote_quality_records` artifacts that operators can replay against
+        # the execution lifecycles. Otherwise the summary stays legacy.
+        quote_quality_state = ""
+        cost_evidence_class = "legacy_cost_evidence"
     summary = ReplaySlippageSummary(
         summary_id=f"replay-summary-{generated_at.strftime('%Y%m%d%H%M%S')}",
         matched_execution_count=len(records),
@@ -169,6 +183,8 @@ def generate_replay_slippage_evidence(
         status=status,
         details=details,
         generated_at_utc=generated_at,
+        quote_quality_state=quote_quality_state,
+        cost_evidence_class=cost_evidence_class,
     )
     summary_path = validation_store.write_replay_slippage_summary(summary)
     return ReplaySlippageGenerationResult(

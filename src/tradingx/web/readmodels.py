@@ -2834,6 +2834,11 @@ class LocalWebReadModel:
             generated_at_utc=self._parse_datetime(
                 str(payload.get("generated_at_utc", ""))
             ),
+            quote_quality_state=str(payload.get("quote_quality_state", "")),
+            cost_evidence_class=str(
+                payload.get("cost_evidence_class", "legacy_cost_evidence")
+            ),
+            kind=str(payload.get("kind", "replay_slippage_summary")),
         )
 
     def _historical_warmup_from_payload(

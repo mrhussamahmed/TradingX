@@ -45,6 +45,7 @@ def _registration(**overrides: object) -> dict[str, object]:
         "output_capture_artifact_ref": "sha256:" + "c" * 64,
         "registration_sequence": 1,
         "selection_influence": True,
+        "arrival_timestamp_policy": "decision_timestamp",
     }
     payload.update(overrides)
     return payload
@@ -110,6 +111,55 @@ def test_post_result_registration_yields_trial_lineage_contaminated() -> None:
 
     assert manifest["status"] == "contaminated"
     assert "trial_lineage_contaminated" in manifest["blocker_codes"]
+
+
+def test_arrival_timestamp_policy_change_within_study_contaminates_lineage() -> None:
+    """Roadmap §Milestone 5 amendment: changing arrival_timestamp_policy must
+    create a new study_id. Two registrations sharing study_id but disagreeing on
+    policy contaminate the trial lineage.
+    """
+
+    from tradingx.experiments import build_trial_universe_manifest
+
+    manifest = build_trial_universe_manifest(
+        promotion_decision_scope="scope-prod-001",
+        registrations=(
+            _registration(
+                experiment_id="exp-001",
+                registration_sequence=1,
+                study_id="study-shared",
+                arrival_timestamp_policy="decision_timestamp",
+            ),
+            _registration(
+                experiment_id="exp-002",
+                registration_sequence=2,
+                study_id="study-shared",
+                arrival_timestamp_policy="submit_timestamp",
+            ),
+        ),
+        run_records=(
+            _run_record(run_id="run-001", experiment_id="exp-001"),
+            _run_record(run_id="run-002", experiment_id="exp-002"),
+        ),
+        cited_artifacts=(),
+    )
+
+    assert "trial_lineage_contaminated" in manifest["blocker_codes"]
+    assert "arrival_timestamp_policy_changed_within_study" in manifest["audit_flags"]
+
+
+def test_arrival_timestamp_policy_missing_contaminates_lineage() -> None:
+    from tradingx.experiments import build_trial_universe_manifest
+
+    manifest = build_trial_universe_manifest(
+        promotion_decision_scope="scope-prod-001",
+        registrations=(_registration(arrival_timestamp_policy=""),),
+        run_records=(_run_record(),),
+        cited_artifacts=(),
+    )
+
+    assert "trial_lineage_contaminated" in manifest["blocker_codes"]
+    assert "arrival_timestamp_policy_missing" in manifest["audit_flags"]
 
 
 def test_registered_failed_or_canceled_runs_omitted_from_u_are_incomplete() -> None:

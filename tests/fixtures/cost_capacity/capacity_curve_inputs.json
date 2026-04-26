@@ -1,0 +1,39 @@
+{
+  "report_id": "capacity-fixture-001",
+  "strategy_id": "trend-following-v1",
+  "target_capital_scale": "1000000",
+  "tested_scales": ["100000", "500000", "1000000"],
+  "validated_range_min": "100000",
+  "validated_range_max": "2000000",
+  "max_participation_rate": "0.05",
+  "expected_turnover": "2.0",
+  "orders_per_day": "50",
+  "rebalance_frequency": "daily",
+  "annualized_cost_drag_by_scale": {
+    "100000": "0.0010",
+    "500000": "0.0014",
+    "1000000": "0.0019"
+  },
+  "capacity_under_turnover_assumption": "1500000",
+  "lower_bound_capacity_curve": {
+    "100000": "100000",
+    "500000": "500000",
+    "1000000": "1000000"
+  },
+  "expected_cost_curve": {
+    "100000": "0.0010",
+    "500000": "0.0014",
+    "1000000": "0.0019"
+  },
+  "net_edge_curve": {
+    "100000": "0.012",
+    "500000": "0.010",
+    "1000000": "0.008"
+  },
+  "lower_bound_net_edge_by_scale": {
+    "100000": "0.005",
+    "500000": "0.004",
+    "1000000": "0.002"
+  },
+  "lower_bound_capacity_limit": "1500000"
+}
