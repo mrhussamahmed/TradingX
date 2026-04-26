@@ -114,14 +114,25 @@ def probabilistic_sharpe_ratio(
     benchmark_sharpe: float,
     sample_size: float,
     skewness: float,
-    kurtosis: float,
+    excess_kurtosis: float,
 ) -> float:
+    """Bailey & López de Prado (2012) PSR.
+
+    ``excess_kurtosis`` is kurtosis - 3 (i.e. excess over the normal).
+    Defect 4 renamed the parameter from ``kurtosis`` to make this
+    explicit; callers must pass the excess (not raw) kurtosis.
+    """
+
     if sample_size <= 1:
         raise ValueError("sample_size must be greater than 1.")
+    # Bailey & López de Prado (2012), eq.(5). The denominator uses
+    # ``(γ4 - 1)/4`` where γ4 is the excess kurtosis. Defect 4 renamed
+    # the parameter so callers no longer have to remember that the
+    # ``kurtosis`` argument expected an excess-kurtosis value.
     denominator = (
         1.0
         - (skewness * observed_sharpe)
-        + (((kurtosis - 1.0) / 4.0) * (observed_sharpe**2))
+        + (((excess_kurtosis - 1.0) / 4.0) * (observed_sharpe**2))
     )
     if denominator <= 0:
         raise ValueError("PSR denominator must be positive.")
@@ -162,12 +173,17 @@ def deflated_sharpe_ratio(
     observed_sharpe: float,
     sample_size: float,
     skewness: float,
-    kurtosis: float,
+    excess_kurtosis: float,
     n_trials: int,
     trial_sharpe_variance: float,
     mean_trial_sharpe: float = 0.0,
     periods_per_year: int = PAPER_PERIODS_PER_YEAR,
 ) -> float:
+    """Bailey & López de Prado (2014) DSR.
+
+    ``excess_kurtosis`` is kurtosis - 3 (Defect 4 rename).
+    """
+
     benchmark_sharpe = expected_max_sharpe(
         n_trials=n_trials,
         trial_sharpe_variance=trial_sharpe_variance,
@@ -179,7 +195,7 @@ def deflated_sharpe_ratio(
         benchmark_sharpe=benchmark_sharpe,
         sample_size=sample_size,
         skewness=skewness,
-        kurtosis=kurtosis,
+        excess_kurtosis=excess_kurtosis,
     )
 
 
@@ -225,24 +241,38 @@ def conditional_drawdown_at_risk(
     return sum(worst_tail) / len(worst_tail)
 
 
-def effective_sample_size_hac(
+def effective_sample_size_lo_signed(
     returns: Sequence[float],
     *,
     max_lag: int = DEFAULT_AUTOCORRELATION_LAGS,
 ) -> tuple[float, tuple[dict[str, object], ...]]:
+    """Lo (2002) effective sample size with SIGNED autocorrelations.
+
+    Uses signed autocorrelations together with Bartlett (Newey-West)
+    triangular weights ``w_k = 1 - k/m`` where ``m`` is the truncation
+    lag (max_lag). Defect 4 renamed this from ``effective_sample_size_hac``
+    after the adversarial review found that summing absolute
+    autocorrelations both double-penalizes negatively-correlated returns
+    and silently omits the Bartlett window.
+    """
+
     values = cast(FloatArray, np.asarray(list(returns), dtype=float))
     n_observations = int(values.size)
     if n_observations <= 1:
         return float(n_observations), ()
     lag_count = min(max(max_lag, 0), n_observations - 1)
+    if lag_count == 0:
+        return float(n_observations), ()
     lag_sensitivity: list[dict[str, object]] = []
     autocorrelation_penalty = 0.0
     for lag in range(1, lag_count + 1):
         correlation = _lagged_autocorrelation(values, lag)
-        absolute_correlation = 0.0 if correlation is None else abs(correlation)
-        autocorrelation_penalty += absolute_correlation
-        lag_effective_sample_size = n_observations / (
-            1.0 + (2.0 * autocorrelation_penalty)
+        signed_correlation = 0.0 if correlation is None else float(correlation)
+        bartlett_weight = 1.0 - (lag / (lag_count + 1.0))
+        autocorrelation_penalty += bartlett_weight * signed_correlation
+        denominator = 1.0 + (2.0 * autocorrelation_penalty)
+        lag_effective_sample_size = (
+            float(n_observations) if denominator <= 0 else n_observations / denominator
         )
         lag_sensitivity.append(
             {
@@ -250,16 +280,25 @@ def effective_sample_size_hac(
                 "autocorrelation": (
                     "0" if correlation is None else _decimal_string(correlation)
                 ),
+                "bartlett_weight": _decimal_string(bartlett_weight),
                 "effective_sample_size": _decimal_string(
-                    min(float(n_observations), lag_effective_sample_size)
+                    min(float(n_observations), max(0.0, lag_effective_sample_size))
                 ),
             }
         )
-    effective_sample_size = n_observations / (1.0 + (2.0 * autocorrelation_penalty))
+    denominator = 1.0 + (2.0 * autocorrelation_penalty)
+    effective_sample_size = (
+        float(n_observations) if denominator <= 0 else n_observations / denominator
+    )
     return (
-        min(float(n_observations), effective_sample_size),
+        min(float(n_observations), max(0.0, effective_sample_size)),
         tuple(lag_sensitivity),
     )
+
+
+# Defect 4 — Backwards-compatible alias kept until callers migrate.
+# New code MUST use ``effective_sample_size_lo_signed`` directly.
+effective_sample_size_hac = effective_sample_size_lo_signed
 
 
 def build_power_analysis_report(
@@ -325,12 +364,33 @@ def build_stationary_block_bootstrap_report(
     random_seed: int = DEFAULT_BOOTSTRAP_SEED,
     block_lengths: Sequence[int] = DEFAULT_BLOCK_LENGTHS,
     n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
-    tail_tolerance: float = 0.01,
+    tail_tolerance: float | None = None,
+    tail_tolerance_relative_to_mean: float = 0.10,
     generated_at_utc: datetime | None = None,
 ) -> dict[str, object]:
+    """Defect 4: tail_tolerance is now relative to |mean| of the returns.
+
+    The previous absolute threshold (default 0.01) silently assumed the
+    return scale was order 1%. For sub-percent return series an absolute
+    tolerance is unsupportable. The new
+    ``tail_tolerance_relative_to_mean`` expresses the threshold as a
+    fraction of |mean(returns)|. ``tail_tolerance`` is kept as a
+    deprecated alias for backwards compatibility with existing callers.
+    """
+
     if n_resamples <= 0:
         raise ValueError("n_resamples must be positive.")
+    if tail_tolerance is not None:
+        # Accept legacy callers that pass an absolute tolerance.
+        relative_tolerance = float(tail_tolerance)
+    else:
+        relative_tolerance = float(tail_tolerance_relative_to_mean)
     values = tuple(float(value) for value in returns)
+    mean_value = float(np.mean(values)) if values else 0.0
+    absolute_tolerance = abs(mean_value) * relative_tolerance
+    if tail_tolerance is not None:
+        # Legacy mode treats ``tail_tolerance`` as absolute.
+        absolute_tolerance = float(tail_tolerance)
     sensitivity: list[dict[str, object]] = []
     tail_spreads: list[float] = []
     for block_length in block_lengths:
@@ -355,7 +415,7 @@ def build_stationary_block_bootstrap_report(
             }
         )
     max_tail_spread = max(tail_spreads, default=float("inf"))
-    stable = bool(values) and max_tail_spread <= tail_tolerance
+    stable = bool(values) and max_tail_spread <= absolute_tolerance
     status = "stable" if stable else "unstable"
     return {
         "schema_version": "1.0",
@@ -364,11 +424,51 @@ def build_stationary_block_bootstrap_report(
         "random_seed": random_seed,
         "n_resamples": n_resamples,
         "block_length_sensitivity": sensitivity,
-        "tail_stability_threshold": _decimal_string(tail_tolerance),
+        "tail_stability_threshold": _decimal_string(absolute_tolerance),
+        "tail_tolerance_relative_to_mean": _decimal_string(relative_tolerance),
         "tail_stability_status": status,
         "blocker_codes": [] if stable else ["dsr_pbo_inputs_incomplete"],
         "generated_at_utc": _utc_iso(generated_at_utc),
     }
+
+
+def _newey_west_truncation_lag(n: int) -> int:
+    """Standard Newey-West truncation lag: floor(4 * (n/100)**(2/9))."""
+
+    if n <= 1:
+        return 0
+    return int(math.floor(4.0 * (n / 100.0) ** (2.0 / 9.0)))
+
+
+def _hac_adjusted_std_error(paired_diff: Sequence[float]) -> float:
+    """Newey-West HAC standard error of the mean of paired differences.
+
+    Uses Bartlett triangular weights and the lag rule
+    ``floor(4 * (n/100)**(2/9))`` as recommended for Newey-West (1987).
+    Falls back to the iid OLS standard error when n is too small for any
+    lag adjustment.
+    """
+
+    n = len(paired_diff)
+    if n < 2:
+        return 0.0
+    arr = cast(FloatArray, np.asarray(list(paired_diff), dtype=float))
+    mean = float(np.mean(arr))
+    centered = arr - mean
+    gamma_zero = float(np.dot(centered, centered) / n)
+    truncation_lag = _newey_west_truncation_lag(n)
+    long_run_variance = gamma_zero
+    for k in range(1, truncation_lag + 1):
+        if k >= n:
+            break
+        bartlett_weight = 1.0 - (k / (truncation_lag + 1.0))
+        gamma_k = float(np.dot(centered[:-k], centered[k:]) / n)
+        long_run_variance += 2.0 * bartlett_weight * gamma_k
+    if long_run_variance <= 0:
+        # Fall back to the iid standard error so the lower bound is at
+        # least as wide as the unadjusted estimate.
+        return float(np.std(arr, ddof=1)) / math.sqrt(n)
+    return math.sqrt(long_run_variance / n)
 
 
 def build_paired_benchmark_uncertainty_report(
@@ -380,11 +480,19 @@ def build_paired_benchmark_uncertainty_report(
     confidence_level: Decimal | str = Decimal("0.95"),
     generated_at_utc: datetime | None = None,
 ) -> dict[str, object]:
+    """Defect 4: replace the hard-coded 1.96 with the proper z-quantile and
+    apply Newey-West HAC adjustment to the paired-difference standard error.
+    """
+
     candidate = tuple(float(value) for value in candidate_returns)
     missing = [
         name for name in required_benchmarks if name not in benchmark_returns_by_name
     ]
     comparisons: list[dict[str, object]] = []
+    confidence = float(Decimal(str(confidence_level)))
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence_level must lie strictly within (0, 1).")
+    z_quantile = float(norm.ppf(1.0 - (1.0 - confidence) / 2.0))
     for name in required_benchmarks:
         if name not in benchmark_returns_by_name:
             continue
@@ -396,8 +504,8 @@ def build_paired_benchmark_uncertainty_report(
             left - right for left, right in zip(candidate, benchmark, strict=True)
         ]
         mean_diff = float(np.mean(paired_diff))
-        std_error = float(np.std(paired_diff, ddof=1)) / math.sqrt(len(paired_diff))
-        lower_bound = mean_diff - (1.96 * std_error)
+        std_error = _hac_adjusted_std_error(paired_diff)
+        lower_bound = mean_diff - (z_quantile * std_error)
         comparisons.append(
             {
                 "benchmark_name": name,
@@ -556,16 +664,32 @@ def _stationary_bootstrap_means(
     n_resamples: int,
     random_seed: int,
 ) -> tuple[float, ...]:
+    """Politis & Romano (1994) stationary bootstrap with geometric blocks.
+
+    Defect 4 — block_length is interpreted as the EXPECTED block length;
+    each block's actual length is drawn from a geometric distribution
+    with parameter ``p = 1/block_length`` (sampled here via
+    ``random.expovariate(p)``). Fixed-block-length resampling that the
+    earlier implementation used is the *circular* block bootstrap, not
+    the stationary one.
+    """
+
     if not values:
         return ()
+    if block_length <= 0:
+        raise ValueError("block_length must be positive (it is the mean).")
     random_state = random.Random(random_seed)
+    p = 1.0 / float(block_length)
     n_observations = len(values)
     means: list[float] = []
     for _ in range(n_resamples):
         sample: list[float] = []
         while len(sample) < n_observations:
             start = random_state.randrange(n_observations)
-            for offset in range(block_length):
+            # Geometric block length: ceil(Exp(p)) gives a positive
+            # geometric sample with mean 1/p == block_length.
+            actual_length = max(1, int(math.ceil(random_state.expovariate(p))))
+            for offset in range(actual_length):
                 if len(sample) == n_observations:
                     break
                 sample.append(values[(start + offset) % n_observations])
