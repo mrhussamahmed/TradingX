@@ -203,6 +203,40 @@ _WAVE_ARTIFACT_EVALUATORS: dict[str, str] = {
 }
 
 
+# Defect 8 hardening — subcommand -> set of allowed payload "kind"
+# values. The dispatcher uses this to reject ``--ref`` paths whose
+# payload kind does not match the subcommand. Earlier the dispatcher
+# would silently emit no blockers if the wrong file was supplied.
+_WAVE_ARTIFACT_ALLOWED_KINDS: dict[str, frozenset[str]] = {
+    # Wave 6
+    "portfolio-utility": frozenset({"portfolio_utility_definition"}),
+    "optimizer-validation": frozenset({"optimizer_validation_report"}),
+    "optimizer-fallback": frozenset({"optimizer_fallback_record"}),
+    "forecast-manifest": frozenset(
+        {"forecast_model_manifest", "feature_manifest", "label_definition"}
+    ),
+    "sizing-policy": frozenset({"sizing_policy", "expected_return_report"}),
+    # Wave 7
+    "short-capability": frozenset({"short_capability_manifest"}),
+    "borrow-snapshot": frozenset({"borrow_availability_snapshot"}),
+    "short-financing": frozenset({"short_financing_model"}),
+    "short-risk-report": frozenset({"short_risk_report"}),
+    # Wave 8
+    "live-probe-plan": frozenset({"live_probe_plan"}),
+    "live-probe-run": frozenset({"live_probe_run_record"}),
+    "live-probe-recertification": frozenset(
+        {"live_probe_recertification_report"}
+    ),
+    # Wave 9
+    "change-control": frozenset({"change_control_record"}),
+    "replay-equivalence": frozenset({"replay_equivalence_report"}),
+    "recertification": frozenset({"recertification_report"}),
+    "drift-monitor-spec": frozenset({"drift_monitor_spec"}),
+    # Wave 10
+    "legacy-migration-report": frozenset({"legacy_artifact_migration_report"}),
+}
+
+
 def _run_wave_artifact_check(command: str, refs: list[str]) -> int:
     """Defect 8 — generic Wave 4-10 artifact CLI dispatcher.
 
@@ -251,6 +285,29 @@ def _run_wave_artifact_check(command: str, refs: list[str]) -> int:
                         "ref": ref,
                         "blocker_codes": ["authority_artifact_invalid"],
                         "error": "payload is not a JSON object",
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        # Defect 8 hardening — validate payload kind matches subcommand.
+        # Without this check, ``forecast-manifest --ref short_risk.json``
+        # would silently emit no blockers because the evaluator simply
+        # ignores artifact kinds it does not recognise.
+        allowed_kinds = _WAVE_ARTIFACT_ALLOWED_KINDS.get(command)
+        payload_kind = str(payload.get("kind", "")).strip()
+        if allowed_kinds is not None and payload_kind not in allowed_kinds:
+            print(
+                json.dumps(
+                    {
+                        "command": command,
+                        "ref": ref,
+                        "blocker_codes": ["authority_artifact_invalid"],
+                        "error": (
+                            f"payload kind {payload_kind!r} does not match "
+                            f"subcommand {command!r}; expected one of "
+                            f"{sorted(allowed_kinds)}"
+                        ),
                     },
                     sort_keys=True,
                 )

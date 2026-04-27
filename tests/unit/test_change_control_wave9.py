@@ -347,3 +347,35 @@ def test_recertification_report_with_aligned_change_id_passes() -> None:
     )
     codes = [blocker.code for blocker in blockers]
     assert "recertification_report_missing" not in codes
+
+
+def test_recertification_report_must_cover_all_open_changes() -> None:
+    """Defect 3 hardening — one matching change_id cannot satisfy
+    arbitrarily many open changes. Each change_control_record requiring
+    recertification must be referenced by some recertification_report.
+    """
+
+    open_a = _change(change_id="chg-a")
+    open_b = _change(change_id="chg-b")
+    only_a_recert = _recert(change_id="chg-a")
+    blockers = evaluate_change_control_blockers(
+        artifact_payloads=(open_a, open_b, only_a_recert)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "recertification_report_missing" in codes
+    cap = strictest_state_cap(blockers)
+    assert cap != PromotionState.PRODUCTION
+
+
+def test_recertification_report_without_change_record_blocks() -> None:
+    """Defect 3 hardening — a recertification_report shipped WITHOUT a
+    change_control_record certifies nothing. Without the change record,
+    the bundle has no audit trail of what is being recertified.
+    """
+
+    dangling_recert = _recert(change_id="chg-orphan")
+    blockers = evaluate_change_control_blockers(
+        artifact_payloads=(dangling_recert,)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "unrecorded_material_change" in codes

@@ -26,7 +26,10 @@
     "raw_payload_availability": {"type": "string"},
     "manual_review_required": {"type": "boolean"},
     "summary_metrics": {"type": "object"},
-    "evidence_status": {"type": "string", "enum": ["valid", "stale", "invalid"]},
+    "evidence_status": {
+      "type": "string",
+      "enum": ["valid", "stale", "invalid", "manual_review_required"]
+    },
     "required_action": {
       "type": "string",
       "enum": ["none", "replay_required", "invalidate_old_claim"]

@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -176,8 +177,6 @@ _SUPPORTED_SCHEMA_KEYS = {
     "items",
     "format",
     "pattern",
-    "title",
-    "$schema",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "quant"
 
@@ -286,9 +285,14 @@ def _validate_against_schema(
             raise SchemaValidationError(f"{path} has invalid enum value {value!r}")
     pattern = schema.get("pattern")
     if pattern is not None and isinstance(value, str):
-        import re
-
-        if not re.search(str(pattern), value):
+        try:
+            compiled = re.compile(str(pattern))
+        except re.error as exc:
+            raise SchemaValidationError(
+                f"{path} schema declares an invalid regex pattern "
+                f"{pattern!r}: {exc}"
+            ) from exc
+        if not compiled.search(value):
             raise SchemaValidationError(
                 f"{path} does not match pattern {pattern!r}"
             )

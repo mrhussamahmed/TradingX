@@ -147,6 +147,40 @@ def test_schema_validator_rejects_version_drift_refs_and_bad_decimal_format() ->
         )
 
 
+def test_invalid_regex_pattern_raises_schema_validation_error() -> None:
+    """Malformed schema patterns must surface as ``SchemaValidationError``,
+    not as raw ``re.error`` from the validator internals."""
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "BadPattern",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name"],
+        "properties": {
+            "name": {"type": "string", "pattern": "[unterminated"},
+        },
+    }
+    with pytest.raises(SchemaValidationError, match="invalid regex pattern"):
+        validate_quant_artifact({"name": "anything"}, schema=schema)
+
+
+def test_pattern_validates_when_regex_is_well_formed() -> None:
+    """Sanity check that valid patterns continue to enforce."""
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GoodPattern",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["code"],
+        "properties": {
+            "code": {"type": "string", "pattern": r"^[A-Z]{3}$"},
+        },
+    }
+    validate_quant_artifact({"code": "ABC"}, schema=schema)
+    with pytest.raises(SchemaValidationError, match="does not match pattern"):
+        validate_quant_artifact({"code": "abc"}, schema=schema)
+
+
 def test_required_wave1_quant_schemas_validate_canonical_samples() -> None:
     samples = {
         "strategy_capability_manifest": {

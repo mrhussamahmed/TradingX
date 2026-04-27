@@ -125,14 +125,18 @@ def probabilistic_sharpe_ratio(
 
     if sample_size <= 1:
         raise ValueError("sample_size must be greater than 1.")
-    # Bailey & López de Prado (2012), eq.(5). The denominator uses
-    # ``(γ4 - 1)/4`` where γ4 is the excess kurtosis. Defect 4 renamed
-    # the parameter so callers no longer have to remember that the
-    # ``kurtosis`` argument expected an excess-kurtosis value.
+    # Bailey & López de Prado (2012), eq.(5). The published denominator
+    # uses ``(γ4 - 1)/4`` where γ4 is the RAW kurtosis (= 3 for normal
+    # returns). Expressed in excess-kurtosis form (γ4_excess = γ4 - 3),
+    # the same term becomes ``(γ4_excess + 2)/4`` — which collapses to
+    # the canonical Lo (2002) ``Var[SR] = (1 + SR² / 2)/(n - 1)`` for
+    # normal returns. The earlier ``(excess_kurtosis - 1)/4`` form was a
+    # rename without an algebraic update and produced a negative
+    # contribution for normal returns, biasing PSR upward.
     denominator = (
         1.0
         - (skewness * observed_sharpe)
-        + (((excess_kurtosis - 1.0) / 4.0) * (observed_sharpe**2))
+        + (((excess_kurtosis + 2.0) / 4.0) * (observed_sharpe**2))
     )
     if denominator <= 0:
         raise ValueError("PSR denominator must be positive.")

@@ -538,3 +538,55 @@ def test_recertification_report_with_stale_run_refs_blocks_live_probe_promotion(
     codes = [blocker.code for blocker in blockers]
     assert "post_probe_recertification_missing" in codes
 
+
+def test_recertification_run_refs_match_across_canonical_namespaces() -> None:
+    """Defect 3 hardening — namespace alone must not break linkage.
+
+    A live_probe_run_record carries a bare ``run_id`` while a
+    recertification_report typically references runs via ``cas://``
+    indirection. The cross-bundle check normalises both sides so the
+    bundle is linked when the underlying identifier matches.
+    """
+
+    run = build_live_probe_run_record(
+        run_id="run-real",
+        plan_id="lp-001",
+        strategy_id="trend-following-v1",
+        status="pass",
+        order_count=20,
+        fill_count=20,
+        filled_notional=Decimal("800"),
+        session_count=2,
+        reconciliation_cycle_count=4,
+        slippage_summary_ref="cas://slip-001",
+        quote_quality_summary_ref="cas://qq-001",
+        limit_breach_count=0,
+        rollback_triggered=False,
+        success_criteria_met=True,
+        minimum_activity_met=True,
+        evidence_refs=["cas://run-evidence-001"],
+        started_at_utc=NOW,
+        completed_at_utc=NOW + timedelta(hours=1),
+    )
+    cas_recert = build_live_probe_recertification_report(
+        report_id="rec-004",
+        strategy_id="trend-following-v1",
+        run_refs=["cas://run-real"],
+        incident_refs=[],
+        unresolved_incident_refs=[],
+        minimum_activity_status="met",
+        drill_status="fresh",
+        broker_timeout_status="defined",
+        idempotency_status="complete",
+        reconciliation_status="complete",
+        cost_observation_refs=["cas://cost-001"],
+        approved_at_utc=NOW,
+        approver="ops-lead",
+        generated_at_utc=NOW,
+    )
+    blockers = evaluate_live_probe_blockers(
+        artifact_payloads=(run, cas_recert)
+    )
+    codes = [blocker.code for blocker in blockers]
+    assert "post_probe_recertification_missing" not in codes
+

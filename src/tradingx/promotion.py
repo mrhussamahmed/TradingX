@@ -872,7 +872,7 @@ _WAVE_4_TO_10_OVERRIDES: tuple[tuple[str, str, str, str, str], ...] = (
         "dsr_pbo_inputs_incomplete",
         "wave_4",
         "evaluate_statistical_evidence_blockers",
-        "test_excess_kurtosis_normalisation_matches_bldp_paper",
+        "test_psr_normal_returns_collapses_to_lo_2002_variance",
         "promotion-check.statistical_blockers",
     ),
     (
@@ -2883,9 +2883,17 @@ def evaluate_live_probe_blockers(
         _append_blocker(blockers, "post_probe_recertification_missing")
     # Defect 3 — cross-bundle linkage: every observed run_id must appear
     # in at least one live_probe_recertification_report.run_refs set.
+    # Matching tolerates a single canonical-namespace prefix (``cas://``
+    # or ``run-``) so a recert report that uses the cas:// indirection
+    # form still matches the bare run_id from the run record. Anything
+    # else fails closed.
     if has_run_record and has_recertification and observed_run_ids:
-        certified = set().union(*recert_run_ref_sets) if recert_run_ref_sets else set()
-        if not observed_run_ids.issubset(certified):
+        certified_raw = (
+            set().union(*recert_run_ref_sets) if recert_run_ref_sets else set()
+        )
+        certified = {_canonical_run_ref(ref) for ref in certified_raw}
+        observed = {_canonical_run_ref(ref) for ref in observed_run_ids}
+        if not observed.issubset(certified):
             _append_blocker(blockers, "post_probe_recertification_missing")
     return tuple(blockers)
 
@@ -3022,14 +3030,26 @@ def evaluate_change_control_blockers(
     if has_change_requiring_recert and not has_recertification_report:
         _append_blocker(blockers, "recertification_report_missing")
     # Defect 3 — when both sides are present, the recertification_report
-    # must reference (via change_id) one of the change_control_record
+    # must reference (via change_id) ALL of the change_control_record
     # entries that required recertification. A stale or missing change_id
-    # means the report does not certify any of the actual changes.
+    # means the report does not certify the actual change set. ``all``
+    # (not ``any``) closes the loophole where one matching ID covers
+    # arbitrarily many open changes.
     if has_change_requiring_recert and has_recertification_report:
-        if required_change_ids and not any(
-            cid in required_change_ids for cid in recert_change_ids if cid
+        cleaned_recert_ids = {cid for cid in recert_change_ids if cid}
+        if required_change_ids and not required_change_ids.issubset(
+            cleaned_recert_ids
         ):
             _append_blocker(blockers, "recertification_report_missing")
+    # Defect 3 follow-up — a recertification_report that *claims* to
+    # certify a specific change (non-empty ``change_id``) but ships
+    # WITHOUT any matching change_control_record cannot certify what it
+    # claims. Periodic recertification reports (no ``change_id``) remain
+    # valid because they recertify the strategy as a whole, not a
+    # specific change.
+    cleaned_recert_ids = {cid for cid in recert_change_ids if cid}
+    if cleaned_recert_ids and not required_change_ids:
+        _append_blocker(blockers, "unrecorded_material_change")
     return tuple(blockers)
 
 
@@ -3832,6 +3852,23 @@ def _optional_state(value: object) -> PromotionState | None:
 
 def _normal_form(value: object) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _canonical_run_ref(value: object) -> str:
+    """Strip transport-layer prefixes from a run reference.
+
+    Defect 3 cross-bundle linkage: live_probe_run_record.run_id is a
+    bare identifier (e.g. ``probe-2026-04-15``), while
+    live_probe_recertification_report.run_refs may carry a content-
+    addressed prefix (``cas://probe-2026-04-15``). Normalise both sides
+    to the bare identifier so a namespace difference alone does not
+    silently break the linkage check.
+    """
+    text = str(value or "").strip()
+    for prefix in ("cas://", "ledger://", "artifact://"):
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text
 
 
 def _is_unknown(value: object) -> bool:

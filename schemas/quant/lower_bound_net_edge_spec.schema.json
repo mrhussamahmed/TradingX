@@ -40,8 +40,14 @@
     "confidence_level": {"type": "string", "format": "decimal-string"},
     "return_horizon": {"type": "string"},
     "benchmark_pairing": {"type": "string"},
-    "serial_dependence_correction": {"type": "string"},
-    "fat_tail_treatment": {"type": "string"},
+    "serial_dependence_correction": {
+      "type": "string",
+      "enum": ["HAC", "block_bootstrap", "none"]
+    },
+    "fat_tail_treatment": {
+      "type": "string",
+      "enum": ["block_bootstrap_stress", "stationary_bootstrap", "none"]
+    },
     "minimum_effective_sample_size": {"type": "integer"},
     "prior_policy": {"type": "string"},
     "stress_inputs": {"type": "array", "items": {"type": "string"}},

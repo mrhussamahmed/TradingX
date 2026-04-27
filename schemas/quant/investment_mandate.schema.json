@@ -65,8 +65,14 @@
     "liquidity_policy": {"type": "string"},
     "tax_modeled": {"type": "boolean"},
     "tax_account_type": {"type": "string"},
-    "pre_tax_or_after_tax": {"type": "string"},
-    "taxable_or_tax_exempt_status": {"type": "string"},
+    "pre_tax_or_after_tax": {
+      "type": "string",
+      "enum": ["pre_tax", "after_tax"]
+    },
+    "taxable_or_tax_exempt_status": {
+      "type": "string",
+      "enum": ["taxable", "tax_exempt"]
+    },
     "tax_assumptions": {"type": "string"},
     "fx_policy": {"type": "string"},
     "margin_policy": {"type": "string"},
