@@ -447,6 +447,42 @@ def test_build_recertification_report_is_deterministic_given_now_utc() -> None:
     assert before == repeat
 
 
+def test_build_recertification_report_pinning_now_utc_alone_is_deterministic() -> None:
+    """bug_005 follow-up — pinning ``now_utc`` without also pinning
+    ``generated_at_utc`` must still produce a deterministic artifact.
+    Earlier the builder fell back to wall-clock time for
+    ``generated_at_utc`` when only ``now_utc`` was supplied, breaking
+    content-addressed-storage hashes across rebuilds.
+    """
+
+    common = {
+        "report_id": "recert-002",
+        "strategy_id": "trend-following-v1",
+        "production_state_before": "production",
+        "production_state_after": "production",
+        "reason": "monthly review",
+        "authority_boundary_ref": "cas://ab-001",
+        "risk_accepted": True,
+        "evidence_refs": ["cas://evidence-001"],
+        "freshness_status": "fresh",
+        "statistical_status": "valid",
+        "cost_capacity_status": "valid",
+        "optimizer_status": "valid",
+        "live_probe_status": "valid",
+        "drift_status": "nominal",
+        "incident_status": "resolved",
+        "approval_status": "approved",
+        "approver": "ops-lead",
+        "production_expires_at_utc": LATER,
+        "next_operational_review_due_utc": LATER,
+        "next_statistical_review_due_utc": LATER,
+    }
+    first = build_recertification_report(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    second = build_recertification_report(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    assert first == second
+    assert first["generated_at_utc"] == NOW.isoformat()
+
+
 def test_build_drift_monitor_spec_is_deterministic_given_now_utc() -> None:
     common = {
         "spec_id": "drift-001",

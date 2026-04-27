@@ -67,6 +67,26 @@ def lo_adjusted_sharpe_ratio(
     periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
     autocorrelation_lags: int = DEFAULT_AUTOCORRELATION_LAGS,
 ) -> float | None:
+    """Lo (2002) annualised Sharpe ratio with HAC autocorrelation adjustment.
+
+    Uses Bartlett (Newey-West 1987) triangular weights ``w_k = 1 - k/(m+1)``
+    where ``m`` is ``autocorrelation_lags`` (the truncation lag). The
+    ``m+1`` denominator is the canonical Newey-West convention and matches
+    ``effective_sample_size_lo_signed`` so both HAC paths apply the same
+    penalty.
+
+    bug_001 — earlier code used ``1 - k/m`` which gives the highest lag a
+    weight of zero (effectively dropping it) and disagreed with the ESS
+    path. The convention switch is mathematically the right call but
+    changes observable output for series with strong, persistent
+    autocorrelation: returns whose adjusted variance under the corrected
+    weights is non-positive (e.g. tightly mean-reverting pairs spreads or
+    short-side strategies with strong negative lag-1 autocorrelation) now
+    return ``None`` instead of a finite Sharpe. Callers consuming this in
+    production should expect intermittent ``None`` for such series and
+    treat that as "Sharpe undefined", not as a regression.
+    """
+
     excess_returns = _excess_returns(
         returns=returns,
         risk_free_daily_rates=risk_free_daily_rates,

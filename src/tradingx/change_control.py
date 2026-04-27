@@ -177,6 +177,13 @@ def build_recertification_report(
 ) -> dict[str, object]:
     blocker_codes: list[str] = []
     now = (now_utc or datetime.now(UTC)).astimezone(UTC)
+    # bug_005 follow-up — when ``generated_at_utc`` is omitted, fall back to
+    # the resolved ``now`` so a single ``now_utc`` pin propagates to the
+    # artifact stamp. Without this fallback, pinning ``now_utc`` alone
+    # leaves ``generated_at_utc`` reading the wall clock and breaks
+    # content-addressing across rebuilds.
+    if generated_at_utc is None:
+        generated_at_utc = now
     if production_expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "production_approval_expired")
     if next_operational_review_due_utc.astimezone(UTC) <= now:

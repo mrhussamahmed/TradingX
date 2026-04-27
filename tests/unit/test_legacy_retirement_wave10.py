@@ -6,7 +6,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tradingx.authority import validate_quant_artifact
+import pytest
+
+from tradingx.authority import SchemaValidationError, validate_quant_artifact
 from tradingx.legacy_retirement import (
     build_legacy_artifact_migration_report,
     classify_legacy_artifact,
@@ -154,3 +156,88 @@ def test_evaluate_legacy_retirement_blockers_passes_clean_bundle() -> None:
     )
     blockers = evaluate_legacy_retirement_blockers(artifact_payloads=(clean,))
     assert blockers == ()
+
+
+def test_evaluate_legacy_retirement_blockers_rejects_negative_count_bypass() -> None:
+    """bug_014 follow-up — a tampered payload claiming negative
+    ``summary_counts`` must not bypass ``legacy_artifacts_detected`` when
+    the ``classified_artifacts`` list still contains legacy/invalid
+    entries. The evaluator now re-derives from ``classified_artifacts``
+    and clips ``summary_counts`` at zero."""
+
+    from tradingx.promotion import evaluate_legacy_retirement_blockers
+
+    tampered = {
+        "kind": "legacy_artifact_migration_report",
+        "summary_counts": {"legacy": -5, "invalid": -2},
+        "blocker_codes": [],
+        "classified_artifacts": [
+            {
+                "classification": "legacy",
+                "artifact_ref": "cas://ga-001",
+                "reason": "legacy_kind",
+            }
+        ],
+    }
+    codes = [
+        blocker.code
+        for blocker in evaluate_legacy_retirement_blockers(
+            artifact_payloads=(tampered,)
+        )
+    ]
+    assert "legacy_artifacts_detected" in codes
+
+
+def test_evaluate_legacy_retirement_blockers_rejects_summary_classified_mismatch() -> (
+    None
+):
+    """bug_014 follow-up — a tampered payload that zeroes ``summary_counts``
+    while leaving legacy/invalid entries in ``classified_artifacts`` must
+    not bypass detection. The evaluator now treats
+    ``classified_artifacts`` as the source of truth."""
+
+    from tradingx.promotion import evaluate_legacy_retirement_blockers
+
+    inconsistent = {
+        "kind": "legacy_artifact_migration_report",
+        "summary_counts": {"legacy": 0, "invalid": 0, "valid": 0},
+        "classified_artifacts": [
+            {
+                "classification": "legacy",
+                "artifact_ref": "cas://ga-001",
+                "reason": "legacy_kind",
+            },
+            {
+                "classification": "invalid",
+                "artifact_ref": "cas://cm-001",
+                "reason": "blocker_codes_present",
+            },
+        ],
+        "blocker_codes": [],
+    }
+    codes = [
+        blocker.code
+        for blocker in evaluate_legacy_retirement_blockers(
+            artifact_payloads=(inconsistent,)
+        )
+    ]
+    assert "legacy_artifacts_detected" in codes
+
+
+def test_legacy_artifact_migration_report_schema_rejects_negative_counts() -> None:
+    """bug_014 follow-up — the schema must reject ``summary_counts`` with
+    negative integers. Defense-in-depth at the schema layer in addition to
+    the evaluator-level cross-check."""
+
+    schema = _schema("legacy_artifact_migration_report")
+    payload = {
+        "schema_version": "1.0",
+        "kind": "legacy_artifact_migration_report",
+        "report_id": "legacy-neg-1",
+        "generated_at_utc": "2026-04-26T12:00:00+00:00",
+        "classified_artifacts": [],
+        "summary_counts": {"legacy": -1},
+        "blocker_codes": [],
+    }
+    with pytest.raises(SchemaValidationError):
+        validate_quant_artifact(payload, schema=schema)

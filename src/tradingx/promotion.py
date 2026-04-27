@@ -1278,22 +1278,35 @@ def evaluate_legacy_retirement_blockers(
 
     The builder in ``tradingx.legacy_retirement`` appends the blocker
     when the classifier finds legacy/invalid artifacts. The evaluator
-    re-derives the blocker from the report's ``summary_counts`` so a
-    tampered payload claiming ``blocker_codes=[]`` cannot bypass the
-    PAPER_SHADOW cap.
+    re-derives the blocker from the report's ``classified_artifacts``
+    list (the most direct evidence) and clips ``summary_counts`` at zero
+    so a tampered payload claiming ``blocker_codes=[]`` cannot bypass the
+    PAPER_SHADOW cap by sending negative counts or by zeroing out
+    ``summary_counts`` while leaving classified entries in place.
     """
 
     blockers: list[Blocker] = []
     for payload in artifact_payloads:
         if str(payload.get("kind", "")) != "legacy_artifact_migration_report":
             continue
+        classified_legacy_or_invalid = 0
+        classified_artifacts = payload.get("classified_artifacts", ())
+        if isinstance(classified_artifacts, Sequence) and not isinstance(
+            classified_artifacts, str | bytes
+        ):
+            for artifact in classified_artifacts:
+                if isinstance(artifact, Mapping) and artifact.get("classification") in {
+                    "legacy",
+                    "invalid",
+                }:
+                    classified_legacy_or_invalid += 1
         summary_counts = payload.get("summary_counts", {})
         legacy_count = 0
         invalid_count = 0
         if isinstance(summary_counts, Mapping):
-            legacy_count = int(summary_counts.get("legacy", 0) or 0)
-            invalid_count = int(summary_counts.get("invalid", 0) or 0)
-        if legacy_count > 0 or invalid_count > 0:
+            legacy_count = max(0, int(summary_counts.get("legacy", 0) or 0))
+            invalid_count = max(0, int(summary_counts.get("invalid", 0) or 0))
+        if classified_legacy_or_invalid > 0 or legacy_count > 0 or invalid_count > 0:
             _append_blocker(blockers, "legacy_artifacts_detected")
         for code in _string_sequence(payload.get("blocker_codes", ())):
             if code in BLOCKER_REGISTRY:

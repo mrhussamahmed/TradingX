@@ -45,7 +45,7 @@
     },
     "summary_counts": {
       "type": "object",
-      "additionalProperties": {"type": "integer"}
+      "additionalProperties": {"type": "integer", "minimum": 0}
     },
     "blocker_codes": {"type": "array", "items": {"type": "string"}}
   }
