@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Evidence Invalidation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "affected_evidence_refs",
+    "affected_experiment_refs",
+    "affected_gate_report_refs",
+    "affected_promotion_decision_refs",
+    "old_dataset_id",
+    "new_dataset_id",
+    "invalidation_reason",
+    "materiality_flags",
+    "dependency_status",
+    "required_action",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "evidence_invalidation_report"},
+    "affected_evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "affected_experiment_refs": {"type": "array", "items": {"type": "string"}},
+    "affected_gate_report_refs": {"type": "array", "items": {"type": "string"}},
+    "affected_promotion_decision_refs": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "old_dataset_id": {"type": "string"},
+    "new_dataset_id": {"type": "string"},
+    "invalidation_reason": {"type": "string"},
+    "materiality_flags": {"type": "array", "items": {"type": "string"}},
+    "dependency_status": {
+      "type": "string",
+      "enum": ["resolved", "unresolved_dependency"]
+    },
+    "required_action": {
+      "type": "string",
+      "enum": ["resolve_dependency_index", "none", "replay_required", "invalidate_old_claim"]
+    },
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

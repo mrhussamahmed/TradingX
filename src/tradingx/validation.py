@@ -22,6 +22,11 @@ from tradingx.evaluation import (
     AdversarialCheckContext,
     evaluate_candidate,
 )
+from tradingx.experiments import (
+    MetricVisibilityContext,
+    apply_metric_visibility_to_report,
+    build_metric_visibility_blocked_gate_report,
+)
 from tradingx.features.regime import classify_regime
 from tradingx.pbo import cohort_window_id_for
 from tradingx.persistence import FilesystemArtifactStore
@@ -991,7 +996,32 @@ def build_gate_report(
     window_end_utc: datetime,
     gate1_pbo_payload: tuple[Decimal, str] | None = None,
     trials_ledger: TrialsLedger | None = None,
+    metric_visibility_context: MetricVisibilityContext | None = None,
+    dataset_manifest_id: str | None = None,
 ) -> ValidationReport:
+    benchmark_symbol = "+".join(
+        symbol for symbol, _ in benchmark_stack_payload.opportunity_cost_weights
+    )
+    active_trials_ledger = (
+        None
+        if metric_visibility_context is not None
+        and metric_visibility_context.promotion_valid
+        else trials_ledger
+    )
+    if (
+        metric_visibility_context is not None
+        and metric_visibility_context.promotion_valid
+        and not metric_visibility_context.is_released
+    ):
+        return build_metric_visibility_blocked_gate_report(
+            gate_id=gate_id,
+            candidates=candidates,
+            benchmark_symbol=benchmark_symbol,
+            window_start_utc=window_start_utc,
+            window_end_utc=window_end_utc,
+            context=metric_visibility_context,
+            dataset_manifest_id=dataset_manifest_id,
+        )
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
     benchmark_returns = benchmark_stack_payload.opportunity_cost_returns
     base_cost_model_config = CostModelConfig()
@@ -1057,7 +1087,7 @@ def build_gate_report(
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
                 gate1_pbo_payload=gate1_pbo_payload,
-                trials_ledger=trials_ledger,
+                trials_ledger=active_trials_ledger,
             )
             pass1_results[candidate.candidate_id] = result
             pass1_packs[candidate.candidate_id] = pack
@@ -1098,7 +1128,7 @@ def build_gate_report(
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
                 base_cost_model_config=base_cost_model_config,
-                trials_ledger=trials_ledger,
+                trials_ledger=active_trials_ledger,
             )
             candidate_results.append(final_result)
     elif gate_id == "2":
@@ -1121,7 +1151,7 @@ def build_gate_report(
                 window_start_utc=window_start_utc,
                 window_end_utc=window_end_utc,
                 adversarial_context=adversarial_context,
-                trials_ledger=trials_ledger,
+                trials_ledger=active_trials_ledger,
             )
             candidate_results.append(result)
     else:
@@ -1135,14 +1165,12 @@ def build_gate_report(
         report_status = "pending"
 
     report_timestamp = datetime.now(UTC)
-    return ValidationReport(
+    report = ValidationReport(
         report_id=f"gate-{gate_id}-{report_timestamp.strftime('%Y%m%dT%H%M%SZ')}",
         gate_id=gate_id,
         generated_at_utc=report_timestamp,
         status=report_status,
-        benchmark_symbol="+".join(
-            symbol for symbol, _ in benchmark_stack_payload.opportunity_cost_weights
-        ),
+        benchmark_symbol=benchmark_symbol,
         window_start_utc=window_start_utc,
         window_end_utc=window_end_utc,
         candidate_results=tuple(candidate_results),
@@ -1157,6 +1185,11 @@ def build_gate_report(
             "portfolio weights are normalized to max gross exposure 1.0 before replay",
         ),
         evidence_refs=tuple(result.evidence_pack_id for result in candidate_results),
+    )
+    return apply_metric_visibility_to_report(
+        report,
+        context=metric_visibility_context,
+        dataset_manifest_id=dataset_manifest_id,
     )
 
 

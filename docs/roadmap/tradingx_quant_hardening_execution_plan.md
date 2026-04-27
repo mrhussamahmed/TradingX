@@ -207,7 +207,8 @@ Every strategy must declare:
 - short dividend liability assumption
 - whether results are pre-tax or after-tax
 
-`capacity_extrapolation_risk` blocks `production`.
+`capacity_extrapolation_risk` caps evidence at `paper_shadow` and blocks
+`production`.
 
 `unspecified` tax/account/financing caps evidence at `paper_shadow`.
 
@@ -1881,33 +1882,1196 @@ Existing production/paper approvals without recertification metadata become `leg
 - Monthly/quarterly recertification artifacts exist.
 - Golden replay reproduces valid, stale, invalidated, unrecorded, and recertified outcomes from artifacts alone.
 
-## Initial Implementation Order
+## Review-Grade Implementation Plan
 
-Milestone 0 is the policy layer that capital-bearing promotion must satisfy. Its authority-bearing artifacts depend on the Milestone 1 trust spine, so technical bootstrapping starts with Milestone 1.
+This section is the executable program for implementing the locked
+milestones above. The plan is intentionally conservative: each wave adds
+classification, blockers, replay, and operator-visible refusal before it
+adds any path that can advance a strategy state.
 
-The first technical implementation slice is Milestone 1 only, and it must include the full enforcement chain:
+The plan is written for adversarial scientific, architecture,
+engineering, security, and operations review. Reviewers should be able to
+reconstruct each claim from code, tests, fixtures, schemas, artifacts,
+and command output without trusting narrative.
+
+### Current-Code Baseline
+
+This plan assumes the current repository state has these implemented
+foundations:
+
+- Python package `tradingx` targets Python 3.11 through 3.12 and uses
+  `pytest`, `ruff`, `black`, and strict `mypy` through `pyproject.toml`.
+- Runtime activation currently lives in
+  `src/tradingx/activation.py` through `LocalActivationGateway`,
+  filesystem strategy activation records, approved weight snapshots, and
+  blueprint activations.
+- Existing live trading enablement is intentionally disabled by layered
+  controls in `src/tradingx/live_enablement.py` and
+  `src/tradingx/config.py`.
+- Existing pre-trade risk controls live in `src/tradingx/risk.py` and
+  cover liquidity, price floor, concentration, intraday buying power,
+  stale market data, stale broker state, kill switch, and live-mode
+  refusal.
+- The week-1 OMS journal is append-only SQLite in
+  `src/tradingx/journal.py`, but it is not the V5 authority ledger
+  described here.
+- Current validation uses `src/tradingx/validation.py`,
+  `src/tradingx/evaluation.py`, `src/tradingx/trials.py`,
+  `src/tradingx/pbo.py`, and existing `EvaluationEvidencePack`,
+  `TrialsLedger`, CPCV, and PBO dataclasses.
+- The headless-control-plane work already provides Postgres migration,
+  repository, outbox, projection-state, runtime projector, and documents
+  projector patterns under `src/tradingx/controlplane/` and
+  `src/tradingx/persistence/repositories/`.
+
+This plan also assumes the following quant-hardening components do not
+exist yet and must be introduced rather than retroactively assumed:
+
+- `src/tradingx/promotion.py`
+- `src/tradingx/experiments.py`
+- `src/tradingx/data_fingerprint.py`
+- `src/tradingx/change_control.py`
+- `schemas/quant/*.schema.json`
+- `config/strategy/capabilities/<strategy_id>.json`
+- `config/strategy/promotion/<strategy_id>.json`
+- `tests/fixtures/promotion/`
+- `artifacts/quant/ledger/`
+- `artifacts/quant/store/`
+
+If implementation discovers any baseline mismatch, the first commit in
+the wave must update this plan or record an amendment before code lands.
+
+### External Constraints To Revalidate
+
+The external sources below are planning constraints, not legal advice.
+Every implementation wave that touches broker, short-sale, advisory,
+software-supply-chain, or key-management behavior must re-check the
+current official source during that wave and record a replayable
+`external_source_snapshot` artifact. The artifact must include
+`retrieved_at_utc`, URL, `canonical_text_ref` or
+`raw_snapshot_artifact_ref` to the retained payload, canonical-text hash,
+source version/status where available, exact mapped requirement, and the
+design/schema/test artifact that consumes the requirement. A retrieval
+date or hash without a retained content-addressed payload is not
+reviewable.
+
+- SEC Rule 15c3-5 market-access controls:
+  <https://www.sec.gov/rules-regulations/staff-guidance/trading-markets-frequently-asked-questions/divisionsmarketregfaq-0>
+- SEC Regulation SHO short-sale locate and close-out guidance:
+  <https://www.sec.gov/investor/pubs/regsho.htm>
+- SEC investment-adviser marketing and hypothetical-performance guide:
+  <https://www.sec.gov/resources-small-businesses/small-business-compliance-guides/investment-adviser-marketing>
+- NIST key-management guidelines:
+  <https://csrc.nist.gov/Projects/key-management/key-management-guidelines>
+- NIST SP 800-218 Secure Software Development Framework:
+  <https://csrc.nist.gov/pubs/sp/800/218/final>
+- SLSA provenance model:
+  <https://slsa.dev/spec/v1.2/provenance>
+- CFTC automated-trading risk-controls concept release, relevant only if
+  TradingX later expands into futures, swaps, or derivatives venues:
+  <https://www.cftc.gov/PressRoom/PressReleases/6683-13>
+
+### Implementation Doctrine
+
+The governing implementation rule is:
 
 ```text
-schema -> artifact -> blocker -> CLI report -> activation refusal -> golden replay
+red test -> schema -> canonical artifact -> immutable storage ->
+blocker evaluator -> CLI report -> activation/runtime refusal ->
+golden replay -> docs and review pack
 ```
 
-For Milestone 1 specifically, that means:
+No wave may end with only a schema, only a CLI, only documentation, or
+only a happy-path artifact. A wave is complete only when it can prove one
+promotion-valid path and one fail-closed path from retained artifacts
+alone.
+
+Every new authority path must be disabled by default. The first behavior
+for each missing evidence class is classification and refusal, not
+promotion.
+
+### Blocker Registry And Coverage Matrix
+
+Blocker codes are authority data, not ad hoc strings. Wave 1 must create
+a canonical blocker registry and generated coverage matrix before any
+new promotion decision can be trusted.
+
+Each blocker entry must declare:
+
+- blocker code
+- max promotion state
+- exact condition
+- remediation path
+- owning wave
+- migration behavior for legacy artifacts
+- schema field or artifact source
+- evaluator function
+- red test and fixture IDs
+- CLI/report output field
+- runtime enforcement point, or explicit `not_runtime_applicable`
+
+The generated matrix is:
 
 ```text
-ledger schema -> signed decision/evidence fixture -> blocker evaluator -> promotion-check CLI -> activation refusal -> projection-drift and replay fixtures
+blocker -> max_state -> schema field -> evaluator -> red test ->
+fixture -> CLI output -> runtime enforcement point
+```
+
+No red test, fixture, schema, CLI report, runtime refusal, web read model,
+or documentation example may emit a blocker absent from the registry. The
+first registry seed must include every blocker-like code already named in
+this roadmap, including `capacity_extrapolation_risk`,
+`unsupported_side`, `short_support_missing`, `pending_threshold`,
+`legacy_statistical_evidence`, `unsupported_cost_bucket`,
+`unrecorded_material_change`, and `dependency_scope_unresolved`. A wave
+may tighten a provisional cap, but it may not emit a looser cap than the
+registry declares.
+
+The first Wave 1A registry fixture must seed at least these provisional
+entries:
+
+| Code | Initial Max State | Condition | Remediation And Migration |
+|---|---|---|---|
+| `capacity_extrapolation_risk` | `paper_shadow` | Target scale is outside validated capacity range or relies on unsupported extrapolation. | Add lower-bound capacity evidence at intended scale or reduce target scale; legacy capacity claims remain non-production. |
+| `unsupported_side` | `research_only` | Strategy emits a side or exposure sign not supported by the state-action or instrument contract. | Redesign to supported semantics or add capability package; legacy negative-side artifacts stay diagnostic. |
+| `short_support_missing` | `research_only` | Negative or short exposure lacks complete short capability, locate, borrow, financing, and broker semantics. | Complete short-side package or redesign long-only; legacy short evidence is research-only. |
+| `pending_threshold` | `paper_shadow` | Required threshold justification is absent or was declared after metric exposure. | Add signed pre-metric threshold or rerun through a clean lockbox; old reports cannot hard-pass. |
+| `legacy_statistical_evidence` | `paper_shadow` | Old evidence lacks required registered trial universe, power, bootstrap, paired benchmark, or full PBO artifacts. | Rerun registered validation; old evidence remains diagnostic only. |
+| `unsupported_cost_bucket` | `paper_shadow` | Intended execution bucket lacks powered samples and no defensible fallback exists. | Collect bucket evidence, define conservative fallback, or exclude the route; old cost claim is invalid for promotion. |
+| `unrecorded_material_change` | `paper_shadow` | Current approved code, data, config, schema, broker, or evidence hash differs without a change-control record. | Add change-control record, resolve impact, and recertify; production approval decays until resolved. |
+| `dependency_scope_unresolved` | `paper_shadow` | A change or restatement cannot be mapped to affected evidence and decisions. | Resolve dependency index coverage; affected approvals cannot remain production-valid. |
+
+### Target Architecture
+
+Implement quant hardening as six bounded subsystems:
+
+| Subsystem | Responsibility | Initial Files |
+|---|---|---|
+| Quant Authority Plane | Canonical JSON, content addressing, artifact store, append-only authority ledger, signatures, approval identities, role registry, key/WORM policy checks. | `src/tradingx/promotion.py`, `src/tradingx/authority.py`, `schemas/quant/*`, `artifacts/quant/*` |
+| Promotion Decision Engine | Evaluate manifests, evidence, authority records, state-action contracts, blockers, strictest-cap logic, and replayability. | `src/tradingx/promotion.py`, `src/tradingx/activation.py`, `src/tradingx/runtime_portfolio.py` |
+| Evidence Producers | Register experiments, data manifests, validation reports, cost/capacity reports, optimizer reports, short reports, live-probe reports, recertification reports. | Existing evidence modules plus new milestone modules |
+| Runtime Enforcement Adapters | Convert promotion decisions into activation refusal, order-route refusal, planner refusal, short-side refusal, and live-probe refusal. | `src/tradingx/activation.py`, `src/tradingx/risk.py`, `src/tradingx/execution.py`, `src/tradingx/live_enablement.py` |
+| Operator And Web Surfaces | Display legacy, exploratory, blocked, and promotable evidence without implying authority from UI state, cached projections, or old gate artifacts. | `src/tradingx/web/app.py`, `src/tradingx/web/readmodels.py`, `src/tradingx/reporting.py` |
+| Review And Replay Surface | CLI reports, golden replays, invariant coverage reports, migration reports, and review handoffs. | `src/tradingx/__main__.py`, `tests/fixtures/*`, `docs/superpowers/plans/*` |
+
+Authority-bearing data must flow in one direction:
+
+```text
+raw inputs -> canonical artifact -> content address -> ledger record
+-> promotion decision -> mutable projection -> runtime refusal/use
+```
+
+The reverse direction is illegal. Runtime files, mutable projections, UI
+state, web read models, web actions, or local config may display
+decisions, but cannot authorize them. Until a V5 promotion decision
+exists, web and report surfaces must label legacy gate artifacts as
+legacy or exploratory and must not render them as promotion authority.
+
+### Formal Invariants
+
+Implementation is not accepted until these invariants have executable
+tests:
+
+1. Mutable projection files never increase authority.
+2. Missing authority artifacts fail closed.
+3. Missing retained replay inputs make hashes insufficient.
+4. Strictest blocker cap always wins.
+5. State-action contracts are enforced before activation and before any
+   order-capable route.
+6. Negative weights are never silently clipped into promotable long-only
+   behavior.
+7. Evidence class can only stay the same or degrade after restatement,
+   replay failure, missing input, or unrecorded material change.
+8. Approval records expire and are scoped; expired approval is no
+   approval.
+9. Key-management or WORM-control gaps disable authority-bearing
+   promotion.
+10. Research evidence can remain useful for diagnosis without becoming
+    promotable.
+11. Every CLI report must be reproducible from artifacts without
+    network access unless the command is explicitly an ingestion command.
+12. No CLI or runtime path may treat `approved_by`, free-text notes, or
+    mutable config as signed authority.
+13. Canonical JSON hashing is stable across process, platform, key
+    order, decimal formatting, and timezone normalization.
+14. Runtime refusal messages expose blocker codes and artifact refs, but
+    never leak secrets or signing material.
+15. A failed migration never deletes or rewrites prior authority
+    artifacts.
+16. Web read models and web actions never infer promotion state from
+    legacy validation reports, gate reports, or UI-local status.
+17. Every emitted blocker code is present in the canonical blocker
+    registry and has generated coverage from schema source through
+    runtime or report enforcement.
+18. Approval signatures are cryptographically verified against an
+    explicit trust root; placeholder or fixture signatures are never
+    accepted outside test roots.
+19. Every order-capable route has a deny-by-default authority guard from
+    the first governance slice, even when full live-probe tokens are
+    implemented later.
+
+### Wave 0: Plan Anchoring And Baseline Audit
+
+Goal: make the implementation start from measured reality.
+
+Deliverables:
+
+- Add or update a review handoff document under
+  `docs/superpowers/plans/` that records the exact current branch,
+  commit SHA, repo status, Python version, and validation command
+  results.
+- Inventory current authority-like data paths: strategy activations,
+  approved weights, filesystem artifacts, SQLite OMS journal, Postgres
+  outbox, projection status, validation evidence, PBO reports, and live
+  disablement state.
+- Inventory current metric-producing and promotion-implying surfaces:
+  `gate-report`, `GateValidationController`, `build_gate_report`,
+  `reporting.py`, web gate actions, web runtime report generation, web
+  read models, structured logs, and artifact writers.
+- Inventory current blocker-like strings in roadmap, code, tests,
+  fixtures, CLI outputs, and web/report payloads, and record which ones
+  are missing deterministic caps.
+- Record a gap map from existing paths to V5 authority requirements.
+- Define the first implementation branch. Use `codex/` prefix unless a
+  human operator specifies otherwise.
+
+Tests and checks:
+
+- `uv run pytest tests/unit/test_activation.py tests/unit/test_live_enablement.py tests/unit/test_risk.py tests/unit/test_pbo_compute.py`
+- `uv run pytest tests/unit/test_controlplane_repository_contracts.py tests/unit/test_controlplane_runtime_projector.py`
+- `uv run mypy src/tradingx`
+- `uv run ruff check .`
+
+Exit criteria:
+
+- Current behavior is documented as baseline, not implied.
+- All existing tests selected for baseline pass or the review handoff
+  records exact failures and why implementation must not proceed before
+  they are fixed.
+
+### Wave 1: Governance Spine First Slice
+
+Goal: implement Milestone 1 as the first end-to-end trust spine.
+
+Write scope:
+
+- `src/tradingx/promotion.py`
+- `src/tradingx/authority.py`
+- `src/tradingx/types.py`
+- `src/tradingx/activation.py`
+- `src/tradingx/runtime_portfolio.py`
+- `src/tradingx/portfolio/live_construction.py`
+- `src/tradingx/web/app.py`
+- `src/tradingx/web/readmodels.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/*.schema.json`
+- `schemas/quant/blocker_registry.schema.json`
+- `schemas/quant/trust_root.schema.json`
+- `tests/fixtures/promotion/`
+- `tests/unit/test_promotion.py`
+- `tests/unit/test_authority.py`
+- `tests/unit/test_blocker_registry.py`
+- `tests/unit/test_execution_authority.py`
+- `tests/integration/test_promotion_activation.py`
+- `tests/unit/test_web_readmodels.py`
+- `tests/contract/test_local_web_app_api_contract.py`
+
+Review slicing:
+
+Wave 1 must merge in reviewable subwaves, each with its own review
+package and no hidden authority increase:
+
+1. Wave 1A: blocker registry, canonical hashing, schema strategy, and
+   content-addressed store.
+2. Wave 1B: ledger append safety, cryptographic signatures, trust roots,
+   key scope, revocation, and rotation tests.
+3. Wave 1C: blocker evaluator, state-action contracts, generated
+   coverage matrix, and `promotion-check` CLI.
+4. Wave 1D: activation refusal, deny-by-default order-route guard, web
+   non-authority labeling, projection-drift fixtures, and golden replay.
+
+Design tasks:
+
+1. Define the canonical blocker registry and generated coverage matrix.
+   Registry validation must fail when a blocker-like code appears in
+   docs, schemas, fixtures, tests, CLI expected output, web/report
+   payloads, or runtime refusal output without max state, condition,
+   remediation, migration behavior, evaluator, fixture, red test, and
+   enforcement mapping.
+2. Define immutable dataclasses for promotion states, blocker codes,
+   blocker caps, evidence classification, artifact refs, ledger records,
+   approval records, operator identities, role registry refs, key policy,
+   trust roots, state-action contracts, order-route authority checks, and
+   promotion decisions.
+3. Implement canonical JSON serialization with sorted keys, explicit
+   schema version, UTC timestamp normalization, decimal-as-string
+   normalization, and deterministic hashing.
+4. Implement a local content-addressed artifact store interface that can
+   write, read, and verify artifacts by hash. Start with filesystem
+   storage; keep the interface object-storage compatible. Filesystem
+   writes must use a temp-file, file fsync, atomic rename, and parent
+   directory fsync sequence, and must recover safely from leftover temp
+   files or interrupted writes.
+5. Implement an append-only ledger reader/writer that verifies sequence,
+   previous hash, payload hash, approval refs, artifact refs, and replay
+   refs. Do not reuse the OMS SQLite journal as authority. Ledger append
+   must take an exclusive process-safe lock, re-read the tail under the
+   lock, detect stale writer state, reject hash/sequence races, fsync the
+   committed record and directory, and fail closed on corrupt or partial
+   tail records.
+6. Implement cryptographic signature verification against explicit trust
+   roots. A `signature_ref` is not authority unless the payload signature
+   verifies against a trusted key, signer scope covers the artifact and
+   requested action, the key is within validity bounds, and no revocation
+   or rotation rule invalidates it. Placeholder signatures and test-only
+   keys must be rejected outside fixture roots.
+7. Implement schema validation for quant artifacts. Prefer a real JSON
+   Schema validator. If the repository avoids a new dependency, the tiny
+   validator is accepted only as a closed-world typed-artifact validator
+   with a documented supported-keyword subset and tests for unknown
+   fields, required fields, enums, numeric formats, refs, version
+   migration, and unimplemented-keyword rejection. Do not accept
+   unversioned artifacts.
+8. Implement blocker evaluation with deterministic strictest-cap logic.
+9. Implement state-action contract loading and enforcement.
+10. Add a deny-by-default order-route guard at the risk/execution
+    boundary. Until Wave 8 adds full live-probe authority tokens, direct
+    order-capable routes must either run through explicitly labeled
+    legacy paper paths or fail closed as non-V5-authorized.
+11. Implement projection-drift detection for
+   `config/strategy/promotion/<strategy_id>.json`.
+12. Add `promotion-check` CLI with JSON output and human-readable summary.
+13. Wire activation refusal so existing runtime activation cannot proceed
+    when promotion is capped below the requested action contract.
+14. Create golden fixtures for valid, legacy, stale, invalid,
+    projection-drift, unsigned approval, key-policy-missing, sequence-gap,
+    missing-replay-input, and unsupported-short-side cases.
+15. Add web non-authority labeling for existing gate, validation, and
+    promotion-like read models: without a V5 promotion decision, web
+    surfaces must show legacy or exploratory status and must not present
+    old artifacts as promotion approval.
+
+Red tests before implementation:
+
+- Missing `ledger_key_management_policy` yields
+  `ledger_key_worm_controls_missing` and max state `disabled`.
+- Any blocker-like code absent from the registry, or present without
+  generated coverage through schema/evaluator/test/fixture/output/
+  enforcement mapping, fails CI.
+- Hand-editing a promotion projection to `production` yields projection
+  drift and does not increase authority.
+- Missing retained replay input yields `replay_path_missing`.
+- Negative mean-reversion weight without short package yields
+  `unsupported_side` or `short_support_missing` and max state
+  `research_only`.
+- A `build_portfolio_cycle_target_weights` or runtime-planning fixture
+  with a negative sleeve target fails before aggregation can drop or
+  normalize the negative value.
+- State-action contract that allows paper orders in `paper_shadow`
+  yields `state_action_contract_missing`.
+- Ledger sequence gap yields authority invalidation.
+- Two concurrent ledger writers cannot both append from the same prior
+  tail; one succeeds and the other retries or fails without forking the
+  ledger.
+- A crash between temp write and rename, between rename and directory
+  fsync, or during ledger tail write leaves the previous valid ledger,
+  the new valid ledger, or a detectable fail-closed corruption state.
+- Invalid, placeholder, revoked, expired, wrong-scope, or wrong-trust-root
+  signatures are rejected before a ledger record or approval can carry
+  authority.
+- Unknown schema fields, missing required fields, invalid enums,
+  unsupported schema keywords, and schema-version drift fail closed for
+  authority-bearing artifacts.
+- Same artifact hash with missing payload is not replay-valid.
+- CLI `promotion-check --strategy-id trend-following-v1` returns exact
+  blocker codes from fixture artifacts.
+- Existing `LocalActivationGateway` refuses activation when the
+  promotion decision is below the requested runtime route.
+- Direct construction of an order-capable execution gateway cannot be
+  treated as V5-authorized without passing the Wave 1 order-route guard,
+  even before Wave 8 live-probe tokens exist.
+- Web read models and `/api/actions/gate-report` responses cannot imply
+  V5 promotion from legacy validation or gate artifacts.
+
+Exit criteria:
+
+- `promotion-check` can reproduce one blocked decision and one
+  `paper_shadow`-eligible placeholder decision from artifacts alone.
+- Activation refusal is tested without changing default live disabled
+  posture.
+- Generated blocker coverage matrix is complete for every blocker named
+  in Wave 1 docs, fixtures, tests, CLI output, web output, and runtime
+  refusal paths.
+- Wave 1A through 1D have separate review packages and can be reviewed
+  without granting authority from an incomplete subwave.
+- Existing runtime and web tests remain green.
+- No current strategy is promoted above the evidence actually present.
+
+### Wave 2: Mandate And Allocation Governance
+
+Goal: implement Milestone 0 authority artifacts and make capital-bearing
+promotion impossible without them.
+
+Write scope:
+
+- `src/tradingx/promotion.py`
+- `src/tradingx/portfolio/blueprint.py`
+- `src/tradingx/portfolio/construction.py`
+- `src/tradingx/reporting.py`
+- `schemas/quant/investment_mandate.schema.json`
+- `schemas/quant/benchmark_policy.schema.json`
+- `schemas/quant/jurisdiction_account_use_manifest.schema.json`
+- `schemas/quant/instrument_support_package.schema.json`
+- `schemas/quant/strategy_capital_role.schema.json`
+- `schemas/quant/wealth_thesis.schema.json`
+- `schemas/quant/capital_allocation_policy.schema.json`
+- `schemas/quant/lower_bound_net_edge_spec.schema.json`
+- `schemas/quant/strategy_materiality_policy.schema.json`
+- `tests/fixtures/mandate/`
+
+Implementation tasks:
+
+1. Add authority-bearing mandate artifact loaders and validators.
+2. Add capital role, wealth thesis, benchmark policy, survival
+   definition, tax/account status, jurisdiction/account-use status,
+   instrument-package status, and materiality-policy blockers.
+3. Classify current strategies as at most `research_only` until signed
+   mandate artifacts exist.
+4. Add placeholder signed artifacts only for tests. Do not ship test
+   placeholders as production authority. Test fixtures must live under
+   explicit fixture roots, use test-only signer identities, and be
+   rejected if their signer IDs, role registry IDs, or artifact roots
+   appear in production config or production artifact roots.
+5. Add CLI report fields that explain missing mandate blockers
+   separately from statistical blockers.
+6. Add migration classification for existing activation records and
+   approved weight snapshots as legacy operator artifacts, not V5
+   authority.
+
+Red tests before implementation:
+
+- Missing investment mandate yields `utility_definition_missing` or the
+  exact mandate blocker declared by the implementation.
+- `tax_account_financing_unspecified` caps at `paper_shadow`.
+- Unknown jurisdiction or account use caps live trading at
+  `paper_trading`.
+- External-capital status unknown yields
+  `external_capital_compliance_unknown` and max state `disabled`.
+- Missing simple-equity instrument package yields
+  `instrument_package_missing`.
+- Opportunity-cost report cannot override a blocker.
+- Any artifact signed by a test-only signer, loaded from a fixture root,
+  or referencing a fixture role registry is refused outside test mode.
+
+Exit criteria:
+
+- Capital-bearing promotion cannot pass without mandate artifacts.
+- Mandate artifacts are authority-bearing and ledger referenced.
+- Existing Stage 1 paper behavior remains disabled from V5 promotion
+  unless explicitly run through legacy paths that are clearly labeled.
+
+### Wave 3: Experiment Registration And Data Provenance
+
+Goal: implement Milestones 2 and 3 so selection bias, hidden trials, and
+data restatements cannot be hidden.
+
+Write scope:
+
+- `src/tradingx/experiments.py`
+- `src/tradingx/trials.py`
+- `src/tradingx/evaluation.py`
+- `src/tradingx/validation.py`
+- `src/tradingx/controller.py`
+- `src/tradingx/reporting.py`
+- `src/tradingx/web/app.py`
+- `src/tradingx/web/runtime.py`
+- `src/tradingx/web/readmodels.py`
+- `src/tradingx/data_fingerprint.py`
+- `src/tradingx/data.py`
+- `src/tradingx/historical.py`
+- `src/tradingx/benchmark_stack.py`
+- `src/tradingx/risk_free.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/experiment_*.schema.json`
+- `schemas/quant/trial_universe_manifest.schema.json`
+- `schemas/quant/dataset_manifest.schema.json`
+- `schemas/quant/data_restatement_report.schema.json`
+- `schemas/quant/evidence_dependency_index.schema.json`
+- `tests/fixtures/experiments/`
+- `tests/fixtures/data_fingerprints/`
+- `tests/unit/test_controller_generate_gate_report_cpcv.py`
+- `tests/unit/test_reporting.py`
+- `tests/unit/test_web_app.py`
+- `tests/contract/test_local_web_app_api_contract.py`
+
+Implementation tasks:
+
+1. Add experiment registration and run lifecycle records that are
+   append-only and promotion-scope aware.
+2. Add a metric-vault boundary. Metrics must not be displayed, exported,
+   logged, or persisted for promotion-valid runs until the run has a
+   release token. The boundary must be enforced in the shared report
+   writer and every orchestration surface that can compute or expose
+   metrics, including `build_gate_report`,
+   `GateValidationController.generate_gate_report`, `gate-report` CLI,
+   validation artifact writes, `reporting.py`, web gate actions, web
+   runtime report generation, web read models, and structured runtime
+   logs.
+3. Implement an explicit `MetricVisibilityContext` or equivalent taint
+   model. Registration context and release-token status must flow through
+   metric-producing APIs, report builders, CLI commands, artifact
+   writers, web actions, web read models, stdout/stderr capture, and log
+   emitters. Metric-bearing return values must either be wrapped in this
+   context or forbidden on promotion-valid paths before release.
+4. Capture script/notebook source hashes, stdout/stderr hashes, output
+   artifact hashes, git SHA, config fingerprint, and result hashes.
+5. Add leak-detection tests using sentinel metric values that must not
+   appear in stdout, stderr, structured logs, artifact JSON, web action
+   responses, read models, or report summaries without a release token.
+6. Upgrade `TrialsLedger` or wrap it so failed, canceled, omitted,
+   no-metric, and child perturbation runs are included in the promotion
+   universe. Duplicate trial IDs must be idempotent only when the
+   canonical payload hash is identical; the same trial ID with changed
+   payload must raise a ledger-integrity error instead of being ignored.
+7. Make `gate-report` without a registration context emit
+   `promotion_valid=false` and `evidence_class=exploratory`.
+8. Add dataset manifests with raw payload refs, normalized frame refs,
+   point-in-time universe membership, symbol mapping, delisting policy,
+   bitemporal timestamps, benchmark/cash curve refs, calendar, timezone,
+   and adjustment policy.
+9. Add data-restatement compare and evidence invalidation commands.
+10. Build the dependency index mapping datasets to evidence, experiments,
+   gate reports, and promotion decisions.
+
+Red tests before implementation:
+
+- Post-result registration yields `trial_lineage_contaminated`.
+- Registered failed or canceled runs omitted from `U` yields
+  `trial_universe_incomplete`.
+- Unregistered metric-bearing notebook yields
+  `trial_lineage_contaminated`.
+- Missing outside-exploration attestation yields
+  `trial_lineage_contaminated`.
+- Gate report without registration is exploratory and non-promotable.
+- Without a metric-vault release token, `gate-report` stdout,
+  `GateValidationController` artifacts, structured logs, report
+  summaries, web action responses, and web read models contain no
+  promotion-valid metrics and expose only blocked/exploratory status plus
+  blocker codes.
+- A sentinel metric generated under an unreleased
+  `MetricVisibilityContext` is absent from stdout, stderr, artifacts,
+  logs, web responses, read models, and report summaries.
+- A metric-bearing return value crossing a named surface without
+  visibility context fails closed instead of being implicitly serialized.
+- `TrialsLedger.record` or its replacement rejects a repeated
+  `trial_id` with changed payload and records idempotent duplicate
+  writes only when the canonical payload hash matches exactly.
+- Missing point-in-time universe membership yields
+  `point_in_time_data_incomplete`.
+- Hash without retained raw or normalized input yields
+  `replay_path_missing`.
+- Data-level materiality marks evidence stale; replay-proven decision
+  delta marks it invalid.
+
+Exit criteria:
+
+- Selection universe and dataset replay are reproducible from artifacts.
+- Legacy trials cannot support DSR/PBO/MCS promotion claims.
+- Existing tests for validation and PBO still pass after the wrappers are
+  added.
+
+### Wave 4: Statistical Evidence Engine
+
+Goal: implement Milestone 4 so statistical evidence supports exact
+economic claims rather than impressive isolated metrics.
+
+Write scope:
+
+- `src/tradingx/stats.py`
+- `src/tradingx/evaluation.py`
+- `src/tradingx/validation.py`
+- `src/tradingx/pbo.py`
+- `src/tradingx/validation_folds.py`
+- `src/tradingx/experiments.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/power_analysis_report.schema.json`
+- `schemas/quant/bootstrap_report.schema.json`
+- `schemas/quant/paired_benchmark_uncertainty_report.schema.json`
+- `schemas/quant/statistical_validation_report.schema.json`
+- `schemas/quant/threshold_justification.schema.json`
+- `tests/fixtures/validation_evidence/`
+
+Implementation tasks:
+
+1. Add threshold-justification artifacts and make missing threshold an
+   explicit pending blocker.
+2. Add HAC or block-bootstrap-aware power reports with `n_eff <= n` and
+   lag sensitivity.
+3. Add paired benchmark uncertainty across cash, 60/40 or
+   mandate-appropriate alternative, static sleeve baseline, and no-trade
+   or current-holdings baseline.
+4. Add stationary block bootstrap reports with fixed seed, block-length
+   sensitivity, and tail-stability flags.
+5. Require DSR inputs from the Wave 3 trial universe, not broad family
+   legacy rows.
+6. Require full CPCV/PBO matrix refs for PBO promotion validity.
+7. Make underpowered, unstable, exploratory, or incomplete evidence cap
+   at `paper_shadow` or stricter.
+
+Red tests before implementation:
+
+- Metric-only old evidence is classified `legacy_statistical_evidence`.
+- Missing threshold yields `pending_threshold`, no hard pass.
+- Underpowered evidence cannot support above `paper_shadow`.
+- DSR without effective independent trial count is blocked by
+  `dsr_pbo_inputs_incomplete`.
+- PBO summary without full CPCV matrix is blocked.
+- Paired benchmark uncertainty missing blocks economic edge support.
+
+Exit criteria:
+
+- A full statistical report can be generated from registered experiment
+  and dataset artifacts.
+- A deliberately underpowered fixture cannot accidentally pass because
+  point estimates look good.
+
+### Wave 5: Cost, Quote Quality, And Capacity
+
+Goal: implement Milestone 5 so net edge and capacity claims include
+execution semantics, quote quality, sparse-bucket fallback, and
+turnover-adjusted scale.
+
+Write scope:
+
+- `src/tradingx/costs.py`
+- `src/tradingx/replay_slippage.py`
+- `src/tradingx/execution.py`
+- `src/tradingx/backtest.py`
+- `src/tradingx/validation.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/data.py`
+- `src/tradingx/experiments.py`
+- `src/tradingx/types.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/quote_quality_record.schema.json`
+- `schemas/quant/execution_cost_observation.schema.json`
+- `schemas/quant/cost_model_report.schema.json`
+- `schemas/quant/capacity_curve_report.schema.json`
+- `tests/fixtures/cost_capacity/`
+
+Implementation tasks:
+
+1. Add arrival timestamp policy to experiment registration.
+2. Record quote-quality state for cost observations, including stale,
+   locked, crossed, outage-adjacent, session, and latency flags.
+3. Split paper, live-probe, and live observations. Paper fills may
+   validate lifecycle only.
+4. Add clean and all-events cost estimates; require all-events stress
+   unless runtime no-trade quote-state controls are enforced and replayed.
+5. Add sparse bucket fallback and unsupported-bucket blocker.
+6. Model order type, broker/venue route, partial/non-fill behavior,
+   halts, open/close handling, rate limits, queue/adverse selection, and
+   non-fill opportunity cost for promoted routes.
+7. Add capacity curves with lower confidence or posterior bounds and
+   validated range.
+
+Red tests before implementation:
+
+- Paper-only execution data cannot support market-impact claim.
+- Missing powered bucket requirements yields
+  `execution_sample_power_missing`.
+- Intended capital outside validated range blocks production.
+- Clean estimate without runtime bad-quote no-trade rule uses
+  all-events stress.
+- Unsupported sparse bucket yields `unsupported_cost_bucket`.
+- Capacity point estimate without lower-bound curve yields
+  `capacity_lower_bound_missing`.
+
+Exit criteria:
+
+- Every economic report references cost and capacity artifacts.
+- Capacity extrapolation cannot reach production.
+- Existing replay-slippage behavior remains compatible but is classified
+  legacy unless it has the new fields.
+
+### Wave 6: Portfolio Utility, Optimizer, Forecasts, And Sizing
+
+Goal: implement Milestones 6 and 7 so optimizer, forecasts, and sizing
+cannot manufacture or amplify false edge.
+
+Write scope:
+
+- `src/tradingx/portfolio/construction.py`
+- `src/tradingx/portfolio/live_construction.py`
+- `src/tradingx/portfolio/blueprint.py`
+- `src/tradingx/portfolio/optimizer.py`
+- `src/tradingx/signals/`
+- `src/tradingx/sizing.py`
+- `src/tradingx/strategy.py`
+- `src/tradingx/evaluation.py`
+- `src/tradingx/validation.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/experiments.py`
+- `src/tradingx/types.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/portfolio_utility_definition.schema.json`
+- `schemas/quant/optimizer_*.schema.json`
+- `schemas/quant/forecast_model_manifest.schema.json`
+- `schemas/quant/feature_manifest.schema.json`
+- `schemas/quant/label_definition.schema.json`
+- `schemas/quant/expected_return_report.schema.json`
+- `schemas/quant/sizing_policy.schema.json`
+- `tests/fixtures/portfolio_optimizer/`
+- `tests/fixtures/forecast_sizing/`
+
+Implementation tasks:
+
+1. Add predeclared portfolio utility definitions with objective
+   hierarchy, lambdas, threshold justifications, and freeze refs.
+2. Add optimizer input, decision, validation, recertification, and
+   fallback artifacts.
+3. Require all applicable baselines or signed exclusion artifacts.
+4. Add paired OOS utility and full no-alpha pipeline simulation.
+5. Add perturbation tests for covariance, expected return, costs,
+   capacity, constraints, and tail stress.
+6. Add forecast identity, feature manifest, label definition, and sizing
+   policy hashes to experiment registration.
+7. Separate heuristic signals from expected-return forecasts.
+8. Add uncertainty calibration and uncertainty-penalized expected return.
+9. Add sizing property tests: higher cost, higher uncertainty, lower
+   capacity, or worse drawdown must not increase size.
+10. Keep Kelly disabled by default; full Kelly is never allowed.
+
+Red tests before implementation:
+
+- Optimizer without frozen utility lambdas yields
+  `optimizer_or_sizing_lockbox_missing`.
+- Excluding equal-weight baseline without signed approval blocks.
+- No-alpha full pipeline showing edge blocks optimizer promotion.
+- Forecast feature timestamp after decision time blocks.
+- Uncalibrated uncertainty caps at `paper_shadow`.
+- Higher cost increasing size fails property test.
+- Negative penalized edge creating long exposure fails unless explicitly
+  allowed.
+
+Exit criteria:
+
+- Existing static allocations remain usable as baselines.
+- Optimizer or forecast paths cannot feed runtime unless validation is
+  current and promotion-valid.
+- Fallback to static blueprint allocation is deterministic and audited.
+
+### Wave 7: Short-Side Capability And Financing
+
+Goal: implement Milestone 8 and keep negative weights from masquerading
+as executable shorts.
+
+Write scope:
+
+- `src/tradingx/risk.py`
+- `src/tradingx/runtime_portfolio.py`
+- `src/tradingx/portfolio/live_construction.py`
+- `src/tradingx/execution.py`
+- `src/tradingx/costs.py`
+- `src/tradingx/strategy.py`
+- `src/tradingx/signals/mean_revert.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/types.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/short_*.schema.json`
+- `tests/fixtures/short_side/`
+
+Implementation tasks:
+
+1. Add short capability manifest that separates research simulation from
+   runtime short support.
+2. Add borrow availability snapshots with broker, mode, locate,
+   threshold-security, fee, and freshness fields.
+3. Add short financing model for borrow fees, locate fees, dividend
+   liability, margin, recall, forced-buy-in, corporate action, and
+   close-out costs.
+4. Add runtime short checks before target planning and before order
+   submission.
+5. Add broker-initiated cover and forced-buy-in reconciliation events.
+6. Feed short financing and borrow constraints into cost/capacity
+   evidence.
+
+Red tests before implementation:
+
+- Negative target without manifest is blocked.
+- Stale borrow snapshot blocks new shorts.
+- Missing locate documentation blocks new shorts.
+- Threshold-security policy missing yields
+  `short_legal_mechanics_missing`.
+- Paper/live short semantics mismatch prevents production.
+- Historical short backtest without borrow path is research-only.
+
+Exit criteria:
+
+- `mean-reversion-v1` remains capped until a complete short package or
+  long-only redesign exists.
+- Runtime cannot silently clip, ignore, or reinterpret negative weights.
+
+### Wave 8: Live Probe And Operational Safety
+
+Goal: implement Milestone 9 so tiny live use is a bounded operational
+experiment, not a promotion shortcut.
+
+Write scope:
+
+- `src/tradingx/live_enablement.py`
+- `src/tradingx/operator_control.py`
+- `src/tradingx/runtime_host.py`
+- `src/tradingx/runtime_portfolio.py`
+- `src/tradingx/execution.py`
+- `src/tradingx/risk.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/types.py`
+- `src/tradingx/__main__.py`
+- `schemas/quant/live_probe_*.schema.json`
+- `schemas/quant/authority_boundary.schema.json`
+- `schemas/quant/broker_timeout_state_transition.schema.json`
+- `schemas/quant/operational_safety_drill.schema.json`
+- `schemas/quant/pre_trade_control_manifest.schema.json`
+- `tests/fixtures/live_probe/`
+
+Implementation tasks:
+
+1. Add authority boundary records with identity, role, scope, expiry,
+   signatures, and approval payload hash.
+2. Add live-probe plans with capital, loss, order, participation,
+   spread, session, activity, success, rollback, flatten, and expiry
+   fields.
+3. Add pre-trade control manifest for price collars, fat-finger
+   notional/share limits, open-order caps, order-rate caps, duplicate
+   prevention, cancel-on-disconnect, self-trade prevention where
+   relevant, buying-power/margin precheck, and reject-on-missing-control.
+4. Add broker-timeout state machine and reconcile-before-retry behavior.
+5. Add safety drills with freshness windows.
+6. Add live-probe run records and recertification reports.
+7. Ensure existing four-layer live disablement still blocks absent
+   valid live-probe authority.
+8. Add an order-route authority token/check at the risk/execution
+   boundary, not only at high-level broker-mode resolution. Live order
+   submission must require a current live-probe or production authority
+   token bound to strategy, account, broker mode, route, state-action
+   contract, pre-trade control manifest, and idempotency key. Execution
+   gateways must reject live submissions when the token is absent,
+   expired, scoped to a different route, or not ledger-verifiable.
+
+Red tests before implementation:
+
+- Missing price collar yields `pre_trade_control_missing`.
+- Expired live-probe approval blocks live route.
+- Timeout state cannot retry until reconciliation or idempotency proves
+  retry safety.
+- No-signal probe is inconclusive unless extension policy was
+  predeclared.
+- Manual exception attempting to disable kill switch is rejected.
+- Unresolved reconciliation incident blocks production eligibility.
+- Direct construction of an execution gateway with a live
+  `TradingClient`, bypassing `resolve_broker_mode`, cannot submit a live
+  order without the route authority token and current pre-trade manifest.
+- A stale, mismatched, or reused order-route authority token blocks at
+  the risk/execution boundary even if higher-level live controls were
+  accidentally permissive.
+
+Exit criteria:
+
+- Live probe can be simulated from fixtures without broker credentials.
+- Real Alpaca live path remains unavailable unless every required
+  authority and runtime control is present.
+- Production promotion is still impossible without post-probe
+  recertification.
+
+### Wave 9: Recertification And Change Control
+
+Goal: implement Milestone 10 so production approval expires, decays,
+and is invalidated by material change.
+
+Write scope:
+
+- `src/tradingx/change_control.py`
+- `src/tradingx/promotion.py`
+- `src/tradingx/activation.py`
+- `src/tradingx/runtime_strategy_registry.py`
+- `src/tradingx/live_enablement.py`
+- `src/tradingx/validation.py`
+- `src/tradingx/experiments.py`
+- `src/tradingx/data_fingerprint.py`
+- `src/tradingx/drift/`
+- `src/tradingx/__main__.py`
+- `config/strategy/promotion/<strategy_id>.json`
+- `schemas/quant/change_control_record.schema.json`
+- `schemas/quant/replay_equivalence_report.schema.json`
+- `schemas/quant/recertification_report.schema.json`
+- `schemas/quant/drift_monitor_*.schema.json`
+- `schemas/quant/production_decay_event.schema.json`
+- `tests/fixtures/change_control/`
+
+Implementation tasks:
+
+1. Add change-control records for code, data, schema, broker, vendor,
+   model, feature, optimizer, utility, risk, and cost/capacity changes.
+2. Add unrecorded-hash-difference detection for approved code, config,
+   schema, data, and evidence refs.
+3. Add dependency-scope resolution through the Wave 3 dependency index.
+4. Add replay-equivalence reports using V5 materiality defaults.
+5. Add recertification reports with authority, evidence freshness,
+   statistical, cost/capacity, optimizer, live-probe, drift, and
+   incident statuses.
+6. Add production expiry and monthly/quarterly review due dates as
+   ledger-derived projection fields.
+7. Add drift monitor specs and reports with demotion rules.
+8. Enforce approval freshness before every runtime cycle and order
+   submission.
+
+Red tests before implementation:
+
+- Current hash differs from approved hash and no change record exists:
+  `unrecorded_material_change`.
+- Unknown change scope defaults critical.
+- Dependency scope unresolved blocks production.
+- Production approval expires and decays.
+- Drift monitor spec missing yields `drift_monitor_spec_missing`.
+- Replay equivalence fails when a material default fires.
+- Manual exception cannot extend production indefinitely.
+
+Exit criteria:
+
+- Production is never permanent.
+- Runtime checks production approval freshness every cycle.
+- Golden replay can reproduce valid, stale, invalidated, unrecorded, and
+  recertified outcomes.
+
+### Wave 10: Legacy Path Retirement And Hardening
+
+Goal: make V5 authority the only path for production claims while
+preserving useful legacy research artifacts.
+
+Implementation tasks:
+
+1. Add warnings to legacy commands that generate non-promotable evidence.
+2. Ensure legacy evidence is explicitly tagged in reports and web read
+   models.
+3. Add migration reports for existing artifacts that classify them as
+   valid, legacy, stale, invalid, or manual-review-required.
+4. Add deprecation tests proving old activation and gate artifacts cannot
+   bypass promotion checks.
+5. Update operator manual, architecture map, state file, and index if
+   the authority order changes.
+
+Exit criteria:
+
+- A reviewer can run one command to see all legacy evidence that cannot
+  support promotion.
+- No runtime-capable path remains outside state-action contract checks.
+
+## Verification Matrix
+
+Every wave must use a layered verification matrix. Add new rows as new
+surfaces appear.
+
+| Layer | Required Proof |
+|---|---|
+| Unit | Pure blocker logic, canonical hashing, schema field validation, cap ordering, date/expiry handling, Decimal handling, timezone handling. |
+| Property/Table | Monotonic cap rules, canonical JSON stability, sizing monotonicity, no authority increase from mutable projection, no stricter blocker lost when blockers combine. |
+| Blocker Registry | Generated matrix covers every blocker from schema field to evaluator, red test, fixture, CLI/report output, migration behavior, and runtime enforcement point or `not_runtime_applicable`. |
+| Signature Trust | Trust-root loading, real signature verification, signer scope, expiry, revocation, rotation, and fixture-key refusal outside test roots. |
+| External Source | `external_source_snapshot` artifacts include retrieved timestamp, URL, retained `canonical_text_ref` or `raw_snapshot_artifact_ref`, canonical-text hash, mapped requirement, and consuming design/schema/test refs. |
+| Golden Fixture | At least one artifact-only pass case and one artifact-only fail-closed case per milestone. |
+| Integration | CLI to artifact store to promotion decision to activation/runtime refusal. |
+| Migration | Existing legacy artifacts classified without mutation or deletion. |
+| Replay | Old decision reproduced or invalidated from immutable inputs. |
+| CLI Contract | JSON output contains strategy id, evidence class, max state, blocker codes, artifact refs, schema versions, replay refs, and exit code semantics. |
+| Runtime | Activation, planner, order route, short route, live route, and recertification checks refuse when caps require refusal. |
+| Static Analysis | `uv run ruff check .`, `uv run black --check .`, and `uv run mypy src/tradingx`. |
+| Full Regression | `./scripts/validate` before merge unless a documented environment dependency makes a guarded smoke test skip. |
+
+Tests must be deterministic. Any test using randomness must declare the
+seed in the artifact and assert the seed in the output. Any test using
+time must inject a clock.
+
+## Review Package Required Per Wave
+
+Every implementation wave must produce a review package containing:
+
+- code diff summary by subsystem
+- exact commands run and results
+- schema diff
+- migration behavior
+- generated blocker registry diff and coverage matrix
+- new blocker codes, caps, remediation, and migration behavior
+- external source snapshot refs for source-driven requirements
+- trust-root/signature verification changes where authority changed
+- happy-path artifact refs
+- fail-closed artifact refs
+- replay command and expected digest
+- runtime refusal command or test
+- threat model amendment
+- reviewer attack notes: what could still be wrong
+- no-live-enable assertion
+
+The review package must explicitly answer:
+
+1. What authority does this wave add?
+2. What authority does this wave remove from mutable or legacy paths?
+3. What exact artifact is trusted?
+4. What exact artifact is not trusted?
+5. What happens when the artifact is missing?
+6. What happens when the artifact is stale?
+7. What happens when the artifact is tampered with?
+8. What happens when replay inputs are unavailable?
+9. What happens when runtime state disagrees with the decision?
+10. What is the rollback path?
+
+## Adversarial Review Checklist
+
+Scientific reviewers should attack:
+
+- multiple-testing controls
+- failed and canceled trial accounting
+- DSR/PBO/MCS inputs
+- power and effective sample size
+- serial dependence and non-normality
+- paired benchmark choice
+- cost/capacity stress
+- after-tax and financing assumptions
+- capacity extrapolation
+
+Architecture reviewers should attack:
+
+- source-of-truth boundaries
+- circular dependencies
+- mutable projection authority leaks
+- schema evolution and migration
+- replay input retention
+- artifact store abstraction
+- Postgres and filesystem split-brain risks
+- CLI/runtime/web consistency
+
+Engineering reviewers should attack:
+
+- deterministic hashing
+- Decimal versus float conversion
+- naive datetime handling
+- path traversal and artifact URI validation
+- idempotency and duplicate detection
+- exception redaction
+- concurrency and partial commits
+- fixture realism
+- test brittleness
+
+Operations reviewers should attack:
+
+- kill switch availability
+- stale data and stale broker-state behavior
+- reconciliation gaps
+- live disablement layering
+- broker timeout recovery
+- drill freshness
+- incident closure
+- operator notification path
+
+Security and compliance reviewers should attack:
+
+- signing-key custody
+- role registry drift
+- approval expiry
+- WORM backup restore tests
+- secret redaction
+- short-sale locate and close-out mechanics
+- hypothetical-performance restrictions before external use
+- external-capital/advisory/custody status
+
+## Known Failure Traps
+
+These traps must be tested directly or recorded as unresolved blockers:
+
+- accepting a hash when the payload is gone
+- trusting `approved_by` without identity and signature
+- trusting a ceremonial `signature_ref` without cryptographic
+  verification against a scoped trust root
+- emitting blocker codes that are absent from the generated blocker
+  registry and coverage matrix
+- using local config as authority
+- promoting a strategy because paper fills were clean
+- accepting unknown or unimplemented schema fields in authority-bearing
+  artifacts
+- clipping negative weights and calling the result long-only
+- counting only completed successful experiments
+- changing a study ID to hide a failed trial
+- treating broad family trials as the promotion universe
+- omitting delisted symbols or stale symbol mappings
+- using adjusted data without explicit adjustment policy
+- computing metrics before registration and then registering afterward
+- leaking unreleased promotion metrics through return values, stdout,
+  stderr, structured logs, artifact JSON, web responses, or read models
+- using a cost point estimate outside the validated participation range
+- recording only retrieval dates for external sources without retained
+  source snapshots, content hashes, and mapped requirements
+- treating no-signal live probe as success
+- letting expired approval survive through cached projection
+- letting web routes, UI state, or Postgres read models imply authority
+- letting a schema-breaking change pass without migration and replay
+- letting manual exception disable kill switch, reconciliation,
+  idempotency, stale-data checks, or dependency-scope resolution
+
+## Rollback And Kill Strategy
+
+Rollback is also governed:
+
+- Each wave must be revertible without deleting prior artifacts.
+- Schema migrations must be forward-only unless the rollback plan proves
+  no authority artifact can be orphaned.
+- New promotion checks must default to stricter caps if configuration is
+  missing.
+- Existing paper operation may continue only through explicitly labeled
+  legacy paths when V5 authority is absent.
+- Live mode remains disabled unless Wave 8 authority and current live
+  controls both pass.
+- If a new checker crashes, activation fails closed and the CLI returns
+  a non-zero exit with a redacted error and artifact context.
+
+## Initial Implementation Order
+
+Technical bootstrapping still starts with Milestone 1, because Milestone
+0 authority artifacts require a trust spine before they can authorize
+anything.
+
+The exact first implementation slice is:
+
+```text
+blocker registry -> promotion schemas -> canonical artifact hashing ->
+content-addressed store -> trust roots and signature verification ->
+authority ledger verification -> blocker evaluator ->
+state-action and order-route deny guard -> promotion-check CLI ->
+activation refusal -> web non-authority labeling ->
+projection-drift fixture -> golden replay fixture
 ```
 
 Recommended execution waves:
 
-1. Trust spine foundation: Milestone 1.
-2. Mandate and allocation governance: Milestone 0.
-3. Evidence provenance: Milestones 2 and 3.
-4. Statistical and economic evidence: Milestones 4 and 5.
-5. Portfolio and sizing: Milestones 6 and 7.
-6. Runtime semantics and operations: Milestones 8 and 9.
-7. Production lifecycle: Milestone 10.
+1. Wave 0: baseline audit and review handoff.
+2. Wave 1: Governance Spine, Milestone 1.
+3. Wave 2: Mandate and allocation governance, Milestone 0.
+4. Wave 3: Experiment registration and data provenance, Milestones 2
+   and 3.
+5. Wave 4: Statistical evidence engine, Milestone 4.
+6. Wave 5: Cost, quote quality, and capacity, Milestone 5.
+7. Wave 6: Portfolio utility, optimizer, forecasts, and sizing,
+   Milestones 6 and 7.
+8. Wave 7: Short-side capability and financing, Milestone 8.
+9. Wave 8: Live probe and operational safety, Milestone 9.
+10. Wave 9: Recertification and change control, Milestone 10.
+11. Wave 10: legacy path retirement and hardening.
 
-Every wave must leave the system safer than it found it. A partially implemented milestone should add blockers and classification before adding any new pathway to promotion.
+No wave may merge if it makes activation, runtime planning, order
+routing, live probing, shorting, optimizer use, or production approval
+more permissive than the previous state without the new authority and
+replay proof in the same change.
 
 ## Non-Goals
 
@@ -1920,5 +3084,10 @@ This plan does not:
 - authorize Kelly sizing
 - replace human approval for production decisions
 - replace legal, tax, compliance, or broker-specific review
+- claim SEC, FINRA, CFTC, NIST, or broker rules are fully encoded
+- make external-capital, advisory, or marketing use acceptable without
+  specialized review
 
-It defines the evidence, artifacts, replay paths, blockers, and operational controls required before those claims can be responsibly made.
+It defines the evidence, artifacts, replay paths, blockers, and
+operational controls required before those claims can be responsibly
+made.

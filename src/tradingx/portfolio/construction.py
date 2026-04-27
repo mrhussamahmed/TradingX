@@ -10,7 +10,13 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from tradingx.backtest import DailyBarBacktestResult, run_daily_bar_backtest
 from tradingx.costs import CostModelConfig
-from tradingx.portfolio.blueprint import PortfolioBlueprint, SleeveRiskBudget
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+    resolve_blueprint_allocation_limits,
+    validate_blueprint_allocation_limits,
+)
 from tradingx.sleeves.base import SleeveProtocol
 from tradingx.sleeves.evaluation import build_sleeve_target_weight_history
 from tradingx.types import RegimeSnapshot
@@ -29,9 +35,18 @@ def build_portfolio_target_weight_history(
     blueprint: PortfolioBlueprint,
     bars_by_symbol: dict[str, pd.DataFrame],
     regime_snapshots_by_date: dict[date, RegimeSnapshot],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> pd.DataFrame:
     if not sleeves:
         raise ValueError("sleeves must not be empty")
+    effective_limits = resolve_blueprint_allocation_limits(
+        blueprint,
+        allocation_limits,
+    )
+    validate_blueprint_allocation_limits(
+        blueprint,
+        allocation_limits=effective_limits,
+    )
 
     budget_by_sleeve = {
         sleeve_budget.sleeve_id: sleeve_budget
@@ -73,6 +88,7 @@ def build_portfolio_target_weight_history(
         combined_row = _combine_sleeve_weights(
             blueprint=blueprint,
             contributions=contributions,
+            allocation_limits=effective_limits,
         )
         rows.append(
             {
@@ -90,12 +106,14 @@ def simulate_portfolio_returns(
     bars_by_symbol: dict[str, pd.DataFrame],
     regime_snapshots_by_date: dict[date, RegimeSnapshot],
     cost_model_config: CostModelConfig | None = None,
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> PortfolioSimulationResult:
     combined = build_portfolio_target_weight_history(
         sleeves,
         blueprint=blueprint,
         bars_by_symbol=bars_by_symbol,
         regime_snapshots_by_date=regime_snapshots_by_date,
+        allocation_limits=allocation_limits,
     )
     traded_symbols = tuple(str(column) for column in combined.columns)
     result = run_daily_bar_backtest(
@@ -140,7 +158,16 @@ def _combine_sleeve_weights(
     *,
     blueprint: PortfolioBlueprint,
     contributions: dict[str, dict[str, Decimal]],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> dict[str, Decimal]:
+    effective_limits = resolve_blueprint_allocation_limits(
+        blueprint,
+        allocation_limits,
+    )
+    validate_blueprint_allocation_limits(
+        blueprint,
+        allocation_limits=effective_limits,
+    )
     budget_by_sleeve = {
         sleeve_budget.sleeve_id: sleeve_budget
         for sleeve_budget in blueprint.sleeve_budgets

@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from tradingx.experiments import MetricVisibilityContext, MetricVisibilityError
 from tradingx.types import (
     AlertDrillRecord,
     ApprovedWeightSnapshot,
@@ -97,11 +98,49 @@ class FilesystemArtifactStore:
             "reconciliation", f"{snapshot.reconciliation_id}.json", snapshot
         )
 
-    def write_evaluation_evidence(self, evidence_pack: EvaluationEvidencePack) -> Path:
+    def write_evaluation_evidence(
+        self,
+        evidence_pack: EvaluationEvidencePack,
+        *,
+        metric_visibility_context: MetricVisibilityContext | None = None,
+    ) -> Path:
+        if (
+            metric_visibility_context is None
+            and evidence_pack.metric_visibility_context
+        ):
+            metric_visibility_context = MetricVisibilityContext.from_mapping(
+                evidence_pack.metric_visibility_context
+            )
+        if evidence_pack.promotion_valid and metric_visibility_context is None:
+            raise MetricVisibilityError(
+                "promotion-valid evaluation metrics require visibility context"
+            )
+        payload: Any = evidence_pack
+        if metric_visibility_context is not None:
+            if (
+                metric_visibility_context.promotion_valid
+                and not metric_visibility_context.is_released
+            ):
+                raise MetricVisibilityError(
+                    "promotion-valid evaluation metrics require metric-vault release"
+                )
+            serialized = _serialize(evidence_pack)
+            if isinstance(serialized, dict):
+                serialized["metric_visibility_context"] = (
+                    metric_visibility_context.to_json()
+                )
+                serialized["promotion_valid"] = metric_visibility_context.is_released
+                serialized["evidence_class"] = (
+                    "valid" if metric_visibility_context.is_released else "exploratory"
+                )
+                serialized["blocker_codes"] = list(
+                    metric_visibility_context.blocker_codes
+                )
+                payload = serialized
         return self._write_json(
             "evaluation_evidence",
             f"{evidence_pack.evidence_pack_id}.json",
-            evidence_pack,
+            payload,
         )
 
     def write_operator_alert(self, alert: OperatorAlert) -> Path:
@@ -305,6 +344,13 @@ class FilesystemArtifactStore:
         )
 
     def write_validation_report(self, report: ValidationReport) -> Path:
+        if report.promotion_valid and (
+            report.metric_vault_release_status != "released"
+            or not report.metric_release_token_ref
+        ):
+            raise MetricVisibilityError(
+                "promotion-valid validation reports require metric-vault release"
+            )
         return self._write_json(
             "validation_reports",
             f"{report.report_id}.json",
@@ -1314,6 +1360,7 @@ class FilesystemArtifactStore:
             metric_name=str(payload["metric_name"]),
             random_seed=int(payload["random_seed"]),
             generated_at_utc=datetime.fromisoformat(str(payload["generated_at_utc"])),
+            full_cpcv_matrix_ref=str(payload.get("full_cpcv_matrix_ref", "")),
         )
 
     def build_operator_evidence_report(self) -> dict[str, object]:

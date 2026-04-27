@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "kind": "evidence_dependency_index",
+  "datasets": {
+    "dataset-spy-v1": {
+      "evidence_pack_ids": ["evidence-1"],
+      "experiment_ids": ["exp-001"],
+      "gate_report_ids": ["gate-1"],
+      "promotion_decision_ids": ["decision-1"]
+    }
+  },
+  "generated_at_utc": "2026-04-26T08:30:00Z"
+}

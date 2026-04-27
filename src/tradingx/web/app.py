@@ -177,6 +177,12 @@ class ActionRunnerProtocol(Protocol):
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
+        experiment_id: str | None = None,
+        run_id: str | None = None,
+        promotion_decision_scope: str | None = None,
+        metric_release_token: str | None = None,
+        dataset_manifest_id: str | None = None,
+        dataset_manifest_file: str | None = None,
     ) -> WebActionResult: ...
 
     def generate_decision_report(self, *, gate: str | None) -> WebActionResult: ...
@@ -257,6 +263,12 @@ class GateReportRequest(BaseModel):
     window_start: str
     window_end: str
     universe: list[str] = []
+    experiment_id: str | None = None
+    run_id: str | None = None
+    promotion_decision_scope: str | None = None
+    metric_release_token: str | None = None
+    dataset_manifest_id: str | None = None
+    dataset_manifest_file: str | None = None
 
 
 class DecisionReportRequest(BaseModel):
@@ -1203,6 +1215,12 @@ def create_app(
                 window_start=payload.window_start,
                 window_end=payload.window_end,
                 universe=tuple(symbol.upper() for symbol in payload.universe),
+                experiment_id=payload.experiment_id,
+                run_id=payload.run_id,
+                promotion_decision_scope=payload.promotion_decision_scope,
+                metric_release_token=payload.metric_release_token,
+                dataset_manifest_id=payload.dataset_manifest_id,
+                dataset_manifest_file=payload.dataset_manifest_file,
             ),
         )
 

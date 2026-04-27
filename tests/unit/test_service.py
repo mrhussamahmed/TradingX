@@ -934,6 +934,8 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
             del strategy_id
             return True
 
+    activation_kwargs: list[dict[str, object]] = []
+
     monkeypatch.setattr(service_module, "resolve_broker_mode", fake_resolve_broker_mode)
     monkeypatch.setattr(
         service_module,
@@ -958,7 +960,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     monkeypatch.setattr(
         service_module,
         "LocalActivationGateway",
-        lambda **kwargs: object(),
+        lambda **kwargs: activation_kwargs.append(kwargs) or object(),
     )
     monkeypatch.setattr(
         service_module,
@@ -994,3 +996,6 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
         "client_mode": "live",
         "market_data_mode": "live",
     }
+    assert activation_kwargs
+    assert activation_kwargs[0]["promotion_decision_provider"] is not None
+    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"

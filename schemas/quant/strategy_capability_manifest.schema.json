@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Strategy Capability Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "strategy_id", "supported_sides", "instrument_types"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "strategy_capability_manifest"},
+    "strategy_id": {"type": "string"},
+    "supported_sides": {"type": "array", "items": {"type": "string"}},
+    "instrument_types": {"type": "array", "items": {"type": "string"}},
+    "short_capability_ref": {"type": "string", "format": "content-addressed-ref"}
+  }
+}

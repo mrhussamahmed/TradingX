@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Drift Monitor Spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "spec_id",
+    "strategy_id",
+    "monitored_variables",
+    "reference_window",
+    "live_window",
+    "thresholds",
+    "regime_labels",
+    "multiple_testing_policy",
+    "alert_latency_seconds",
+    "missing_data_policy",
+    "minimum_sample_requirement",
+    "demotion_rules",
+    "operator_notification_path",
+    "expires_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "drift_monitor_spec"},
+    "spec_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "monitored_variables": {"type": "array", "items": {"type": "string"}},
+    "reference_window": {"type": "string"},
+    "live_window": {"type": "string"},
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "regime_labels": {"type": "array", "items": {"type": "string"}},
+    "multiple_testing_policy": {"type": "string"},
+    "alert_latency_seconds": {"type": "integer"},
+    "missing_data_policy": {"type": "string"},
+    "minimum_sample_requirement": {"type": "integer"},
+    "demotion_rules": {"type": "array", "items": {"type": "string"}},
+    "operator_notification_path": {"type": "string"},
+    "expires_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

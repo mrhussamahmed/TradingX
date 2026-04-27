@@ -31,8 +31,14 @@ from tradingx.data import (
 from tradingx.execution import (
     AlpacaPaperExecutionGateway,
     OrderRejected,
+    OrderRouteAuthorityGuard,
     classify_order_rejection_reason,
 )
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+)
+from tradingx.experiments import MetricVisibilityContext
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.live_enablement import (
     build_trading_client_for_mode,
@@ -1495,8 +1501,29 @@ class GateValidationController:
         window_start_utc: datetime,
         window_end_utc: datetime,
         universe: tuple[str, ...],
+        metric_visibility_context: MetricVisibilityContext | None = None,
+        dataset_manifest_id: str | None = None,
     ) -> GateReportResult:
         candidates = build_mandatory_candidate_registry(universe)
+        metrics_blocked = (
+            metric_visibility_context is not None
+            and metric_visibility_context.promotion_valid
+            and not metric_visibility_context.is_released
+        )
+        if metrics_blocked:
+            report = build_gate_report(
+                gate_id=gate_id,
+                bars_by_symbol={},
+                candidates=candidates,
+                benchmark_stack_payload=benchmark_stack_payload,
+                window_start_utc=window_start_utc,
+                window_end_utc=window_end_utc,
+                gate1_pbo_payload=None,
+                trials_ledger=None,
+                metric_visibility_context=metric_visibility_context,
+                dataset_manifest_id=dataset_manifest_id,
+            )
+            return self._persist_gate_report_result(report, gate_id=gate_id)
         required_symbols = {candidate.benchmark_symbol for candidate in candidates} | {
             symbol for candidate in candidates for symbol in candidate.universe
         }
@@ -1538,7 +1565,17 @@ class GateValidationController:
             window_end_utc=window_end_utc,
             gate1_pbo_payload=gate1_pbo_payload,
             trials_ledger=self._trials_ledger,
+            metric_visibility_context=metric_visibility_context,
+            dataset_manifest_id=dataset_manifest_id,
         )
+        return self._persist_gate_report_result(report, gate_id=gate_id)
+
+    def _persist_gate_report_result(
+        self,
+        report: Any,
+        *,
+        gate_id: str,
+    ) -> GateReportResult:
         report_path = self._artifacts.write_validation_report(report)
         self._metrics.record_evidence_artifact("validation_report")
         assessment = GateAssessment(
@@ -1547,6 +1584,12 @@ class GateValidationController:
             evidence_refs=(str(report_path),),
             decision_summary=report.summary,
             recorded_at_utc=datetime.now(UTC),
+            promotion_valid=report.promotion_valid,
+            evidence_class=report.evidence_class,
+            blocker_codes=report.blocker_codes,
+            experiment_id=report.experiment_id,
+            run_id=report.run_id,
+            dataset_manifest_id=report.dataset_manifest_id,
         )
         assessment_path = self._artifacts.write_gate_assessment(assessment)
         self._metrics.record_evidence_artifact("gate_assessment")
@@ -1677,20 +1720,19 @@ class GateValidationController:
 
 
 def build_default_controller(config: TradingConfig) -> RoundTripController:
-    trading_client = TradingClient(
-        config.paper_credentials.api_key,
-        config.paper_credentials.api_secret,
-        paper=True,
+    """Backwards-compatible alias for the legacy paper roundtrip controller.
+
+    The legacy non-V5 paper roundtrip lives in
+    :mod:`tradingx.legacy_paper_roundtrip` so the ``legacy_paper_non_authority``
+    flag is concentrated in a single, clearly-labeled legacy module
+    (Defect 2).
+    """
+
+    from tradingx.legacy_paper_roundtrip import (
+        build_legacy_paper_roundtrip_controller,
     )
-    return RoundTripController(
-        market_data=AlpacaMarketDataGateway.from_credentials(
-            api_key=config.paper_credentials.api_key,
-            api_secret=config.paper_credentials.api_secret,
-        ),
-        execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
-        portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
-        risk=PaperOnlyRiskEngine(config),
-    )
+
+    return build_legacy_paper_roundtrip_controller(config)
 
 
 def build_default_paper_trading_controller(
@@ -1699,10 +1741,57 @@ def build_default_paper_trading_controller(
     return build_default_trading_loop_controller(config, broker_mode="paper")
 
 
+def _required_state_for_broker_mode(broker_mode: str) -> PromotionState:
+    """Map a broker_mode label onto the V5 promotion state it requires.
+
+    Defect 2 requires production runtime routes to enforce the matching
+    promotion state — not the historical paper-non-authority bypass.
+    """
+
+    normalized = broker_mode.strip().lower()
+    if normalized == "live":
+        return PromotionState.PRODUCTION
+    if normalized == "live_probe":
+        return PromotionState.TINY_LIVE_PROBE
+    return PromotionState.PAPER_TRADING
+
+
+def _route_label_for_broker_mode(broker_mode: str) -> str:
+    normalized = broker_mode.strip().lower()
+    if normalized == "live":
+        return "live_order"
+    if normalized == "live_probe":
+        return "live_probe_order"
+    return "paper_order"
+
+
+def _build_default_authority_guard(
+    config: TradingConfig,
+    *,
+    broker_mode: str,
+) -> OrderRouteAuthorityGuard:
+    """Wire the V5 authority guard for a runtime route.
+
+    Sources the promotion decision from
+    ``config.runtime.artifact_root / "promotion"``. Bundles that are
+    missing or fail authority validation will fail-closed at order
+    submission via :class:`OrderRouteAuthorityError`.
+    """
+
+    promotion_root = config.runtime.artifact_root / "promotion"
+    decision_provider = build_artifact_promotion_decision_provider(promotion_root)
+    return OrderRouteAuthorityGuard(
+        decision_provider=decision_provider,
+        required_state=_required_state_for_broker_mode(broker_mode),
+        route_label=_route_label_for_broker_mode(broker_mode),
+    )
+
+
 def build_default_trading_loop_controller(
     config: TradingConfig,
     *,
     broker_mode: str | None = None,
+    strategy_id: str = "trend-following-v1",
 ) -> PaperTradingLoopController:
     decision = resolve_broker_mode(config, explicit_mode=broker_mode)
     trading_client = build_trading_client_for_mode(config, decision)
@@ -1716,9 +1805,17 @@ def build_default_trading_loop_controller(
         git_sha=_resolve_git_sha(),
         dry_run=config.runtime.dry_run,
     )
+    authority_guard = _build_default_authority_guard(
+        config,
+        broker_mode=decision.effective_mode,
+    )
     return PaperTradingLoopController(
         market_data=market_data_gateway,
-        execution=AlpacaPaperExecutionGateway(trading_client=trading_client),
+        execution=AlpacaPaperExecutionGateway(
+            trading_client=trading_client,
+            authority_guard=authority_guard,
+            strategy_id=strategy_id,
+        ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         risk=PaperOnlyRiskEngine(config),
         strategy=DeterministicBaselineStrategy(),

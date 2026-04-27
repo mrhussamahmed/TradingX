@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Production Decay Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "event_id",
+    "strategy_id",
+    "decay_reason",
+    "previous_state",
+    "new_state",
+    "triggering_artifact_ref",
+    "occurred_at_utc",
+    "operator_notification_status",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "production_decay_event"},
+    "event_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "decay_reason": {"type": "string"},
+    "previous_state": {"type": "string"},
+    "new_state": {"type": "string"},
+    "triggering_artifact_ref": {"type": "string"},
+    "occurred_at_utc": {"type": "string", "format": "utc-datetime"},
+    "operator_notification_status": {
+      "type": "string",
+      "enum": ["sent", "acknowledged", "pending", "failed"]
+    },
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

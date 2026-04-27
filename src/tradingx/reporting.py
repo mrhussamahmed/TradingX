@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import cast
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS, PromotionDecision
 from tradingx.types import GateDecisionBrief, GateDecisionCandidateSummary
 
 
@@ -30,12 +31,18 @@ def _payload_strings(value: object) -> tuple[str, ...]:
 def _required_operator_action(gate_id: str, status: str) -> str:
     if status == "pass":
         return (
-            "Review the evidence and decide whether to advance "
-            f"beyond Gate {gate_id}."
+            "Review the legacy non-authority evidence before any separate V5 "
+            f"promotion decision for Gate {gate_id}."
         )
     if status == "pending":
-        return f"Do not advance; collect the missing evidence and rerun Gate {gate_id}."
-    return f"Do not advance; address failed criteria and regenerate Gate {gate_id}."
+        return (
+            f"Do not advance; collect the missing legacy non-authority evidence "
+            f"and rerun Gate {gate_id}."
+        )
+    return (
+        f"Do not advance; address failed criteria and regenerate Gate {gate_id} "
+        f"({LEGACY_NON_AUTHORITY_STATUS})."
+    )
 
 
 def _criterion_payload_status(payload: dict[str, object]) -> str:
@@ -173,4 +180,21 @@ def build_gate_decision_brief(
     )
 
 
-__all__ = ("build_gate_decision_brief",)
+def build_promotion_blocker_report(decision: PromotionDecision) -> dict[str, object]:
+    payload = decision.to_json()
+    return {
+        "schema_version": "1.0",
+        "strategy_id": payload["strategy_id"],
+        "requested_state": payload["requested_state"],
+        "max_state": payload["max_state"],
+        "blocker_codes": payload["blocker_codes"],
+        "mandate_blocker_codes": payload["mandate_blocker_codes"],
+        "statistical_blocker_codes": payload["statistical_blocker_codes"],
+        "authority_blocker_codes": payload["authority_blocker_codes"],
+        "artifact_refs": payload["artifact_refs"],
+        "ledger_sequence": payload["ledger_sequence"],
+        "ledger_hash": payload["ledger_hash"],
+    }
+
+
+__all__ = ("build_gate_decision_brief", "build_promotion_blocker_report")

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from tradingx.portfolio.blueprint import PortfolioBlueprint
+from tradingx.portfolio.blueprint import PortfolioBlueprint, StrategyAllocationLimit
 from tradingx.portfolio.construction import _combine_sleeve_weights
 from tradingx.sleeves.base import SleeveProtocol
 from tradingx.types import SleeveContext, SleeveTargetWeights, SleeveTrade
+
+
+class UnsupportedPortfolioCycleTargetWeights(ValueError):
+    """Raised when cycle weights would hide unsupported exposure semantics."""
 
 
 def build_portfolio_cycle_target_weights(
@@ -15,6 +19,7 @@ def build_portfolio_cycle_target_weights(
     blueprint: PortfolioBlueprint,
     sleeves_by_id: dict[str, SleeveProtocol],
     context_by_sleeve_id: dict[str, SleeveContext],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> tuple[dict[str, Decimal], tuple[SleeveTargetWeights, ...]]:
     sleeve_trades_by_id = {
         sleeve_id: sleeve.plan_for_bar(context_by_sleeve_id[sleeve_id])
@@ -23,6 +28,7 @@ def build_portfolio_cycle_target_weights(
     return _build_portfolio_cycle_target_weights_from_trades(
         blueprint=blueprint,
         sleeve_trades_by_id=sleeve_trades_by_id,
+        allocation_limits=allocation_limits,
     )
 
 
@@ -30,6 +36,7 @@ def _build_portfolio_cycle_target_weights_from_trades(
     *,
     blueprint: PortfolioBlueprint,
     sleeve_trades_by_id: dict[str, tuple[SleeveTrade, ...]],
+    allocation_limits: tuple[StrategyAllocationLimit, ...] | None = None,
 ) -> tuple[dict[str, Decimal], tuple[SleeveTargetWeights, ...]]:
     budget_by_sleeve_id = {
         budget.sleeve_id: budget.budget_fraction_of_equity
@@ -37,6 +44,18 @@ def _build_portfolio_cycle_target_weights_from_trades(
     }
     contributions: dict[str, dict[str, Decimal]] = {}
     for sleeve_id, trades in sleeve_trades_by_id.items():
+        negative_trades = tuple(
+            trade
+            for trade in trades
+            if trade.target_weight_of_sleeve_budget < Decimal("0")
+        )
+        if negative_trades:
+            symbols = ", ".join(sorted({trade.symbol for trade in negative_trades}))
+            raise UnsupportedPortfolioCycleTargetWeights(
+                "unsupported_side: negative sleeve target weights are not supported "
+                "by the current long-only portfolio cycle path "
+                f"for sleeve {sleeve_id!r}: {symbols}."
+            )
         contributions[sleeve_id] = {
             trade.symbol: trade.target_weight_of_sleeve_budget
             for trade in trades
@@ -45,6 +64,7 @@ def _build_portfolio_cycle_target_weights_from_trades(
     aggregate = _combine_sleeve_weights(
         blueprint=blueprint,
         contributions=contributions,
+        allocation_limits=allocation_limits,
     )
     all_contributions_scaled = {
         sleeve_id: {
@@ -101,4 +121,7 @@ def _rescale_to_aggregate(
     return result
 
 
-__all__ = ("build_portfolio_cycle_target_weights",)
+__all__ = (
+    "UnsupportedPortfolioCycleTargetWeights",
+    "build_portfolio_cycle_target_weights",
+)

@@ -1,0 +1,1 @@
+{"allocation_policy_id":"allocation:paper-shadow-zero-capital","description":"Allocation policy hard-caps real capital at zero for paper shadow.","kind":"allocation_policy","schema_version":"1.0","strategy_id":"trend-following-v1"}

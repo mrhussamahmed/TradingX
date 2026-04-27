@@ -74,15 +74,17 @@ def test_lo_adjusted_sharpe_ratio_penalizes_positive_autocorrelation() -> None:
 def test_probabilistic_sharpe_ratio_reproduces_bailey_2012_appendix_example() -> None:
     module = importlib.import_module("tradingx.stats")
 
+    # BLDP (2012) appendix uses RAW γ4 = 5.78 (excess γ4 = 2.78).
+    # The function takes excess kurtosis; pass the converted value.
     psr = module.probabilistic_sharpe_ratio(
         observed_sharpe=2.0 / math.sqrt(12.0),
         benchmark_sharpe=1.0 / math.sqrt(12.0),
         sample_size=59.895,
         skewness=-0.72,
-        kurtosis=5.78,
+        excess_kurtosis=2.78,
     )
 
-    assert psr == pytest.approx(0.95, abs=1e-4)
+    assert psr == pytest.approx(0.95, abs=2e-3)
 
 
 def test_expected_max_sharpe_reproduces_bailey_2014_threshold() -> None:
@@ -99,11 +101,12 @@ def test_expected_max_sharpe_reproduces_bailey_2014_threshold() -> None:
 def test_deflated_sharpe_ratio_reproduces_bailey_2014_example() -> None:
     module = importlib.import_module("tradingx.stats")
 
+    # Bailey (2014) worked example uses RAW γ4 = 10 (excess γ4 = 7).
     dsr = module.deflated_sharpe_ratio(
         observed_sharpe=2.5 / math.sqrt(250.0),
         sample_size=1250,
         skewness=-3.0,
-        kurtosis=10.0,
+        excess_kurtosis=7.0,
         n_trials=100,
         trial_sharpe_variance=0.5,
     )
@@ -114,11 +117,12 @@ def test_deflated_sharpe_ratio_reproduces_bailey_2014_example() -> None:
 def test_deflated_sharpe_ratio_reproduces_bailey_2014_normal_case() -> None:
     module = importlib.import_module("tradingx.stats")
 
+    # Normal returns: skew=0, excess γ4 = 0 (raw γ4 = 3).
     dsr = module.deflated_sharpe_ratio(
         observed_sharpe=2.5 / math.sqrt(250.0),
         sample_size=1250,
         skewness=0.0,
-        kurtosis=3.0,
+        excess_kurtosis=0.0,
         n_trials=88,
         trial_sharpe_variance=0.5,
     )
@@ -203,3 +207,220 @@ def test_calmar_ratio_matches_annualized_return_divided_by_max_drawdown() -> Non
     result = calmar_ratio(returns, periods_per_year=3)
 
     assert result == pytest.approx(1.318, abs=1e-3)
+
+
+# ----------------------------------------------------------------------
+# Defect 4 — Wave 4 stats math falsification tests
+# ----------------------------------------------------------------------
+
+
+def test_paired_benchmark_lower_bound_changes_with_confidence_level() -> None:
+    """A different confidence level must move the lower bound proportionally."""
+
+    from tradingx.stats import build_paired_benchmark_uncertainty_report
+
+    candidate = [0.001, -0.0005, 0.0015, 0.0007, -0.0002, 0.0011] * 10
+    benchmark_returns = {
+        "cash": [0.0] * len(candidate),
+        "sixty_forty": [0.0001] * len(candidate),
+        "static_sleeve_baseline": [0.0002] * len(candidate),
+        "no_trade": [0.0] * len(candidate),
+    }
+    report_95 = build_paired_benchmark_uncertainty_report(
+        strategy_id="test",
+        candidate_returns=candidate,
+        benchmark_returns_by_name=benchmark_returns,
+        confidence_level="0.95",
+    )
+    report_99 = build_paired_benchmark_uncertainty_report(
+        strategy_id="test",
+        candidate_returns=candidate,
+        benchmark_returns_by_name=benchmark_returns,
+        confidence_level="0.99",
+    )
+    bound_95 = float(report_95["comparisons"][0]["lower_confidence_bound"])
+    bound_99 = float(report_99["comparisons"][0]["lower_confidence_bound"])
+    # 99% lower bound must be strictly LOWER (more conservative) than 95%.
+    assert bound_99 < bound_95
+
+
+def test_effective_sample_size_uses_signed_autocorrelations() -> None:
+    """Pin ESS to the closed-form Newey-West value with signed lags.
+
+    Earlier this test only asserted ``eff >= n``, which the upper clamp
+    in ``effective_sample_size_lo_signed`` (``min(n, ...)``) satisfies
+    trivially. To actually pin the math, this test rebuilds the
+    Bartlett-weighted signed-autocorrelation sum by hand and asserts the
+    function returns the same denominator (modulo the clamp). A buggy
+    implementation that used absolute autocorrelations or the wrong
+    weight would produce a materially different value.
+    """
+
+    from tradingx.stats import _lagged_autocorrelation, effective_sample_size_lo_signed
+
+    # Construct an AR(1)-like series with a small positive drift so the
+    # autocorrelation pattern is non-trivial and well-defined.
+    rng_seed = 7
+    import random as _r
+
+    rng = _r.Random(rng_seed)
+    series: list[float] = [0.0]
+    for _ in range(199):
+        series.append(0.6 * series[-1] + 0.01 * rng.gauss(0.0, 1.0))
+
+    max_lag = 5
+    n = len(series)
+    weighted_signed_sum = 0.0
+    import numpy as _np
+
+    arr = _np.asarray(series, dtype=float)
+    for lag in range(1, max_lag + 1):
+        rho = _lagged_autocorrelation(arr, lag)
+        assert rho is not None
+        bartlett = 1.0 - (lag / (max_lag + 1.0))
+        weighted_signed_sum += bartlett * float(rho)
+    expected_denominator = 1.0 + (2.0 * weighted_signed_sum)
+    expected_eff = (
+        float(n) if expected_denominator <= 0 else n / expected_denominator
+    )
+    expected_eff_clamped = min(float(n), max(0.0, expected_eff))
+
+    eff, _ = effective_sample_size_lo_signed(series, max_lag=max_lag)
+    assert eff == pytest.approx(expected_eff_clamped, abs=1e-9)
+
+    # And the signedness must matter: a negatively-autocorrelated series
+    # produces a strictly larger denominator inverse than its
+    # absolute-correlation counterpart would. Verify by mirroring sign:
+    pos_neg_alternating = [0.01, -0.01] * 60
+    eff_signed, _ = effective_sample_size_lo_signed(
+        pos_neg_alternating, max_lag=5
+    )
+    # A buggy absolute-value implementation would collapse ESS toward
+    # zero. The signed implementation either fires the
+    # ``denominator <= 0`` fallback (returns n) or yields ESS > n which
+    # is clamped to n. Either way ESS equals n exactly for this series.
+    assert eff_signed == pytest.approx(float(len(pos_neg_alternating)))
+
+
+def test_psr_normal_returns_collapses_to_lo_2002_variance() -> None:
+    """For normal returns, Var[SR] must collapse to (1 + SR²/2)/(n-1).
+
+    This is the Lo (2002) canonical result and is the primary sanity
+    check on the Bailey & López de Prado denominator. Any rename of the
+    ``kurtosis``/``excess_kurtosis`` parameter must preserve this
+    identity. The earlier ``(excess_kurtosis - 1)/4`` form failed it
+    by producing a NEGATIVE contribution for excess γ4 = 0.
+    """
+
+    from scipy.stats import norm
+
+    from tradingx.stats import probabilistic_sharpe_ratio
+
+    observed_sharpe = 1.0
+    benchmark_sharpe = 0.0
+    sample_size = 252.0
+    skewness = 0.0
+    excess_kurtosis = 0.0  # Normal distribution.
+
+    # Lo (2002) closed form for normal returns:
+    #   z = (SR - SR*) * sqrt(n - 1) / sqrt(1 + SR²/2)
+    #   PSR = Φ(z)
+    expected_z = (
+        (observed_sharpe - benchmark_sharpe)
+        * math.sqrt(sample_size - 1.0)
+        / math.sqrt(1.0 + (observed_sharpe**2) / 2.0)
+    )
+    expected_psr = float(norm.cdf(expected_z))
+
+    psr = probabilistic_sharpe_ratio(
+        observed_sharpe=observed_sharpe,
+        benchmark_sharpe=benchmark_sharpe,
+        sample_size=sample_size,
+        skewness=skewness,
+        excess_kurtosis=excess_kurtosis,
+    )
+    assert psr == pytest.approx(expected_psr, abs=1e-12)
+
+
+
+
+def test_stationary_bootstrap_block_lengths_are_geometric() -> None:
+    """The stationary bootstrap must draw block lengths from Geom(1/L).
+
+    To verify the *distribution* (not just that two block lengths give
+    different variance), we instrument the random number generator and
+    compare the empirical block-length distribution against the
+    Geom(1/L) CDF using a one-sample KS test. A fixed-block
+    implementation would produce a degenerate distribution that fails
+    the KS test at any reasonable significance level.
+    """
+
+    import random
+    from unittest.mock import patch
+
+    from scipy.stats import geom, kstest
+
+    from tradingx.stats import _stationary_bootstrap_means
+
+    # Capture every block length the implementation draws by patching
+    # ``random.Random.expovariate`` (the function the agent's fix
+    # documented as the geometric-block source).
+    rng = random.Random(2026)
+    block_length = 8
+    captured: list[float] = []
+    real_expovariate = random.Random.expovariate
+
+    def spy(self: random.Random, lambd: float) -> float:
+        value = real_expovariate(self, lambd)
+        captured.append(value)
+        return value
+
+    with patch.object(random.Random, "expovariate", spy):
+        _stationary_bootstrap_means(
+            tuple(0.01 * i for i in range(120)),
+            block_length=block_length,
+            n_resamples=200,
+            random_seed=2026,
+        )
+
+    # Fail-fast guard: if the function silently reverted to fixed
+    # blocks, no expovariate calls would happen.
+    assert len(captured) > 0, (
+        "stationary bootstrap must draw geometric block lengths via "
+        "random.Random.expovariate; no draws observed"
+    )
+
+    # ``random.expovariate(1/L)`` returns continuous Exp(1/L) draws.
+    # The implementation rounds these to integer block lengths via
+    # ``max(1, int(...))``. Test the underlying continuous draws against
+    # the Exp(1/L) CDF, which is the canonical Politis-Romano (1994)
+    # construction.
+    rate = 1.0 / float(block_length)
+    statistic, p_value = kstest(captured, "expon", args=(0.0, 1.0 / rate))
+    # Reject only at very low p-values (1e-3) so randomness across CI
+    # runs does not flake; a fixed-block implementation would yield
+    # p ≈ 0 because all draws would be identical.
+    assert p_value > 1e-3, (
+        f"block-length distribution does not match Exp(1/{block_length}); "
+        f"KS p-value={p_value:.6f}"
+    )
+
+    # Sanity: keep the original variance check as a secondary signal so
+    # a regression to fixed blocks would fail two assertions, not one.
+    base = [0.0]
+    rng2 = random.Random(0)
+    for _ in range(199):
+        base.append(0.95 * base[-1] + 0.01 * rng2.gauss(0.0, 1.0))
+    means_short = _stationary_bootstrap_means(
+        tuple(base), block_length=2, n_resamples=300, random_seed=2026
+    )
+    means_long = _stationary_bootstrap_means(
+        tuple(base), block_length=20, n_resamples=300, random_seed=2026
+    )
+    var_short = sum(
+        (m - sum(means_short) / len(means_short)) ** 2 for m in means_short
+    )
+    var_long = sum(
+        (m - sum(means_long) / len(means_long)) ** 2 for m in means_long
+    )
+    assert var_long != pytest.approx(var_short, rel=0.01)

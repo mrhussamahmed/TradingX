@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.promotion import Blocker, PromotionDecision, PromotionState
 from tradingx.types import (
     EvaluationEvidencePack,
     GateAssessment,
@@ -147,7 +148,8 @@ def test_build_gate_decision_brief_combines_validation_and_paper_evidence(
 
     assert brief.gate_id == "1"
     assert brief.status == "pass"
-    assert "advance" in brief.required_operator_action.lower()
+    assert "legacy non-authority" in brief.required_operator_action.lower()
+    assert "v5 promotion decision" in brief.required_operator_action.lower()
     assert brief.latest_open_positions == ("SPY",)
     assert brief.blocked_trade_count == 2
     assert brief.reconciliation_failure_count == 1
@@ -270,3 +272,24 @@ def test_build_gate_decision_brief_excludes_pending_criterion_from_failed_criter
     )
 
     assert brief.candidate_summaries[0].failed_criteria == ()
+
+
+def test_promotion_blocker_report_separates_mandate_and_statistical_blockers() -> None:
+    reporting = importlib.import_module("tradingx.reporting")
+    decision = PromotionDecision(
+        strategy_id="trend-following-v1",
+        requested_state=PromotionState.PRODUCTION,
+        max_state=PromotionState.RESEARCH_ONLY,
+        blockers=(
+            Blocker("utility_definition_missing"),
+            Blocker("lower_bound_net_edge_undefined"),
+        ),
+        artifact_refs=("sha256:" + "1" * 64,),
+        ledger_sequence=1,
+        ledger_hash="sha256:" + "2" * 64,
+    )
+
+    report = reporting.build_promotion_blocker_report(decision)
+
+    assert report["mandate_blocker_codes"] == ["utility_definition_missing"]
+    assert report["statistical_blocker_codes"] == ["lower_bound_net_edge_undefined"]

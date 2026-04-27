@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "kind": "experiment_run_record",
+  "run_id": "run-001",
+  "experiment_id": "exp-001",
+  "promotion_decision_scope": "scope-prod-001",
+  "lifecycle_status": "completed",
+  "started_at_utc": "2026-04-26T08:05:00Z",
+  "completed_at_utc": "2026-04-26T08:20:00Z",
+  "metrics_visible_at_utc": "2026-04-26T08:25:00Z",
+  "metrics_visibility_status": "released",
+  "metric_vault_release_status": "released",
+  "metric_release_token_ref": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "immutable_stdout_stderr_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "notebook_output_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "result_artifact_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "termination_reason_code": "completed",
+  "termination_stage": "post_validation",
+  "partial_metric_payload_hash": "",
+  "conservative_imputation_policy": "none",
+  "cancellation_sensitivity_status": "not_applicable"
+}

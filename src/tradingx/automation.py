@@ -45,6 +45,10 @@ from tradingx.live_enablement import (
 )
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+)
 from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH
 from tradingx.runtime_host import PortfolioGatewayProtocol
@@ -897,6 +901,11 @@ def build_default_market_day_automation_runner(
         store=operator_store,
         runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
+        promotion_decision_provider=build_artifact_promotion_decision_provider(
+            config.runtime.artifact_root / "quant" / "promotion"
+        ),
+        required_promotion_state=PromotionState.PAPER_TRADING,
+        projection_root=Path("config/strategy/promotion"),
     )
     trading_client = build_trading_client_for_mode(config, decision)
     portfolio_gateway = AlpacaPortfolioGateway(trading_client=trading_client)

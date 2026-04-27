@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Threshold Justification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "metric_name",
+    "threshold_value",
+    "rationale",
+    "justification_ref",
+    "status",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "threshold_justification"},
+    "strategy_id": {"type": "string"},
+    "metric_name": {"type": "string"},
+    "threshold_value": {"type": "string"},
+    "rationale": {"type": "string"},
+    "justification_ref": {"type": "string"},
+    "status": {"type": "string", "enum": ["valid", "pending_threshold"]},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

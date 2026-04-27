@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tradingx.portfolio.blueprint import StrategyAllocationLimit
 from tradingx.runtime_portfolio import (
     RuntimePortfolioPlanner,
     UnsupportedRuntimePortfolioPlanError,
@@ -33,6 +34,7 @@ class FakeActivationGateway:
         *,
         strategy_id: str,
         blueprint_activation: BlueprintActivationRecord | None = None,
+        allocation_limits: tuple[StrategyAllocationLimit, ...] = (),
     ) -> None:
         self._activation = StrategyActivationRecord(
             activation_id="activation-1",
@@ -54,6 +56,7 @@ class FakeActivationGateway:
             weights={"signal": Decimal("1.0")},
         )
         self._blueprint_activation = blueprint_activation
+        self._allocation_limits = allocation_limits
 
     def load_or_create_active_records(
         self,
@@ -64,6 +67,13 @@ class FakeActivationGateway:
 
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
         return self._blueprint_activation
+
+    def get_strategy_allocation_limits(
+        self,
+        blueprint,
+    ) -> tuple[StrategyAllocationLimit, ...]:
+        del blueprint
+        return self._allocation_limits
 
 
 class FakeMarketData:
@@ -460,6 +470,77 @@ def test_runtime_portfolio_planner_builds_blueprint_plan_with_attributions(
         ("vol-target-v1", Decimal("0.5")),
     )
     assert qqq_intent.sleeve_attributions == (("trend-following-v1", Decimal("1")),)
+
+
+def test_runtime_portfolio_planner_enforces_activation_allocation_limits(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint_path = tmp_path / "bp-runtime.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-runtime",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    strategy_id: trend-following-v1",
+                "    budget_fraction_of_equity: 0.10",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_sleeve_from_candidate",
+        lambda candidate: _NoopSleeve(sleeve_id=candidate.candidate_id),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+            allocation_limits=(
+                StrategyAllocationLimit(
+                    strategy_id="trend-following-v1",
+                    max_strategy_allocation=Decimal("0.05"),
+                ),
+            ),
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    with pytest.raises(ValueError, match="allocation_policy_limit_exceeded"):
+        planner.plan_for_service(
+            symbols=("SPY",),
+            portfolio_state=PortfolioState(
+                as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+                cash=Decimal("10000"),
+                equity=Decimal("10000"),
+                buying_power=Decimal("20000"),
+                positions=(),
+                open_orders=(),
+            ),
+            default_quantity=Decimal("0"),
+        )
 
 
 def test_runtime_portfolio_planner_surfaces_structural_failure_from_runtime_controller(

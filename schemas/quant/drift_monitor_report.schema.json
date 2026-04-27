@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Drift Monitor Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "spec_ref",
+    "monitored_values",
+    "threshold_results",
+    "regime_classification",
+    "missing_data_status",
+    "multiple_testing_adjustment",
+    "alerted_at_utc",
+    "demotion_recommendation",
+    "evidence_refs",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "drift_monitor_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "spec_ref": {"type": "string"},
+    "monitored_values": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "threshold_results": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "regime_classification": {"type": "string"},
+    "missing_data_status": {"type": "string"},
+    "multiple_testing_adjustment": {"type": "string"},
+    "alerted_at_utc": {"type": "string"},
+    "demotion_recommendation": {
+      "type": "string",
+      "enum": ["no_action", "operator_review", "demote_to_paper_shadow", "halt"]
+    },
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

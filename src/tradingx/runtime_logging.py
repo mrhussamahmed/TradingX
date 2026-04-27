@@ -5,9 +5,12 @@ from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tradingx.config import TradingConfig
+
+if TYPE_CHECKING:
+    from tradingx.experiments import MetricVisibilityContext
 
 
 def _serialize(value: Any) -> Any:
@@ -57,18 +60,43 @@ class StructuredRuntimeLogger:
         decision_snapshot_id: str,
         cycle_correlation_id: str,
         fields: dict[str, Any] | None = None,
+        metric_visibility_context: MetricVisibilityContext | None = None,
     ) -> Path:
         self._root_dir.mkdir(parents=True, exist_ok=True)
+        visible_payload: dict[str, object] = {
+            "message": message,
+            "fields": fields or {},
+        }
+        if metric_visibility_context is not None:
+            from tradingx.experiments import sanitize_metric_payload
+
+            visible_payload = sanitize_metric_payload(
+                visible_payload,
+                context=metric_visibility_context,
+                surface="structured_runtime_log",
+            )
         payload = {
             "timestamp_utc": self._now_provider(),
             "component": self._component,
             "event_type": event_type,
             "severity": severity,
-            "message": message,
+            "message": visible_payload.get("message", message),
             "decision_snapshot_id": decision_snapshot_id,
             "cycle_correlation_id": cycle_correlation_id,
-            "fields": fields or {},
+            "fields": visible_payload.get("fields", fields or {}),
         }
+        for key in (
+            "promotion_valid",
+            "evidence_class",
+            "blocker_codes",
+            "metric_visibility_status",
+            "metric_visibility_surface",
+            "experiment_id",
+            "run_id",
+            "promotion_decision_scope",
+        ):
+            if key in visible_payload:
+                payload[key] = visible_payload[key]
         encoded = json.dumps(_serialize(payload), sort_keys=True) + "\n"
         self._rotate_if_needed(incoming_bytes=len(encoded.encode("utf-8")))
         with self.path.open("a", encoding="utf-8") as handle:

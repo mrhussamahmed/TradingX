@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Operational Safety Drill",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "drill_id",
+    "drill_type",
+    "expected_behavior",
+    "observed_behavior",
+    "passed",
+    "executed_at_utc",
+    "freshness_window_seconds",
+    "valid_until_utc",
+    "is_stale",
+    "evidence_refs",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "operational_safety_drill"},
+    "drill_id": {"type": "string"},
+    "drill_type": {
+      "type": "string",
+      "enum": [
+        "kill_switch",
+        "broker_anomaly",
+        "duplicate_order_idempotency",
+        "reconciliation_mismatch",
+        "stale_data",
+        "drawdown_limit",
+        "flatten",
+        "cancel_on_disconnect"
+      ]
+    },
+    "expected_behavior": {"type": "string"},
+    "observed_behavior": {"type": "string"},
+    "passed": {"type": "boolean"},
+    "executed_at_utc": {"type": "string", "format": "utc-datetime"},
+    "freshness_window_seconds": {"type": "integer"},
+    "valid_until_utc": {"type": "string", "format": "utc-datetime"},
+    "is_stale": {"type": "boolean"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

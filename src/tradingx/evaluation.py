@@ -449,14 +449,19 @@ def evaluate_candidate(
                 dtype=float,
             )
             skewness = float(scipy_skew(returns_array, bias=False))
-            kurtosis = float(scipy_kurtosis(returns_array, fisher=True, bias=False))
-            if math.isfinite(skewness) and math.isfinite(kurtosis):
+            # ``scipy_kurtosis(..., fisher=True)`` returns excess kurtosis
+            # (kurtosis - 3), which is exactly what PSR/DSR expect after
+            # the Defect 4 rename.
+            excess_kurtosis = float(
+                scipy_kurtosis(returns_array, fisher=True, bias=False)
+            )
+            if math.isfinite(skewness) and math.isfinite(excess_kurtosis):
                 try:
                     dsr_value = deflated_sharpe_ratio(
                         observed_sharpe=observed_sharpe,
                         sample_size=float(len(candidate_returns)),
                         skewness=skewness,
-                        kurtosis=kurtosis,
+                        excess_kurtosis=excess_kurtosis,
                         n_trials=stats.n_trials,
                         trial_sharpe_variance=stats.trial_sharpe_variance,
                         mean_trial_sharpe=stats.trial_sharpe_mean,

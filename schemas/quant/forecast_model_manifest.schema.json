@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Forecast Model Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "manifest_id",
+    "strategy_id",
+    "model_identity",
+    "model_version_hash",
+    "feature_manifest_ref",
+    "label_definition_ref",
+    "training_dataset_ref",
+    "model_class",
+    "horizon",
+    "target_variable",
+    "uncertainty_estimator",
+    "uncertainty_calibrated",
+    "retraining_cadence",
+    "promotion_status",
+    "approved_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "forecast_model_manifest"},
+    "manifest_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "model_identity": {"type": "string"},
+    "model_version_hash": {"type": "string"},
+    "feature_manifest_ref": {"type": "string"},
+    "label_definition_ref": {"type": "string"},
+    "training_dataset_ref": {"type": "string"},
+    "model_class": {"type": "string"},
+    "horizon": {"type": "string"},
+    "target_variable": {"type": "string"},
+    "uncertainty_estimator": {"type": "string"},
+    "uncertainty_calibrated": {"type": "boolean"},
+    "retraining_cadence": {"type": "string"},
+    "promotion_status": {
+      "type": "string",
+      "enum": ["promotion_valid", "uncertainty_penalized", "exploratory", "legacy"]
+    },
+    "approved_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

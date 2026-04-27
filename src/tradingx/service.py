@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol, cast
 
 from tradingx.activation import LocalActivationGateway
@@ -32,6 +33,10 @@ from tradingx.portfolio.fallback import (
     ActivationGatewaySupersedeProtocol,
     BlueprintExhaustionError,
     narrow_blueprint_on_sleeve_failure,
+)
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
 )
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
@@ -752,6 +757,11 @@ def build_default_trading_service(
         store=operator_store,
         runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
+        promotion_decision_provider=build_artifact_promotion_decision_provider(
+            config.runtime.artifact_root / "quant" / "promotion"
+        ),
+        required_promotion_state=PromotionState.PAPER_TRADING,
+        projection_root=Path("config/strategy/promotion"),
     )
     operator_control_store = OperatorControlStore(config.runtime.data_root / "control")
     blueprint_planner = RuntimePortfolioPlanner(
@@ -814,6 +824,11 @@ def build_runtime_host_trading_service(
             activation_gateway=LocalActivationGateway(
                 store=operator_store,
                 runtime_snapshot_store=runtime_store,
+                promotion_decision_provider=build_artifact_promotion_decision_provider(
+                    config.runtime.artifact_root / "quant" / "promotion"
+                ),
+                required_promotion_state=PromotionState.PAPER_TRADING,
+                projection_root=Path("config/strategy/promotion"),
             ),
             operator_store=operator_store,
         ),

@@ -1,0 +1,1 @@
+{"account_type":"paper","description":"Tax/account assumptions for paper-shadow diagnostics.","financing_assumption":"none","kind":"tax_account_policy","schema_version":"1.0","strategy_id":"trend-following-v1","tax_mode":"pre_tax_diagnostic"}

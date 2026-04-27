@@ -1,0 +1,18 @@
+{
+  "record_id": "qq-fixture-001",
+  "symbol": "SPY",
+  "quote_timestamp_utc": "2026-04-26T13:30:00+00:00",
+  "system_receive_at_utc": "2026-04-26T13:30:00+00:00",
+  "source": "alpaca",
+  "vendor": "alpaca",
+  "trading_session": "regular",
+  "bid_price": "400.10",
+  "ask_price": "400.12",
+  "handling_policy": "no_trade_on_bad_quote",
+  "quote_age_milliseconds": 80,
+  "latency_milliseconds": 5,
+  "is_locked": false,
+  "is_crossed": false,
+  "is_stale": false,
+  "outage_adjacent": false
+}

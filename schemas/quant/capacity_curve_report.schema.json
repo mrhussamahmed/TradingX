@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Capacity Curve Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "target_capital_scale",
+    "tested_scales",
+    "validated_range_min",
+    "validated_range_max",
+    "max_participation_rate",
+    "expected_turnover",
+    "orders_per_day",
+    "rebalance_frequency",
+    "annualized_cost_drag_by_scale",
+    "capacity_under_turnover_assumption",
+    "lower_bound_capacity_curve",
+    "expected_cost_curve",
+    "net_edge_curve",
+    "lower_bound_net_edge_by_scale",
+    "lower_bound_capacity_limit",
+    "capacity_extrapolation_risk",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "capacity_curve_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "target_capital_scale": {"type": "string"},
+    "tested_scales": {"type": "array", "items": {"type": "string"}},
+    "validated_range_min": {"type": "string"},
+    "validated_range_max": {"type": "string"},
+    "max_participation_rate": {"type": "string"},
+    "expected_turnover": {"type": "string"},
+    "orders_per_day": {"type": "string"},
+    "rebalance_frequency": {"type": "string"},
+    "annualized_cost_drag_by_scale": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "capacity_under_turnover_assumption": {"type": "string"},
+    "lower_bound_capacity_curve": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "expected_cost_curve": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "net_edge_curve": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "lower_bound_net_edge_by_scale": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "lower_bound_capacity_limit": {"type": "string"},
+    "capacity_extrapolation_risk": {"type": "boolean"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

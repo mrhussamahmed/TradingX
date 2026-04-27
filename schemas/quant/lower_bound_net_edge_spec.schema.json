@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Lower Bound Net Edge Spec",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "artifact_uri",
+    "payload_hash",
+    "ledger_sequence",
+    "approval_record_refs",
+    "authority_ref",
+    "created_at_utc",
+    "replay_input_refs",
+    "estimator_family",
+    "confidence_level",
+    "return_horizon",
+    "benchmark_pairing",
+    "serial_dependence_correction",
+    "fat_tail_treatment",
+    "minimum_effective_sample_size",
+    "prior_policy",
+    "stress_inputs",
+    "pass_threshold"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "lower_bound_net_edge_spec"},
+    "strategy_id": {"type": "string"},
+    "artifact_uri": {"type": "string"},
+    "payload_hash": {"type": "string", "format": "sha256"},
+    "ledger_sequence": {"type": "integer"},
+    "approval_record_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "authority_ref": {"type": "string"},
+    "created_at_utc": {"type": "string", "format": "utc-datetime"},
+    "replay_input_refs": {"type": "array", "items": {"type": "string", "format": "content-addressed-ref"}},
+    "estimator_family": {"type": "string"},
+    "confidence_level": {"type": "string", "format": "decimal-string"},
+    "return_horizon": {"type": "string"},
+    "benchmark_pairing": {"type": "string"},
+    "serial_dependence_correction": {
+      "type": "string",
+      "enum": ["HAC", "block_bootstrap", "none"]
+    },
+    "fat_tail_treatment": {
+      "type": "string",
+      "enum": ["block_bootstrap_stress", "stationary_bootstrap", "none"]
+    },
+    "minimum_effective_sample_size": {"type": "integer"},
+    "prior_policy": {"type": "string"},
+    "stress_inputs": {"type": "array", "items": {"type": "string"}},
+    "pass_threshold": {"type": "string", "format": "decimal-string"}
+  }
+}

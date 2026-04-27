@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Recertification Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "production_state_before",
+    "production_state_after",
+    "reason",
+    "authority_boundary_ref",
+    "risk_accepted",
+    "evidence_refs",
+    "freshness_status",
+    "statistical_status",
+    "cost_capacity_status",
+    "optimizer_status",
+    "live_probe_status",
+    "drift_status",
+    "incident_status",
+    "approval_status",
+    "approver",
+    "production_expires_at_utc",
+    "next_operational_review_due_utc",
+    "next_statistical_review_due_utc",
+    "change_id",
+    "evidence_class",
+    "promotion_valid",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "recertification_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "production_state_before": {"type": "string"},
+    "production_state_after": {"type": "string"},
+    "reason": {"type": "string"},
+    "authority_boundary_ref": {"type": "string"},
+    "risk_accepted": {"type": "boolean"},
+    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    "freshness_status": {
+      "type": "string",
+      "enum": ["fresh", "stale"]
+    },
+    "statistical_status": {"type": "string"},
+    "cost_capacity_status": {"type": "string"},
+    "optimizer_status": {"type": "string"},
+    "live_probe_status": {"type": "string"},
+    "drift_status": {
+      "type": "string",
+      "enum": ["nominal", "inactive", "active"]
+    },
+    "incident_status": {
+      "type": "string",
+      "enum": ["resolved", "open", "active"]
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": ["approved", "pending", "rejected"]
+    },
+    "approver": {"type": "string"},
+    "production_expires_at_utc": {"type": "string", "format": "utc-datetime"},
+    "next_operational_review_due_utc": {"type": "string", "format": "utc-datetime"},
+    "next_statistical_review_due_utc": {"type": "string", "format": "utc-datetime"},
+    "change_id": {"type": "string"},
+    "evidence_class": {
+      "type": "string",
+      "enum": ["promotion_valid", "exploratory", "legacy"]
+    },
+    "promotion_valid": {"type": "boolean"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

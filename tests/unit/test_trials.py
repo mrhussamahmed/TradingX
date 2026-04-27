@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from tradingx.trials import TrialsLedger
+import pytest
+
+from tradingx.trials import TrialsLedger, TrialsLedgerIntegrityError
 from tradingx.types import TrialRecord
 
 
@@ -43,11 +45,22 @@ def test_trials_ledger_idempotent_on_trial_id(tmp_path: Path) -> None:
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
 
     ledger.record(_make_record("trial-1", "1.0"))
-    ledger.record(_make_record("trial-1", "2.0"))
+    ledger.record(_make_record("trial-1", "1.0"))
     fetched = ledger.list_for_candidate("trend-following-v1")
 
     assert len(fetched) == 1
     assert fetched[0].observed_sharpe_net_of_costs == Decimal("1.0")
+
+
+def test_trials_ledger_rejects_same_trial_id_with_changed_payload(
+    tmp_path: Path,
+) -> None:
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+
+    ledger.record(_make_record("trial-1", "1.0"))
+
+    with pytest.raises(TrialsLedgerIntegrityError, match="changed payload"):
+        ledger.record(_make_record("trial-1", "2.0"))
 
 
 def test_trials_ledger_filters_by_window(tmp_path: Path) -> None:

@@ -167,6 +167,42 @@ class FakeAutomationRunner:
         )
 
 
+class FakeGateController:
+    def __init__(self) -> None:
+        self.called_with = None
+
+    def generate_gate_report(self, **kwargs):
+        self.called_with = kwargs
+
+        class Result:
+            artifact_paths = (Path("artifacts/validation/gate-report.json"),)
+
+        return Result()
+
+
+def _write_benchmark_stack_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "hurdle_returns": ["0.0001"],
+                "opportunity_cost_returns": ["0.0002"],
+                "opportunity_cost_weights": [
+                    {"symbol": "SPY", "weight": "0.6"},
+                    {"symbol": "AGG", "weight": "0.4"},
+                ],
+                "operating_constraint": {
+                    "max_drawdown_design": "0.15",
+                    "max_drawdown_halt": "0.25",
+                    "cdar_threshold": "0.08",
+                    "cdar_confidence": "0.95",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _wait_for(predicate, *, timeout_seconds: float = 1.0) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -241,6 +277,7 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
     monkeypatch, tmp_path
 ) -> None:
     service_manager_instances: list[object] = []
+    activation_kwargs: list[dict[str, object]] = []
 
     class RecordingServiceManager:
         def __init__(self, *, config, service_builder=None) -> None:
@@ -281,7 +318,7 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
     monkeypatch.setattr(
         web_runtime,
         "LocalActivationGateway",
-        lambda *args, **kwargs: object(),
+        lambda *args, **kwargs: activation_kwargs.append(kwargs) or object(),
     )
     monkeypatch.setattr(
         web_runtime,
@@ -313,6 +350,9 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
         action_runner._runtime_host_manager.service_manager
         is service_manager_instances[0]
     )
+    assert activation_kwargs
+    assert activation_kwargs[0]["promotion_decision_provider"] is not None
+    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
@@ -385,6 +425,8 @@ def test_local_web_action_runner_generates_gate3_artifacts(tmp_path) -> None:
 
     assert report.status == "completed"
     assert package.status == "completed"
+    assert "legacy_non_authority" in report.message
+    assert "legacy_non_authority" in package.message
     assert recovery.status in {"completed", "pending"}
     assert alert.status in {"completed", "pending"}
     assert (tmp_path / "artifacts" / "validation" / "gate3_reports").exists()
@@ -490,3 +532,107 @@ def test_local_web_action_runner_rejects_gate_report_benchmark_outside_artifact_
             window_start="2026-04-01",
             window_end="2026-04-17",
         )
+
+
+def test_local_web_action_runner_fake_metric_context_fails_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    benchmark_file = artifact_root / "benchmark-stack.json"
+    _write_benchmark_stack_file(benchmark_file)
+    fake_controller = FakeGateController()
+    monkeypatch.setattr(
+        "tradingx.web.runtime.build_default_gate_validation_controller",
+        lambda config, artifact_root: fake_controller,
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(artifact_root)}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    result = runner.generate_gate_report(
+        gate="1",
+        benchmark_stack_file=str(benchmark_file),
+        window_start="2026-04-01",
+        window_end="2026-04-17",
+        experiment_id="exp-fake",
+        run_id="run-fake",
+        promotion_decision_scope="scope-prod-001",
+        metric_release_token="sha256:" + "9" * 64,
+        dataset_manifest_id="dataset-fake",
+    )
+
+    assert result.status == "completed"
+    context = fake_controller.called_with["metric_visibility_context"]
+    assert context.is_released is False
+    assert "trial_lineage_contaminated" in context.blocker_codes
+    assert "point_in_time_data_incomplete" in context.blocker_codes
+
+
+def test_local_web_action_runner_resolves_released_metric_context(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tradingx.experiments import ExperimentLedger
+
+    artifact_root = tmp_path / "artifacts"
+    benchmark_file = artifact_root / "benchmark-stack.json"
+    _write_benchmark_stack_file(benchmark_file)
+    dataset_file = artifact_root / "datasets" / "dataset-spy-v1.json"
+    dataset_file.parent.mkdir(parents=True, exist_ok=True)
+    dataset_file.write_text(
+        Path(
+            "tests/fixtures/data_fingerprints/dataset_manifest_complete.json"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    ledger = ExperimentLedger(ledger_root=artifact_root / "experiments")
+    registration = json.loads(
+        Path(
+            "tests/fixtures/experiments/experiment_registration_pre_result.json"
+        ).read_text(encoding="utf-8")
+    )
+    completed_run = json.loads(
+        Path("tests/fixtures/experiments/experiment_run_completed.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    started_run = dict(completed_run)
+    started_run["lifecycle_status"] = "started"
+    started_run["termination_reason_code"] = "started"
+    ledger.append_registration(registration)
+    ledger.append_run_record(started_run)
+    ledger.append_run_record(completed_run)
+    fake_controller = FakeGateController()
+    monkeypatch.setattr(
+        "tradingx.web.runtime.build_default_gate_validation_controller",
+        lambda config, artifact_root: fake_controller,
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(artifact_root)}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    runner.generate_gate_report(
+        gate="1",
+        benchmark_stack_file=str(benchmark_file),
+        window_start="2026-04-01",
+        window_end="2026-04-17",
+        experiment_id="exp-001",
+        run_id="run-001",
+        promotion_decision_scope="scope-prod-001",
+        metric_release_token="sha256:" + "b" * 64,
+        dataset_manifest_id="dataset-spy-v1",
+        dataset_manifest_file=str(dataset_file),
+    )
+
+    context = fake_controller.called_with["metric_visibility_context"]
+    assert context.is_released is True
+    assert fake_controller.called_with["dataset_manifest_id"] == "dataset-spy-v1"

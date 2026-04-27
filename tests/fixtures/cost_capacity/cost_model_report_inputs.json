@@ -1,0 +1,47 @@
+{
+  "report_id": "cost-fixture-001",
+  "strategy_id": "trend-following-v1",
+  "model_version": "1.0",
+  "cost_feature_hash": "sha256:fixture-cost-feature-hash",
+  "bucket_assignment_policy": "vol_x_spread",
+  "training_dataset_ref": "cas://dataset/spy-2026q1.json",
+  "sample_window_start_utc": "2026-01-01T00:00:00+00:00",
+  "sample_window_end_utc": "2026-04-01T00:00:00+00:00",
+  "bucket_definitions": [
+    "vol_low_spread_low",
+    "vol_low_spread_high",
+    "vol_high_spread_low",
+    "vol_high_spread_high"
+  ],
+  "minimum_bucket_sample_size": 100,
+  "bucket_power_target": "0.80",
+  "bucket_confidence": "0.95",
+  "powered_bucket_coverage": {
+    "vol_low_spread_low": true,
+    "vol_low_spread_high": true,
+    "vol_high_spread_low": true,
+    "vol_high_spread_high": true
+  },
+  "sparse_bucket_fallback_policy": "global_adverse_p90",
+  "clean_estimate_bps": "8",
+  "all_events_stress_bps": "12",
+  "adverse_p90_bps": "15",
+  "adverse_p95_bps": "20",
+  "bucket_sample_sizes": {
+    "vol_low_spread_low": 200,
+    "vol_low_spread_high": 200,
+    "vol_high_spread_low": 200,
+    "vol_high_spread_high": 200
+  },
+  "unsupported_buckets": [],
+  "non_fill_opportunity_cost_bps": "2",
+  "queue_adverse_selection_bps": "1",
+  "counterfactual_quality": "high",
+  "paper_observation_count": 500,
+  "live_probe_observation_count": 100,
+  "live_observation_count": 50,
+  "minimum_live_sample_requirement": 100,
+  "calibration_source": "live_probe_calibration",
+  "runtime_no_trade_rule_enforced": true,
+  "impact_claim_requested": true
+}

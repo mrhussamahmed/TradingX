@@ -41,6 +41,7 @@ def compute_pbo(
     random_seed: int = DEFAULT_RANDOM_SEED,
     evaluation_id: str | None = None,
     generated_at_utc: datetime | None = None,
+    full_cpcv_matrix_ref: str = "",
 ) -> PBOReport:
     if not cpcv_records:
         raise InsufficientCPCVCohortError("cpcv_records is empty.")
@@ -143,6 +144,7 @@ def compute_pbo(
         metric_name=_METRIC_NAME,
         random_seed=random_seed,
         generated_at_utc=generated_at_utc or datetime.now(UTC),
+        full_cpcv_matrix_ref=full_cpcv_matrix_ref,
     )
 
 

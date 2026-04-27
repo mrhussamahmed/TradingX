@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Power Analysis Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "strategy_id",
+    "n_observations",
+    "effective_sample_size",
+    "minimum_effective_sample_size",
+    "max_lag",
+    "lag_sensitivity",
+    "status",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "power_analysis_report"},
+    "strategy_id": {"type": "string"},
+    "n_observations": {"type": "integer"},
+    "effective_sample_size": {"type": "string"},
+    "minimum_effective_sample_size": {"type": "integer"},
+    "max_lag": {"type": "integer"},
+    "lag_sensitivity": {"type": "array", "items": {"type": "object"}},
+    "status": {"type": "string", "enum": ["powered", "underpowered"]},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

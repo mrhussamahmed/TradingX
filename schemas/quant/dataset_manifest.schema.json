@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Dataset Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "dataset_id",
+    "vendor",
+    "pulled_at_utc",
+    "symbols",
+    "window_start_utc",
+    "window_end_utc",
+    "bar_frequency",
+    "adjustment_policy",
+    "total_return_policy",
+    "corporate_action_policy",
+    "timezone",
+    "calendar",
+    "session_policy",
+    "timestamp_alignment",
+    "missing_data_policy",
+    "stale_data_policy",
+    "point_in_time_universe_membership_ref",
+    "point_in_time_symbol_mapping_ref",
+    "inception_delisting_policy",
+    "delisting_return_inputs_ref",
+    "survivorship_policy",
+    "vendor_observation_timestamp_ref",
+    "vendor_availability_timestamp_ref",
+    "raw_payload_refs",
+    "raw_payload_hashes",
+    "normalized_frame_refs",
+    "normalized_frame_hashes",
+    "normalization_code_hash",
+    "normalization_policy_hash",
+    "corporate_action_hash",
+    "benchmark_hash",
+    "cash_curve_hash"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "dataset_manifest"},
+    "dataset_id": {"type": "string"},
+    "vendor": {"type": "string"},
+    "pulled_at_utc": {"type": "string", "format": "utc-datetime"},
+    "symbols": {"type": "array", "items": {"type": "string"}},
+    "window_start_utc": {"type": "string"},
+    "window_end_utc": {"type": "string"},
+    "bar_frequency": {"type": "string"},
+    "adjustment_policy": {"type": "string"},
+    "total_return_policy": {"type": "string"},
+    "corporate_action_policy": {"type": "string"},
+    "benchmark_curve_ref": {"type": "string", "format": "content-addressed-ref"},
+    "cash_curve_ref": {"type": "string", "format": "content-addressed-ref"},
+    "timezone": {"type": "string"},
+    "calendar": {"type": "string"},
+    "session_policy": {"type": "string"},
+    "timestamp_alignment": {"type": "string"},
+    "missing_data_policy": {"type": "string"},
+    "stale_data_policy": {"type": "string"},
+    "point_in_time_universe_membership_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "point_in_time_symbol_mapping_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "inception_delisting_policy": {"type": "string"},
+    "delisting_return_inputs_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "survivorship_policy": {"type": "string"},
+    "vendor_observation_timestamp_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "vendor_availability_timestamp_ref": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "raw_payload_refs": {
+      "type": "array",
+      "items": {"type": "string", "format": "content-addressed-ref"}
+    },
+    "raw_payload_hashes": {
+      "type": "array",
+      "items": {"type": "string", "format": "content-addressed-ref"}
+    },
+    "normalized_frame_refs": {
+      "type": "array",
+      "items": {"type": "string", "format": "content-addressed-ref"}
+    },
+    "normalized_frame_hashes": {
+      "type": "array",
+      "items": {"type": "string", "format": "content-addressed-ref"}
+    },
+    "normalization_code_hash": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "normalization_policy_hash": {
+      "type": "string",
+      "format": "content-addressed-ref"
+    },
+    "corporate_action_hash": {"type": "string", "format": "content-addressed-ref"},
+    "benchmark_hash": {"type": "string", "format": "content-addressed-ref"},
+    "cash_curve_hash": {"type": "string", "format": "content-addressed-ref"},
+    "status": {"type": "string"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

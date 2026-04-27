@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Replay Equivalence Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "strategy_id",
+    "old_artifact_ref",
+    "new_artifact_ref",
+    "metric_deltas",
+    "decision_deltas",
+    "trade_deltas",
+    "safety_rule_deltas",
+    "equivalence_status",
+    "blocker_codes",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "replay_equivalence_report"},
+    "report_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "old_artifact_ref": {"type": "string"},
+    "new_artifact_ref": {"type": "string"},
+    "metric_deltas": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "decision_deltas": {"type": "array", "items": {"type": "string"}},
+    "trade_deltas": {"type": "array", "items": {"type": "string"}},
+    "safety_rule_deltas": {"type": "array", "items": {"type": "string"}},
+    "equivalence_status": {
+      "type": "string",
+      "enum": ["equivalent", "non_equivalent", "indeterminate"]
+    },
+    "blocker_codes": {"type": "array", "items": {"type": "string"}},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

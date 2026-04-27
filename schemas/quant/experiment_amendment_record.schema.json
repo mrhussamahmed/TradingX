@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Experiment Amendment Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "amendment_id",
+    "experiment_id",
+    "promotion_decision_scope",
+    "amended_at_utc",
+    "reason_code"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "experiment_amendment_record"},
+    "amendment_id": {"type": "string"},
+    "experiment_id": {"type": "string"},
+    "promotion_decision_scope": {"type": "string"},
+    "amended_at_utc": {"type": "string", "format": "utc-datetime"},
+    "reason_code": {"type": "string"},
+    "selection_audit_required": {"type": "boolean"},
+    "correction_payload_hash": {"type": "string", "format": "content-addressed-ref"}
+  }
+}

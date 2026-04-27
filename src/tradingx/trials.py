@@ -9,6 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
+from tradingx.authority import canonical_payload_hash
 from tradingx.types import TrialRecord, TrialStatistics
 
 _SCHEMA = """
@@ -35,6 +36,10 @@ CREATE INDEX IF NOT EXISTS idx_trials_window
 """
 
 
+class TrialsLedgerIntegrityError(ValueError):
+    """Raised when an append-only trial record is rewritten with new content."""
+
+
 class TrialsLedger:
     def __init__(self, *, database_path: Path) -> None:
         self._database_path = database_path
@@ -52,10 +57,23 @@ class TrialsLedger:
             connection.close()
 
     def record(self, trial: TrialRecord) -> None:
+        payload = _record_payload(trial)
         with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM trials WHERE trial_id = ?",
+                (trial.trial_id,),
+            ).fetchone()
+            if existing is not None:
+                if canonical_payload_hash(
+                    _record_payload(_row_to_record(existing))
+                ) == (canonical_payload_hash(payload)):
+                    return
+                raise TrialsLedgerIntegrityError(
+                    f"trial_id changed payload: {trial.trial_id}"
+                )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO trials VALUES (
+                INSERT INTO trials VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
@@ -157,4 +175,23 @@ def _row_to_record(row: tuple[object, ...]) -> TrialRecord:
     )
 
 
-__all__ = ("TrialsLedger",)
+def _record_payload(trial: TrialRecord) -> dict[str, object]:
+    return {
+        "trial_id": trial.trial_id,
+        "candidate_id": trial.candidate_id,
+        "family": trial.family,
+        "window_start_utc": trial.window_start_utc.isoformat(),
+        "window_end_utc": trial.window_end_utc.isoformat(),
+        "observed_sharpe_net_of_costs": str(trial.observed_sharpe_net_of_costs),
+        "observed_cagr_net_of_costs": str(trial.observed_cagr_net_of_costs),
+        "observed_max_drawdown": str(trial.observed_max_drawdown),
+        "observed_cdar_95": str(trial.observed_cdar_95),
+        "annualized_cost_drag_bps": str(trial.annualized_cost_drag_bps),
+        "passed": trial.passed,
+        "recorded_at_utc": trial.recorded_at_utc.isoformat(),
+        "git_sha": trial.git_sha,
+        "config_fingerprint": trial.config_fingerprint,
+    }
+
+
+__all__ = ("TrialsLedger", "TrialsLedgerIntegrityError")

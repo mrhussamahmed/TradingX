@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Legacy Artifact Migration Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "report_id",
+    "generated_at_utc",
+    "classified_artifacts",
+    "summary_counts",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "legacy_artifact_migration_report"},
+    "report_id": {"type": "string"},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"},
+    "classified_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact_ref",
+          "classification",
+          "reason"
+        ],
+        "properties": {
+          "artifact_ref": {"type": "string"},
+          "classification": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "legacy",
+              "stale",
+              "invalid",
+              "manual_review_required"
+            ]
+          },
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "summary_counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer"}
+    },
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Data Restatement Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "old_dataset_id",
+    "new_dataset_id",
+    "data_level_materiality_flags",
+    "evidence_level_materiality_flags",
+    "evidence_status",
+    "required_action",
+    "generated_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "data_restatement_report"},
+    "old_dataset_id": {"type": "string"},
+    "new_dataset_id": {"type": "string"},
+    "changed_symbols": {"type": "array", "items": {"type": "string"}},
+    "data_level_materiality_flags": {"type": "array", "items": {"type": "string"}},
+    "evidence_level_materiality_flags": {"type": "array", "items": {"type": "string"}},
+    "daily_return_deltas_bps": {"type": "object"},
+    "raw_payload_availability": {"type": "string"},
+    "manual_review_required": {"type": "boolean"},
+    "summary_metrics": {"type": "object"},
+    "evidence_status": {
+      "type": "string",
+      "enum": ["valid", "stale", "invalid", "manual_review_required"]
+    },
+    "required_action": {
+      "type": "string",
+      "enum": ["none", "replay_required", "invalidate_old_claim"]
+    },
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

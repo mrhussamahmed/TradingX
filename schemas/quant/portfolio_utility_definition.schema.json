@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Portfolio Utility Definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "utility_id",
+    "strategy_id",
+    "lambda_values",
+    "lambda_justification_refs",
+    "pre_experiment_approval_ref",
+    "freeze_at_utc",
+    "change_policy",
+    "objective_hierarchy",
+    "tail_risk_components",
+    "return_components",
+    "risk_components",
+    "drawdown_components",
+    "cost_components",
+    "capacity_components",
+    "liquidity_components",
+    "constraint_components",
+    "threshold_justification_ref",
+    "approver",
+    "approved_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "portfolio_utility_definition"},
+    "utility_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "lambda_values": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "lambda_justification_refs": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "pre_experiment_approval_ref": {"type": "string"},
+    "freeze_at_utc": {"type": "string", "format": "utc-datetime"},
+    "change_policy": {"type": "string"},
+    "objective_hierarchy": {"type": "array", "items": {"type": "string"}},
+    "tail_risk_components": {"type": "array", "items": {"type": "string"}},
+    "return_components": {"type": "array", "items": {"type": "string"}},
+    "risk_components": {"type": "array", "items": {"type": "string"}},
+    "drawdown_components": {"type": "array", "items": {"type": "string"}},
+    "cost_components": {"type": "array", "items": {"type": "string"}},
+    "capacity_components": {"type": "array", "items": {"type": "string"}},
+    "liquidity_components": {"type": "array", "items": {"type": "string"}},
+    "constraint_components": {"type": "array", "items": {"type": "string"}},
+    "threshold_justification_ref": {"type": "string"},
+    "approver": {"type": "string"},
+    "approved_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

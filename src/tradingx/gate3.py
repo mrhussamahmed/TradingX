@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from tradingx.execution import sum_per_sleeve_notional
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS
 from tradingx.replay_slippage import (
     REPLAY_DIVERGENCE_NOISE_FLOOR_BPS,
     REPLAY_SLIPPAGE_DIVERGENCE_LIMIT,
@@ -137,7 +138,10 @@ def _criterion_statuses(criteria: tuple[Gate3CriterionSnapshot, ...]) -> str:
 
 def _required_operator_action(status: str) -> str:
     if status == "pass":
-        return "Review the Gate 3 package and decide whether to advance."
+        return (
+            "Review the Gate 3 legacy non-authority package before any separate "
+            "V5 promotion decision."
+        )
     if status == "fail":
         return "Do not advance; address the failing Gate 3 criteria first."
     return "Continue paper trading, drills, and evidence collection."
@@ -786,8 +790,11 @@ def _build_legacy_gate3_report(
     generated_at_utc = datetime.now(UTC)
     report_id = f"gate3-{generated_at_utc.strftime('%Y%m%d%H%M%S')}"
     summary = {
-        "pass": "Gate 3 evidence is complete and ready for operator review.",
-        "pending": "Gate 3 evidence is still incomplete.",
+        "pass": (
+            "Gate 3 legacy non-authority evidence is complete and ready "
+            "for operator review."
+        ),
+        "pending": "Gate 3 legacy non-authority evidence is still incomplete.",
         "fail": "Gate 3 contains failing criteria and must not advance.",
     }[status]
     return Gate3ReadinessReport(
@@ -961,8 +968,11 @@ def _build_governed_gate3_report(
     generated_at_utc = datetime.now(UTC)
     report_id = f"gate3-{generated_at_utc.strftime('%Y%m%d%H%M%S')}"
     summary = {
-        "pass": "Gate 3 evidence is complete and ready for operator review.",
-        "pending": "Gate 3 evidence is still incomplete.",
+        "pass": (
+            "Gate 3 legacy non-authority evidence is complete and ready "
+            "for operator review."
+        ),
+        "pending": "Gate 3 legacy non-authority evidence is still incomplete.",
         "fail": "Gate 3 contains failing criteria and must not advance.",
     }[status]
     return Gate3ReadinessReport(
@@ -1083,9 +1093,18 @@ def build_gate3_promotion_package(
     report: Gate3ReadinessReport,
 ) -> Gate3PromotionPackage:
     headline = {
-        "pass": "Gate 3 is ready for promotion review.",
-        "pending": "Gate 3 is not ready for promotion.",
-        "fail": "Gate 3 promotion is blocked by failing criteria.",
+        "pass": (
+            "Gate 3 is ready for V5 promotion review "
+            f"({LEGACY_NON_AUTHORITY_STATUS})."
+        ),
+        "pending": (
+            "Gate 3 is not ready for V5 promotion "
+            f"({LEGACY_NON_AUTHORITY_STATUS})."
+        ),
+        "fail": (
+            "Gate 3 promotion is blocked by failing criteria "
+            f"({LEGACY_NON_AUTHORITY_STATUS})."
+        ),
     }[report.status]
     package_id = f"gate3-package-{report.generated_at_utc.strftime('%Y%m%d%H%M%S')}"
     return Gate3PromotionPackage(

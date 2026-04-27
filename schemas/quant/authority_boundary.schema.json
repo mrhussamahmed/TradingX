@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Authority Boundary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "boundary_id",
+    "approval_type",
+    "identity_provider",
+    "operator_identity_ids",
+    "role_registry_version",
+    "role",
+    "scope",
+    "write_authorization_status",
+    "max_exception_duration_seconds",
+    "second_approver_required",
+    "approvers",
+    "canonical_approval_payload_hash",
+    "signatures",
+    "approved_at_utc",
+    "expires_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "authority_boundary"},
+    "boundary_id": {"type": "string"},
+    "approval_type": {"type": "string"},
+    "identity_provider": {"type": "string"},
+    "operator_identity_ids": {"type": "array", "items": {"type": "string"}},
+    "role_registry_version": {"type": "string"},
+    "role": {"type": "string"},
+    "scope": {"type": "string"},
+    "write_authorization_status": {
+      "type": "string",
+      "enum": ["authorized", "not_authorized", "expired"]
+    },
+    "max_exception_duration_seconds": {"type": "integer"},
+    "second_approver_required": {"type": "boolean"},
+    "approvers": {"type": "array", "items": {"type": "string"}},
+    "canonical_approval_payload_hash": {"type": "string"},
+    "signatures": {"type": "array", "items": {"type": "string"}},
+    "approved_at_utc": {"type": "string", "format": "utc-datetime"},
+    "expires_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

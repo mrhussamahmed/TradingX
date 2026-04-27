@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Evidence Dependency Index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "datasets", "generated_at_utc"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "evidence_dependency_index"},
+    "datasets": {"type": "object"},
+    "generated_at_utc": {"type": "string", "format": "utc-datetime"}
+  }
+}

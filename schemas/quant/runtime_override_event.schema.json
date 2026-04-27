@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Runtime Override Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "event_id",
+    "event_type",
+    "priority",
+    "action",
+    "scope",
+    "reason",
+    "operator",
+    "authority_boundary_ref",
+    "disabled_controls_requested",
+    "expires_at_utc",
+    "occurred_at_utc",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "runtime_override_event"},
+    "event_id": {"type": "string"},
+    "event_type": {"type": "string"},
+    "priority": {"type": "integer"},
+    "action": {"type": "string"},
+    "scope": {"type": "string"},
+    "reason": {"type": "string"},
+    "operator": {"type": "string"},
+    "authority_boundary_ref": {"type": "string"},
+    "disabled_controls_requested": {"type": "array", "items": {"type": "string"}},
+    "expires_at_utc": {"type": "string", "format": "utc-datetime"},
+    "occurred_at_utc": {"type": "string", "format": "utc-datetime"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -180,6 +180,120 @@ def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
         "mean-reversion-v1",
     }
     assert all(result.evidence_pack_id for result in report.candidate_results)
+    assert report.promotion_valid is False
+    assert report.evidence_class == "exploratory"
+    assert "registered experiment context required" in report.assumptions
+
+
+def test_unreleased_metric_context_does_not_compute_or_emit_metrics() -> None:
+    from tradingx.experiments import MetricVisibilityContext
+
+    sentinel_frame = _ohlcv_frame(
+        [
+            100.0,
+            98765.4321,
+            98765.4321,
+            98765.4321,
+        ]
+    )
+    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol={"SPY": sentinel_frame, "QQQ": sentinel_frame.copy()},
+        candidates=candidates,
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(sentinel_frame)
+        ),
+        window_start_utc=sentinel_frame.index[0].to_pydatetime(),
+        window_end_utc=sentinel_frame.index[-1].to_pydatetime(),
+        metric_visibility_context=MetricVisibilityContext(
+            experiment_id="exp-001",
+            run_id="run-001",
+            promotion_decision_scope="scope-prod-001",
+            promotion_valid=True,
+            metric_vault_release_status="pending",
+            metric_release_token_ref="",
+        ),
+    )
+
+    encoded = json.dumps(report.to_json(), sort_keys=True)
+    assert "98765.4321" not in encoded
+    assert report.promotion_valid is False
+    assert report.evidence_class == "exploratory"
+    assert "trial_lineage_contaminated" in report.blocker_codes
+    assert all(result.status == "pending" for result in report.candidate_results)
+
+
+def test_promotion_valid_gate_report_requires_dataset_manifest() -> None:
+    from tradingx.experiments import MetricVisibilityContext
+
+    bars_by_symbol = {
+        "SPY": _ohlcv_frame([100.0, 101.0, 102.0, 103.0]),
+        "QQQ": _ohlcv_frame([100.0, 100.5, 101.0, 101.5]),
+    }
+
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol=bars_by_symbol,
+        candidates=build_mandatory_candidate_registry(("SPY", "QQQ")),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+        metric_visibility_context=MetricVisibilityContext(
+            experiment_id="exp-001",
+            run_id="run-001",
+            promotion_decision_scope="scope-prod-001",
+            promotion_valid=True,
+            metric_vault_release_status="released",
+            metric_release_token_ref="sha256:" + "1" * 64,
+        ),
+    )
+
+    assert report.promotion_valid is False
+    assert "point_in_time_data_incomplete" in report.blocker_codes
+
+
+def test_promotion_valid_gate_report_ignores_legacy_trials_ledger() -> None:
+    from tradingx.experiments import MetricVisibilityContext
+
+    class ExplodingLegacyLedger:
+        def trial_statistics_for_family(self, family: str):
+            pytest.fail(f"legacy trials ledger should not feed {family}")
+
+        def record(self, record) -> None:
+            pytest.fail(f"legacy trials ledger should not record {record}")
+
+    bars_by_symbol = {
+        "SPY": _ohlcv_frame([100.0, 101.0, 102.0, 103.0, 104.0, 105.0]),
+        "QQQ": _ohlcv_frame([100.0, 100.5, 101.0, 101.5, 102.0, 102.5]),
+    }
+
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol=bars_by_symbol,
+        candidates=build_mandatory_candidate_registry(("SPY", "QQQ")),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars_by_symbol["SPY"])
+        ),
+        window_start_utc=bars_by_symbol["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars_by_symbol["SPY"].index[-1].to_pydatetime(),
+        trials_ledger=ExplodingLegacyLedger(),  # type: ignore[arg-type]
+        metric_visibility_context=MetricVisibilityContext(
+            experiment_id="exp-001",
+            run_id="run-001",
+            promotion_decision_scope="scope-prod-001",
+            promotion_valid=True,
+            metric_vault_release_status="released",
+            metric_release_token_ref="sha256:" + "1" * 64,
+            evidence_class="valid",
+        ),
+        dataset_manifest_id="dataset-spy-v1",
+    )
+
+    assert report.promotion_valid is True
 
 
 def test_hurdle_clearance_passes_when_candidate_beats_cash() -> None:

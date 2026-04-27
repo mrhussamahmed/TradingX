@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Quant Blocker Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "blockers"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "owning_wave",
+          "max_state",
+          "condition",
+          "remediation",
+          "migration_behavior",
+          "evaluator",
+          "fixture",
+          "red_test",
+          "cli_output",
+          "web_report_field",
+          "runtime_enforcement"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "owning_wave": {
+            "type": "string"
+          },
+          "max_state": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "remediation": {
+            "type": "string"
+          },
+          "migration_behavior": {
+            "type": "string"
+          },
+          "evaluator": {
+            "type": "string"
+          },
+          "fixture": {
+            "type": "string"
+          },
+          "schema_field": {
+            "type": "string"
+          },
+          "red_test": {
+            "type": "string"
+          },
+          "cli_output": {
+            "type": "string"
+          },
+          "web_report_field": {
+            "type": "string"
+          },
+          "runtime_enforcement": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

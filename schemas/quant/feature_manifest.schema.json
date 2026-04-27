@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Feature Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "manifest_id",
+    "strategy_id",
+    "feature_definitions",
+    "availability_timestamp_policy",
+    "timestamp_source",
+    "decision_timestamp_policy",
+    "lookback_windows",
+    "lag_policy",
+    "missing_value_policy",
+    "leakage_audit_status",
+    "freeze_at_utc",
+    "feature_set_hash",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "feature_manifest"},
+    "manifest_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "feature_definitions": {"type": "array", "items": {"type": "string"}},
+    "availability_timestamp_policy": {"type": "string"},
+    "timestamp_source": {
+      "type": "string",
+      "enum": ["source_data_arrival", "computation", "decision", "submit", "unspecified"]
+    },
+    "decision_timestamp_policy": {"type": "string"},
+    "lookback_windows": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "lag_policy": {"type": "string"},
+    "missing_value_policy": {"type": "string"},
+    "leakage_audit_status": {
+      "type": "string",
+      "enum": ["clean", "feature_after_decision", "label_overlap", "not_audited"]
+    },
+    "freeze_at_utc": {"type": "string", "format": "utc-datetime"},
+    "feature_set_hash": {"type": "string"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

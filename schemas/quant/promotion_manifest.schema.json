@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Quant Promotion Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "strategy_id",
+    "requested_state",
+    "artifact_store_root",
+    "replay_store_root",
+    "ledger_root",
+    "trust_root_path"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "strategy_id": {
+      "type": "string"
+    },
+    "requested_state": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
+    },
+    "max_state": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "research_only",
+        "paper_shadow",
+        "paper_trading",
+        "tiny_live_probe",
+        "production"
+      ]
+    },
+    "artifact_store_root": {"type": "string"},
+    "replay_store_root": {"type": "string"},
+    "ledger_root": {"type": "string"},
+    "trust_root_path": {"type": "string"}
+  }
+}

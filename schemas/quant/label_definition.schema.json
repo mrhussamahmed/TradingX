@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TradingX Label Definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "definition_id",
+    "strategy_id",
+    "target",
+    "horizon",
+    "return_basis",
+    "benchmark_ref",
+    "cost_adjustment",
+    "overlap_policy",
+    "purge_window",
+    "embargo_window",
+    "overlap_status",
+    "label_definition_hash",
+    "blocker_codes"
+  ],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "kind": {"type": "string", "const": "label_definition"},
+    "definition_id": {"type": "string"},
+    "strategy_id": {"type": "string"},
+    "target": {"type": "string"},
+    "horizon": {"type": "string"},
+    "return_basis": {"type": "string"},
+    "benchmark_ref": {"type": "string"},
+    "cost_adjustment": {"type": "string"},
+    "overlap_policy": {"type": "string"},
+    "purge_window": {"type": "string"},
+    "embargo_window": {"type": "string"},
+    "overlap_status": {
+      "type": "string",
+      "enum": ["non_overlapping", "overlapping_with_purge", "overlapping_unhandled"]
+    },
+    "label_definition_hash": {"type": "string"},
+    "blocker_codes": {"type": "array", "items": {"type": "string"}}
+  }
+}

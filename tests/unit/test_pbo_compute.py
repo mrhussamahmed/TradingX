@@ -247,3 +247,27 @@ def test_report_fields_populated() -> None:
         75.0,
         95.0,
     ]
+
+
+def test_full_cpcv_matrix_ref_is_threaded_into_report() -> None:
+    rng = random.Random(11)
+    strategies = tuple(f"cand::cfg{index}" for index in range(60))
+
+    report = compute_pbo(
+        cpcv_records=_make_records(
+            cohort_window_id="cohort-matrix-ref",
+            n_paths=45,
+            strategy_ids=strategies,
+            oos_sharpe_by_strategy_path={
+                (strategy, path_index): Decimal(str(rng.gauss(0.0, 1.0)))
+                for strategy in strategies
+                for path_index in range(45)
+            },
+        ),
+        min_cohort_size=50,
+        min_paths=20,
+        random_seed=2026,
+        full_cpcv_matrix_ref="cas://validation/full-cpcv-matrix.json",
+    )
+
+    assert report.full_cpcv_matrix_ref == "cas://validation/full-cpcv-matrix.json"

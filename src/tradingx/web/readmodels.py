@@ -12,8 +12,13 @@ from typing import Protocol
 
 from tradingx.config import TradingConfig
 from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
+from tradingx.experiments import (
+    metric_visibility_context_from_payload,
+    sanitize_metric_payload,
+)
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
@@ -170,6 +175,18 @@ class LocalWebReadModel:
             )
         )
         alerts = tuple(incident.summary for incident in self.list_incidents()[:5])
+        gate_statuses = {
+            str(key): str(value)
+            for key, value in self._ensure_mapping(
+                validation_summary.get("latest_gate_statuses", {})
+            ).items()
+        }
+        recommendations = {
+            str(key): int(str(value))
+            for key, value in self._ensure_mapping(
+                validation_summary.get("evaluation_recommendations", {})
+            ).items()
+        }
         return DashboardSnapshot(
             generated_at_utc=datetime.now(UTC),
             service_status=self._service_manager.get_state(),
@@ -193,23 +210,22 @@ class LocalWebReadModel:
             },
             positions=positions,
             alerts=alerts,
-            gate_statuses={
-                str(key): str(value)
-                for key, value in self._ensure_mapping(
-                    validation_summary.get("latest_gate_statuses", {})
-                ).items()
-            },
-            recommendations={
-                str(key): int(str(value))
-                for key, value in self._ensure_mapping(
-                    validation_summary.get("evaluation_recommendations", {})
-                ).items()
-            },
+            gate_statuses=gate_statuses,
+            recommendations=recommendations,
             document_summary={
                 "session_count": len(
                     [record for record in document_records if record.kind == "handover"]
                 ),
                 "latest_state": latest_state_preview,
+                "v5_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+                "gate_validation_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+                "recommendation_authority_status": LEGACY_NON_AUTHORITY_STATUS,
+            },
+            gate_authority_statuses={
+                key: LEGACY_NON_AUTHORITY_STATUS for key in gate_statuses
+            },
+            recommendation_authority_statuses={
+                key: LEGACY_NON_AUTHORITY_STATUS for key in recommendations
             },
         )
 
@@ -708,7 +724,10 @@ class LocalWebReadModel:
         paper_payloads = self._paper_store.list_artifact_payloads(category)
         if paper_payloads:
             return paper_payloads
-        return self._validation_store.list_artifact_payloads(category)
+        return [
+            self._sanitize_validation_payload(payload, surface=f"web_list_{category}")
+            for payload in self._validation_store.list_artifact_payloads(category)
+        ]
 
     def list_config_proposals(self) -> tuple[ConfigProposal, ...]:
         proposal_dir = self._repo_root / "config" / "proposals"
@@ -2499,15 +2518,33 @@ class LocalWebReadModel:
 
     def build_research_snapshot(self) -> ResearchStudioSnapshot:
         generated_at = datetime.now(UTC)
-        evaluation_payloads = self._validation_store.list_artifact_payloads(
-            "evaluation_evidence"
-        )
-        validation_reports = self._validation_store.list_artifact_payloads(
-            "validation_reports"
-        )
-        gate_assessments = self._validation_store.list_artifact_payloads(
-            "gate_assessments"
-        )
+        evaluation_payloads = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_evaluation_evidence",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "evaluation_evidence"
+            )
+        ]
+        validation_reports = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_validation_reports",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "validation_reports"
+            )
+        ]
+        gate_assessments = [
+            self._sanitize_validation_payload(
+                payload,
+                surface="web_research_gate_assessments",
+            )
+            for payload in self._validation_store.list_artifact_payloads(
+                "gate_assessments"
+            )
+        ]
         candidate_statuses: dict[str, dict[str, str]] = {}
         for report in validation_reports:
             for candidate in self._ensure_list(report.get("candidate_results", [])):
@@ -2797,6 +2834,11 @@ class LocalWebReadModel:
             generated_at_utc=self._parse_datetime(
                 str(payload.get("generated_at_utc", ""))
             ),
+            quote_quality_state=str(payload.get("quote_quality_state", "")),
+            cost_evidence_class=str(
+                payload.get("cost_evidence_class", "legacy_cost_evidence")
+            ),
+            kind=str(payload.get("kind", "replay_slippage_summary")),
         )
 
     def _historical_warmup_from_payload(
@@ -2921,6 +2963,18 @@ class LocalWebReadModel:
         if isinstance(value, dict):
             return {str(key): item for key, item in value.items()}
         return {}
+
+    def _sanitize_validation_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        surface: str,
+    ) -> dict[str, object]:
+        return sanitize_metric_payload(
+            payload,
+            context=metric_visibility_context_from_payload(payload),
+            surface=surface,
+        )
 
     def _ensure_scalar_mapping(self, value: object) -> dict[str, ScalarValue]:
         if not isinstance(value, dict):

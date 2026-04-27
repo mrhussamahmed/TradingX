@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -9,6 +9,26 @@ from typing import Final, TypeAlias
 import pandas as pd  # type: ignore[import-untyped]
 
 ScalarValue: TypeAlias = str | int | float | bool | Decimal
+
+
+def _serialize_dataclass_payload(value: object) -> object:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _serialize_dataclass_payload(asdict(value))
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_serialize_dataclass_payload(item) for item in value]
+    if isinstance(value, list):
+        return [_serialize_dataclass_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _serialize_dataclass_payload(item) for key, item in value.items()
+        }
+    return value
 
 
 @dataclass(frozen=True)
@@ -86,6 +106,10 @@ class EvaluationEvidencePack:
     marginal_cdar_delta: Decimal | None = None
     pbo_value: Decimal | None = None
     pbo_report_id: str | None = None
+    promotion_valid: bool = False
+    evidence_class: str = "exploratory"
+    blocker_codes: tuple[str, ...] = ()
+    metric_visibility_context: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +175,7 @@ class PBOReport:
     metric_name: str
     random_seed: int
     generated_at_utc: datetime
+    full_cpcv_matrix_ref: str = ""
 
 
 @dataclass(frozen=True)
@@ -227,6 +252,12 @@ class GateAssessment:
     evidence_refs: tuple[str, ...]
     decision_summary: str
     recorded_at_utc: datetime
+    promotion_valid: bool = False
+    evidence_class: str = "exploratory"
+    blocker_codes: tuple[str, ...] = ()
+    experiment_id: str = ""
+    run_id: str = ""
+    dataset_manifest_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -265,6 +296,21 @@ class ValidationReport:
     summary: str
     assumptions: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+    promotion_valid: bool = False
+    evidence_class: str = "exploratory"
+    blocker_codes: tuple[str, ...] = ()
+    experiment_id: str = ""
+    run_id: str = ""
+    promotion_decision_scope: str = ""
+    metric_vault_release_status: str = "not_applicable"
+    metric_release_token_ref: str = ""
+    dataset_manifest_id: str = ""
+
+    def to_json(self) -> dict[str, object]:
+        payload = _serialize_dataclass_payload(self)
+        if not isinstance(payload, dict):
+            raise TypeError("ValidationReport serialization must produce an object")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -567,6 +613,9 @@ class ReplaySlippageSummary:
     status: str
     details: str
     generated_at_utc: datetime
+    quote_quality_state: str = ""
+    cost_evidence_class: str = "legacy_cost_evidence"
+    kind: str = "replay_slippage_summary"
 
 
 @dataclass(frozen=True)
@@ -935,6 +984,8 @@ class DashboardSnapshot:
     gate_statuses: dict[str, str]
     recommendations: dict[str, int]
     document_summary: dict[str, str | int]
+    gate_authority_statuses: dict[str, str] = field(default_factory=dict)
+    recommendation_authority_statuses: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
