@@ -452,3 +452,28 @@ export function postProposal(payload: {
     body: JSON.stringify(payload),
   })
 }
+
+export const KILL_SWITCH_ENDPOINT_AVAILABLE = false
+export const FLATTEN_ALL_ENDPOINT_AVAILABLE = false
+
+export function postKillSwitch(): Promise<ActionResult> {
+  if (!KILL_SWITCH_ENDPOINT_AVAILABLE) {
+    return Promise.reject(
+      new Error(
+        'Kill Switch endpoint is not implemented in the backend yet. Use the runbook to activate kill state.',
+      ),
+    )
+  }
+  return request<ActionResult>('/api/actions/kill-switch', { method: 'POST' })
+}
+
+export function postFlattenAll(): Promise<ActionResult> {
+  if (!FLATTEN_ALL_ENDPOINT_AVAILABLE) {
+    return Promise.reject(
+      new Error(
+        'Flatten All endpoint is not implemented in the backend yet. Use the closeout runbook.',
+      ),
+    )
+  }
+  return request<ActionResult>('/api/actions/flatten-all', { method: 'POST' })
+}
