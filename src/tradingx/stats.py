@@ -93,7 +93,12 @@ def lo_adjusted_sharpe_ratio(
             correlation = _lagged_autocorrelation(excess_returns, lag)
             if correlation is None:
                 continue
-            autocorrelation_adjustment += 2.0 * (1.0 - (lag / lag_count)) * correlation
+            # Bartlett (Newey-West 1987) triangular weight ``1 - k/(M+1)``.
+            # Must match ``effective_sample_size_lo_signed`` so the two
+            # HAC paths apply the same autocorrelation penalty.
+            autocorrelation_adjustment += (
+                2.0 * (1.0 - (lag / (lag_count + 1.0))) * correlation
+            )
     if autocorrelation_adjustment <= 0:
         LOGGER.warning(
             "Sharpe ratio is undefined because the autocorrelation adjustment "
@@ -252,12 +257,13 @@ def effective_sample_size_lo_signed(
 ) -> tuple[float, tuple[dict[str, object], ...]]:
     """Lo (2002) effective sample size with SIGNED autocorrelations.
 
-    Uses signed autocorrelations together with Bartlett (Newey-West)
-    triangular weights ``w_k = 1 - k/m`` where ``m`` is the truncation
+    Uses signed autocorrelations together with Bartlett (Newey-West 1987)
+    triangular weights ``w_k = 1 - k/(m+1)`` where ``m`` is the truncation
     lag (max_lag). Defect 4 renamed this from ``effective_sample_size_hac``
     after the adversarial review found that summing absolute
     autocorrelations both double-penalizes negatively-correlated returns
-    and silently omits the Bartlett window.
+    and silently omits the Bartlett window. ``lo_adjusted_sharpe_ratio``
+    uses the same window so the two HAC paths apply consistent penalties.
     """
 
     values = cast(FloatArray, np.asarray(list(returns), dtype=float))
