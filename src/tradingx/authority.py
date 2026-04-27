@@ -177,6 +177,8 @@ _SUPPORTED_SCHEMA_KEYS = {
     "items",
     "format",
     "pattern",
+    "minimum",
+    "maximum",
 }
 _SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "quant"
 
@@ -283,6 +285,19 @@ def _validate_against_schema(
     if isinstance(enum_values, Sequence) and not isinstance(enum_values, str | bytes):
         if value not in enum_values:
             raise SchemaValidationError(f"{path} has invalid enum value {value!r}")
+    if isinstance(value, int | float | Decimal) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, int | float | Decimal) and not isinstance(minimum, bool):
+            if value < minimum:
+                raise SchemaValidationError(
+                    f"{path} must be >= {minimum} (got {value})"
+                )
+        maximum = schema.get("maximum")
+        if isinstance(maximum, int | float | Decimal) and not isinstance(maximum, bool):
+            if value > maximum:
+                raise SchemaValidationError(
+                    f"{path} must be <= {maximum} (got {value})"
+                )
     pattern = schema.get("pattern")
     if pattern is not None and isinstance(value, str):
         try:
@@ -293,9 +308,7 @@ def _validate_against_schema(
                 f"{pattern!r}: {exc}"
             ) from exc
         if not compiled.search(value):
-            raise SchemaValidationError(
-                f"{path} does not match pattern {pattern!r}"
-            )
+            raise SchemaValidationError(f"{path} does not match pattern {pattern!r}")
     format_name = schema.get("format")
     if format_name is not None:
         _validate_format(value, str(format_name), path=path)
@@ -322,7 +335,10 @@ def _validate_format(value: object, format_name: str, *, path: str) -> None:
     if format_name == "utc-datetime":
         if not isinstance(value, str):
             raise SchemaValidationError(f"{path} must be a utc-datetime")
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SchemaValidationError(f"{path} must be a utc-datetime") from exc
         if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
             raise SchemaValidationError(f"{path} must be a utc-datetime")
         return

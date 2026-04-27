@@ -256,9 +256,7 @@ def test_required_wave1_quant_schemas_validate_canonical_samples() -> None:
 
     for schema_name, sample in samples.items():
         schema = json.loads(
-            Path(f"schemas/quant/{schema_name}.schema.json").read_text(
-                encoding="utf-8"
-            )
+            Path(f"schemas/quant/{schema_name}.schema.json").read_text(encoding="utf-8")
         )
         validate_quant_artifact(sample, schema=schema)
 
@@ -399,12 +397,16 @@ def test_ledger_partial_tail_record_fails_closed(tmp_path) -> None:
     with pytest.raises(AuthorityLedgerError, match="corrupt ledger record"):
         AuthorityLedger(ledger_root).append(
             payload={"schema_version": "1.0"},
-            artifact_refs=(FileContentAddressedStore(tmp_path / "store").write_json(
-                {"schema_version": "1.0"}
-            ),),
-            replay_refs=(FileContentAddressedStore(tmp_path / "replay").write_json(
-                {"schema_version": "1.0"}
-            ),),
+            artifact_refs=(
+                FileContentAddressedStore(tmp_path / "store").write_json(
+                    {"schema_version": "1.0"}
+                ),
+            ),
+            replay_refs=(
+                FileContentAddressedStore(tmp_path / "replay").write_json(
+                    {"schema_version": "1.0"}
+                ),
+            ),
             writer_identity="operator-a",
             approval_refs=("approval-1",),
         )
@@ -648,3 +650,28 @@ def test_signature_verification_rejects_placeholder_revoked_expired_and_scope() 
             required_scope="promotion_decision",
             verified_at_utc=datetime(2026, 4, 26, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "not-a-datetime",
+        "2026-13-99T25:00:00Z",
+        "2026-04-26",  # ISO-shaped but no time component / tz
+        "",
+    ),
+)
+def test_validate_format_utc_datetime_raises_schema_validation_error(
+    value: str,
+) -> None:
+    """Review finding bug_007: ``_validate_format`` must wrap ``datetime``
+    parse errors as ``SchemaValidationError`` so call sites that catch
+    only ``SchemaValidationError`` (e.g. ``experiments.py``) honour the
+    documented contract. Sibling format branches (decimal-string, sha256)
+    already wrap; the utc-datetime branch did not.
+    """
+
+    from tradingx.authority import _validate_format
+
+    with pytest.raises(SchemaValidationError, match="utc-datetime"):
+        _validate_format(value, "utc-datetime", path="$.signed_at_utc")

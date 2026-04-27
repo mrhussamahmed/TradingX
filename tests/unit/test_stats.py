@@ -280,9 +280,7 @@ def test_effective_sample_size_uses_signed_autocorrelations() -> None:
         bartlett = 1.0 - (lag / (max_lag + 1.0))
         weighted_signed_sum += bartlett * float(rho)
     expected_denominator = 1.0 + (2.0 * weighted_signed_sum)
-    expected_eff = (
-        float(n) if expected_denominator <= 0 else n / expected_denominator
-    )
+    expected_eff = float(n) if expected_denominator <= 0 else n / expected_denominator
     expected_eff_clamped = min(float(n), max(0.0, expected_eff))
 
     eff, _ = effective_sample_size_lo_signed(series, max_lag=max_lag)
@@ -292,14 +290,65 @@ def test_effective_sample_size_uses_signed_autocorrelations() -> None:
     # produces a strictly larger denominator inverse than its
     # absolute-correlation counterpart would. Verify by mirroring sign:
     pos_neg_alternating = [0.01, -0.01] * 60
-    eff_signed, _ = effective_sample_size_lo_signed(
-        pos_neg_alternating, max_lag=5
-    )
+    eff_signed, _ = effective_sample_size_lo_signed(pos_neg_alternating, max_lag=5)
     # A buggy absolute-value implementation would collapse ESS toward
     # zero. The signed implementation either fires the
     # ``denominator <= 0`` fallback (returns n) or yields ESS > n which
     # is clamped to n. Either way ESS equals n exactly for this series.
     assert eff_signed == pytest.approx(float(len(pos_neg_alternating)))
+
+
+def test_lo_adjusted_sharpe_uses_newey_west_window_weight() -> None:
+    """Pin Sharpe HAC to ``1 - k/(M+1)`` to match ``effective_sample_size_lo_signed``.
+
+    Review finding bug_001: ``lo_adjusted_sharpe_ratio`` used the Lo
+    (2002) ``1 - k/M`` form (last lag weight = 0) while the ESS path
+    used the Newey-West ``1 - k/(M+1)`` form (last lag weight =
+    ``1/(M+1)``). The two paths therefore reported different
+    autocorrelation penalties for the same series. The Defect 4 fix
+    chose the Newey-West convention for ESS; this test pins the same
+    convention for the Sharpe path.
+    """
+
+    import math
+    import random as _r
+
+    import numpy as _np
+
+    from tradingx.stats import (
+        DEFAULT_AUTOCORRELATION_LAGS,
+        DEFAULT_PERIODS_PER_YEAR,
+        _excess_returns,
+        _lagged_autocorrelation,
+        lo_adjusted_sharpe_ratio,
+    )
+
+    rng = _r.Random(7)
+    returns: list[float] = [0.0]
+    for _ in range(199):
+        returns.append(0.6 * returns[-1] + 0.01 * rng.gauss(0.0, 1.0))
+    risk_free = [0.0] * len(returns)
+
+    excess = _excess_returns(returns=returns, risk_free_daily_rates=risk_free)
+    volatility = float(_np.std(excess, ddof=1))
+    base_sharpe = float(_np.mean(excess)) / volatility
+
+    lag_count = DEFAULT_AUTOCORRELATION_LAGS
+    adjustment = 1.0
+    for lag in range(1, lag_count + 1):
+        rho = _lagged_autocorrelation(excess, lag)
+        assert rho is not None
+        # MUST match ESS convention: 1 - k/(M+1).
+        weight = 1.0 - (lag / (lag_count + 1.0))
+        adjustment += 2.0 * weight * float(rho)
+    expected = math.sqrt(DEFAULT_PERIODS_PER_YEAR) * base_sharpe / math.sqrt(adjustment)
+
+    actual = lo_adjusted_sharpe_ratio(
+        returns=returns,
+        risk_free_daily_rates=risk_free,
+    )
+    assert actual is not None
+    assert actual == pytest.approx(expected, rel=1e-9)
 
 
 def test_psr_normal_returns_collapses_to_lo_2002_variance() -> None:
@@ -340,8 +389,6 @@ def test_psr_normal_returns_collapses_to_lo_2002_variance() -> None:
         excess_kurtosis=excess_kurtosis,
     )
     assert psr == pytest.approx(expected_psr, abs=1e-12)
-
-
 
 
 def test_stationary_bootstrap_block_lengths_are_geometric() -> None:
@@ -417,10 +464,6 @@ def test_stationary_bootstrap_block_lengths_are_geometric() -> None:
     means_long = _stationary_bootstrap_means(
         tuple(base), block_length=20, n_resamples=300, random_seed=2026
     )
-    var_short = sum(
-        (m - sum(means_short) / len(means_short)) ** 2 for m in means_short
-    )
-    var_long = sum(
-        (m - sum(means_long) / len(means_long)) ** 2 for m in means_long
-    )
+    var_short = sum((m - sum(means_short) / len(means_short)) ** 2 for m in means_short)
+    var_long = sum((m - sum(means_long) / len(means_long)) ** 2 for m in means_long)
     assert var_long != pytest.approx(var_short, rel=0.01)

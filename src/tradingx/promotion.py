@@ -1269,10 +1269,49 @@ _WAVE_4_TO_10_OVERRIDES: tuple[tuple[str, str, str, str, str], ...] = (
 )
 
 
-def evaluate_legacy_retirement_blockers() -> str:
-    """Wave-10 evaluator stub used by the registry metadata backfill."""
+def evaluate_legacy_retirement_blockers(
+    *,
+    artifact_payloads: Sequence[Mapping[str, object]] = (),
+) -> tuple[Blocker, ...]:
+    """Wave 10 — surface ``legacy_artifacts_detected`` from
+    ``legacy_artifact_migration_report`` payloads.
 
-    return "after_tax_edge_missing_for_taxable_account"
+    The builder in ``tradingx.legacy_retirement`` appends the blocker
+    when the classifier finds legacy/invalid artifacts. The evaluator
+    re-derives the blocker from the report's ``classified_artifacts``
+    list (the most direct evidence) and clips ``summary_counts`` at zero
+    so a tampered payload claiming ``blocker_codes=[]`` cannot bypass the
+    PAPER_SHADOW cap by sending negative counts or by zeroing out
+    ``summary_counts`` while leaving classified entries in place.
+    """
+
+    blockers: list[Blocker] = []
+    for payload in artifact_payloads:
+        if str(payload.get("kind", "")) != "legacy_artifact_migration_report":
+            continue
+        classified_legacy_or_invalid = 0
+        classified_artifacts = payload.get("classified_artifacts", ())
+        if isinstance(classified_artifacts, Sequence) and not isinstance(
+            classified_artifacts, str | bytes
+        ):
+            for artifact in classified_artifacts:
+                if isinstance(artifact, Mapping) and artifact.get("classification") in {
+                    "legacy",
+                    "invalid",
+                }:
+                    classified_legacy_or_invalid += 1
+        summary_counts = payload.get("summary_counts", {})
+        legacy_count = 0
+        invalid_count = 0
+        if isinstance(summary_counts, Mapping):
+            legacy_count = max(0, int(summary_counts.get("legacy", 0) or 0))
+            invalid_count = max(0, int(summary_counts.get("invalid", 0) or 0))
+        if classified_legacy_or_invalid > 0 or legacy_count > 0 or invalid_count > 0:
+            _append_blocker(blockers, "legacy_artifacts_detected")
+        for code in _string_sequence(payload.get("blocker_codes", ())):
+            if code in BLOCKER_REGISTRY:
+                _append_blocker(blockers, code)
+    return tuple(blockers)
 
 
 for (
@@ -1919,6 +1958,7 @@ def _validate_cas_payload(payload: Mapping[str, object]) -> None:
         "drift_monitor_spec",
         "drift_monitor_report",
         "production_decay_event",
+        "legacy_artifact_migration_report",
     }:
         validate_quant_artifact(payload, schema=_schema(kind))
     elif kind in _MANDATE_ARTIFACT_SCHEMA_NAMES and _has_authority_metadata(payload):
@@ -2117,6 +2157,10 @@ def _evaluate_verified_decision_blockers(
         artifact_payloads=artifact_payloads,
     ):
         _append_blocker(blockers, blocker.code)
+    for blocker in evaluate_legacy_retirement_blockers(
+        artifact_payloads=artifact_payloads,
+    ):
+        _append_blocker(blockers, blocker.code)
 
     target_weights_raw = decision_payload.get("target_weights", {})
     if not isinstance(target_weights_raw, Mapping):
@@ -2147,9 +2191,7 @@ def _evaluate_verified_decision_blockers(
     # state would be MORE permissive than the payload claims.
     derived_codes = {b.code for b in blockers if b.code in BLOCKER_REGISTRY}
     payload_codes = {
-        str(code)
-        for code in blocker_codes_raw
-        if str(code) in BLOCKER_REGISTRY
+        str(code) for code in blocker_codes_raw if str(code) in BLOCKER_REGISTRY
     }
     extra_payload_codes = payload_codes - derived_codes
     if extra_payload_codes:
@@ -2938,6 +2980,14 @@ def evaluate_change_control_blockers(
                 change_id = str(payload.get("change_id", "")).strip()
                 if change_id:
                     required_change_ids.add(change_id)
+                else:
+                    # bug_015 — a material/critical change without a
+                    # change_id has no audit trail. Without this guard
+                    # an empty change_id on both the change_control_record
+                    # and the recertification_report bypasses the
+                    # Defect-3 cross-bundle linkage check (both sides
+                    # contribute empty sets that trivially "match").
+                    _append_blocker(blockers, "unrecorded_material_change")
             if bool(payload.get("unknown_scope", False)):
                 _append_blocker(blockers, "unrecorded_material_change")
             dependency_refs = payload.get("dependency_index_refs", ())
@@ -3037,9 +3087,7 @@ def evaluate_change_control_blockers(
     # arbitrarily many open changes.
     if has_change_requiring_recert and has_recertification_report:
         cleaned_recert_ids = {cid for cid in recert_change_ids if cid}
-        if required_change_ids and not required_change_ids.issubset(
-            cleaned_recert_ids
-        ):
+        if required_change_ids and not required_change_ids.issubset(cleaned_recert_ids):
             _append_blocker(blockers, "recertification_report_missing")
     # Defect 3 follow-up — a recertification_report that *claims* to
     # certify a specific change (non-empty ``change_id``) but ships

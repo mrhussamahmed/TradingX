@@ -380,3 +380,41 @@ def test_short_runtime_event_critical_types_emit_blockers(event_type: str) -> No
         reconciled=False,
     )
     assert payload["blocker_codes"]
+
+
+def test_build_borrow_availability_snapshot_is_deterministic_given_now_utc() -> None:
+    """Review finding bug_005: ``is_stale`` must be derived from a
+    caller-supplied ``now_utc`` rather than the wall clock so the
+    artifact is reproducible from inputs alone.
+    """
+
+    common = {
+        "snapshot_id": "borrow-001",
+        "symbol": "QQQ",
+        "broker_id": "alpaca",
+        "broker_mode": "live",
+        "shortable": True,
+        "easy_to_borrow": True,
+        "hard_to_borrow": False,
+        "threshold_security_status": "clean",
+        "borrow_rate_bps": Decimal("25"),
+        "fee_timestamp_utc": NOW,
+        "locate_id": "loc-001",
+        "locate_documentation_ref": "cas://locate-doc-001",
+        "locate_status": "active",
+        "locate_expiry_utc": NOW + timedelta(hours=4),
+        "source": "alpaca",
+        "snapshot_at_utc": NOW,
+        "freshness_threshold_seconds": 3600,
+    }
+    fresh = build_borrow_availability_snapshot(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    stale = build_borrow_availability_snapshot(
+        **common,
+        now_utc=NOW + timedelta(hours=2),  # type: ignore[arg-type,call-arg]
+    )
+    assert fresh["is_stale"] is False
+    assert "borrow_snapshot_stale" not in fresh["blocker_codes"]
+    assert stale["is_stale"] is True
+    assert "borrow_snapshot_stale" in stale["blocker_codes"]
+    repeat = build_borrow_availability_snapshot(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    assert fresh == repeat

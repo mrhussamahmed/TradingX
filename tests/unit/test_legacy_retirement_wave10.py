@@ -6,7 +6,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tradingx.authority import validate_quant_artifact
+import pytest
+
+from tradingx.authority import SchemaValidationError, validate_quant_artifact
 from tradingx.legacy_retirement import (
     build_legacy_artifact_migration_report,
     classify_legacy_artifact,
@@ -77,9 +79,7 @@ def test_migration_report_schema_validates() -> None:
         ],
         generated_at_utc=NOW,
     )
-    validate_quant_artifact(
-        report, schema=_schema("legacy_artifact_migration_report")
-    )
+    validate_quant_artifact(report, schema=_schema("legacy_artifact_migration_report"))
     assert report["summary_counts"]["legacy"] == 2
     assert report["summary_counts"]["valid"] == 1
     assert "legacy_artifacts_detected" in report["blocker_codes"]
@@ -94,9 +94,7 @@ def test_migration_report_with_only_valid_emits_no_blocker() -> None:
         ],
         generated_at_utc=NOW,
     )
-    validate_quant_artifact(
-        report, schema=_schema("legacy_artifact_migration_report")
-    )
+    validate_quant_artifact(report, schema=_schema("legacy_artifact_migration_report"))
     assert report["blocker_codes"] == []
 
 
@@ -108,3 +106,138 @@ def test_deprecation_legacy_activation_record_cannot_bypass_promotion() -> None:
         {"kind": "strategy_activation_record", "artifact_ref": "cas://sa-001"}
     )
     assert result["classification"] == "legacy"
+
+
+def test_evaluate_legacy_retirement_blockers_surfaces_legacy_artifacts_detected() -> (
+    None
+):
+    """Review finding bug_014 — ``legacy_artifacts_detected`` must be a
+    real, reachable blocker. The Wave 10 builder emits it on a contaminated
+    bundle and the registry caps it at PAPER_SHADOW, but no evaluator
+    consumed ``legacy_artifact_migration_report`` payloads in
+    promotion. Promote-the-stub to a real evaluator that re-derives
+    the blocker from the report's fields.
+    """
+
+    from tradingx.promotion import (
+        PromotionState,
+        evaluate_legacy_retirement_blockers,
+        strictest_state_cap,
+    )
+
+    contaminated = build_legacy_artifact_migration_report(
+        report_id="legacy-001",
+        artifacts=[
+            {"kind": "promotion_evidence", "artifact_ref": "cas://pe-001"},
+            {"kind": "gate_assessment", "artifact_ref": "cas://ga-001"},
+        ],
+        generated_at_utc=NOW,
+    )
+    blockers = evaluate_legacy_retirement_blockers(artifact_payloads=(contaminated,))
+    codes = [blocker.code for blocker in blockers]
+    assert "legacy_artifacts_detected" in codes
+    cap = strictest_state_cap(blockers)
+    assert cap == PromotionState.PAPER_SHADOW
+
+
+def test_evaluate_legacy_retirement_blockers_passes_clean_bundle() -> None:
+    """A migration report covering only valid V5 artifacts must NOT emit
+    ``legacy_artifacts_detected``."""
+
+    from tradingx.promotion import evaluate_legacy_retirement_blockers
+
+    clean = build_legacy_artifact_migration_report(
+        report_id="legacy-002",
+        artifacts=[
+            {"kind": "promotion_evidence", "artifact_ref": "cas://pe-001"},
+            {"kind": "experiment_registration", "artifact_ref": "cas://er-001"},
+        ],
+        generated_at_utc=NOW,
+    )
+    blockers = evaluate_legacy_retirement_blockers(artifact_payloads=(clean,))
+    assert blockers == ()
+
+
+def test_evaluate_legacy_retirement_blockers_rejects_negative_count_bypass() -> None:
+    """bug_014 follow-up — a tampered payload claiming negative
+    ``summary_counts`` must not bypass ``legacy_artifacts_detected`` when
+    the ``classified_artifacts`` list still contains legacy/invalid
+    entries. The evaluator now re-derives from ``classified_artifacts``
+    and clips ``summary_counts`` at zero."""
+
+    from tradingx.promotion import evaluate_legacy_retirement_blockers
+
+    tampered = {
+        "kind": "legacy_artifact_migration_report",
+        "summary_counts": {"legacy": -5, "invalid": -2},
+        "blocker_codes": [],
+        "classified_artifacts": [
+            {
+                "classification": "legacy",
+                "artifact_ref": "cas://ga-001",
+                "reason": "legacy_kind",
+            }
+        ],
+    }
+    codes = [
+        blocker.code
+        for blocker in evaluate_legacy_retirement_blockers(
+            artifact_payloads=(tampered,)
+        )
+    ]
+    assert "legacy_artifacts_detected" in codes
+
+
+def test_evaluate_legacy_retirement_blockers_rejects_summary_classified_mismatch() -> (
+    None
+):
+    """bug_014 follow-up — a tampered payload that zeroes ``summary_counts``
+    while leaving legacy/invalid entries in ``classified_artifacts`` must
+    not bypass detection. The evaluator now treats
+    ``classified_artifacts`` as the source of truth."""
+
+    from tradingx.promotion import evaluate_legacy_retirement_blockers
+
+    inconsistent = {
+        "kind": "legacy_artifact_migration_report",
+        "summary_counts": {"legacy": 0, "invalid": 0, "valid": 0},
+        "classified_artifacts": [
+            {
+                "classification": "legacy",
+                "artifact_ref": "cas://ga-001",
+                "reason": "legacy_kind",
+            },
+            {
+                "classification": "invalid",
+                "artifact_ref": "cas://cm-001",
+                "reason": "blocker_codes_present",
+            },
+        ],
+        "blocker_codes": [],
+    }
+    codes = [
+        blocker.code
+        for blocker in evaluate_legacy_retirement_blockers(
+            artifact_payloads=(inconsistent,)
+        )
+    ]
+    assert "legacy_artifacts_detected" in codes
+
+
+def test_legacy_artifact_migration_report_schema_rejects_negative_counts() -> None:
+    """bug_014 follow-up — the schema must reject ``summary_counts`` with
+    negative integers. Defense-in-depth at the schema layer in addition to
+    the evaluator-level cross-check."""
+
+    schema = _schema("legacy_artifact_migration_report")
+    payload = {
+        "schema_version": "1.0",
+        "kind": "legacy_artifact_migration_report",
+        "report_id": "legacy-neg-1",
+        "generated_at_utc": "2026-04-26T12:00:00+00:00",
+        "classified_artifacts": [],
+        "summary_counts": {"legacy": -1},
+        "blocker_codes": [],
+    }
+    with pytest.raises(SchemaValidationError):
+        validate_quant_artifact(payload, schema=schema)

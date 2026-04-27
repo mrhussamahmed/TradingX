@@ -52,15 +52,15 @@ def build_authority_boundary(
     signatures: Sequence[str],
     approved_at_utc: datetime,
     expires_at_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     blocker_codes: list[str] = []
     if write_authorization_status != "authorized":
         _append_unique(blocker_codes, "authority_boundary_invalid")
-    if expires_at_utc.astimezone(UTC) <= datetime.now(UTC):
+    if expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "authority_boundary_expired")
-    if second_approver_required and (
-        len(approvers) < 2 or len(signatures) < 2
-    ):
+    if second_approver_required and (len(approvers) < 2 or len(signatures) < 2):
         _append_unique(blocker_codes, "authority_boundary_invalid")
     return {
         "schema_version": "1.0",
@@ -107,7 +107,9 @@ def build_pre_trade_control_manifest(
     drill_refs: Sequence[str],
     approved_at_utc: datetime,
     expires_at_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     blocker_codes: list[str] = []
     if price_collar_bps <= Decimal("0"):
         _append_unique(blocker_codes, "pre_trade_control_missing")
@@ -123,7 +125,7 @@ def build_pre_trade_control_manifest(
         _append_unique(blocker_codes, "pre_trade_control_missing")
     if not reject_on_missing_control:
         _append_unique(blocker_codes, "pre_trade_control_missing")
-    if expires_at_utc.astimezone(UTC) <= datetime.now(UTC):
+    if expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "pre_trade_control_missing")
     return {
         "schema_version": "1.0",
@@ -163,9 +165,11 @@ def build_operational_safety_drill(
     executed_at_utc: datetime,
     freshness_window_seconds: int,
     evidence_refs: Sequence[str],
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     valid_until = executed_at_utc + timedelta(seconds=int(freshness_window_seconds))
-    is_stale = datetime.now(UTC) > valid_until.astimezone(UTC)
+    is_stale = now > valid_until.astimezone(UTC)
     blocker_codes: list[str] = []
     if not passed:
         _append_unique(blocker_codes, "safety_drill_failed")
@@ -215,7 +219,9 @@ def build_live_probe_plan(
     authority_boundary_ref: str,
     approved_at_utc: datetime,
     expires_at_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     blocker_codes: list[str] = []
     if not pre_trade_control_manifest_ref.strip():
         _append_unique(blocker_codes, "pre_trade_control_missing")
@@ -223,7 +229,7 @@ def build_live_probe_plan(
         _append_unique(blocker_codes, "authority_boundary_missing")
     if not kill_switch_required:
         _append_unique(blocker_codes, "pre_trade_control_missing")
-    if expires_at_utc.astimezone(UTC) <= datetime.now(UTC):
+    if expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "live_probe_plan_expired")
     return {
         "schema_version": "1.0",

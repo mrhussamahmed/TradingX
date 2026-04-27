@@ -72,6 +72,12 @@ def build_change_control_record(
         _append_unique(blocker_codes, "unrecorded_material_change")
     replay_required = materiality_class in {"material", "critical"}
     recertification_required = materiality_class in {"material", "critical"}
+    if recertification_required and not change_id.strip():
+        # bug_015 — a material/critical change without a meaningful
+        # change_id cannot be cross-referenced from a recertification
+        # report. The evaluator catches this independently, but emitting
+        # the blocker here makes the defect visible on the artifact.
+        _append_unique(blocker_codes, "unrecorded_material_change")
     return {
         "schema_version": "1.0",
         "kind": "change_control_record",
@@ -167,9 +173,17 @@ def build_recertification_report(
     next_statistical_review_due_utc: datetime,
     change_id: str = "",
     generated_at_utc: datetime | None = None,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
     blocker_codes: list[str] = []
-    now = datetime.now(UTC)
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
+    # bug_005 follow-up — when ``generated_at_utc`` is omitted, fall back to
+    # the resolved ``now`` so a single ``now_utc`` pin propagates to the
+    # artifact stamp. Without this fallback, pinning ``now_utc`` alone
+    # leaves ``generated_at_utc`` reading the wall clock and breaks
+    # content-addressing across rebuilds.
+    if generated_at_utc is None:
+        generated_at_utc = now
     if production_expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "production_approval_expired")
     if next_operational_review_due_utc.astimezone(UTC) <= now:
@@ -236,13 +250,15 @@ def build_drift_monitor_spec(
     demotion_rules: Sequence[str],
     operator_notification_path: str,
     expires_at_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     blocker_codes: list[str] = []
     if not monitored_variables:
         _append_unique(blocker_codes, "drift_monitor_spec_missing")
     if not thresholds:
         _append_unique(blocker_codes, "drift_monitor_spec_missing")
-    if expires_at_utc.astimezone(UTC) <= datetime.now(UTC):
+    if expires_at_utc.astimezone(UTC) <= now:
         _append_unique(blocker_codes, "drift_monitor_spec_missing")
     return {
         "schema_version": "1.0",
