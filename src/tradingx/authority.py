@@ -293,9 +293,7 @@ def _validate_against_schema(
                 f"{pattern!r}: {exc}"
             ) from exc
         if not compiled.search(value):
-            raise SchemaValidationError(
-                f"{path} does not match pattern {pattern!r}"
-            )
+            raise SchemaValidationError(f"{path} does not match pattern {pattern!r}")
     format_name = schema.get("format")
     if format_name is not None:
         _validate_format(value, str(format_name), path=path)
@@ -322,7 +320,10 @@ def _validate_format(value: object, format_name: str, *, path: str) -> None:
     if format_name == "utc-datetime":
         if not isinstance(value, str):
             raise SchemaValidationError(f"{path} must be a utc-datetime")
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SchemaValidationError(f"{path} must be a utc-datetime") from exc
         if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
             raise SchemaValidationError(f"{path} must be a utc-datetime")
         return
