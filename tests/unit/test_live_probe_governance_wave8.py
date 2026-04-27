@@ -532,9 +532,7 @@ def test_recertification_report_with_stale_run_refs_blocks_live_probe_promotion(
         approver="ops-lead",
         generated_at_utc=NOW,
     )
-    blockers = evaluate_live_probe_blockers(
-        artifact_payloads=(run, stale_recert)
-    )
+    blockers = evaluate_live_probe_blockers(artifact_payloads=(run, stale_recert))
     codes = [blocker.code for blocker in blockers]
     assert "post_probe_recertification_missing" in codes
 
@@ -584,9 +582,141 @@ def test_recertification_run_refs_match_across_canonical_namespaces() -> None:
         approver="ops-lead",
         generated_at_utc=NOW,
     )
-    blockers = evaluate_live_probe_blockers(
-        artifact_payloads=(run, cas_recert)
-    )
+    blockers = evaluate_live_probe_blockers(artifact_payloads=(run, cas_recert))
     codes = [blocker.code for blocker in blockers]
     assert "post_probe_recertification_missing" not in codes
 
+
+# -------------------------------------------------------------
+# Determinism (review finding bug_005)
+# -------------------------------------------------------------
+
+
+def test_build_authority_boundary_is_deterministic_given_now_utc() -> None:
+    """Given identical inputs (including ``now_utc``), the builder must
+    return the same ``blocker_codes`` regardless of wall-clock time.
+    Without an injectable ``now_utc`` the builder reads ``datetime.now``
+    and CAS hashes drift across rebuilds when the build crosses an
+    expiry window. Two distinct ``now_utc`` values must produce
+    consistent expiry decisions.
+    """
+
+    common = {
+        "boundary_id": "ab-001",
+        "approval_type": "live_probe",
+        "identity_provider": "internal",
+        "operator_identity_ids": ["op-001", "op-002"],
+        "role_registry_version": "v1",
+        "role": "ops-lead",
+        "scope": "live_probe",
+        "write_authorization_status": "authorized",
+        "max_exception_duration_seconds": 3600,
+        "second_approver_required": True,
+        "approvers": ["op-001", "op-002"],
+        "canonical_approval_payload_hash": "sha256:" + "a" * 64,
+        "signatures": ["sig-001", "sig-002"],
+        "approved_at_utc": NOW,
+        "expires_at_utc": LATER,
+    }
+    before = build_authority_boundary(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    after = build_authority_boundary(
+        **common,
+        now_utc=LATER + timedelta(days=1),  # type: ignore[arg-type,call-arg]
+    )
+    assert "authority_boundary_expired" not in before["blocker_codes"]
+    assert "authority_boundary_expired" in after["blocker_codes"]
+    # Determinism — re-running with the same now_utc gives identical output.
+    repeat = build_authority_boundary(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    assert before == repeat
+
+
+def test_build_pre_trade_control_manifest_is_deterministic_given_now_utc() -> None:
+    common = {
+        "manifest_id": "ptc-001",
+        "strategy_id": "trend-following-v1",
+        "broker_id": "alpaca",
+        "broker_mode": "live_probe",
+        "price_collar_bps": Decimal("150"),
+        "fat_finger_notional_limit": Decimal("10000"),
+        "fat_finger_share_limit": Decimal("1000"),
+        "max_open_orders": 5,
+        "max_order_rate_per_minute": 10,
+        "duplicate_prevention_enabled": True,
+        "idempotency_key_policy": "intent_hash_plus_client_order_id",
+        "cancel_on_disconnect": True,
+        "self_trade_prevention": "enabled",
+        "buying_power_precheck": True,
+        "margin_precheck": True,
+        "locate_precheck_for_shorts": True,
+        "reject_on_missing_control": True,
+        "control_owner": "ops-lead",
+        "drill_refs": ["cas://drill-001"],
+        "approved_at_utc": NOW,
+        "expires_at_utc": LATER,
+    }
+    before = build_pre_trade_control_manifest(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    after = build_pre_trade_control_manifest(
+        **common,
+        now_utc=LATER + timedelta(days=1),  # type: ignore[arg-type,call-arg]
+    )
+    assert "pre_trade_control_missing" not in before["blocker_codes"]
+    assert "pre_trade_control_missing" in after["blocker_codes"]
+
+
+def test_build_operational_safety_drill_is_deterministic_given_now_utc() -> None:
+    common = {
+        "drill_id": "drl-001",
+        "drill_type": "kill_switch",
+        "expected_behavior": "halt all orders",
+        "observed_behavior": "halted all orders",
+        "passed": True,
+        "executed_at_utc": NOW,
+        "freshness_window_seconds": 86400,
+        "evidence_refs": ["cas://drill-evidence-001"],
+    }
+    fresh = build_operational_safety_drill(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    stale = build_operational_safety_drill(
+        **common,
+        now_utc=NOW + timedelta(days=30),  # type: ignore[arg-type,call-arg]
+    )
+    assert fresh["is_stale"] is False
+    assert "safety_drill_stale" not in fresh["blocker_codes"]
+    assert stale["is_stale"] is True
+    assert "safety_drill_stale" in stale["blocker_codes"]
+
+
+def test_build_live_probe_plan_is_deterministic_given_now_utc() -> None:
+    common = {
+        "plan_id": "lp-001",
+        "strategy_id": "trend-following-v1",
+        "broker_id": "alpaca",
+        "broker_mode": "live_probe",
+        "symbols": ["SPY"],
+        "capital_limit": Decimal("1000"),
+        "loss_limit": Decimal("100"),
+        "order_count_limit": 50,
+        "participation_limit": Decimal("0.01"),
+        "spread_limit_bps": Decimal("50"),
+        "duration_seconds": 86400,
+        "minimum_order_count": 10,
+        "minimum_filled_notional": Decimal("500"),
+        "minimum_reconciliation_cycles": 3,
+        "minimum_sessions": 1,
+        "no_signal_outcome_policy": "inconclusive",
+        "start_criteria": ["market_open", "kill_switch_armed"],
+        "success_criteria": ["all_fills_reconciled", "no_breach"],
+        "rollback_criteria": ["loss_breach", "operator_kill"],
+        "flatten_policy": "market_orders_to_zero",
+        "kill_switch_required": True,
+        "pre_trade_control_manifest_ref": "cas://ptc-001",
+        "authority_boundary_ref": "cas://ab-001",
+        "approved_at_utc": NOW,
+        "expires_at_utc": LATER,
+    }
+    before = build_live_probe_plan(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    after = build_live_probe_plan(
+        **common,
+        now_utc=LATER + timedelta(days=1),  # type: ignore[arg-type,call-arg]
+    )
+    assert "live_probe_plan_expired" not in before["blocker_codes"]
+    assert "live_probe_plan_expired" in after["blocker_codes"]

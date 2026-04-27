@@ -374,8 +374,103 @@ def test_recertification_report_without_change_record_blocks() -> None:
     """
 
     dangling_recert = _recert(change_id="chg-orphan")
+    blockers = evaluate_change_control_blockers(artifact_payloads=(dangling_recert,))
+    codes = [blocker.code for blocker in blockers]
+    assert "unrecorded_material_change" in codes
+
+
+def test_empty_change_id_does_not_bypass_cross_bundle_linkage() -> None:
+    """Review finding bug_015 — the Wave 9 Defect-3 cross-bundle linkage
+    check must not be bypassable via empty ``change_id`` on both sides.
+
+    A material change_control_record with ``change_id=""`` paired with an
+    approved recertification_report carrying ``change_id=""`` was previously
+    accepted with zero blockers — defeating the audit-trail invariant.
+    The audit trail requires a meaningful identifier so the recertification
+    can be tied to the change it certifies.
+    """
+
+    open_change = _change(change_id="")  # material -> recert required
+    blank_recert = _recert(change_id="")
     blockers = evaluate_change_control_blockers(
-        artifact_payloads=(dangling_recert,)
+        artifact_payloads=(open_change, blank_recert)
     )
     codes = [blocker.code for blocker in blockers]
     assert "unrecorded_material_change" in codes
+    cap = strictest_state_cap(blockers)
+    assert cap != PromotionState.PRODUCTION
+
+
+# -------------------------------------------------------------
+# Determinism (review finding bug_005)
+# -------------------------------------------------------------
+
+
+def test_build_recertification_report_is_deterministic_given_now_utc() -> None:
+    """The builder reads the wall clock to derive
+    ``production_approval_expired`` and ``next_review_due_passed``.
+    Identical inputs (including ``now_utc``) must produce identical
+    output so the artifact is content-addressable across rebuilds.
+    """
+
+    common = {
+        "report_id": "recert-001",
+        "strategy_id": "trend-following-v1",
+        "production_state_before": "production",
+        "production_state_after": "production",
+        "reason": "monthly review",
+        "authority_boundary_ref": "cas://ab-001",
+        "risk_accepted": True,
+        "evidence_refs": ["cas://evidence-001"],
+        "freshness_status": "fresh",
+        "statistical_status": "valid",
+        "cost_capacity_status": "valid",
+        "optimizer_status": "valid",
+        "live_probe_status": "valid",
+        "drift_status": "nominal",
+        "incident_status": "resolved",
+        "approval_status": "approved",
+        "approver": "ops-lead",
+        "production_expires_at_utc": LATER,
+        "next_operational_review_due_utc": LATER,
+        "next_statistical_review_due_utc": LATER,
+        "generated_at_utc": NOW,
+    }
+    before = build_recertification_report(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    after = build_recertification_report(
+        **common,
+        now_utc=LATER + timedelta(days=1),  # type: ignore[arg-type,call-arg]
+    )
+    assert "production_approval_expired" not in before["blocker_codes"]
+    assert "production_approval_expired" in after["blocker_codes"]
+    repeat = build_recertification_report(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    assert before == repeat
+
+
+def test_build_drift_monitor_spec_is_deterministic_given_now_utc() -> None:
+    common = {
+        "spec_id": "drift-001",
+        "strategy_id": "trend-following-v1",
+        "monitored_variables": ["sharpe_drift", "feature_psi"],
+        "reference_window": "trailing_252",
+        "live_window": "trailing_30",
+        "thresholds": {
+            "sharpe_drift": Decimal("0.30"),
+            "feature_psi": Decimal("0.20"),
+        },
+        "regime_labels": ["calm", "volatile"],
+        "multiple_testing_policy": "bonferroni",
+        "alert_latency_seconds": 60,
+        "missing_data_policy": "halt_on_gap",
+        "minimum_sample_requirement": 20,
+        "demotion_rules": ["psi>0.2 -> demote", "sharpe drift>0.3 -> halt"],
+        "operator_notification_path": "telegram:ops",
+        "expires_at_utc": LATER,
+    }
+    before = build_drift_monitor_spec(**common, now_utc=NOW)  # type: ignore[arg-type,call-arg]
+    after = build_drift_monitor_spec(
+        **common,
+        now_utc=LATER + timedelta(days=1),  # type: ignore[arg-type,call-arg]
+    )
+    assert "drift_monitor_spec_missing" not in before["blocker_codes"]
+    assert "drift_monitor_spec_missing" in after["blocker_codes"]

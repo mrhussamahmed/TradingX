@@ -130,8 +130,10 @@ def build_borrow_availability_snapshot(
     source: str,
     snapshot_at_utc: datetime,
     freshness_threshold_seconds: int,
+    now_utc: datetime | None = None,
 ) -> dict[str, object]:
-    snapshot_age = datetime.now(UTC) - snapshot_at_utc.astimezone(UTC)
+    now = (now_utc or datetime.now(UTC)).astimezone(UTC)
+    snapshot_age = now - snapshot_at_utc.astimezone(UTC)
     is_stale = snapshot_age > timedelta(seconds=int(freshness_threshold_seconds))
     blocker_codes: list[str] = []
     if is_stale:

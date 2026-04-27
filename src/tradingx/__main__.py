@@ -199,7 +199,7 @@ _WAVE_ARTIFACT_EVALUATORS: dict[str, str] = {
     "recertification": "evaluate_change_control_blockers",
     "drift-monitor-spec": "evaluate_change_control_blockers",
     # Wave 10 — legacy retirement
-    "legacy-migration-report": "evaluate_change_control_blockers",
+    "legacy-migration-report": "evaluate_legacy_retirement_blockers",
 }
 
 
@@ -224,9 +224,7 @@ _WAVE_ARTIFACT_ALLOWED_KINDS: dict[str, frozenset[str]] = {
     # Wave 8
     "live-probe-plan": frozenset({"live_probe_plan"}),
     "live-probe-run": frozenset({"live_probe_run_record"}),
-    "live-probe-recertification": frozenset(
-        {"live_probe_recertification_report"}
-    ),
+    "live-probe-recertification": frozenset({"live_probe_recertification_report"}),
     # Wave 9
     "change-control": frozenset({"change_control_record"}),
     "replay-equivalence": frozenset({"replay_equivalence_report"}),
