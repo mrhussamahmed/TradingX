@@ -112,11 +112,7 @@ def _write_service_cycle(
         )
     )
     if payload_overrides:
-        path = (
-            paper_store._root_dir
-            / "service_cycles"
-            / f"{cycle_id}.json"
-        )
+        path = paper_store._root_dir / "service_cycles" / f"{cycle_id}.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload.update(payload_overrides)
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -971,7 +967,9 @@ def test_portfolio_source_evidence_stays_missing_without_explicit_account_positi
     paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
     _write_service_cycle(paper_store, timestamp=timestamp)
 
-    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+    snapshot = _minimal_read_model(
+        tmp_path, timestamp
+    ).build_portfolio_workspace_snapshot()
 
     assert snapshot.source_evidence_at_utc is None
     assert snapshot.account_position_source_at_utc is None
@@ -993,7 +991,9 @@ def test_portfolio_source_evidence_keeps_one_sided_account_position_missing(
             "position_source_at_utc": "",
         },
     )
-    account_only = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+    account_only = _minimal_read_model(
+        tmp_path, timestamp
+    ).build_portfolio_workspace_snapshot()
 
     assert account_only.source_evidence_at_utc is None
     assert account_only.account_position_source_at_utc is None
@@ -1007,7 +1007,9 @@ def test_portfolio_source_evidence_keeps_one_sided_account_position_missing(
             "position_source_at_utc": position_time.isoformat(),
         },
     )
-    position_only = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+    position_only = _minimal_read_model(
+        tmp_path, timestamp
+    ).build_portfolio_workspace_snapshot()
 
     assert position_only.source_evidence_at_utc is None
     assert position_only.account_position_source_at_utc is None
@@ -1029,7 +1031,9 @@ def test_portfolio_source_evidence_uses_older_split_account_position_source(
         },
     )
 
-    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+    snapshot = _minimal_read_model(
+        tmp_path, timestamp
+    ).build_portfolio_workspace_snapshot()
 
     assert snapshot.source_evidence_at_utc == position_time
     assert snapshot.account_position_source_at_utc == position_time
@@ -1070,7 +1074,9 @@ def test_portfolio_required_source_ignores_fresh_oms_and_closed_trade_without_ac
         payload={"reason_code": "baseline_long_entry"},
     )
 
-    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+    snapshot = _minimal_read_model(
+        tmp_path, timestamp
+    ).build_portfolio_workspace_snapshot()
 
     assert snapshot.source_evidence_at_utc is None
     assert snapshot.account_position_source_at_utc is None

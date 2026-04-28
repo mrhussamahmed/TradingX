@@ -38,8 +38,7 @@ class PostgresRuntimeProjectionRepository:
     ) -> None:
         def write(connection: Any) -> None:
             inserted = connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO runtime.runtime_heartbeat (
                         heartbeat_id,
                         runtime_instance_id,
@@ -63,16 +62,15 @@ class PostgresRuntimeProjectionRepository:
                     )
                     ON CONFLICT (heartbeat_id) DO NOTHING
                     RETURNING heartbeat_id
-                    """
-                ),
+                    """),
                 _runtime_heartbeat_params(record),
             ).scalar_one_or_none()
             if inserted is not None:
                 return
 
-            existing = connection.execute(
-                text(
-                    """
+            existing = (
+                connection.execute(
+                    text("""
                     SELECT
                         heartbeat_id,
                         runtime_instance_id,
@@ -85,10 +83,12 @@ class PostgresRuntimeProjectionRepository:
                         payload_json
                     FROM runtime.runtime_heartbeat
                     WHERE heartbeat_id = :heartbeat_id
-                    """
-                ),
-                {"heartbeat_id": record.heartbeat_id},
-            ).mappings().one()
+                    """),
+                    {"heartbeat_id": record.heartbeat_id},
+                )
+                .mappings()
+                .one()
+            )
             if _runtime_heartbeat_row_matches(existing, record):
                 return
             raise repositories.RepositoryConflictError(
@@ -141,8 +141,7 @@ class PostgresRuntimeProjectionRepository:
     ) -> None:
         def write(connection: Any) -> None:
             inserted = connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO runtime.control_posture_snapshot (
                         posture_id,
                         observed_at_utc,
@@ -174,16 +173,15 @@ class PostgresRuntimeProjectionRepository:
                     )
                     ON CONFLICT (posture_id) DO NOTHING
                     RETURNING posture_id
-                    """
-                ),
+                    """),
                 _control_posture_params(record),
             ).scalar_one_or_none()
             if inserted is not None:
                 return
 
-            existing = connection.execute(
-                text(
-                    """
+            existing = (
+                connection.execute(
+                    text("""
                     SELECT
                         posture_id,
                         observed_at_utc,
@@ -200,10 +198,12 @@ class PostgresRuntimeProjectionRepository:
                         payload_json
                     FROM runtime.control_posture_snapshot
                     WHERE posture_id = :posture_id
-                    """
-                ),
-                {"posture_id": record.posture_id},
-            ).mappings().one()
+                    """),
+                    {"posture_id": record.posture_id},
+                )
+                .mappings()
+                .one()
+            )
             if _control_posture_row_matches(existing, record):
                 return
             raise repositories.RepositoryConflictError(
@@ -220,18 +220,15 @@ class PostgresRuntimeProjectionRepository:
     ) -> None:
         def write(connection: Any) -> None:
             connection.execute(
-                text(
-                    """
+                text("""
                     DELETE FROM runtime.control_posture_blocker
                     WHERE posture_id = :posture_id
-                    """
-                ),
+                    """),
                 {"posture_id": posture_id},
             )
             for blocker in blockers:
                 connection.execute(
-                    text(
-                        """
+                    text("""
                         INSERT INTO runtime.control_posture_blocker (
                             blocker_id,
                             posture_id,
@@ -249,8 +246,7 @@ class PostgresRuntimeProjectionRepository:
                             :source_ref,
                             CAST(:payload_json AS JSONB)
                         )
-                        """
-                    ),
+                        """),
                     {
                         "blocker_id": blocker.blocker_id,
                         "posture_id": blocker.posture_id,

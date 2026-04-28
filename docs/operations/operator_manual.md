@@ -439,11 +439,17 @@ By default:
 - the site is local-only
 - the site is read-only
 
-To enable action buttons, set this in `.env`:
+To enable action buttons, set both values in `.env`:
 
 ```dotenv
 TRADINGX_WEB_WRITE_MODE_ENABLED=true
+TRADINGX_WEB_WRITE_SIGNING_SECRET=<local-random-secret>
 ```
+
+The browser stores this secret only in session storage after you unlock write
+controls. If write mode is enabled without the signing secret, the API remains
+read-only and the controls will report that server-side write signing is not
+configured.
 
 ## How to use the website
 

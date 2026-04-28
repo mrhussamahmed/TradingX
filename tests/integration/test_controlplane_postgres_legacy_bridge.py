@@ -207,9 +207,7 @@ def test_legacy_bridge_reruns_timestampless_payload_with_epoch_timestamp(
     assert len(outbox_rows) == 1
     assert outbox_rows[0]["occurred_at_utc"] == FIXED_LEGACY_EPOCH
     assert "observed_at_utc" not in outbox_rows[0]["payload_json"]["metadata"]
-    assert status_rows[0]["checked_at_utc"] == datetime(
-        2026, 4, 24, 13, 5, tzinfo=UTC
-    )
+    assert status_rows[0]["checked_at_utc"] == datetime(2026, 4, 24, 13, 5, tzinfo=UTC)
 
 
 def test_legacy_bridge_rerun_marks_existing_event_count(
@@ -356,9 +354,7 @@ def test_legacy_bridge_tail_updates_checked_at_and_active_write_path(
         """,
     )
 
-    assert status_rows[0]["checked_at_utc"] == datetime(
-        2026, 4, 24, 13, 1, tzinfo=UTC
-    )
+    assert status_rows[0]["checked_at_utc"] == datetime(2026, 4, 24, 13, 1, tzinfo=UTC)
     assert status_rows[0]["metadata_json"]["write_path"] == "active_bridge"
 
 
@@ -424,12 +420,13 @@ def test_document_bridge_edit_appends_new_outbox_event_not_conflict(
     )
 
     assert len(active_rows) == 2
-    assert {
-        row["payload_json"]["payload"]["document_id"] for row in active_rows
-    } == {"STATE"}
-    assert active_rows[0]["payload_json"]["source_event_id"] != active_rows[1][
-        "payload_json"
-    ]["source_event_id"]
+    assert {row["payload_json"]["payload"]["document_id"] for row in active_rows} == {
+        "STATE"
+    }
+    assert (
+        active_rows[0]["payload_json"]["source_event_id"]
+        != active_rows[1]["payload_json"]["source_event_id"]
+    )
 
 
 def test_document_bridge_unchanged_rerun_reuses_existing_outbox_row(
@@ -464,12 +461,14 @@ def test_document_bridge_unchanged_rerun_reuses_existing_outbox_row(
         """,
     )
 
-    assert first.source_results[0].outbox_event_ids == second.source_results[
-        0
-    ].outbox_event_ids
-    assert second.source_results[0].existing_outbox_event_ids == first.source_results[
-        0
-    ].outbox_event_ids
+    assert (
+        first.source_results[0].outbox_event_ids
+        == second.source_results[0].outbox_event_ids
+    )
+    assert (
+        second.source_results[0].existing_outbox_event_ids
+        == first.source_results[0].outbox_event_ids
+    )
     assert len(outbox_rows) == 2
     assert status_rows[0]["metadata_json"]["new_event_count"] == 0
     assert status_rows[0]["metadata_json"]["existing_event_count"] == 2
@@ -503,9 +502,10 @@ def test_document_bridge_delete_appends_inventory_snapshot(
         event_kind="inventory_snapshot",
     )
 
-    assert first.source_results[0].source_watermark != second.source_results[
-        0
-    ].source_watermark
+    assert (
+        first.source_results[0].source_watermark
+        != second.source_results[0].source_watermark
+    )
     assert len(inventory_rows) == 2
     assert inventory_rows[0]["payload_json"]["payload"]["active_document_ids"] == [
         "first",
@@ -586,9 +586,7 @@ def test_document_bridge_partial_read_failure_does_not_write_inventory_snapshot(
         """,
     )
 
-    assert result.source_results[0].source_errors == (
-        "unreadable_file:docs/INDEX.md",
-    )
+    assert result.source_results[0].source_errors == ("unreadable_file:docs/INDEX.md",)
     assert len(active_rows) == 1
     assert active_rows[0]["payload_json"]["payload"]["document_id"] == "STATE"
     assert inventory_rows == ()
@@ -614,11 +612,7 @@ def _bridge_with_service_cycle(
         else ""
     )
     (category_dir / "cycle-1.json").write_text(
-        (
-            '{"cycle_id":"cycle-1",'
-            f"{timestamp_fragment}"
-            f'"equity":"{equity}"}}'
-        ),
+        ('{"cycle_id":"cycle-1",' f"{timestamp_fragment}" f'"equity":"{equity}"}}'),
         encoding="utf-8",
     )
     adapter = JsonArtifactSourceAdapter(

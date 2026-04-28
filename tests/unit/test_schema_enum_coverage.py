@@ -111,9 +111,7 @@ class _LiteralVisitor(ast.NodeVisitor):
         # ``LITERAL op _normal_form(...)``. Most callers write the
         # function on the left, but treat both for safety.
         operands = [node.left, *node.comparators]
-        for left, op, right in zip(
-            operands[:-1], node.ops, operands[1:], strict=True
-        ):
+        for left, op, right in zip(operands[:-1], node.ops, operands[1:], strict=True):
             if not isinstance(op, ast.Eq | ast.NotEq | ast.In | ast.NotIn):
                 continue
             field = self._resolve_field(left) or self._resolve_field(right)
@@ -230,9 +228,7 @@ def test_schema_enum_covers_evaluator_literals(field: str) -> None:
 
     schemas = _schemas_declaring_field(field)
     if not schemas:
-        pytest.skip(
-            f"no schema under schemas/quant declares property {field!r}"
-        )
+        pytest.skip(f"no schema under schemas/quant declares property {field!r}")
 
     declared: set[str] = set()
     for kind in schemas:

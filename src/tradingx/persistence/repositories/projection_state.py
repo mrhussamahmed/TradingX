@@ -76,8 +76,7 @@ class PostgresProjectionStateRepository:
             outbox_event_id = self._id_provider()
             created_at_utc = _aware_utc(self._clock())
             inserted = connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO system.outbox_event (
                         outbox_event_id,
                         aggregate_type,
@@ -103,8 +102,7 @@ class PostgresProjectionStateRepository:
                     )
                     ON CONFLICT (dedupe_key) DO NOTHING
                     RETURNING outbox_event_id
-                    """
-                ),
+                    """),
                 {
                     "outbox_event_id": outbox_event_id,
                     "aggregate_type": request.aggregate_type,
@@ -121,8 +119,7 @@ class PostgresProjectionStateRepository:
                 return str(inserted)
 
             existing = connection.execute(
-                text(
-                    """
+                text("""
                     SELECT outbox_event_id
                     FROM system.outbox_event
                     WHERE dedupe_key = :dedupe_key
@@ -132,8 +129,7 @@ class PostgresProjectionStateRepository:
                       AND event_version = :event_version
                       AND occurred_at_utc = :occurred_at_utc
                       AND payload_json = CAST(:payload_json AS JSONB)
-                    """
-                ),
+                    """),
                 {
                     "dedupe_key": request.dedupe_key,
                     "aggregate_type": request.aggregate_type,
@@ -226,8 +222,7 @@ class PostgresProjectionStateRepository:
             params["cursor_created_at_utc"] = _aware_utc(cursor_created_at_utc)
             params["cursor_outbox_event_id"] = cursor_outbox_event_id
 
-        statement = text(
-            f"""
+        statement = text(f"""
             SELECT
                 outbox_event_id,
                 aggregate_type,
@@ -244,8 +239,7 @@ class PostgresProjectionStateRepository:
               {cursor_filter}
             ORDER BY created_at_utc ASC, outbox_event_id ASC
             LIMIT :batch_size
-            """
-        ).bindparams(
+            """).bindparams(
             bindparam("aggregate_types", expanding=True),
             bindparam("source_families", expanding=True),
         )
@@ -286,8 +280,7 @@ class PostgresProjectionStateRepository:
         self._write(
             "save projection checkpoint",
             lambda connection: connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO system.projection_checkpoint (
                         projection_name,
                         last_outbox_event_id,
@@ -316,8 +309,7 @@ class PostgresProjectionStateRepository:
                         lag_seconds = EXCLUDED.lag_seconds,
                         status = EXCLUDED.status,
                         metadata_json = EXCLUDED.metadata_json
-                    """
-                ),
+                    """),
                 {
                     "projection_name": record.projection_name,
                     "last_outbox_event_id": record.last_outbox_event_id,
@@ -402,8 +394,7 @@ class PostgresProjectionStateRepository:
         self._write(
             "upsert projection source status",
             lambda connection: connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO system.domain_projection_source_status (
                         domain_name,
                         source_family,
@@ -439,8 +430,7 @@ class PostgresProjectionStateRepository:
                         ready_for_postgres = EXCLUDED.ready_for_postgres,
                         checked_at_utc = EXCLUDED.checked_at_utc,
                         metadata_json = EXCLUDED.metadata_json
-                    """
-                ),
+                    """),
                 {
                     "domain_name": record.domain_name,
                     "source_family": record.source_family,
@@ -471,8 +461,7 @@ class PostgresProjectionStateRepository:
         self._write(
             "save domain projection status",
             lambda connection: connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO system.domain_projection_status (
                         domain_name,
                         target_store,
@@ -507,8 +496,7 @@ class PostgresProjectionStateRepository:
                         ready_for_postgres = EXCLUDED.ready_for_postgres,
                         checked_at_utc = EXCLUDED.checked_at_utc,
                         metadata_json = EXCLUDED.metadata_json
-                    """
-                ),
+                    """),
                 {
                     "domain_name": summary.domain_name,
                     "target_store": summary.target_store,

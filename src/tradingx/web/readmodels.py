@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -297,7 +298,7 @@ class LocalWebReadModel:
 
     def _payload_timestamp(
         self,
-        payload: dict[str, object] | None,
+        payload: Mapping[str, object] | None,
         *fields: str,
     ) -> datetime | None:
         if payload is None:
@@ -310,7 +311,7 @@ class LocalWebReadModel:
 
     def _latest_payload_timestamp(
         self,
-        payloads: list[dict[str, object]],
+        payloads: Sequence[Mapping[str, object]],
         *fields: str,
     ) -> datetime | None:
         timestamps = [
@@ -1109,8 +1110,10 @@ class LocalWebReadModel:
             if selection.ranked_opportunities
             else None
         )
-        score = selected_score if selected_score is not None else (
-            top_score if selection.decision == "no_trade" else None
+        score = (
+            selected_score
+            if selected_score is not None
+            else (top_score if selection.decision == "no_trade" else None)
         )
         integrity_reason = ""
         if (
@@ -1122,21 +1125,33 @@ class LocalWebReadModel:
 
         signal = RuntimeDecisionSignalDetail(
             available=score is not None and not integrity_reason,
-            symbol=(score.symbol if score is not None and not integrity_reason else None),
+            symbol=(
+                score.symbol if score is not None and not integrity_reason else None
+            ),
             final_score=(
-                score.final_score if score is not None and not integrity_reason else None
+                score.final_score
+                if score is not None and not integrity_reason
+                else None
             ),
             base_signal=(
-                score.base_signal if score is not None and not integrity_reason else None
+                score.base_signal
+                if score is not None and not integrity_reason
+                else None
             ),
             model_weight=(
-                score.model_weight if score is not None and not integrity_reason else None
+                score.model_weight
+                if score is not None and not integrity_reason
+                else None
             ),
             regime_weight=(
-                score.regime_weight if score is not None and not integrity_reason else None
+                score.regime_weight
+                if score is not None and not integrity_reason
+                else None
             ),
             liquidity_weight=(
-                score.liquidity_weight if score is not None and not integrity_reason else None
+                score.liquidity_weight
+                if score is not None and not integrity_reason
+                else None
             ),
         )
         eligible = None

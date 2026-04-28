@@ -1080,10 +1080,16 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert gate3.status_code == 200
     assert gate3.json()["status"] == "pending"
     assert gate3.json()["source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
-    assert gate3.json()["oldest_required_source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
+    assert (
+        gate3.json()["oldest_required_source_evidence_at_utc"]
+        == "2026-04-18T18:00:00+00:00"
+    )
     assert gate3.json()["required_criterion_ids"] == ["duration_or_trade_count"]
     assert gate3.json()["criteria"][0]["required"] is True
-    assert gate3.json()["criteria"][0]["source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
+    assert (
+        gate3.json()["criteria"][0]["source_evidence_at_utc"]
+        == "2026-04-18T18:00:00+00:00"
+    )
     assert gate3_package.status_code == 200
     assert gate3_package.json()["package_id"] == "gate3-package-1"
     assert research.status_code == 200
@@ -1135,11 +1141,17 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert runtime_decision.status_code == 200
     runtime_decision_payload = runtime_decision.json()
     assert runtime_decision_payload["selection_id"] == "selection-1"
-    assert runtime_decision_payload["decision_source_at_utc"] == "2026-04-19T12:00:00+00:00"
+    assert (
+        runtime_decision_payload["decision_source_at_utc"]
+        == "2026-04-19T12:00:00+00:00"
+    )
     assert runtime_decision_payload["signal"]["available"] is True
     assert runtime_decision_payload["signal"] != {}
     assert runtime_decision_payload["risk"] != {}
-    assert runtime_decision_payload["freshness"]["decision_source_at_utc"] == "2026-04-19T12:00:00+00:00"
+    assert (
+        runtime_decision_payload["freshness"]["decision_source_at_utc"]
+        == "2026-04-19T12:00:00+00:00"
+    )
 
 
 def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() -> None:

@@ -97,10 +97,7 @@ def evaluate_projection_readiness(
     domain_statuses = tuple(
         status for status in source_statuses if status.domain_name == domain_name
     )
-    status_by_key = {
-        status.identity_key: status
-        for status in domain_statuses
-    }
+    status_by_key = {status.identity_key: status for status in domain_statuses}
 
     if not domain_requirements:
         blockers.append(
@@ -240,12 +237,8 @@ def _source_blockers(
             )
         )
 
-    if (
-        requirement.max_lag_seconds is not None
-        and (
-            status.lag_seconds is None
-            or status.lag_seconds > requirement.max_lag_seconds
-        )
+    if requirement.max_lag_seconds is not None and (
+        status.lag_seconds is None or status.lag_seconds > requirement.max_lag_seconds
     ):
         blockers.append(
             _source_blocker(
@@ -519,10 +512,7 @@ def _source_blockers_by_key(
         key = (blocker.source_family, blocker.source_identity)
         if blocker.code not in blockers_by_key.setdefault(key, []):
             blockers_by_key[key].append(blocker.code)
-    return {
-        key: tuple(codes)
-        for key, codes in blockers_by_key.items()
-    }
+    return {key: tuple(codes) for key, codes in blockers_by_key.items()}
 
 
 def _aware_utc(value: datetime) -> datetime:

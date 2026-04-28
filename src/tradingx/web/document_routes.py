@@ -93,9 +93,7 @@ class _ConfiguredDocumentsRouteProvider:
         except Exception:
             self._raise_if_fail_closed("repository_unavailable")
             return self._legacy_provider.list_documents()
-        return tuple(
-            _document_record_from_postgres(document) for document in documents
-        )
+        return tuple(_document_record_from_postgres(document) for document in documents)
 
     def get_document(self, document_id: str) -> DocumentRecord | None:
         if not self._mode.use_postgres:

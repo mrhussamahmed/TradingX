@@ -1411,12 +1411,19 @@ class FilesystemArtifactStore:
                 sorted(category_dir.glob("*.json")) if category_dir.exists() else []
             )
             counts[category] = len(artifacts)
-            latest_artifacts[category] = artifacts[-1].name if artifacts else ""
-        service_cycle_payloads = self._read_category_payloads("service_cycles")
+            latest_artifacts[category] = self._latest_artifact_name(artifacts)
+        service_cycle_payloads = self._read_category_payloads_by_recency(
+            "service_cycles"
+        )
+        reconciliation_payloads = self._read_category_payloads("reconciliation")
         evaluation_payloads = self._read_category_payloads("evaluation_evidence")
         gate_payloads = self._read_category_payloads("gate_assessments")
         latest_service_cycle = (
             service_cycle_payloads[-1] if service_cycle_payloads else None
+        )
+        latest_portfolio_summary = self._latest_portfolio_summary(
+            latest_service_cycle=latest_service_cycle,
+            reconciliation_payloads=reconciliation_payloads,
         )
         daily_pnl = Decimal("0")
         if latest_service_cycle is not None:
@@ -1452,21 +1459,11 @@ class FilesystemArtifactStore:
                     int(payload.get("reconciliation_failure_count", 0))
                     for payload in service_cycle_payloads
                 ),
-                "latest_open_positions": list(
-                    latest_service_cycle.get("open_position_symbols", ())
-                    if latest_service_cycle is not None
-                    else ()
-                ),
-                "latest_cash": (
-                    str(latest_service_cycle.get("cash", ""))
-                    if latest_service_cycle is not None
-                    else ""
-                ),
-                "latest_equity": (
-                    str(latest_service_cycle.get("equity", ""))
-                    if latest_service_cycle is not None
-                    else ""
-                ),
+                "latest_open_positions": latest_portfolio_summary[
+                    "latest_open_positions"
+                ],
+                "latest_cash": latest_portfolio_summary["latest_cash"],
+                "latest_equity": latest_portfolio_summary["latest_equity"],
                 "daily_pnl": str(daily_pnl),
                 "evaluation_recommendations": recommendation_counts,
                 "latest_gate_statuses": {
@@ -1475,6 +1472,143 @@ class FilesystemArtifactStore:
                 },
             },
         }
+
+    def _latest_portfolio_summary(
+        self,
+        *,
+        latest_service_cycle: dict[str, Any] | None,
+        reconciliation_payloads: list[dict[str, Any]],
+    ) -> dict[str, object]:
+        service_as_of = self._parse_artifact_timestamp(
+            None
+            if latest_service_cycle is None
+            else latest_service_cycle.get("completed_at_utc")
+        )
+        latest_reconciliation = self._latest_reconciliation_portfolio_payload(
+            reconciliation_payloads
+        )
+        reconciliation_as_of = self._parse_artifact_timestamp(
+            None
+            if latest_reconciliation is None
+            else self._portfolio_state_payload(latest_reconciliation).get("as_of_utc")
+        )
+        if latest_reconciliation is not None and (
+            service_as_of is None
+            or (
+                reconciliation_as_of is not None
+                and reconciliation_as_of >= service_as_of
+            )
+        ):
+            portfolio_state = self._portfolio_state_payload(latest_reconciliation)
+            return {
+                "latest_open_positions": self._open_position_symbols_from_payload(
+                    portfolio_state
+                ),
+                "latest_cash": str(portfolio_state.get("cash", "")),
+                "latest_equity": str(portfolio_state.get("equity", "")),
+            }
+        if latest_service_cycle is None:
+            return {
+                "latest_open_positions": [],
+                "latest_cash": "",
+                "latest_equity": "",
+            }
+        return {
+            "latest_open_positions": list(
+                latest_service_cycle.get("open_position_symbols", ())
+            ),
+            "latest_cash": str(latest_service_cycle.get("cash", "")),
+            "latest_equity": str(latest_service_cycle.get("equity", "")),
+        }
+
+    def _latest_artifact_name(self, artifacts: list[Path]) -> str:
+        if not artifacts:
+            return ""
+        return max(artifacts, key=self._artifact_recency_key).name
+
+    def _artifact_recency_key(self, path: Path) -> tuple[datetime, float, str]:
+        fallback_mtime = path.stat().st_mtime
+        timestamp = self._artifact_payload_timestamp(path)
+        if timestamp is None:
+            timestamp = datetime.fromtimestamp(fallback_mtime, UTC)
+        return (timestamp, fallback_mtime, path.name)
+
+    def _artifact_payload_timestamp(self, path: Path) -> datetime | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return self._payload_timestamp(payload)
+
+    def _payload_timestamp(self, payload: dict[str, Any]) -> datetime | None:
+        for field in (
+            "generated_at_utc",
+            "completed_at_utc",
+            "recorded_at_utc",
+            "sent_at_utc",
+            "filled_at_utc",
+            "submitted_at_utc",
+            "activated_at_utc",
+            "timestamp_utc",
+            "as_of_utc",
+        ):
+            timestamp = self._parse_artifact_timestamp(payload.get(field))
+            if timestamp is not None:
+                return timestamp
+        portfolio_state = self._portfolio_state_payload(payload)
+        return self._parse_artifact_timestamp(portfolio_state.get("as_of_utc"))
+
+    def _latest_reconciliation_portfolio_payload(
+        self,
+        reconciliation_payloads: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        candidates = [
+            payload
+            for payload in reconciliation_payloads
+            if self._portfolio_state_payload(payload)
+        ]
+        if not candidates:
+            return None
+        return max(
+            candidates,
+            key=lambda payload: self._parse_artifact_timestamp(
+                self._portfolio_state_payload(payload).get("as_of_utc")
+            )
+            or datetime.min.replace(tzinfo=UTC),
+        )
+
+    def _portfolio_state_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_portfolio_state = payload.get("portfolio_state")
+        return (
+            dict(raw_portfolio_state) if isinstance(raw_portfolio_state, dict) else {}
+        )
+
+    def _open_position_symbols_from_payload(
+        self,
+        portfolio_state: dict[str, Any],
+    ) -> list[str]:
+        symbols: list[str] = []
+        for raw_position in portfolio_state.get("positions", ()):
+            if not isinstance(raw_position, dict):
+                continue
+            quantity = Decimal(str(raw_position.get("quantity", "0")))
+            if quantity != Decimal("0"):
+                symbols.append(str(raw_position.get("symbol", "")))
+        return [symbol for symbol in symbols if symbol]
+
+    def _parse_artifact_timestamp(self, value: object) -> datetime | None:
+        raw_value = str(value or "").strip()
+        if not raw_value:
+            return None
+        try:
+            timestamp = datetime.fromisoformat(raw_value)
+        except ValueError:
+            return None
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
 
     def list_artifact_payloads(self, category: str) -> list[dict[str, Any]]:
         return self._read_category_payloads(category)
@@ -1487,6 +1621,16 @@ class FilesystemArtifactStore:
             json.loads(path.read_text(encoding="utf-8"))
             for path in sorted(category_dir.glob("*.json"))
         ]
+
+    def _read_category_payloads_by_recency(
+        self,
+        category: str,
+    ) -> list[dict[str, Any]]:
+        return sorted(
+            self._read_category_payloads(category),
+            key=lambda payload: self._payload_timestamp(payload)
+            or datetime.min.replace(tzinfo=UTC),
+        )
 
 
 def _write_text_atomically(path: Path, payload: str) -> None:

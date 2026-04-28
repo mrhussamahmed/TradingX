@@ -92,9 +92,7 @@ def test_v1_documents_hybrid_override_reads_ready_postgres_list_detail_and_tombs
     config_proposal_response = client.get("/api/v1/documents/proposal-1")
 
     assert list_response.status_code == 200
-    document_ids = {
-        item["doc_id"] for item in list_response.json()["data"]["items"]
-    }
+    document_ids = {item["doc_id"] for item in list_response.json()["data"]["items"]}
     assert {"STATE", "INDEX", "2026-04-25-wave2"} <= document_ids
     assert "DELETED" not in document_ids
     assert "proposal-1" not in document_ids
@@ -305,11 +303,7 @@ def _seed_documents(store: _RouteStore) -> None:
         ),
     ):
         state = "tombstoned" if document_id == "DELETED" else "active"
-        source_family = (
-            "config_proposals"
-            if document_id == "proposal-1"
-            else None
-        )
+        source_family = "config_proposals" if document_id == "proposal-1" else None
         writer.upsert_document_revision(
             _document_projection_document(
                 document_id=document_id,

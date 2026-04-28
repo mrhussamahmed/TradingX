@@ -544,9 +544,7 @@ class DocumentFileTreeSourceAdapter(LegacySourceAdapter):
                 errors.append(f"unreadable_file:{relative_path}")
                 continue
 
-            source_event_id = (
-                f"file:{relative_path}:{str(payload['content_hash'])}"
-            )
+            source_event_id = f"file:{relative_path}:{str(payload['content_hash'])}"
             source_watermark = _event_payload_watermark(source_event_id, payload)
             active_documents.append(
                 {
@@ -567,9 +565,7 @@ class DocumentFileTreeSourceAdapter(LegacySourceAdapter):
                     resource_id=str(payload["document_id"]),
                     payload=payload,
                     metadata={
-                        "observed_at_utc": _aware_utc(
-                            observed_at_utc
-                        ).isoformat(),
+                        "observed_at_utc": _aware_utc(observed_at_utc).isoformat(),
                         "source_path": relative_path,
                         "document_event_kind": "file_observed",
                         "internal_document_key": str(payload["internal_document_key"]),
@@ -1277,9 +1273,7 @@ def bridge_source_requirements(
             source_family=row.source_family,
             source_identity=row.source_identity,
             is_mutable=row.is_mutable,
-            max_freshness_seconds=(
-                max_freshness_seconds if row.is_mutable else None
-            ),
+            max_freshness_seconds=(max_freshness_seconds if row.is_mutable else None),
             max_lag_seconds=max_lag_seconds,
             requires_initial_import_complete=True,
             requires_active_write_path=row.is_mutable,
@@ -1369,9 +1363,7 @@ def source_root_display(
             root_parts = root_relative.parts
         except ValueError:
             root_parts = (external_label,)
-        return _redact_path_segments(
-            (*root_parts, *relative.parts), secrets=secrets
-        )
+        return _redact_path_segments((*root_parts, *relative.parts), secrets=secrets)
 
     final_segment = _redact_path_segment(resolved.name, secrets=secrets)
     if final_segment == "***":
@@ -1581,9 +1573,11 @@ def _adapter_for_inventory_row(
                 identity=identity,
                 root_dir=artifact_root,
                 patterns=(
-                    artifact_ref
-                    if artifact_ref.endswith(".json")
-                    else f"{artifact_ref}.json",
+                    (
+                        artifact_ref
+                        if artifact_ref.endswith(".json")
+                        else f"{artifact_ref}.json"
+                    ),
                 ),
                 event_family=event_family,
                 event_type=event_type,
@@ -2084,9 +2078,7 @@ def _document_inventory_payload(
         "document_event_kind": "inventory_snapshot",
         "document_state": "inventory",
         "source_family": source_family,
-        "active_document_ids": [
-            document["document_id"] for document in documents
-        ],
+        "active_document_ids": [document["document_id"] for document in documents],
         "active_documents": [dict(document) for document in documents],
     }
 

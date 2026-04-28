@@ -70,9 +70,7 @@ def test_settings_repr_redacts_raw_dsn() -> None:
 def test_require_postgres_dsn_fails_when_postgres_is_requested_without_dsn(
     values: dict[str, str],
 ) -> None:
-    config = TradingConfig.from_mapping(
-        values
-    )
+    config = TradingConfig.from_mapping(values)
 
     with pytest.raises(postgres.PostgresConfigurationError) as exc_info:
         postgres.require_postgres_dsn(config)
@@ -199,9 +197,7 @@ def test_reset_requires_engine_database_to_match_guarded_dsn() -> None:
 
 
 def test_reset_redacts_connection_failure_diagnostics() -> None:
-    raw_dsn = (
-        f"postgresql://tradingx:{_SECRET_PASSWORD}@127.0.0.1:5432/tradingx_test"
-    )
+    raw_dsn = f"postgresql://tradingx:{_SECRET_PASSWORD}@127.0.0.1:5432/tradingx_test"
 
     class UnreachableEngine:
         url = make_url(raw_dsn)

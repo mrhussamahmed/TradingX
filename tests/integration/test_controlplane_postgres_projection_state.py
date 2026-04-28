@@ -111,9 +111,7 @@ def test_outbox_conflicting_dedupe_key_raises_redacted_conflict(
     repo.append_outbox_event(_append_request(payload={"heartbeat_id": "heartbeat-1"}))
 
     with pytest.raises(repositories.OutboxAppendConflictError) as exc_info:
-        repo.append_outbox_event(
-            _append_request(payload={"heartbeat_id": "different"})
-        )
+        repo.append_outbox_event(_append_request(payload={"heartbeat_id": "different"}))
 
     inspected = (
         str(exc_info.value),
@@ -402,9 +400,7 @@ def test_derived_domain_status_mapping_is_persisted_from_readiness(repo: Any) ->
         ),
         (
             lambda: (_requirement(max_freshness_seconds=60),),
-            lambda: (
-                _source_status(checked_at_utc=FIXED_NOW - timedelta(minutes=2)),
-            ),
+            lambda: (_source_status(checked_at_utc=FIXED_NOW - timedelta(minutes=2)),),
             True,
             "stale_sources",
         ),
@@ -631,8 +627,7 @@ def _insert_outbox_projection_event(
     }
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO system.outbox_event (
                     outbox_event_id,
                     aggregate_type,
@@ -656,8 +651,7 @@ def _insert_outbox_projection_event(
                     :created_at_utc,
                     NULL
                 )
-                """
-            ),
+                """),
             {
                 "outbox_event_id": outbox_event_id,
                 "aggregate_id": f"{source_family}/{outbox_event_id}",

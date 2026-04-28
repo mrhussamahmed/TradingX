@@ -188,9 +188,7 @@ def test_missing_outbox_dedupe_constraint_blocks_domain() -> None:
         outbox_dedupe_constraint_present=False,
     )
 
-    assert _blocker_codes(report.blockers) == (
-        "outbox_dedupe_constraint_missing",
-    )
+    assert _blocker_codes(report.blockers) == ("outbox_dedupe_constraint_missing",)
 
 
 def test_ready_report_maps_to_deterministic_projection_status_summary() -> None:
@@ -406,8 +404,7 @@ def _source_status(
         lag_seconds=lag_seconds,
         is_mutable=is_mutable,
         ready_for_postgres=ready_for_postgres,
-        checked_at_utc=checked_at_utc
-        or datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
+        checked_at_utc=checked_at_utc or datetime(2026, 4, 24, 12, 0, tzinfo=UTC),
         metadata=metadata or {},
     )
 

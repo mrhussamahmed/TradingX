@@ -266,10 +266,14 @@ def test_control_posture_projector_maps_legacy_safe_summary_live_ready_payload(
 
     runtime_projector.run_once(batch_size=10)
 
-    snapshots = PostgresControlPlaneRepository(
-        engine=engine,
-        dsn=dsn,
-    ).list_control_posture_snapshots().items
+    snapshots = (
+        PostgresControlPlaneRepository(
+            engine=engine,
+            dsn=dsn,
+        )
+        .list_control_posture_snapshots()
+        .items
+    )
 
     assert len(snapshots) == 1
     assert snapshots[0].requested_mode == "live"
@@ -517,8 +521,7 @@ def _domain_projection_status(
     with engine.connect() as connection:
         row = (
             connection.execute(
-                text(
-                    """
+                text("""
                     SELECT
                         domain_name,
                         projection_status,
@@ -526,8 +529,7 @@ def _domain_projection_status(
                         metadata_json
                     FROM system.domain_projection_status
                     WHERE domain_name = :domain_name
-                    """
-                ),
+                    """),
                 {"domain_name": domain_name},
             )
             .mappings()
@@ -539,8 +541,7 @@ def _domain_projection_status(
 def _insert_conflicting_heartbeat(engine: Engine, heartbeat_id: str) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO runtime.runtime_heartbeat (
                     heartbeat_id,
                     runtime_instance_id,
@@ -562,8 +563,7 @@ def _insert_conflicting_heartbeat(engine: Engine, heartbeat_id: str) -> None:
                     'conflict',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "heartbeat_id": heartbeat_id,
                 "observed_at_utc": FIXED_NOW - timedelta(seconds=30),

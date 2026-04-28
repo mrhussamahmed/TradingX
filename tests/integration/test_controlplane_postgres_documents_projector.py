@@ -852,12 +852,10 @@ def _checkpoint(
 def _delete_checkpoint(store: ProjectorStore, source_family: str) -> None:
     with store.engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 DELETE FROM system.projection_checkpoint
                 WHERE projection_name = :projection_name
-                """
-            ),
+                """),
             {"projection_name": _projection_name(source_family)},
         )
 
@@ -1009,13 +1007,11 @@ def _domain_projection_status(
 def _update_document_title(engine: Engine, document_id: str, title: str) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 UPDATE documents.document
                 SET title = :title
                 WHERE document_id = :document_id
-                """
-            ),
+                """),
             {"document_id": document_id, "title": title},
         )
 

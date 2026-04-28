@@ -146,9 +146,7 @@ class DocumentsProjector:
             projection_repo=projection_repo,
         )
         events = projection_repo.list_outbox_events_after(
-            cursor_created_at_utc=(
-                None if cursor is None else cursor.created_at_utc
-            ),
+            cursor_created_at_utc=(None if cursor is None else cursor.created_at_utc),
             cursor_outbox_event_id=None if cursor is None else cursor.outbox_event_id,
             aggregate_types=(DOCUMENTS_DOMAIN_NAME,),
             source_families=(source_family,),
@@ -473,11 +471,9 @@ def _checkpoint_source_watermark(
         source_family=_payload_str(event.payload, "source_family"),
         source_identity=_payload_str(event.payload, "source_identity"),
     )
-    if (
-        status is not None
-        and _payload_str(event.payload, "source_event_id")
-        == status.metadata.get("latest_source_event_id")
-    ):
+    if status is not None and _payload_str(
+        event.payload, "source_event_id"
+    ) == status.metadata.get("latest_source_event_id"):
         return status.source_watermark or ""
     return _payload_str(event.payload, "source_watermark")
 

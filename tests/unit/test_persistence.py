@@ -28,6 +28,8 @@ from tradingx.types import (
     OperatorAlert,
     OpportunityScore,
     OpportunitySelectionRecord,
+    PortfolioState,
+    ReconciliationSnapshot,
     RecoveryDrillRecord,
     ReplaySlippageRecord,
     ReplaySlippageSummary,
@@ -413,6 +415,116 @@ def test_filesystem_artifact_store_writes_service_cycle_and_builds_richer_summar
     assert report["summary"]["latest_cash"] == "10025.00"
     assert report["summary"]["latest_equity"] == "10030.00"
     assert report["summary"]["evaluation_recommendations"] == {"keep": 1}
+
+
+def test_operator_evidence_report_uses_newer_reconciliation_portfolio_state(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    service_time = datetime(2026, 4, 23, 13, 28, tzinfo=UTC)
+    reconciliation_time = datetime(2026, 4, 28, 17, 17, tzinfo=UTC)
+    store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="service-old",
+            started_at_utc=service_time,
+            completed_at_utc=service_time,
+            cycle_status="market_closed",
+            symbols=("SPY", "QQQ", "IWM"),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY", "QQQ"),
+            cash=Decimal("99000.00"),
+            equity=Decimal("100100.00"),
+            buying_power=Decimal("300000.00"),
+        )
+    )
+    store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-z-old",
+            portfolio_state=PortfolioState(
+                as_of_utc=service_time,
+                cash=Decimal("99000.00"),
+                equity=Decimal("100100.00"),
+                buying_power=Decimal("300000.00"),
+                positions=(),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=0,
+            differences=(),
+            resolved=True,
+        )
+    )
+    store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-a-new",
+            portfolio_state=PortfolioState(
+                as_of_utc=reconciliation_time,
+                cash=Decimal("100007.03"),
+                equity=Decimal("100007.03"),
+                buying_power=Decimal("398814.72"),
+                positions=(),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=0,
+            differences=(),
+            resolved=True,
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert report["summary"]["latest_open_positions"] == []
+    assert report["summary"]["latest_cash"] == "100007.03"
+    assert report["summary"]["latest_equity"] == "100007.03"
+    assert report["latest_artifacts"]["reconciliation"] == "reconcile-a-new.json"
+
+
+def test_operator_evidence_report_uses_newest_service_cycle_by_timestamp(
+    tmp_path,
+) -> None:
+    store = FilesystemArtifactStore(tmp_path)
+    old_time = datetime(2026, 4, 23, 13, 28, tzinfo=UTC)
+    new_time = datetime(2026, 4, 28, 17, 17, tzinfo=UTC)
+    store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="z-old",
+            started_at_utc=old_time,
+            completed_at_utc=old_time,
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY",),
+            cash=Decimal("99000.00"),
+            equity=Decimal("100100.00"),
+            buying_power=Decimal("300000.00"),
+        )
+    )
+    store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id="a-new",
+            started_at_utc=new_time,
+            completed_at_utc=new_time,
+            cycle_status="market_closed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=(),
+            cash=Decimal("100007.01"),
+            equity=Decimal("100007.01"),
+            buying_power=Decimal("398814.72"),
+        )
+    )
+
+    report = store.build_operator_evidence_report()
+
+    assert report["latest_artifacts"]["service_cycles"] == "a-new.json"
+    assert report["summary"]["latest_open_positions"] == []
+    assert report["summary"]["latest_cash"] == "100007.01"
+    assert report["summary"]["latest_equity"] == "100007.01"
 
 
 def test_filesystem_artifact_store_writes_validation_report_and_summarizes_gate_status(

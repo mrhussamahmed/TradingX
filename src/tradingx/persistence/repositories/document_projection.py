@@ -133,8 +133,7 @@ class PostgresDocumentProjectionRepository:
                 or revision.revision_number >= latest_revision_number
             ):
                 connection.execute(
-                    text(
-                        """
+                    text("""
                         INSERT INTO documents.document (
                             document_id,
                             document_type,
@@ -162,14 +161,12 @@ class PostgresDocumentProjectionRepository:
                             updated_at_utc = EXCLUDED.updated_at_utc,
                             source_ref = EXCLUDED.source_ref,
                             metadata_json = EXCLUDED.metadata_json
-                        """
-                    ),
+                        """),
                     _document_params(document),
                 )
 
             connection.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO documents.document_revision (
                         document_revision_id,
                         document_id,
@@ -185,8 +182,7 @@ class PostgresDocumentProjectionRepository:
                         :source_ref,
                         CAST(:metadata_json AS JSONB)
                     )
-                    """
-                ),
+                    """),
                 _revision_params(revision),
             )
 
@@ -199,12 +195,10 @@ class PostgresDocumentProjectionRepository:
     ) -> None:
         def replace(connection: Any) -> None:
             connection.execute(
-                text(
-                    """
+                text("""
                     DELETE FROM documents.document_object_ref
                     WHERE document_revision_id = :document_revision_id
-                    """
-                ),
+                    """),
                 {"document_revision_id": document_revision_id},
             )
             for ref in sorted(
@@ -216,8 +210,7 @@ class PostgresDocumentProjectionRepository:
                         "object ref document_revision_id must match replacement key"
                     )
                 connection.execute(
-                    text(
-                        """
+                    text("""
                         INSERT INTO documents.document_object_ref (
                             document_object_ref_id,
                             document_revision_id,
@@ -233,8 +226,7 @@ class PostgresDocumentProjectionRepository:
                             :sha256_hash,
                             CAST(:metadata_json AS JSONB)
                         )
-                        """
-                    ),
+                        """),
                     _object_ref_params(ref),
                 )
 
@@ -260,9 +252,7 @@ class PostgresDocumentProjectionRepository:
                     {
                         **dict(metadata),
                         "document_state": "tombstoned",
-                        "tombstoned_at_utc": _aware_utc(
-                            tombstoned_at_utc
-                        ).isoformat(),
+                        "tombstoned_at_utc": _aware_utc(tombstoned_at_utc).isoformat(),
                         "tombstone_source_ref": source_ref,
                     }
                 ),
@@ -274,13 +264,11 @@ class PostgresDocumentProjectionRepository:
                     key = f"active_document_id_{index}"
                     params[key] = document_id
                     bind_names.append(f":{key}")
-                active_filter = (
-                    f"AND document_id NOT IN ({', '.join(bind_names)})"
-                )
+                active_filter = f"AND document_id NOT IN ({', '.join(bind_names)})"
 
-            rows = connection.execute(
-                text(
-                    f"""
+            rows = (
+                connection.execute(
+                    text(f"""
                     WITH to_tombstone AS (
                         SELECT document_id
                         FROM documents.document
@@ -308,10 +296,12 @@ class PostgresDocumentProjectionRepository:
                     SELECT document_id
                     FROM updated
                     ORDER BY document_id ASC
-                    """
-                ),
-                params,
-            ).mappings().all()
+                    """),
+                    params,
+                )
+                .mappings()
+                .all()
+            )
             return tuple(str(row["document_id"]) for row in rows)
 
         return self._write("tombstone documents absent from inventory", write)
@@ -373,22 +363,18 @@ class PostgresDocumentProjectionRepository:
                     **row_metadata,
                     **dict(metadata),
                     "document_state": "tombstoned",
-                    "tombstoned_at_utc": _aware_utc(
-                        tombstoned_at_utc
-                    ).isoformat(),
+                    "tombstoned_at_utc": _aware_utc(tombstoned_at_utc).isoformat(),
                     "tombstone_source_ref": source_ref,
                 }
                 connection.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE documents.document
                         SET
                             updated_at_utc = :updated_at_utc,
                             source_ref = :source_ref,
                             metadata_json = CAST(:metadata_json AS JSONB)
                         WHERE document_id = :document_id
-                        """
-                    ),
+                        """),
                     {
                         "document_id": document_id,
                         "updated_at_utc": _aware_utc(tombstoned_at_utc),
@@ -417,8 +403,7 @@ class PostgresDocumentProjectionRepository:
                         )
                 else:
                     connection.execute(
-                        text(
-                            """
+                        text("""
                             INSERT INTO documents.document_revision (
                                 document_revision_id,
                                 document_id,
@@ -434,8 +419,7 @@ class PostgresDocumentProjectionRepository:
                                 :source_ref,
                                 CAST(:metadata_json AS JSONB)
                             )
-                            """
-                        ),
+                            """),
                         _revision_params(revision),
                     )
                 tombstoned.append(document_id)
@@ -531,9 +515,9 @@ def _load_revision_by_id(
     *,
     document_revision_id: str,
 ) -> Mapping[str, Any] | None:
-    row = connection.execute(
-        text(
-            """
+    row = (
+        connection.execute(
+            text("""
             SELECT
                 document_revision_id,
                 document_id,
@@ -543,10 +527,12 @@ def _load_revision_by_id(
                 metadata_json
             FROM documents.document_revision
             WHERE document_revision_id = :document_revision_id
-            """
-        ),
-        {"document_revision_id": document_revision_id},
-    ).mappings().one_or_none()
+            """),
+            {"document_revision_id": document_revision_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
     return None if row is None else dict(row)
 
 
@@ -556,9 +542,9 @@ def _load_revision_by_key(
     document_id: str,
     revision_number: int,
 ) -> Mapping[str, Any] | None:
-    row = connection.execute(
-        text(
-            """
+    row = (
+        connection.execute(
+            text("""
             SELECT
                 document_revision_id,
                 document_id,
@@ -569,24 +555,24 @@ def _load_revision_by_key(
             FROM documents.document_revision
             WHERE document_id = :document_id
               AND revision_number = :revision_number
-            """
-        ),
-        {"document_id": document_id, "revision_number": revision_number},
-    ).mappings().one_or_none()
+            """),
+            {"document_id": document_id, "revision_number": revision_number},
+        )
+        .mappings()
+        .one_or_none()
+    )
     return None if row is None else dict(row)
 
 
 def _load_latest_revision_number(connection: Any, document_id: str) -> int | None:
     value = connection.execute(
-        text(
-            """
+        text("""
             SELECT revision_number
             FROM documents.document_revision
             WHERE document_id = :document_id
             ORDER BY revision_number DESC
             LIMIT 1
-            """
-        ),
+            """),
         {"document_id": document_id},
     ).scalar_one_or_none()
     return None if value is None else int(value)
@@ -608,9 +594,9 @@ def _load_active_documents_for_family(
             bind_names.append(f":{key}")
         active_filter = f"AND document_id NOT IN ({', '.join(bind_names)})"
 
-    rows = connection.execute(
-        text(
-            f"""
+    rows = (
+        connection.execute(
+            text(f"""
             SELECT
                 document_id,
                 document_type,
@@ -623,10 +609,12 @@ def _load_active_documents_for_family(
               AND COALESCE(metadata_json ->> 'document_state', 'active') = 'active'
               {active_filter}
             ORDER BY document_id ASC
-            """
-        ),
-        params,
-    ).mappings().all()
+            """),
+            params,
+        )
+        .mappings()
+        .all()
+    )
     return tuple(dict(row) for row in rows)
 
 
@@ -634,9 +622,9 @@ def _load_document_by_id(
     connection: Any,
     document_id: str,
 ) -> Mapping[str, Any] | None:
-    row = connection.execute(
-        text(
-            """
+    row = (
+        connection.execute(
+            text("""
             SELECT
                 document_id,
                 document_type,
@@ -646,10 +634,12 @@ def _load_document_by_id(
                 metadata_json
             FROM documents.document
             WHERE document_id = :document_id
-            """
-        ),
-        {"document_id": document_id},
-    ).mappings().one_or_none()
+            """),
+            {"document_id": document_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
     return None if row is None else dict(row)
 
 
@@ -842,14 +832,12 @@ def _active_cursor_after_inventory(
 
 def _lock_document_revision_allocation(connection: Any, document_id: str) -> None:
     connection.execute(
-        text(
-            """
+        text("""
             SELECT pg_advisory_xact_lock(
                 hashtext('documents.document_revision'),
                 hashtext(:document_id)
             )
-            """
-        ),
+            """),
         {"document_id": document_id},
     )
 

@@ -211,8 +211,9 @@ class _FakePostgresDocumentRepository:
         documents: tuple[repositories.DocumentReadRecord, ...],
         *,
         next_cursor: str | None = None,
-        pages_by_cursor: dict[str, repositories.Page[repositories.DocumentReadRecord]]
-        | None = None,
+        pages_by_cursor: (
+            dict[str, repositories.Page[repositories.DocumentReadRecord]] | None
+        ) = None,
     ) -> None:
         self.documents = {document.document_id: document for document in documents}
         self.next_cursor = next_cursor
@@ -785,9 +786,10 @@ def test_v1_documents_postgres_list_drains_repository_pages(
     response = TestClient(app).get("/api/v1/documents")
 
     assert response.status_code == 200
-    assert [
-        item["doc_id"] for item in response.json()["data"]["items"]
-    ] == ["STATE", "2026-04-25-wave2"]
+    assert [item["doc_id"] for item in response.json()["data"]["items"]] == [
+        "STATE",
+        "2026-04-25-wave2",
+    ]
     assert document_repo.list_pages[0] is None
     assert document_repo.list_pages[1] is not None
     assert document_repo.list_pages[1].cursor == next_cursor
@@ -832,9 +834,9 @@ def test_v1_documents_postgres_filters_non_api_document_families(
     detail_response = client.get("/api/v1/documents/proposal-1")
 
     assert list_response.status_code == 200
-    assert [
-        item["doc_id"] for item in list_response.json()["data"]["items"]
-    ] == ["STATE"]
+    assert [item["doc_id"] for item in list_response.json()["data"]["items"]] == [
+        "STATE"
+    ]
     assert detail_response.status_code == 404
     assert detail_response.json()["data"]["error"]["code"] == "document_not_found"
 

@@ -31,6 +31,7 @@ from tradingx.execution import (
     AlpacaPaperExecutionGateway,
     OrderRejected,
     OrderRouteAuthorityGuard,
+    OrderTimeout,
     classify_order_rejection_reason,
 )
 from tradingx.experiments import MetricVisibilityContext
@@ -84,6 +85,7 @@ from tradingx.types import (
     GateReportResult,
     LatestQuote,
     MarketSnapshot,
+    OrderRecord,
     PortfolioState,
     ReconciliationSnapshot,
     RiskControlEvent,
@@ -783,6 +785,7 @@ class PaperTradingLoopController:
         existing_order = self._artifacts.read_order_record(trade_intent.intent_id)
         recovered = existing_order is not None
         execution_quantity = trade_intent.quantity or default_quantity
+        order_path: Path | None = None
         try:
             if existing_order is None:
                 existing_order = self._find_existing_order_by_client_id(client_order_id)
@@ -859,6 +862,21 @@ class PaperTradingLoopController:
                 existing_order.order_id,
                 timeout_seconds=self._command_timeout_seconds,
                 poll_interval_seconds=0,
+            )
+        except OrderTimeout as error:
+            if existing_order is None or order_path is None:
+                raise RuntimeError(
+                    "Order fill timeout occurred before an order record was persisted."
+                ) from error
+            return self._build_order_timeout_trade_result(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                decision_path=decision_path,
+                trade_path=trade_path,
+                order_path=order_path,
+                order_record=existing_order,
+                error=error,
+                recovered=recovered,
             )
         except OrderRejected as error:
             return self._build_rejected_trade_result(
@@ -937,6 +955,78 @@ class PaperTradingLoopController:
                     execution_path,
                     reconciliation_path,
                     *closed_trade_paths,
+                )
+                if path is not None
+            ),
+            recovered=recovered,
+        )
+
+    def _build_order_timeout_trade_result(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        portfolio_state: PortfolioState,
+        decision_path: Path | None,
+        trade_path: Path,
+        order_path: Path,
+        order_record: OrderRecord,
+        error: OrderTimeout,
+        recovered: bool = False,
+    ) -> TradingLoopResult:
+        reason_code = "order_fill_timeout"
+        if decision_path is not None:
+            self._log_runtime_event(
+                event_type="order_fill_timeout",
+                severity="error",
+                message="Broker order did not reach filled state before timeout.",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                fields={
+                    "broker_order_id": order_record.order_id,
+                    "client_order_id": order_record.client_order_id,
+                    "reason_code": reason_code,
+                },
+            )
+            self._append_journal_event(
+                event_type="timeout",
+                decision_path=decision_path,
+                trade_intent=trade_intent,
+                client_order_id=order_record.client_order_id,
+                broker_order_id=order_record.order_id,
+                payload={
+                    "reason_code": reason_code,
+                    "message": str(error),
+                    "status": order_record.status,
+                },
+            )
+        reconciliation = self._build_reconciliation(
+            trade_intent=trade_intent,
+            portfolio_state=portfolio_state,
+            differences=(reason_code,),
+            resolved=False,
+        )
+        reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+            reconciliation
+        )
+        self._metrics.record_evidence_artifact("reconciliation")
+        self._metrics.record_trade_terminal_state("recovery_required")
+        self._metrics.record_reconciliation_age_seconds(
+            reconciliation.broker_state_age_seconds
+        )
+        return TradingLoopResult(
+            terminal_state="recovery_required",
+            trade_intent=trade_intent,
+            order_record=order_record,
+            risk_event=None,
+            reconciliation=reconciliation,
+            artifact_paths=tuple(
+                path
+                for path in (
+                    trade_path,
+                    self._policy_path,
+                    decision_path,
+                    order_path,
+                    reconciliation_path,
                 )
                 if path is not None
             ),
@@ -1044,11 +1134,24 @@ class PaperTradingLoopController:
         if order_record is None:
             return None
 
-        filled_order = self._execution.wait_for_fill(
-            order_record.order_id,
-            timeout_seconds=self._command_timeout_seconds,
-            poll_interval_seconds=0,
-        )
+        try:
+            filled_order = self._execution.wait_for_fill(
+                order_record.order_id,
+                timeout_seconds=self._command_timeout_seconds,
+                poll_interval_seconds=0,
+            )
+        except OrderTimeout as error:
+            current_portfolio_state = self._portfolio.get_portfolio_state()
+            return self._build_order_timeout_trade_result(
+                trade_intent=trade_intent,
+                portfolio_state=current_portfolio_state,
+                decision_path=None,
+                trade_path=trade_path,
+                order_path=self._artifacts.order_record_path(trade_intent.intent_id),
+                order_record=order_record,
+                error=error,
+                recovered=True,
+            )
         filled_order = self._merge_order_records(order_record, filled_order)
         self._artifacts.write_order_record(trade_intent.intent_id, filled_order)
         final_portfolio_state = self._portfolio.get_portfolio_state()

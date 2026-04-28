@@ -333,9 +333,7 @@ class SizingPolicyViolation(RuntimeError):
     """
 
     def __init__(self, violations: tuple[str, ...]) -> None:
-        super().__init__(
-            "sizing-policy violation: " + ", ".join(violations)
-        )
+        super().__init__("sizing-policy violation: " + ", ".join(violations))
         self.violations = violations
 
 
@@ -386,7 +384,15 @@ def enforce_sizing_monotonicity_runtime(
     if not violations:
         return candidate_decision, ()
     next_payload = dict(candidate_decision)
-    blocker_codes = list(next_payload.get("blocker_codes", []) or [])
+    raw_blocker_codes = next_payload.get("blocker_codes", ())
+    if isinstance(raw_blocker_codes, Sequence) and not isinstance(
+        raw_blocker_codes, (str, bytes)
+    ):
+        blocker_codes = [str(code) for code in raw_blocker_codes]
+    elif raw_blocker_codes:
+        blocker_codes = [str(raw_blocker_codes)]
+    else:
+        blocker_codes = []
     for code in violations:
         if code not in blocker_codes:
             blocker_codes.append(code)

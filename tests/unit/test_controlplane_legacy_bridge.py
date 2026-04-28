@@ -104,9 +104,7 @@ def test_source_event_outbox_payload_excludes_volatile_observation_metadata() ->
 
     request = event.to_outbox_request()
 
-    assert request.payload["metadata"] == {
-        "source_path": "service_cycles/cycle-1.json"
-    }
+    assert request.payload["metadata"] == {"source_path": "service_cycles/cycle-1.json"}
 
 
 def test_file_snapshot_watermark_uses_relative_path_and_content_hash(
@@ -415,9 +413,7 @@ def test_json_artifact_adapter_reads_fixture_payloads_deterministically(
         "cycle-1",
         "cycle-2",
     ]
-    assert result.events[0].occurred_at_utc == datetime(
-        2026, 4, 24, 12, 1, tzinfo=UTC
-    )
+    assert result.events[0].occurred_at_utc == datetime(2026, 4, 24, 12, 1, tzinfo=UTC)
     assert result.source_watermark.startswith("cycle-2:")
     assert result.source_root_display == "artifacts/paper_loop/service_cycles"
 
@@ -606,10 +602,7 @@ def test_default_bridge_reads_top_level_runtime_artifact_sources(
     category_dir = artifact_root / "sleeve_daily_attribution"
     category_dir.mkdir(parents=True)
     (category_dir / "attr-1.json").write_text(
-        (
-            '{"attribution_id":"attr-1",'
-            '"recorded_at_utc":"2026-04-24T12:01:00Z"}'
-        ),
+        ('{"attribution_id":"attr-1",' '"recorded_at_utc":"2026-04-24T12:01:00Z"}'),
         encoding="utf-8",
     )
 
@@ -686,8 +679,7 @@ def test_document_file_tree_adapter_preserves_public_document_ids(
     handover_result = _collect_document_source(tmp_path, "handover_sessions")
 
     state_ids = {
-        event.payload["document_id"]
-        for event in _active_document_events(state_result)
+        event.payload["document_id"] for event in _active_document_events(state_result)
     }
     handover_ids = {
         event.payload["document_id"]

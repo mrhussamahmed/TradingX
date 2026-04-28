@@ -127,9 +127,7 @@ def test_public_timeline_uses_union_sources_and_excludes_outbox(repo: Any) -> No
     _seed_public_timeline_sources(repo.engine, observed_at)
     _insert_outbox_event(repo.engine, "outbox-should-not-leak", observed_at)
 
-    page = repo.list_public_timeline_events(
-        page=repositories.PageRequest(page_size=20)
-    )
+    page = repo.list_public_timeline_events(page=repositories.PageRequest(page_size=20))
 
     source_tables = {event.source_table for event in page.items}
     assert source_tables == set(repositories.PUBLIC_TIMELINE_SOURCE_TABLES)
@@ -145,9 +143,7 @@ def test_storage_failures_are_redacted() -> None:
         PostgresControlPlaneRepository,
     )
 
-    raw_dsn = (
-        "postgresql://tradingx:super-secret@127.0.0.1:5432/tradingx_test"
-    )
+    raw_dsn = "postgresql://tradingx:super-secret@127.0.0.1:5432/tradingx_test"
 
     class BrokenEngine:
         def connect(self) -> object:
@@ -639,9 +635,7 @@ def test_document_projection_writer_tombstone_respects_newer_active_cursor(
             **_document_projection_document("INDEX", revision_number=1).__dict__,
             "metadata": {
                 "source_family": "state_and_index_docs",
-                "latest_active_outbox_created_at_utc": (
-                    "2026-04-24T13:00:00+00:00"
-                ),
+                "latest_active_outbox_created_at_utc": ("2026-04-24T13:00:00+00:00"),
                 "latest_active_outbox_event_id": "outbox-newer",
             },
         }
@@ -679,14 +673,12 @@ def test_document_projection_writer_rechecks_tombstone_candidate_after_lock(
     lock_connection = repo.engine.connect()
     lock_transaction = lock_connection.begin()
     lock_connection.execute(
-        text(
-            """
+        text("""
             SELECT pg_advisory_xact_lock(
                 hashtext('documents.document_revision'),
                 hashtext(:document_id)
             )
-            """
-        ),
+            """),
         {"document_id": "STATE"},
     )
 
@@ -1058,8 +1050,7 @@ def _insert_control_posture(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO runtime.control_posture_snapshot (
                     posture_id,
                     observed_at_utc,
@@ -1089,8 +1080,7 @@ def _insert_control_posture(
                     :payload_hash,
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "posture_id": posture_id,
                 "observed_at_utc": observed_at_utc,
@@ -1110,8 +1100,7 @@ def _insert_control_posture_blocker(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO runtime.control_posture_blocker (
                     blocker_id,
                     posture_id,
@@ -1129,8 +1118,7 @@ def _insert_control_posture_blocker(
                     'operator://hold',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "blocker_id": blocker_id,
                 "posture_id": posture_id,
@@ -1146,8 +1134,7 @@ def _insert_runtime_heartbeat(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO runtime.runtime_heartbeat (
                     heartbeat_id,
                     runtime_instance_id,
@@ -1169,8 +1156,7 @@ def _insert_runtime_heartbeat(
                     'runtime://heartbeat',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "heartbeat_id": heartbeat_id,
                 "observed_at_utc": observed_at_utc,
@@ -1187,8 +1173,7 @@ def _insert_incident(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO incidents.incident (
                     incident_id,
                     severity,
@@ -1214,8 +1199,7 @@ def _insert_incident(
                     'incident://source',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "incident_id": incident_id,
                 "summary": f"Incident {incident_id}",
@@ -1236,8 +1220,7 @@ def _insert_incident_event(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO incidents.incident_event (
                     incident_event_id,
                     incident_id,
@@ -1253,8 +1236,7 @@ def _insert_incident_event(
                     :occurred_at_utc,
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "incident_event_id": incident_event_id,
                 "incident_id": incident_id,
@@ -1273,8 +1255,7 @@ def _insert_projection_status(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO system.domain_projection_status (
                     domain_name,
                     target_store,
@@ -1298,8 +1279,7 @@ def _insert_projection_status(
                     :checked_at_utc,
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "domain_name": domain_name,
                 "checked_at_utc": checked_at_utc,
@@ -1332,8 +1312,7 @@ def _insert_command_event(
     command_id = f"command-{event_id}"
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO commanding.command (
                     command_id,
                     command_type,
@@ -1353,8 +1332,7 @@ def _insert_command_event(
                     :occurred_at_utc,
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "command_id": command_id,
                 "occurred_at_utc": occurred_at_utc,
@@ -1362,8 +1340,7 @@ def _insert_command_event(
             },
         )
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO commanding.command_event (
                     event_id,
                     command_id,
@@ -1381,8 +1358,7 @@ def _insert_command_event(
                     'Command accepted.',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "event_id": event_id,
                 "command_id": command_id,
@@ -1400,8 +1376,7 @@ def _insert_command_session_event(
     session_id = f"session-{event_id}"
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO access.command_session (
                     command_session_id,
                     status,
@@ -1417,8 +1392,7 @@ def _insert_command_session_event(
                     'token-hash',
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "session_id": session_id,
                 "issued_at_utc": occurred_at_utc - timedelta(minutes=5),
@@ -1427,8 +1401,7 @@ def _insert_command_session_event(
             },
         )
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO access.command_session_event (
                     event_id,
                     command_session_id,
@@ -1446,8 +1419,7 @@ def _insert_command_session_event(
                     'test',
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "event_id": event_id,
                 "session_id": session_id,
@@ -1465,8 +1437,7 @@ def _insert_replay_event(
     replay_run_id = f"run-{replay_event_id}"
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO investigations.replay_run (
                     replay_run_id,
                     started_at_utc,
@@ -1482,8 +1453,7 @@ def _insert_replay_event(
                     'running',
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "replay_run_id": replay_run_id,
                 "started_at_utc": occurred_at_utc - timedelta(minutes=5),
@@ -1491,8 +1461,7 @@ def _insert_replay_event(
             },
         )
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO investigations.replay_event (
                     replay_event_id,
                     replay_run_id,
@@ -1508,8 +1477,7 @@ def _insert_replay_event(
                     :occurred_at_utc,
                     CAST(:payload_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "replay_event_id": replay_event_id,
                 "replay_run_id": replay_run_id,
@@ -1526,8 +1494,7 @@ def _insert_outbox_event(
 ) -> None:
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO system.outbox_event (
                     outbox_event_id,
                     aggregate_type,
@@ -1551,8 +1518,7 @@ def _insert_outbox_event(
                     :created_at_utc,
                     NULL
                 )
-                """
-            ),
+                """),
             {
                 "outbox_event_id": outbox_event_id,
                 "occurred_at_utc": occurred_at_utc,
@@ -1581,8 +1547,7 @@ def _insert_document(
     }
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO documents.document (
                     document_id,
                     document_type,
@@ -1600,8 +1565,7 @@ def _insert_document(
                     :source_ref,
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "document_id": document_id,
                 "document_type": document_kind,
@@ -1613,8 +1577,7 @@ def _insert_document(
             },
         )
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO documents.document_revision (
                     document_revision_id,
                     document_id,
@@ -1630,8 +1593,7 @@ def _insert_document(
                     :source_ref,
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "document_revision_id": f"{document_id}:1",
                 "document_id": document_id,
@@ -1697,16 +1659,14 @@ def _materialize_newer_active_document_summary(
     }
     with engine.begin() as connection:
         connection.execute(
-            text(
-                """
+            text("""
                 UPDATE documents.document
                 SET
                     updated_at_utc = :updated_at_utc,
                     source_ref = :source_ref,
                     metadata_json = CAST(:metadata_json AS JSONB)
                 WHERE document_id = :document_id
-                """
-            ),
+                """),
             {
                 "document_id": document_id,
                 "updated_at_utc": observed_at_utc,
@@ -1715,8 +1675,7 @@ def _materialize_newer_active_document_summary(
             },
         )
         connection.execute(
-            text(
-                """
+            text("""
                 INSERT INTO documents.document_revision (
                     document_revision_id,
                     document_id,
@@ -1732,8 +1691,7 @@ def _materialize_newer_active_document_summary(
                     :source_ref,
                     CAST(:metadata_json AS JSONB)
                 )
-                """
-            ),
+                """),
             {
                 "document_revision_id": f"{document_id}:2",
                 "document_id": document_id,

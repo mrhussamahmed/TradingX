@@ -1,7 +1,7 @@
 """Create control-plane Postgres schemas and table skeletons.
 
 Revision ID: 20260424_0001
-Revises: 
+Revises:
 Create Date: 2026-04-24
 """
 

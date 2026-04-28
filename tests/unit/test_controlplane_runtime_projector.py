@@ -331,9 +331,7 @@ def test_runtime_heartbeat_projection_is_idempotent_and_conservative() -> None:
     assert len(heartbeats) == 1
     assert heartbeats[0].heartbeat_state == "unknown"
     assert heartbeats[0].observed_at_utc == event.occurred_at_utc
-    assert heartbeats[0].source_ref == (
-        "artifact:paper_loop/service_cycles:cycle-1"
-    )
+    assert heartbeats[0].source_ref == ("artifact:paper_loop/service_cycles:cycle-1")
 
 
 def test_control_posture_fails_closed_and_noop_refresh_does_not_churn() -> None:
@@ -508,9 +506,7 @@ class FakeRuntimeProjectorUnitOfWork:
     @contextmanager
     def transaction(
         self,
-    ) -> Iterator[
-        tuple[FakeProjectionRepository, FakeRuntimeProjectionRepository]
-    ]:
+    ) -> Iterator[tuple[FakeProjectionRepository, FakeRuntimeProjectionRepository]]:
         projection_snapshot = self.projection_repo.snapshot()
         runtime_snapshot = self.runtime_repo.snapshot()
         try:
@@ -654,9 +650,7 @@ class FakeRuntimeProjectionRepository:
 
     def restore(self, snapshot: Mapping[str, object]) -> None:
         self.heartbeats = deepcopy(snapshot["heartbeats"])
-        self.control_posture_snapshots = deepcopy(
-            snapshot["control_posture_snapshots"]
-        )
+        self.control_posture_snapshots = deepcopy(snapshot["control_posture_snapshots"])
         self.blockers = deepcopy(snapshot["blockers"])
 
     def upsert_runtime_heartbeat(

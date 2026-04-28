@@ -188,8 +188,7 @@ def _control_plane_requests_postgres(config: TradingConfig) -> bool:
         config.control_plane.store in {"hybrid", "postgres"}
         or config.control_plane.postgres_required
         or any(
-            store == "postgres"
-            for _domain, store in config.control_plane.domain_stores
+            store == "postgres" for _domain, store in config.control_plane.domain_stores
         )
     )
 
@@ -215,8 +214,7 @@ def build_postgres_engine(settings: PostgresSettings) -> Engine:
             connect_args={
                 "connect_timeout": settings.connect_timeout_seconds,
                 "options": (
-                    "-c statement_timeout="
-                    f"{settings.statement_timeout_milliseconds}"
+                    "-c statement_timeout=" f"{settings.statement_timeout_milliseconds}"
                 ),
             },
             pool_pre_ping=True,
@@ -310,7 +308,7 @@ def reset_postgres_test_database(engine: Engine, *, dsn: str) -> None:
             "Refusing to reset Postgres schemas. Engine database "
             f"{engine_database_name!r} does not match guarded DSN database "
             f"{dsn_database_name!r}."
-    )
+        )
 
     assert_postgres_test_reset_allowed(dsn)
     try:
@@ -321,8 +319,7 @@ def reset_postgres_test_database(engine: Engine, *, dsn: str) -> None:
     except Exception as exc:
         message = _redact_exception_message(str(exc), dsn)
         raise PostgresMigrationError(
-            "Postgres test reset failed for "
-            f"{redact_postgres_dsn(dsn)}: {message}"
+            "Postgres test reset failed for " f"{redact_postgres_dsn(dsn)}: {message}"
         ) from None
 
 
@@ -438,9 +435,7 @@ def inspect_required_postgres_constraints(engine: Engine) -> tuple[str, ...]:
 
 def _normalized_index_definitions(engine: Engine) -> dict[str, str]:
     with engine.connect() as connection:
-        rows = connection.execute(
-            text(
-                """
+        rows = connection.execute(text("""
                 SELECT schemaname, tablename, indexname, indexdef
                 FROM pg_indexes
                 WHERE schemaname IN (
@@ -454,9 +449,7 @@ def _normalized_index_definitions(engine: Engine) -> dict[str, str]:
                     'documents',
                     'system'
                 )
-                """
-            )
-        ).mappings()
+                """)).mappings()
         return {
             f"{row['schemaname']}.{row['tablename']}.{row['indexname']}": " ".join(
                 str(row["indexdef"]).lower().split()

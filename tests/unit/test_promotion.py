@@ -1013,9 +1013,7 @@ def _wave2_mandate_artifacts(
         if kind not in omitted:
             payloads.append(payload)
     if include_stubs:
-        payloads.extend(
-            _authority_capable_artifact_stubs(omit=omit_stubs)
-        )
+        payloads.extend(_authority_capable_artifact_stubs(omit=omit_stubs))
     return tuple(payloads)
 
 
@@ -2192,8 +2190,7 @@ def test_wave2_fixture_bundles_replay_from_disk() -> None:
         ),
         "tax_exempt_missing_edge": (
             "research_only",
-            _PRODUCTION_MISSING_KIND_BLOCKERS
-            + ("lower_bound_net_edge_undefined",),
+            _PRODUCTION_MISSING_KIND_BLOCKERS + ("lower_bound_net_edge_undefined",),
         ),
     }
     for fixture_name, (max_state, blocker_codes) in expected.items():

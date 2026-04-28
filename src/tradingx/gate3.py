@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import fields
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -40,10 +39,6 @@ P1_BUG_CATEGORIES = frozenset(
 OPTIONAL_GATE3_CRITERION_IDS = frozenset({"replay_slippage_divergence"})
 
 
-def _accepted_dataclass_fields(cls: type[object]) -> frozenset[str]:
-    return frozenset(field.name for field in fields(cls))
-
-
 def _criterion(
     *,
     criterion_id: str,
@@ -55,19 +50,15 @@ def _criterion(
     source_evidence_at_utc: datetime | None,
     required: bool = True,
 ) -> Gate3CriterionSnapshot:
-    payload: dict[str, object] = {
-        "criterion_id": criterion_id,
-        "status": status,
-        "threshold": threshold,
-        "observed_value": observed_value,
-        "details": details,
-        "evidence_refs": evidence_refs,
-        "source_evidence_at_utc": source_evidence_at_utc,
-        "required": required,
-    }
-    accepted_fields = _accepted_dataclass_fields(Gate3CriterionSnapshot)
     return Gate3CriterionSnapshot(
-        **{key: value for key, value in payload.items() if key in accepted_fields}
+        criterion_id=criterion_id,
+        status=status,
+        threshold=threshold,
+        observed_value=observed_value,
+        details=details,
+        evidence_refs=evidence_refs,
+        source_evidence_at_utc=source_evidence_at_utc,
+        required=required,
     )
 
 
@@ -124,29 +115,23 @@ def _readiness_report(
         if required_source_timestamps and not missing_source_criterion_ids
         else None
     )
-    payload: dict[str, object] = {
-        "report_id": report_id,
-        "generated_at_utc": generated_at_utc,
-        "status": status,
-        "closed_trade_count": closed_trade_count,
-        "calendar_days_observed": calendar_days_observed,
-        "criteria": criteria,
-        "summary": summary,
-        "required_operator_action": required_operator_action,
-        "evidence_refs": evidence_refs,
-        "source_evidence_at_utc": oldest_required_source_evidence_at_utc,
-        "oldest_required_source_evidence_at_utc": (
-            oldest_required_source_evidence_at_utc
-        ),
-        "latest_source_evidence_at_utc": (
+    return Gate3ReadinessReport(
+        report_id=report_id,
+        generated_at_utc=generated_at_utc,
+        status=status,
+        closed_trade_count=closed_trade_count,
+        calendar_days_observed=calendar_days_observed,
+        criteria=criteria,
+        summary=summary,
+        required_operator_action=required_operator_action,
+        evidence_refs=evidence_refs,
+        source_evidence_at_utc=oldest_required_source_evidence_at_utc,
+        oldest_required_source_evidence_at_utc=oldest_required_source_evidence_at_utc,
+        latest_source_evidence_at_utc=(
             max(all_source_timestamps) if all_source_timestamps else None
         ),
-        "required_criterion_ids": required_criterion_ids,
-        "missing_source_criterion_ids": missing_source_criterion_ids,
-    }
-    accepted_fields = _accepted_dataclass_fields(Gate3ReadinessReport)
-    return Gate3ReadinessReport(
-        **{key: value for key, value in payload.items() if key in accepted_fields}
+        required_criterion_ids=required_criterion_ids,
+        missing_source_criterion_ids=missing_source_criterion_ids,
     )
 
 
@@ -223,9 +208,7 @@ def _latest_operator_alert_scan_window_source_at(
     return _latest_payload_timestamp(
         scan_windows,
         timestamp_fields=("window_end_utc", "scan_end_utc", "completed_at_utc"),
-        predicate=lambda payload: bool(
-            str(payload.get("artifact_source", "")).strip()
-        )
+        predicate=lambda payload: bool(str(payload.get("artifact_source", "")).strip())
         and bool(
             payload.get("alert_categories")
             or payload.get("categories")
@@ -1354,7 +1337,7 @@ def build_gate3_readiness_report(
             sleeve_ids=sleeve_ids,
             closed_trade_count=closed_trade_count,
             calendar_days=calendar_days,
-    )
+        )
     recovery_completed, recovery_failed = _recovery_statuses(recovery_payloads)
     smtp_completed, smtp_failed = _smtp_statuses(alert_payloads)
     p1_bug_count = _p1_bug_count(operator_alerts)
@@ -1406,8 +1389,7 @@ def build_gate3_promotion_package(
             f"({LEGACY_NON_AUTHORITY_STATUS})."
         ),
         "pending": (
-            "Gate 3 is not ready for V5 promotion "
-            f"({LEGACY_NON_AUTHORITY_STATUS})."
+            "Gate 3 is not ready for V5 promotion " f"({LEGACY_NON_AUTHORITY_STATUS})."
         ),
         "fail": (
             "Gate 3 promotion is blocked by failing criteria "

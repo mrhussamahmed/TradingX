@@ -99,8 +99,9 @@ class RuntimeProjector:
         *,
         unit_of_work: RuntimeProjectorUnitOfWork,
         clock: Callable[[], datetime] | None = None,
-        supported_source_families_by_domain: Mapping[str, tuple[str, ...]]
-        | None = None,
+        supported_source_families_by_domain: (
+            Mapping[str, tuple[str, ...]] | None
+        ) = None,
         full_requirements: tuple[projections.ProjectionSourceRequirement, ...] = (),
         source_registry_version: str = SOURCE_REGISTRY_VERSION,
         mapper_version: str = MAPPER_VERSION,
@@ -134,9 +135,10 @@ class RuntimeProjector:
             checkpoint_names: list[str] = []
             touched_domains: set[str] = set()
 
-            for domain_name, source_families in (
-                self._supported_source_families_by_domain.items()
-            ):
+            for (
+                domain_name,
+                source_families,
+            ) in self._supported_source_families_by_domain.items():
                 for source_family in source_families:
                     result = self._run_family_once(
                         projection_repo=projection_repo,
@@ -198,9 +200,7 @@ class RuntimeProjector:
             projection_repo=projection_repo,
         )
         events = projection_repo.list_outbox_events_after(
-            cursor_created_at_utc=(
-                None if cursor is None else cursor.created_at_utc
-            ),
+            cursor_created_at_utc=(None if cursor is None else cursor.created_at_utc),
             cursor_outbox_event_id=None if cursor is None else cursor.outbox_event_id,
             aggregate_types=(domain_name,),
             source_families=(source_family,),
@@ -318,9 +318,7 @@ class RuntimeProjector:
                     requires_initial_import_complete=(
                         status.metadata.get("initial_import_complete") is True
                     ),
-                    requires_active_write_path=(
-                        "write_path" in status.metadata
-                    ),
+                    requires_active_write_path=("write_path" in status.metadata),
                 )
                 for status in statuses
                 if status.source_family in source_families
@@ -384,10 +382,13 @@ def runtime_heartbeat_from_event(
     if stale_after is None and cadence is not None:
         stale_after = _aware_utc(event.occurred_at_utc) + timedelta(seconds=cadence)
 
-    heartbeat_state = _first_text(
-        envelope_payload,
-        ("heartbeat_state", "runtime_status", "status", "state"),
-    ) or "unknown"
+    heartbeat_state = (
+        _first_text(
+            envelope_payload,
+            ("heartbeat_state", "runtime_status", "status", "state"),
+        )
+        or "unknown"
+    )
     stream_state = _first_text(
         envelope_payload,
         ("stream_state", "runtime_status", "status", "state"),
@@ -491,17 +492,20 @@ def _control_posture_facts(
     event: repositories.OutboxProjectionEvent,
 ) -> tuple[Mapping[str, object], tuple[str, ...]]:
     payload = _payload_mapping(event.payload, "payload")
-    requested_mode = _first_text(
-        payload,
-        (
-            "requested_mode",
-            "requested_broker_mode",
-            "mode",
-            "broker_mode",
-            "market_data_mode",
-            "effective_market_data_mode",
-        ),
-    ) or "unknown"
+    requested_mode = (
+        _first_text(
+            payload,
+            (
+                "requested_mode",
+                "requested_broker_mode",
+                "mode",
+                "broker_mode",
+                "market_data_mode",
+                "effective_market_data_mode",
+            ),
+        )
+        or "unknown"
+    )
     dry_run = _optional_bool(
         payload.get("dry_run")
         if "dry_run" in payload
