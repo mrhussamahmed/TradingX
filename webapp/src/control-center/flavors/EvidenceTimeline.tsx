@@ -38,13 +38,17 @@ function severityBadge(severity: TimelineSeverity): string {
   return 'badge badge-info'
 }
 
+const RISK_PATTERN = /\b(?:critical|high|risk(?:y)?|fail(?:ed|ing|ure)?|block(?:ed|ing)?|error(?:ed)?)\b/
+const WATCH_PATTERN = /\b(?:watch(?:ed|ing)?|warn(?:ed|ing)?|degrad(?:ed|ing)?)\b/
+const GOOD_PATTERN = /\b(?:pass(?:ed|ing)?|good|ok(?:ay)?|complete(?:d)?)\b/
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function deriveTimelineSeverity(input: string | undefined): TimelineSeverity {
   if (!input) return 'info'
   const lowered = input.toLowerCase()
-  if (/critical|high|risk|fail|block|error/.test(lowered)) return 'risk'
-  if (/watch|warn|degrad/.test(lowered)) return 'watch'
-  if (/pass|good|ok|complete/.test(lowered)) return 'good'
+  if (RISK_PATTERN.test(lowered)) return 'risk'
+  if (WATCH_PATTERN.test(lowered)) return 'watch'
+  if (GOOD_PATTERN.test(lowered)) return 'good'
   return 'info'
 }
 
