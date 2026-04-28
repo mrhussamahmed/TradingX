@@ -1,4 +1,5 @@
 export type ViewFlavor =
+  | 'mission-control'
   | 'market-chart'
   | 'strategy-forge'
   | 'market-day-ops'
@@ -22,8 +23,8 @@ export type ViewFlavorPreferences = {
 }
 
 export const SYSTEM_DEFAULTS: ViewFlavorPreferences = {
-  activeFlavor: 'market-chart',
-  defaultFlavor: 'market-chart',
+  activeFlavor: 'mission-control',
+  defaultFlavor: 'mission-control',
   density: 'balanced',
   accentTheme: 'blue-red',
   autoSwitchByWorkflow: true,
@@ -45,51 +46,59 @@ export type FlavorMeta = {
 
 export const FLAVORS: ReadonlyArray<FlavorMeta> = [
   {
-    id: 'market-chart',
-    label: 'Market Chart',
-    subtitle: 'Live market & portfolio',
+    id: 'mission-control',
+    label: 'Mission Control',
+    subtitle: 'Status, safety & attention',
     shortcut: 'Cmd+1',
     index: 1,
     depth: 'full',
   },
   {
-    id: 'strategy-forge',
-    label: 'Strategy Forge',
-    subtitle: 'Research & backtests',
+    id: 'market-chart',
+    label: 'P&L / Positions',
+    subtitle: 'Performance, exposure & benchmarks',
     shortcut: 'Cmd+2',
     index: 2,
+    depth: 'full',
+  },
+  {
+    id: 'strategy-forge',
+    label: 'Strategy Quality',
+    subtitle: 'Research, evidence & degradation',
+    shortcut: 'Cmd+3',
+    index: 3,
     depth: 'v1',
   },
   {
     id: 'market-day-ops',
-    label: 'Market Day Ops',
-    subtitle: 'Intraday operations',
-    shortcut: 'Cmd+3',
-    index: 3,
-    depth: 'full',
-  },
-  {
-    id: 'risk-core',
-    label: 'Risk Core',
-    subtitle: 'Risk & gate authority',
+    label: "Today's Activity",
+    subtitle: 'Runtime, decisions & session flow',
     shortcut: 'Cmd+4',
     index: 4,
     depth: 'full',
   },
   {
-    id: 'portfolio-constellation',
-    label: 'Portfolio Constellation',
-    subtitle: 'Allocation & exposures',
+    id: 'risk-core',
+    label: 'Risk & Safety',
+    subtitle: 'Limits, gates & operator controls',
     shortcut: 'Cmd+5',
     index: 5,
+    depth: 'full',
+  },
+  {
+    id: 'portfolio-constellation',
+    label: 'Open Risk',
+    subtitle: 'Allocation, concentration & exposure',
+    shortcut: 'Cmd+6',
+    index: 6,
     depth: 'v1-sparse',
   },
   {
     id: 'evidence-replay',
-    label: 'Evidence Replay',
-    subtitle: 'Artifacts & replay',
-    shortcut: 'Cmd+6',
-    index: 6,
+    label: 'Evidence & Why',
+    subtitle: 'Audit trail, replay & trust',
+    shortcut: 'Cmd+7',
+    index: 7,
     depth: 'v1',
   },
 ]
@@ -114,6 +123,7 @@ export type AutoSwitchReason =
   | 'strategy-proposal'
   | 'replay-route'
   | 'portfolio-route'
+  | 'mission-control'
   | 'normal-supervision'
 
 export type AutoSwitchSuggestion = {

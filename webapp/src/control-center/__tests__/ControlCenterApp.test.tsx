@@ -216,22 +216,57 @@ describe('ControlCenterApp', () => {
     expect(screen.getByLabelText('Pulse Route TradeX glyph')).toBeInTheDocument()
   })
 
-  it('renders the default Market Chart flavor on first load', async () => {
+  it('renders the default Mission Control flavor on first load', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
-      expect(screen.getByRole('tab', { selected: true, name: /Market Chart/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
     })
-    expect(screen.getAllByText(/Market Chart/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Mission Control/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/Can the bot trade safely now/i)).toBeInTheDocument()
+    expect(screen.getByText(/What needs operator attention/i)).toBeInTheDocument()
+    expect(screen.getByText(/Evidence trust ledger/i)).toBeInTheDocument()
+  })
+
+  it('does not treat placeholder decision labels as decision evidence', async () => {
+    const originalHeartbeat = ROUTES['/api/runtime-host/heartbeat']
+    ROUTES['/api/runtime-host/heartbeat'] = {
+      ...blankRuntimeHeartbeat,
+      last_decision: 'No decision yet',
+      decision_reason: 'No opportunity selection has been recorded.',
+      last_evaluation_at_utc: '2026-04-27T13:30:00Z',
+    }
+    try {
+      render(<ControlCenterApp />)
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
+      })
+      expect(screen.getByText(/No decision evidence/i)).toBeInTheDocument()
+      expect(screen.getByText(/Missing selection-backed decision evidence/i)).toBeInTheDocument()
+      expect(screen.getByText(/No structured trade decision is available/i)).toBeInTheDocument()
+    } finally {
+      ROUTES['/api/runtime-host/heartbeat'] = originalHeartbeat
+    }
+  })
+
+  it('uses required safety evidence gaps in both freshness card and ledger', async () => {
+    render(<ControlCenterApp />)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
+    })
+
+    expect(
+      screen.getAllByText(/Missing heartbeat evidence, gate evidence, portfolio evidence, decision evidence/i),
+    ).toHaveLength(2)
   })
 
   it('switches flavors via the canvas switcher and marks manual override', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
-      expect(screen.getByRole('tab', { selected: true, name: /Market Chart/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByRole('tab', { name: /Risk Core/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /Risk & Safety/i }))
     await waitFor(() => {
-      expect(screen.getByRole('tab', { selected: true, name: /Risk Core/i })).toBeInTheDocument()
+      expect(screen.getByRole('tab', { selected: true, name: /Risk & Safety/i })).toBeInTheDocument()
     })
     expect(screen.getByText(/Manual view override active/i)).toBeInTheDocument()
   })
@@ -245,7 +280,17 @@ describe('ControlCenterApp', () => {
     })
   })
 
-  it('opens the view defaults drawer with all six flavors and density options', async () => {
+  it('uses trader-intent navigation labels instead of internal architecture labels', async () => {
+    render(<ControlCenterApp />)
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Primary navigation/i)).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: /What is happening now/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Why did it happen/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Can I trust it/i })).toBeInTheDocument()
+  })
+
+  it('opens the view defaults drawer with operator-first flavors and density options', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /View Settings/i })).toBeInTheDocument()
@@ -254,6 +299,7 @@ describe('ControlCenterApp', () => {
     expect(screen.getByRole('dialog', { name: /View Defaults/i })).toBeInTheDocument()
     const select = screen.getByLabelText(/Default startup view/i) as HTMLSelectElement
     expect(Array.from(select.options).map((option) => option.value)).toEqual([
+      'mission-control',
       'market-chart',
       'strategy-forge',
       'market-day-ops',
@@ -306,6 +352,7 @@ describe('ControlCenterApp', () => {
       target: { value: 'risk-core' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Save Defaults' }))
+    expect(await screen.findByText(/Saved defaults — startup view: Risk & Safety\./i)).toBeInTheDocument()
     expect(window.localStorage.getItem('tradingx.viewFlavor.preferences')).not.toBeNull()
     const stored = JSON.parse(window.localStorage.getItem('tradingx.viewFlavor.preferences')!)
     expect(stored.defaultFlavor).toBe('risk-core')

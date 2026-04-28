@@ -22,7 +22,6 @@ export type ViewDefaultsDrawerProps = {
 export function ViewDefaultsDrawer({ open, onClose }: ViewDefaultsDrawerProps) {
   const {
     prefs,
-    saved,
     hasStoredPrefs,
     storageBlocked,
     setDefaultFlavor,
@@ -196,7 +195,8 @@ export function ViewDefaultsDrawer({ open, onClose }: ViewDefaultsDrawerProps) {
               pushToast(result.error ?? 'Could not save defaults.', 'risk')
               return
             }
-            const label = FLAVORS.find((flavor) => flavor.id === saved.defaultFlavor)?.label ?? 'Market Chart'
+            const defaultFlavor = result.value?.defaultFlavor ?? prefs.defaultFlavor
+            const label = FLAVORS.find((flavor) => flavor.id === defaultFlavor)?.label ?? 'Mission Control'
             pushToast(`Saved defaults — startup view: ${label}.`, 'good')
           }}
         >

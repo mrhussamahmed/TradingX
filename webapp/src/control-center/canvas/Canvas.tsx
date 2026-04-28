@@ -10,6 +10,7 @@ import { useAutoSwitchSuggestion } from '../state/useAutoSwitchSuggestion'
 import { EvidenceReplayFlavor } from '../flavors/EvidenceReplayFlavor'
 import { MarketChartFlavor } from '../flavors/MarketChartFlavor'
 import { MarketDayOpsFlavor } from '../flavors/MarketDayOpsFlavor'
+import { OperatorMissionControlFlavor } from '../flavors/OperatorMissionControlFlavor'
 import { PortfolioConstellationFlavor } from '../flavors/PortfolioConstellationFlavor'
 import { RiskCoreFlavor } from '../flavors/RiskCoreFlavor'
 import { StrategyForgeFlavor } from '../flavors/StrategyForgeFlavor'
@@ -169,6 +170,8 @@ export function Canvas({ drawerOpen, onDrawerOpenChange }: CanvasProps) {
 
 function ActiveFlavor({ flavorId }: { flavorId: string }) {
   switch (flavorId) {
+    case 'mission-control':
+      return <OperatorMissionControlFlavor />
     case 'market-chart':
       return <MarketChartFlavor />
     case 'strategy-forge':

@@ -19,6 +19,7 @@ import {
 } from './types'
 
 export const PREFERENCES_STORAGE_KEY = 'tradingx.viewFlavor.preferences'
+const PREFERENCES_SCHEMA_VERSION = 2
 
 export type ToggleKey =
   | 'autoSwitchByWorkflow'
@@ -37,7 +38,7 @@ export type PreferencesContextValue = {
   setDensity: (density: CanvasDensity) => void
   setAccentTheme: (theme: AccentTheme) => void
   setToggle: (key: ToggleKey, value: boolean) => void
-  saveDefaults: () => { ok: boolean; error?: string }
+  saveDefaults: () => { ok: boolean; value?: ViewFlavorPreferences; error?: string }
   resetToSystemDefaults: () => void
   resumeAutoSwitch: () => void
 }
@@ -73,11 +74,23 @@ export function validateStoredPreferences(raw: string): ViewFlavorPreferences | 
       return null
     }
     const candidate = parsed as Partial<ViewFlavorPreferences>
+    const schemaVersion =
+      'schemaVersion' in candidate && typeof candidate.schemaVersion === 'number'
+        ? candidate.schemaVersion
+        : null
+    const isLegacyMarketChartDefault =
+      schemaVersion === null &&
+      candidate.defaultFlavor === 'market-chart' &&
+      (!candidate.activeFlavor || candidate.activeFlavor === 'market-chart')
     return {
-      activeFlavor: isViewFlavor(candidate.activeFlavor)
+      activeFlavor: isLegacyMarketChartDefault
+        ? SYSTEM_DEFAULTS.activeFlavor
+        : isViewFlavor(candidate.activeFlavor)
         ? candidate.activeFlavor
         : SYSTEM_DEFAULTS.activeFlavor,
-      defaultFlavor: isViewFlavor(candidate.defaultFlavor)
+      defaultFlavor: isLegacyMarketChartDefault
+        ? SYSTEM_DEFAULTS.defaultFlavor
+        : isViewFlavor(candidate.defaultFlavor)
         ? candidate.defaultFlavor
         : SYSTEM_DEFAULTS.defaultFlavor,
       density: isDensity(candidate.density)
@@ -186,11 +199,14 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     }
     try {
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(persistShape))
+        window.localStorage.setItem(
+          PREFERENCES_STORAGE_KEY,
+          JSON.stringify({ ...persistShape, schemaVersion: PREFERENCES_SCHEMA_VERSION }),
+        )
       }
       setSaved(persistShape)
       setStorageBlocked(false)
-      return { ok: true }
+      return { ok: true, value: persistShape }
     } catch (error) {
       setStorageBlocked(true)
       return {

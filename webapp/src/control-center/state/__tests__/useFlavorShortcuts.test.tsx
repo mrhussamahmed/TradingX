@@ -45,34 +45,34 @@ function dispatchShortcut(key: string, opts: { metaKey?: boolean; ctrlKey?: bool
 }
 
 describe('useFlavorShortcuts', () => {
-  it('switches active flavor for Cmd+1 through Cmd+6', () => {
+  it('switches active flavor for Cmd+1 through Cmd+7', () => {
     const { getByTestId } = renderHarness()
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
 
     dispatchShortcut('2')
-    expect(getByTestId('active').textContent).toBe('strategy-forge')
+    expect(getByTestId('active').textContent).toBe('market-chart')
 
     dispatchShortcut('5', { ctrlKey: true })
-    expect(getByTestId('active').textContent).toBe('portfolio-constellation')
+    expect(getByTestId('active').textContent).toBe('risk-core')
 
-    dispatchShortcut('6')
+    dispatchShortcut('7')
     expect(getByTestId('active').textContent).toBe('evidence-replay')
   })
 
-  it('ignores keys 7+ that do not map to a flavor', () => {
+  it('ignores keys that do not map to a flavor', () => {
     const { getByTestId } = renderHarness()
     dispatchShortcut('1')
-    expect(getByTestId('active').textContent).toBe('market-chart')
-    dispatchShortcut('7')
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
+    dispatchShortcut('8')
+    expect(getByTestId('active').textContent).toBe('mission-control')
     dispatchShortcut('0')
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
   })
 
   it('does not fire when the meta/ctrl modifier is missing', () => {
     const { getByTestId } = renderHarness()
     dispatchShortcut('3', {})
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
   })
 
   it('does not fire when shift or alt are also held', () => {
@@ -88,7 +88,7 @@ describe('useFlavorShortcuts', () => {
     act(() => {
       window.dispatchEvent(event)
     })
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
   })
 
   it('is suppressed while a text input has focus', () => {
@@ -96,24 +96,24 @@ describe('useFlavorShortcuts', () => {
     const input = getByTestId('text-input') as HTMLInputElement
     input.focus()
     dispatchShortcut('3')
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
     input.blur()
     dispatchShortcut('3')
-    expect(getByTestId('active').textContent).toBe('market-day-ops')
+    expect(getByTestId('active').textContent).toBe('strategy-forge')
   })
 
   it('is suppressed while a textarea has focus', () => {
     const { getByTestId } = renderHarness()
     ;(getByTestId('textarea') as HTMLTextAreaElement).focus()
     dispatchShortcut('5')
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
   })
 
   it('is suppressed while a button inside a dialog has focus', () => {
     const { getByTestId } = renderHarness()
     ;(getByTestId('dialog-button') as HTMLButtonElement).focus()
     dispatchShortcut('4')
-    expect(getByTestId('active').textContent).toBe('market-chart')
+    expect(getByTestId('active').textContent).toBe('mission-control')
   })
 })
 

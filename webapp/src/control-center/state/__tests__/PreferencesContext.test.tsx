@@ -104,6 +104,26 @@ describe('PreferencesProvider', () => {
     expect(screen.getByTestId('hasStored').textContent).toBe('true')
   })
 
+  it('migrates legacy Market Chart startup preferences to Mission Control', () => {
+    window.localStorage.setItem(
+      PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        ...SYSTEM_DEFAULTS,
+        activeFlavor: 'market-chart',
+        defaultFlavor: 'market-chart',
+        density: 'compact',
+      }),
+    )
+    render(
+      <PreferencesProvider>
+        <PreferencesProbe onMount={() => undefined} />
+      </PreferencesProvider>,
+    )
+    expect(screen.getByTestId('active').textContent).toBe('mission-control')
+    expect(screen.getByTestId('density').textContent).toBe('compact')
+    expect(screen.getByTestId('hasStored').textContent).toBe('true')
+  })
+
   it('drops invalid stored preferences and applies system defaults silently', () => {
     window.localStorage.setItem(PREFERENCES_STORAGE_KEY, '{not valid JSON')
     render(
@@ -173,11 +193,12 @@ describe('PreferencesProvider', () => {
       api!.setDensity('cinematic')
       api!.setAccentTheme('purple-teal')
     })
-    let result: { ok: boolean } = { ok: false }
+    let result: { ok: boolean; value?: ViewFlavorPreferences } = { ok: false }
     act(() => {
       result = api!.saveDefaults()
     })
     expect(result.ok).toBe(true)
+    expect(result.value?.defaultFlavor).toBe('portfolio-constellation')
     const raw = window.localStorage.getItem(PREFERENCES_STORAGE_KEY)
     expect(raw).not.toBeNull()
     const parsed = JSON.parse(raw!)

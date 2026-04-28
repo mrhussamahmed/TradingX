@@ -7,6 +7,16 @@ import { usePreferences } from '../state/PreferencesContext'
 import styles from './Canvas.module.css'
 
 const THUMBS: Record<ViewFlavor, ReactNode> = {
+  'mission-control': (
+    <div className={styles.thumbForge}>
+      <span />
+      <span />
+      <span />
+      <span />
+      <span />
+      <span />
+    </div>
+  ),
   'market-chart': (
     <div className={styles.thumbChart}>
       {[6, 10, 7, 13, 9, 15, 11, 18, 14, 20, 16, 22, 18, 24].map((h, i) => (

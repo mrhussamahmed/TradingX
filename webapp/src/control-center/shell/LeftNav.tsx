@@ -4,7 +4,6 @@ import {
   Bell,
   BookOpen,
   CalendarClock,
-  CircleCheck,
   Cpu,
   FileEdit,
   FileText,
@@ -24,17 +23,17 @@ import type { ViewFlavor } from '../state/types'
 import styles from './Shell.module.css'
 
 type NavId =
-  | 'mission-control'
-  | 'runtime-host'
-  | 'paper-only'
-  | 'gate3-readiness'
-  | 'portfolio'
-  | 'strategies'
-  | 'proposal-studio'
-  | 'scheduler'
-  | 'evidence'
+  | 'happening-now'
+  | 'bot-status'
+  | 'today-activity'
+  | 'why-explorer'
+  | 'risk'
+  | 'performance'
+  | 'strategy-quality'
+  | 'operator-decisions'
+  | 'evidence-trust'
   | 'alerts'
-  | 'reports'
+  | 'audit'
   | 'research'
   | 'settings'
   | 'system'
@@ -50,29 +49,30 @@ type NavItem = {
 }
 
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { id: 'mission-control', label: 'Mission Control', icon: Activity, flavor: null, group: 'primary' },
-  { id: 'runtime-host', label: 'Runtime Host', icon: Cpu, flavor: 'market-day-ops', group: 'primary' },
-  { id: 'paper-only', label: 'Paper Only', icon: Shield, flavor: null, group: 'primary' },
-  { id: 'gate3-readiness', label: 'Gate 3 Readiness', icon: CircleCheck, flavor: 'risk-core', group: 'primary' },
-  { id: 'portfolio', label: 'Portfolio', icon: PieChart, flavor: 'portfolio-constellation', group: 'primary' },
-  { id: 'strategies', label: 'Strategies', icon: GitBranch, flavor: 'strategy-forge', group: 'primary' },
-  { id: 'proposal-studio', label: 'Proposal Studio', icon: FileEdit, flavor: 'strategy-forge', group: 'primary' },
-  { id: 'scheduler', label: 'Scheduler', icon: CalendarClock, flavor: 'market-day-ops', group: 'primary' },
-  { id: 'evidence', label: 'Evidence', icon: BookOpen, flavor: 'evidence-replay', group: 'expansion' },
+  { id: 'happening-now', label: 'What is happening now', icon: Activity, flavor: 'mission-control', group: 'primary' },
+  { id: 'bot-status', label: 'Is the bot safe', icon: Shield, flavor: 'risk-core', group: 'primary' },
+  { id: 'today-activity', label: 'What did it do', icon: CalendarClock, flavor: 'market-day-ops', group: 'primary' },
+  { id: 'why-explorer', label: 'Why did it happen', icon: Cpu, flavor: 'evidence-replay', group: 'primary' },
+  { id: 'risk', label: 'What risk is open', icon: PieChart, flavor: 'portfolio-constellation', group: 'primary' },
+  { id: 'performance', label: 'Is it working', icon: FileText, flavor: 'market-chart', group: 'primary' },
+  { id: 'strategy-quality', label: 'Which strategy next', icon: GitBranch, flavor: 'strategy-forge', group: 'primary' },
+  { id: 'operator-decisions', label: 'What can I do', icon: FileEdit, flavor: 'market-day-ops', group: 'primary' },
+  { id: 'evidence-trust', label: 'Can I trust it', icon: BookOpen, flavor: 'evidence-replay', group: 'expansion' },
   { id: 'alerts', label: 'Alerts', icon: Bell, flavor: 'risk-core', group: 'expansion' },
-  { id: 'reports', label: 'Reports', icon: FileText, flavor: 'evidence-replay', group: 'expansion' },
+  { id: 'audit', label: 'Audit Trail', icon: FileText, flavor: 'evidence-replay', group: 'expansion' },
   { id: 'research', label: 'Research', icon: FlaskConical, flavor: 'strategy-forge', group: 'expansion' },
   { id: 'settings', label: 'Settings', icon: Settings, flavor: null, group: 'expansion' },
   { id: 'system', label: 'System', icon: Server, flavor: null, group: 'expansion' },
 ]
 
 const CANONICAL_FOR_FLAVOR: Record<ViewFlavor, NavId> = {
-  'market-chart': 'mission-control',
-  'strategy-forge': 'strategies',
-  'market-day-ops': 'scheduler',
-  'risk-core': 'gate3-readiness',
-  'portfolio-constellation': 'portfolio',
-  'evidence-replay': 'evidence',
+  'mission-control': 'happening-now',
+  'market-chart': 'performance',
+  'strategy-forge': 'strategy-quality',
+  'market-day-ops': 'today-activity',
+  'risk-core': 'bot-status',
+  'portfolio-constellation': 'risk',
+  'evidence-replay': 'evidence-trust',
 }
 
 export type LeftNavProps = {
