@@ -7,6 +7,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from tradingx import __main__ as cli
+from tradingx import controller as controller_module
+from tradingx.execution import OrderRouteAuthorityError
 from tradingx.journal import SqliteOmsJournal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.snapshots import (
@@ -213,6 +215,32 @@ def test_promotion_check_wrong_strategy_artifact_fails_closed(capsys) -> None:
     assert payload["mismatched_artifact_strategy_id"] == "trend-following-v1"
 
 
+def test_default_paper_order_authority_uses_operator_promotion_bundle(
+    monkeypatch, tmp_path
+) -> None:
+    observed_roots: list[Path] = []
+
+    def fake_provider(root: Path):
+        observed_roots.append(root)
+        return lambda strategy_id: strategy_id
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        controller_module, "build_artifact_promotion_decision_provider", fake_provider
+    )
+
+    config = controller_module.TradingConfig.from_mapping(
+        {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+    )
+
+    guard = controller_module._build_default_authority_guard(
+        config, broker_mode="paper"
+    )
+
+    assert guard is not None
+    assert observed_roots == [Path("config/strategy/promotion")]
+
+
 class FakeController:
     def run_paper_roundtrip(
         self,
@@ -283,6 +311,15 @@ class FakePaperLoopController:
             "terminal_state": "reconciled_trade",
             "recovered": True,
         }
+
+
+class FakeAuthorityBlockedPaperLoopController:
+    def run_trading_cycle(self, symbol: str, quantity: Decimal):
+        del symbol, quantity
+        raise OrderRouteAuthorityError(
+            "paper_order for trend-following-v1 is capped at research_only; "
+            "requires paper_trading."
+        )
 
 
 class FakePaperServiceController:
@@ -866,10 +903,53 @@ def test_main_paper_loop_rejects_when_runtime_lock_is_held(
     assert fake_controller.called_with is None
 
 
+def test_main_paper_loop_reports_authority_block_without_traceback(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_default_paper_trading_controller",
+        lambda config: FakeAuthorityBlockedPaperLoopController(),
+    )
+
+    exit_code = cli.main(
+        [
+            "paper-loop",
+            "--env-file",
+            str(env_file),
+            "--symbol",
+            "SPY",
+            "--quantity",
+            "1",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload == {
+        "status": "blocked",
+        "error_type": "order_route_authority",
+        "error": (
+            "paper_order for trend-following-v1 is capped at research_only; "
+            "requires paper_trading."
+        ),
+    }
+
+
 def test_main_runs_recovery_command(monkeypatch, tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_ARTIFACT_ROOT={tmp_path / 'artifacts'}\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
     fake_controller = FakePaperLoopController()
@@ -898,7 +978,10 @@ def test_main_runs_recovery_command(monkeypatch, tmp_path, capsys) -> None:
 def test_main_runs_paper_service_command(monkeypatch, tmp_path, capsys) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_ARTIFACT_ROOT={tmp_path / 'artifacts'}\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
     fake_controller = FakePaperServiceController()
@@ -1093,8 +1176,9 @@ def test_main_runtime_plan_command_writes_plan_artifact(
     assert payload["strategy_id"] == "trend-following-v1"
     assert Path(payload["artifact_path"]).exists()
     assert activation_kwargs
-    assert activation_kwargs[0]["promotion_decision_provider"] is not None
-    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
+    assert activation_kwargs[0]["legacy_non_authority_mode"] is True
+    assert "promotion_decision_provider" not in activation_kwargs[0]
+    assert "required_promotion_state" not in activation_kwargs[0]
 
 
 def test_main_runtime_plan_command_reports_blocked_research_strategy(
@@ -1213,7 +1297,10 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "ALPACA_PAPER_API_KEY=pk-paper\nALPACA_PAPER_API_SECRET=sk-paper\n",
+        "ALPACA_PAPER_API_KEY=pk-paper\n"
+        "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        f"TRADINGX_ARTIFACT_ROOT={tmp_path / 'artifacts'}\n"
+        f"TRADINGX_DATA_ROOT={tmp_path / 'data'}\n",
         encoding="utf-8",
     )
     activation = StrategyActivationRecord(
@@ -1352,11 +1439,16 @@ def test_main_runtime_start_fails_closed_when_warmup_is_incomplete(
     assert (
         payload["runtime_state"]["last_error"] == "Warmup incomplete for symbols: QQQ"
     )
+    assert (
+        Path(payload["runtime_state_path"])
+        == tmp_path / "artifacts" / "operator_platform" / "runtime_host" / "state.json"
+    )
     assert payload["service_result"] is None
     assert fake_service.called_with is None
     assert activation_kwargs
-    assert activation_kwargs[0]["promotion_decision_provider"] is not None
-    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
+    assert activation_kwargs[0]["legacy_non_authority_mode"] is True
+    assert "promotion_decision_provider" not in activation_kwargs[0]
+    assert "required_promotion_state" not in activation_kwargs[0]
 
 
 def test_main_prints_live_disable_status(tmp_path, capsys) -> None:

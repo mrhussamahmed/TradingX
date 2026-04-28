@@ -871,7 +871,7 @@ def test_paper_trading_service_narrows_blueprint_after_three_structural_failures
     )
 
 
-def test_paper_trading_service_fails_closed_when_planner_returns_none(
+def test_paper_trading_service_marks_no_trade_when_planner_returns_none(
     tmp_path,
 ) -> None:
     loop_controller = FakeLoopController()
@@ -900,7 +900,7 @@ def test_paper_trading_service_fails_closed_when_planner_returns_none(
 
     assert loop_controller.calls == []
     assert loop_controller.intent_calls == []
-    assert result.last_cycle.cycle_status == "recovery_required"
+    assert result.last_cycle.cycle_status == "no_trade"
 
 
 def test_build_default_trading_service_uses_mode_aware_helpers(
@@ -937,6 +937,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
 
     activation_kwargs: list[dict[str, object]] = []
     registry_kwargs: list[dict[str, object]] = []
+    promotion_roots: list[Path] = []
 
     monkeypatch.setattr(service_module, "resolve_broker_mode", fake_resolve_broker_mode)
     monkeypatch.setattr(
@@ -952,7 +953,11 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     monkeypatch.setattr(
         service_module,
         "build_default_trading_loop_controller",
-        lambda config, *, broker_mode=None: ("loop", broker_mode),
+        lambda config, *, broker_mode=None, strategy_id=None: (
+            "loop",
+            broker_mode,
+            strategy_id,
+        ),
     )
     monkeypatch.setattr(
         service_module,
@@ -963,6 +968,11 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
         service_module,
         "LocalActivationGateway",
         lambda **kwargs: activation_kwargs.append(kwargs) or object(),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "build_artifact_promotion_decision_provider",
+        lambda root: promotion_roots.append(root) or (lambda strategy_id: strategy_id),
     )
     monkeypatch.setattr(
         service_module,
@@ -998,9 +1008,15 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
         "client_mode": "live",
         "market_data_mode": "live",
     }
+    assert service._loop_controller == (  # noqa: SLF001
+        "loop",
+        "live",
+        "baseline-long-only-v1",
+    )
     assert activation_kwargs
     assert activation_kwargs[0]["promotion_decision_provider"] is not None
     assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
+    assert promotion_roots == [Path("config/strategy/promotion")]
     assert registry_kwargs
     assert registry_kwargs[0]["vix_cache_path"] == (
         tmp_path / "data" / "reference" / "vix_daily.csv"

@@ -447,15 +447,26 @@ describe('ControlCenterApp', () => {
     expect(screen.getByRole('button', { name: /Activate Kill Switch/i })).toBeDisabled()
   })
 
-  it('disables Resume Runtime with a clear blocker when writes are locked', async () => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
-    window.dispatchEvent(new Event('resize'))
-    render(<ControlCenterApp />)
-    const button = await screen.findByRole('button', {
-      name: /Resume Runtime/i,
-    })
-    expect(button).toBeDisabled()
-    expect(button.textContent ?? '').toMatch(/server write mode is disabled/i)
+  it('enables Resume Runtime when server write mode is enabled', async () => {
+    const originalConfig = ROUTES['/api/config/summary']
+    try {
+      ROUTES['/api/config/summary'] = {
+        ...blankConfig,
+        config: {
+          ...blankConfig.config,
+          web_write_mode_enabled: true,
+        },
+      }
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+      window.dispatchEvent(new Event('resize'))
+      render(<ControlCenterApp />)
+      const button = await screen.findByRole('button', {
+        name: /Resume Runtime/i,
+      })
+      await waitFor(() => expect(button).not.toBeDisabled())
+    } finally {
+      ROUTES['/api/config/summary'] = originalConfig
+    }
   })
 
   it('persists default flavor when saved and reloads from localStorage', async () => {

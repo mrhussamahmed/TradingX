@@ -80,21 +80,8 @@ describe('Signing boundary regression', () => {
   })
 
   describe('POST request signing', () => {
-    it('rejects writes when not unlocked', async () => {
-      recordingFetchMock()
-      await expect(
-        postRuntimeHostStart({
-          symbols: ['SPY'],
-          quantity: '1',
-          interval_seconds: 60,
-          max_cycles: null,
-        }),
-      ).rejects.toThrow(/locked/i)
-    })
-
-    it('attaches signature, timestamp, and idempotency headers on every POST', async () => {
+    it('allows writes without unlocking the browser session', async () => {
       const { calls } = recordingFetchMock()
-      unlockWebWrites(SECRET_LITERAL)
       await postRuntimeHostStart({
         symbols: ['SPY'],
         quantity: '1',
@@ -104,11 +91,9 @@ describe('Signing boundary regression', () => {
       const writeCalls = calls.filter((call) => call.method === 'POST')
       expect(writeCalls.length).toBeGreaterThan(0)
       for (const call of writeCalls) {
-        const signature = call.headers.get('X-TradingX-Signature') ?? ''
-        const timestamp = call.headers.get('X-TradingX-Timestamp') ?? ''
         const idempotency = call.headers.get('X-TradingX-Idempotency-Key') ?? ''
-        expect(signature).toMatch(/^[0-9a-f]{64}$/)
-        expect(Number.parseInt(timestamp, 10)).toBeGreaterThan(0)
+        expect(call.headers.get('X-TradingX-Signature')).toBeNull()
+        expect(call.headers.get('X-TradingX-Timestamp')).toBeNull()
         expect(idempotency.length).toBeGreaterThan(0)
       }
     })
@@ -132,9 +117,8 @@ describe('Signing boundary regression', () => {
       }
     })
 
-    it('produces a different signature per POST (randomised idempotency key)', async () => {
+    it('produces a different idempotency key per POST', async () => {
       const { calls } = recordingFetchMock()
-      unlockWebWrites(SECRET_LITERAL)
       await postRuntimeHostStart({
         symbols: ['SPY'],
         quantity: '1',
@@ -150,11 +134,8 @@ describe('Signing boundary regression', () => {
       })
       const writeCalls = calls.filter((call) => call.method === 'POST')
       expect(writeCalls.length).toBe(2)
-      const sigA = writeCalls[0].headers.get('X-TradingX-Signature')
-      const sigB = writeCalls[1].headers.get('X-TradingX-Signature')
       const idemA = writeCalls[0].headers.get('X-TradingX-Idempotency-Key')
       const idemB = writeCalls[1].headers.get('X-TradingX-Idempotency-Key')
-      expect(sigA).not.toBe(sigB)
       expect(idemA).not.toBe(idemB)
     })
   })
@@ -189,6 +170,7 @@ describe('Signing boundary regression', () => {
         },
       } as unknown as Parameters<typeof describeWriteMode>[0]
       const writeMode = describeWriteMode(withInjectedSecret, false)
+      expect(writeMode.unlocked).toBe(true)
       expect(writeMode.detail.includes(SECRET_LITERAL)).toBe(false)
       expect(JSON.stringify(writeMode).includes(SECRET_LITERAL)).toBe(false)
     })

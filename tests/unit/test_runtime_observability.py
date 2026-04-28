@@ -343,7 +343,7 @@ def test_paper_trading_service_logs_planner_no_candidate_event(tmp_path) -> None
         max_cycles=1,
     )
 
-    assert result.last_cycle.cycle_status == "recovery_required"
+    assert result.last_cycle.cycle_status == "no_trade"
     payloads = [
         json.loads(line)
         for line in (tmp_path / "data" / "logs" / "service.jsonl")
@@ -352,7 +352,7 @@ def test_paper_trading_service_logs_planner_no_candidate_event(tmp_path) -> None
     ]
     assert any(
         payload["event_type"] == "planner_no_candidate"
-        and payload["severity"] == "warning"
+        and payload["severity"] == "info"
         and payload["fields"]["reason"] == "planner_returned_none"
         and payload["fields"]["strategy_id"] == "baseline-long-only-v1"
         for payload in payloads

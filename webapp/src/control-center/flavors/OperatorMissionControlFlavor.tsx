@@ -83,6 +83,10 @@ export function OperatorMissionControlFlavor() {
     commandCenterGates: commandCenter.gate_statuses,
     gate3Criteria: gate3Readiness.criteria,
   })
+  const operationalGateTone = deriveCombinedGateTone({
+    commandCenterGates: commandCenter.gate_statuses,
+    gate3Criteria: [],
+  })
   const unacknowledged = incidents.filter((incident) => !incident.acknowledged_at_utc)
   const openPositions = portfolio.positions_panel.positions
   const latestEvidenceAt = latestSourceEvidenceTimestamp({
@@ -126,6 +130,16 @@ export function OperatorMissionControlFlavor() {
     portfolioTimestamp: portfolio.source_evidence_at_utc,
     decisionTimestamp: decisionEvidenceAt,
   })
+  const operationalSafetyEvidence = deriveRequiredSafetyEvidence({
+    nowMs,
+    staleMinutes: STALE_MINUTES,
+    heartbeatTimestamp: runtimeHeartbeat.last_evaluation_at_utc,
+    gateTimestamp: Object.keys(commandCenter.gate_statuses ?? {}).length
+      ? commandCenter.generated_at_utc
+      : null,
+    portfolioTimestamp: portfolio.source_evidence_at_utc ?? portfolio.generated_at_utc,
+    decisionTimestamp: decisionEvidenceAt,
+  })
   const staleEvidence = requiredSafetyEvidence.stale
   const requiredEvidenceAge = requiredSafetyEvidence.latestRequiredTimestamp
     ? ageMinutes(requiredSafetyEvidence.latestRequiredTimestamp, nowMs)
@@ -135,9 +149,9 @@ export function OperatorMissionControlFlavor() {
     liveTradingEnabled: configSummary.live_disable_report.live_trading_enabled,
     paperOnlyMode: configSummary.live_disable_report.paper_only_mode,
     killSwitchActive: configSummary.live_disable_report.manual_kill_switch_active,
-    gateTone: gateTone.tone,
+    gateTone: operationalGateTone.tone,
     runtimeStatus: runtimeState.status,
-    evidenceStale: staleEvidence,
+    evidenceStale: operationalSafetyEvidence.stale,
   })
 
   const cards = useMemo<StatusCardModel[]>(() => {

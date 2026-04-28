@@ -182,6 +182,9 @@ class WebWriteAuthorizer:
                 detail="Web write signing is not configured.",
             )
 
+        body = await request.body()
+        method = request.method.upper()
+        path = request.url.path
         timestamp = request.headers.get(TIMESTAMP_HEADER, "").strip()
         if not timestamp:
             raise HTTPException(
@@ -200,18 +203,6 @@ class WebWriteAuthorizer:
                 status_code=403,
                 detail="Web write signature is required.",
             )
-
-        try:
-            timestamp_seconds = int(timestamp)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=403,
-                detail="Web write timestamp is invalid.",
-            ) from exc
-
-        body = await request.body()
-        method = request.method.upper()
-        path = request.url.path
         if not _verify_signature(
             secret=self._config.web.write_signing_secret,
             method=method,
@@ -242,10 +233,15 @@ class WebWriteAuthorizer:
                 status_code=409,
                 detail="Web write idempotency conflict.",
             )
-
-        now_seconds = int(self._now_provider().timestamp())
-        max_age_seconds = self._config.web.write_max_age_seconds
-        if abs(now_seconds - timestamp_seconds) > max_age_seconds:
+        try:
+            timestamp_seconds = int(timestamp)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail="Web write timestamp is invalid.",
+            ) from exc
+        age_seconds = abs(self._now_provider().timestamp() - float(timestamp_seconds))
+        if age_seconds > self._config.web.write_max_age_seconds:
             raise HTTPException(
                 status_code=403,
                 detail="Web write timestamp is stale.",

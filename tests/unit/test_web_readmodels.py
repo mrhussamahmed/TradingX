@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from tradingx.config import TradingConfig
 from tradingx.journal import SqliteOmsJournal
@@ -28,6 +29,7 @@ from tradingx.types import (
     ValidationReport,
     WebServiceState,
 )
+from tradingx.web import readmodels as readmodels_module
 from tradingx.web.readmodels import LocalWebReadModel
 
 
@@ -116,6 +118,74 @@ def _write_service_cycle(
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload.update(payload_overrides)
         path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_dashboard_service_status_uses_persisted_cycles_when_web_manager_idle(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        payload_overrides={"symbols": ("SPY", "QQQ", "IWM")},
+    )
+
+    snapshot = read_model.build_command_center_snapshot()
+
+    assert snapshot.service_status.status == "idle"
+    assert snapshot.service_status.cycles_completed == 1
+    assert snapshot.service_status.active_symbols == ("SPY", "QQQ", "IWM")
+    assert snapshot.service_status.last_completed_at_utc == timestamp
+
+
+def test_command_center_keeps_last_account_snapshot_after_market_closed_cycle(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    closed_timestamp = datetime(2026, 4, 28, 20, 26, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-account",
+        payload_overrides={
+            "symbols": ("SPY", "QQQ", "IWM"),
+            "open_position_symbols": ("SPY", "QQQ", "IWM"),
+            "cash": "98363.03",
+            "equity": "100006.08",
+            "buying_power": "397170.85",
+        },
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=closed_timestamp,
+        cycle_id="cycle-market-closed",
+        payload_overrides={
+            "symbols": ("SPY", "QQQ", "IWM"),
+            "cycle_status": "market_closed",
+            "open_position_symbols": (),
+            "cash": "0",
+            "equity": "0",
+            "buying_power": "0",
+        },
+    )
+
+    snapshot = read_model.build_command_center_snapshot()
+
+    assert snapshot.gate_statuses["paper_cycle"] == "pass"
+    assert snapshot.service_status.cycles_completed == 2
+    assert snapshot.service_status.last_completed_at_utc == closed_timestamp
+    assert snapshot.account_summary == {
+        "cash": "98363.03",
+        "equity": "100006.08",
+        "buying_power": "397170.85",
+        "daily_pnl": "0",
+    }
+    watchlist = {row["symbol"]: row["status"] for row in snapshot.watchlist}
+    assert watchlist["SPY"] == "active"
+    assert watchlist["QQQ"] == "active"
+    assert watchlist["IWM"] == "active"
 
 
 def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
@@ -256,6 +326,44 @@ def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
     assert snapshot.document_summary["session_count"] == 1
     assert documents[0].kind == "handover"
     assert proposals[0].proposal_id == "proposal-1"
+
+
+def test_command_center_uses_operational_paper_gates_for_trade_permission(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 6, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    paper_store = read_model._paper_store
+    validation_store = read_model._validation_store
+    _write_service_cycle(paper_store, timestamp=timestamp)
+    validation_store.write_gate_assessment(
+        GateAssessment(
+            gate_id="1",
+            status="fail",
+            evidence_refs=("artifacts/validation/gate_assessments/gate-1.json",),
+            decision_summary="Old research gate failed.",
+            recorded_at_utc=timestamp,
+        )
+    )
+
+    monkeypatch.setattr(
+        readmodels_module,
+        "build_artifact_promotion_decision_provider",
+        lambda root: lambda strategy_id: SimpleNamespace(
+            max_state=readmodels_module.PromotionState.PAPER_TRADING,
+            blocker_codes=(),
+        ),
+    )
+
+    command_center = read_model.build_command_center_snapshot()
+
+    assert command_center.gate_statuses == {
+        "paper_runtime": "pass",
+        "paper_cycle": "pass",
+        "paper_reconciliation": "pass",
+        "paper_authority": "pass",
+    }
 
 
 def test_local_web_read_model_redacts_unreleased_promotion_metrics(tmp_path) -> None:

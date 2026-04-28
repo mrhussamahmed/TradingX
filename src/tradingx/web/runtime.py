@@ -1016,14 +1016,22 @@ def build_default_local_web_components(
         broker_mode=decision.requested_mode,
     )
     trading_client = build_trading_client_for_mode(config, decision)
-    activation_gateway = LocalActivationGateway(
-        store=FilesystemArtifactStore(operator_store_root),
-        runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
-        promotion_decision_provider=build_artifact_promotion_decision_provider(
-            config.runtime.artifact_root / "quant" / "promotion"
-        ),
-        required_promotion_state=PromotionState.PAPER_TRADING,
-        projection_root=Path("config/strategy/promotion"),
+    activation_gateway = (
+        LocalActivationGateway(
+            store=FilesystemArtifactStore(operator_store_root),
+            runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
+            legacy_non_authority_mode=True,
+        )
+        if decision.requested_mode == "paper"
+        else LocalActivationGateway(
+            store=FilesystemArtifactStore(operator_store_root),
+            runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
+            promotion_decision_provider=build_artifact_promotion_decision_provider(
+                config.runtime.artifact_root / "quant" / "promotion"
+            ),
+            required_promotion_state=PromotionState.PAPER_TRADING,
+            projection_root=Path("config/strategy/promotion"),
+        )
     )
     runtime_host_manager = LocalRuntimeHostManager(
         config=config,

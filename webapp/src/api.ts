@@ -32,10 +32,8 @@ import type {
   StrategyActivationRecord,
 } from './types'
 
-const WRITE_SECRET_SESSION_KEY = 'tradingx.web.writeSigningSecret'
-const TIMESTAMP_HEADER = 'X-TradingX-Timestamp'
 const IDEMPOTENCY_HEADER = 'X-TradingX-Idempotency-Key'
-const SIGNATURE_HEADER = 'X-TradingX-Signature'
+const WRITE_SECRET_SESSION_KEY = 'tradingx.web.writeSigningSecret'
 
 function getWriteSigningSecret(): string {
   if (typeof window === 'undefined') {
@@ -62,74 +60,23 @@ export function areWebWritesUnlocked() {
   return getWriteSigningSecret().length > 0
 }
 
-function bytesToHex(bytes: Uint8Array) {
-  return Array.from(bytes)
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-}
-
-async function sha256Hex(value: string) {
-  const digest = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(value),
-  )
-  return bytesToHex(new Uint8Array(digest))
-}
-
-async function hmacSha256Hex(secret: string, payload: string) {
-  const key = await globalThis.crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const signature = await globalThis.crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(payload),
-  )
-  return bytesToHex(new Uint8Array(signature))
-}
-
-function buildWritePath(url: string) {
-  if (typeof window === 'undefined') {
-    return url
-  }
-  const resolved = new URL(url, window.location.origin)
-  return resolved.pathname
-}
-
-async function signedWriteHeaders(url: string, bodyText: string) {
-  const secret = getWriteSigningSecret()
-  if (!secret) {
-    throw new Error('Web writes are locked. Enter the signing secret to continue.')
-  }
-  const timestamp = String(Math.floor(Date.now() / 1000))
+function writeHeaders() {
   const idempotencyKey =
     globalThis.crypto.randomUUID?.() ??
-    `idem-${timestamp}-${Math.random().toString(16).slice(2)}`
-  const path = buildWritePath(url)
-  const bodyHash = await sha256Hex(bodyText)
-  const canonical = ['POST', path, timestamp, idempotencyKey, bodyHash].join('\n')
-  const signature = await hmacSha256Hex(secret, canonical)
+    `idem-${Date.now()}-${Math.random().toString(16).slice(2)}`
   return {
-    [TIMESTAMP_HEADER]: timestamp,
     [IDEMPOTENCY_HEADER]: idempotencyKey,
-    [SIGNATURE_HEADER]: signature,
   }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? 'GET'
   const isWrite = method === 'POST'
-  const bodyText =
-    typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : ''
-  const signingHeaders = isWrite ? await signedWriteHeaders(url, bodyText) : {}
+  const idempotencyHeaders = isWrite ? writeHeaders() : {}
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
-      ...signingHeaders,
+      ...idempotencyHeaders,
       ...(init?.headers ?? {}),
     },
     ...init,

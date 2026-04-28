@@ -351,8 +351,9 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
         is service_manager_instances[0]
     )
     assert activation_kwargs
-    assert activation_kwargs[0]["promotion_decision_provider"] is not None
-    assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
+    assert activation_kwargs[0]["legacy_non_authority_mode"] is True
+    assert "promotion_decision_provider" not in activation_kwargs[0]
+    assert "required_promotion_state" not in activation_kwargs[0]
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:

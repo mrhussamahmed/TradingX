@@ -1874,13 +1874,14 @@ def _build_default_authority_guard(
 ) -> OrderRouteAuthorityGuard:
     """Wire the V5 authority guard for a runtime route.
 
-    Sources the promotion decision from
-    ``config.runtime.artifact_root / "promotion"``. Bundles that are
+    Sources the promotion decision from the operator-managed promotion
+    bundle under ``config/strategy/promotion``. Bundles that are
     missing or fail authority validation will fail-closed at order
     submission via :class:`OrderRouteAuthorityError`.
     """
 
-    promotion_root = config.runtime.artifact_root / "promotion"
+    del config
+    promotion_root = Path("config/strategy/promotion")
     decision_provider = build_artifact_promotion_decision_provider(promotion_root)
     return OrderRouteAuthorityGuard(
         decision_provider=decision_provider,

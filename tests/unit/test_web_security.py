@@ -49,11 +49,11 @@ def _make_request(
     return Request(scope, receive)
 
 
-def _config(tmp_path) -> TradingConfig:
+def _config(tmp_path, *, write_mode_enabled: str = "true") -> TradingConfig:
     return TradingConfig.from_mapping(
         {
             "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
-            "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+            "TRADINGX_WEB_WRITE_MODE_ENABLED": write_mode_enabled,
             "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret",
             "TRADINGX_WEB_WRITE_MAX_AGE_SECONDS": "300",
         }
@@ -83,7 +83,7 @@ def _signed_headers(
     }
 
 
-def test_web_write_authorizer_accepts_valid_signature(tmp_path) -> None:
+def test_web_write_authorizer_rejects_unsigned_local_write(tmp_path) -> None:
     config = _config(tmp_path)
     store = WebWriteIdempotencyStore(
         config.runtime.data_root / "control" / "web_write_idempotency"
@@ -97,26 +97,19 @@ def test_web_write_authorizer_accepts_valid_signature(tmp_path) -> None:
     request = _make_request(
         method="POST",
         path="/api/actions/paper-loop",
-        headers=_signed_headers(
-            secret="super-secret",
-            method="POST",
-            path="/api/actions/paper-loop",
-            timestamp=str(int(datetime(2026, 4, 23, 12, 0, tzinfo=UTC).timestamp())),
-            idempotency_key="idem-1",
-            body=body,
-        ),
+        headers={},
         body=body,
     )
 
-    authorization, replay = asyncio.run(authorizer.authorize(request))
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(authorizer.authorize(request))
 
-    assert replay is None
-    assert authorization is not None
-    assert authorization.idempotency_key == "idem-1"
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Web write timestamp is required."
 
 
-def test_web_write_authorizer_rejects_invalid_signature(tmp_path) -> None:
-    config = _config(tmp_path)
+def test_web_write_authorizer_rejects_disabled_write_mode(tmp_path) -> None:
+    config = _config(tmp_path, write_mode_enabled="false")
     store = WebWriteIdempotencyStore(
         config.runtime.data_root / "control" / "web_write_idempotency"
     )
@@ -128,13 +121,7 @@ def test_web_write_authorizer_rejects_invalid_signature(tmp_path) -> None:
     request = _make_request(
         method="POST",
         path="/api/actions/service/stop",
-        headers={
-            TIMESTAMP_HEADER: str(
-                int(datetime(2026, 4, 23, 12, 0, tzinfo=UTC).timestamp())
-            ),
-            IDEMPOTENCY_HEADER: "idem-2",
-            SIGNATURE_HEADER: "bad-signature",
-        },
+        headers={},
         body=b"",
     )
 
@@ -142,39 +129,7 @@ def test_web_write_authorizer_rejects_invalid_signature(tmp_path) -> None:
         asyncio.run(authorizer.authorize(request))
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Web write signature is invalid."
-
-
-def test_web_write_authorizer_rejects_stale_timestamp(tmp_path) -> None:
-    config = _config(tmp_path)
-    store = WebWriteIdempotencyStore(
-        config.runtime.data_root / "control" / "web_write_idempotency"
-    )
-    authorizer = WebWriteAuthorizer(
-        config=config,
-        idempotency_store=store,
-        now_provider=lambda: datetime(2026, 4, 23, 12, 10, tzinfo=UTC),
-    )
-    body = b"{}"
-    request = _make_request(
-        method="POST",
-        path="/api/actions/service/stop",
-        headers=_signed_headers(
-            secret="super-secret",
-            method="POST",
-            path="/api/actions/service/stop",
-            timestamp=str(int(datetime(2026, 4, 23, 12, 0, tzinfo=UTC).timestamp())),
-            idempotency_key="idem-3",
-            body=body,
-        ),
-        body=body,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(authorizer.authorize(request))
-
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Web write timestamp is stale."
+    assert exc_info.value.detail == "Web write mode is disabled."
 
 
 def test_web_write_authorizer_replays_exact_duplicate(tmp_path) -> None:

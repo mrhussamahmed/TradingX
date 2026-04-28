@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+run_static=1
+if [[ "${1:-}" == "--pytest-only" ]]; then
+  run_static=0
+  shift
+fi
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'EOF'
+Usage:
+  ./scripts/validate-fast [--pytest-only] [pytest target ...]
+
+Fast local validation for small fixes. This intentionally does not run the
+full coverage suite, frontend build, or live paper smoke test. Use
+./scripts/validate only for final certification.
+
+Examples:
+  ./scripts/validate-fast tests/unit/test_web_readmodels.py -q
+  ./scripts/validate-fast --pytest-only tests/unit/test_service.py::test_name -vv
+  ./scripts/validate-fast
+EOF
+  exit 0
+fi
+
+if [[ "$run_static" -eq 1 ]]; then
+  echo "==> Validating artifact index"
+  python3 scripts/check_index.py
+
+  echo "==> Ruff"
+  uv run ruff check src tests scripts
+
+  echo "==> Black"
+  uv run black --check src tests scripts
+
+  echo "==> mypy"
+  uv run mypy --strict src
+fi
+
+if [[ "$#" -eq 0 ]]; then
+  set -- \
+    tests/unit/test_main.py \
+    tests/unit/test_service.py \
+    tests/unit/test_controller.py \
+    tests/unit/test_runtime_observability.py \
+    tests/unit/test_web_readmodels.py \
+    tests/unit/test_web_runtime.py \
+    tests/unit/test_web_security.py \
+    tests/contract/test_local_web_app_api_contract.py
+fi
+
+echo "==> pytest (focused, no coverage)"
+uv run pytest "$@" --durations=10

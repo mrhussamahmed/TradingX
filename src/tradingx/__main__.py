@@ -40,6 +40,7 @@ from tradingx.data_fingerprint import (
     load_json_object,
 )
 from tradingx.dry_run_report import build_dry_run_report, write_dry_run_report
+from tradingx.execution import OrderRouteAuthorityError
 from tradingx.experiments import (
     ExperimentLedger,
     build_trial_universe_manifest,
@@ -179,6 +180,18 @@ def _run_with_runtime_lock(
             json.dumps(
                 {
                     "status": "blocked",
+                    "error": str(error),
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    except OrderRouteAuthorityError as error:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "error_type": "order_route_authority",
                     "error": str(error),
                 },
                 sort_keys=True,
@@ -852,11 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         activation_gateway = LocalActivationGateway(
             store=operator_store,
             runtime_snapshot_store=runtime_store,
-            promotion_decision_provider=build_artifact_promotion_decision_provider(
-                config.runtime.artifact_root / "quant" / "promotion"
-            ),
-            required_promotion_state=PromotionState.PAPER_TRADING,
-            projection_root=Path("config/strategy/promotion"),
+            legacy_non_authority_mode=True,
         )
         activation, _snapshot = activation_gateway.load_or_create_active_records(
             symbols
@@ -938,14 +947,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config,
                 broker_mode=decision.requested_mode,
             )
-            activation_gateway = LocalActivationGateway(
-                store=operator_store,
-                runtime_snapshot_store=runtime_store,
-                promotion_decision_provider=build_artifact_promotion_decision_provider(
-                    config.runtime.artifact_root / "quant" / "promotion"
-                ),
-                required_promotion_state=PromotionState.PAPER_TRADING,
-                projection_root=Path("config/strategy/promotion"),
+            activation_gateway = (
+                LocalActivationGateway(
+                    store=operator_store,
+                    runtime_snapshot_store=runtime_store,
+                    legacy_non_authority_mode=True,
+                )
+                if decision.requested_mode == "paper"
+                else LocalActivationGateway(
+                    store=operator_store,
+                    runtime_snapshot_store=runtime_store,
+                    promotion_decision_provider=build_artifact_promotion_decision_provider(
+                        config.runtime.artifact_root / "quant" / "promotion"
+                    ),
+                    required_promotion_state=PromotionState.PAPER_TRADING,
+                    projection_root=Path("config/strategy/promotion"),
+                )
             )
             activation, snapshot = activation_gateway.load_or_create_active_records(
                 symbols

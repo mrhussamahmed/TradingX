@@ -272,19 +272,16 @@ const defaultSchedulerState: MarketDaySchedulerState = {
 // eslint-disable-next-line react-refresh/only-export-components
 export function describeWriteMode(
   config: ConfigSummary,
-  unlocked: boolean,
+  _unlocked: boolean,
 ): WriteMode {
   const enabled = Boolean(config.config.web_write_mode_enabled)
   const configured = Boolean(config.config.web_write_signing_configured)
+  const unlocked = enabled
   let detail = ''
   if (!enabled) {
     detail = 'Write mode is disabled on the server.'
-  } else if (!configured) {
-    detail = 'Server-side write signing is not configured.'
-  } else if (!unlocked) {
-    detail = 'Enter the local signing secret to unlock write actions in this browser session.'
   } else {
-    detail = 'Signed write actions are unlocked for this browser session.'
+    detail = 'Local write actions are enabled.'
   }
   return { enabled, configured, unlocked, detail }
 }

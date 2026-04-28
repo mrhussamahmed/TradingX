@@ -19,7 +19,12 @@ from tradingx.experiments import (
 )
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.promotion import LEGACY_NON_AUTHORITY_STATUS
+from tradingx.promotion import (
+    LEGACY_NON_AUTHORITY_STATUS,
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+    state_allows,
+)
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
@@ -162,10 +167,12 @@ class LocalWebReadModel:
         validation_report = self._validation_store.build_operator_evidence_report()
         paper_summary = self._ensure_mapping(paper_report["summary"])
         validation_summary = self._ensure_mapping(validation_report["summary"])
+        service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
         latest_cycle = self._pick_latest_payload(
-            self._paper_store.list_artifact_payloads("service_cycles"),
+            service_cycles,
             timestamp_field="completed_at_utc",
         )
+        latest_account_cycle = self._pick_latest_account_cycle(service_cycles)
         document_records = self.list_documents()
         latest_state_preview = next(
             (record.preview for record in document_records if record.kind == "state"),
@@ -178,7 +185,9 @@ class LocalWebReadModel:
                 "market_value": "",
             }
             for symbol in self._payload_strings(
-                paper_summary.get("latest_open_positions", ())
+                latest_account_cycle.get("open_position_symbols", ())
+                if latest_account_cycle is not None
+                else paper_summary.get("latest_open_positions", ())
             )
         )
         alerts = tuple(incident.summary for incident in self.list_incidents()[:5])
@@ -196,25 +205,15 @@ class LocalWebReadModel:
         }
         return DashboardSnapshot(
             generated_at_utc=datetime.now(UTC),
-            service_status=self._service_manager.get_state(),
-            account_summary={
-                "cash": (
-                    str(latest_cycle.get("cash", ""))
-                    if latest_cycle is not None
-                    else ""
-                ),
-                "equity": (
-                    str(latest_cycle.get("equity", ""))
-                    if latest_cycle is not None
-                    else ""
-                ),
-                "buying_power": (
-                    str(latest_cycle.get("buying_power", ""))
-                    if latest_cycle is not None
-                    else ""
-                ),
-                "daily_pnl": str(paper_summary.get("daily_pnl", "")),
-            },
+            service_status=self._build_effective_service_state(
+                service_cycles=service_cycles,
+                latest_cycle=latest_cycle,
+            ),
+            account_summary=self._build_dashboard_account_summary(
+                latest_account_cycle=latest_account_cycle,
+                service_cycles=service_cycles,
+                paper_summary=paper_summary,
+            ),
             positions=positions,
             alerts=alerts,
             gate_statuses=gate_statuses,
@@ -235,6 +234,62 @@ class LocalWebReadModel:
                 key: LEGACY_NON_AUTHORITY_STATUS for key in recommendations
             },
         )
+
+    def _build_command_center_gate_statuses(
+        self,
+        *,
+        runtime_heartbeat: RuntimeHeartbeatSnapshot,
+        latest_cycle: Mapping[str, object] | None,
+    ) -> dict[str, str]:
+        runtime_state = self.get_runtime_host_state()
+        runtime_tone = runtime_heartbeat.heartbeat_tone.lower()
+        if runtime_state.last_error or runtime_tone == "risk":
+            runtime_status = "fail"
+        elif runtime_tone in {"good", "info"}:
+            runtime_status = "pass"
+        else:
+            runtime_status = "watch"
+
+        if latest_cycle is None:
+            cycle_status = "watch"
+            reconciliation_status = "watch"
+        else:
+            blocked_count = int(str(latest_cycle.get("blocked_trade_count", 0) or 0))
+            reconciliation_failures = int(
+                str(latest_cycle.get("reconciliation_failure_count", 0) or 0)
+            )
+            terminal_status = str(latest_cycle.get("cycle_status", "")).lower()
+            if blocked_count > 0 or reconciliation_failures > 0:
+                cycle_status = "fail"
+            elif re.search(r"fail|error|blocked|recovery", terminal_status):
+                cycle_status = "fail"
+            else:
+                cycle_status = "pass"
+            reconciliation_status = "fail" if reconciliation_failures > 0 else "pass"
+
+        strategy_id = runtime_state.active_strategy_id
+        if strategy_id:
+            decision = build_artifact_promotion_decision_provider(
+                self._repo_root / "config" / "strategy" / "promotion"
+            )(strategy_id)
+            authority_status = (
+                "pass"
+                if state_allows(
+                    decision.max_state,
+                    PromotionState.PAPER_TRADING,
+                )
+                and not decision.blocker_codes
+                else "fail"
+            )
+        else:
+            authority_status = "watch"
+
+        return {
+            "paper_runtime": runtime_status,
+            "paper_cycle": cycle_status,
+            "paper_reconciliation": reconciliation_status,
+            "paper_authority": authority_status,
+        }
 
     def build_command_center_snapshot(self) -> CommandCenterSnapshot:
         dashboard = self.build_dashboard_snapshot()
@@ -285,7 +340,10 @@ class LocalWebReadModel:
             ),
             exposure_breakdown=exposure_breakdown,
             watchlist=watchlist,
-            gate_statuses=dashboard.gate_statuses,
+            gate_statuses=self._build_command_center_gate_statuses(
+                runtime_heartbeat=runtime_heartbeat,
+                latest_cycle=latest_cycle,
+            ),
             recommendations=dashboard.recommendations,
             headline_incidents=tuple(
                 {
@@ -308,6 +366,90 @@ class LocalWebReadModel:
             if raw_value:
                 return self._parse_datetime(raw_value)
         return None
+
+    def _pick_latest_account_cycle(
+        self,
+        service_cycles: Sequence[Mapping[str, object]],
+    ) -> Mapping[str, object] | None:
+        account_cycles = [
+            self._ensure_mapping(payload)
+            for payload in service_cycles
+            if self._service_cycle_has_account_snapshot(payload)
+        ]
+        return self._pick_latest_payload(
+            account_cycles,
+            timestamp_field="completed_at_utc",
+        )
+
+    def _service_cycle_has_account_snapshot(
+        self, payload: Mapping[str, object]
+    ) -> bool:
+        if self._payload_strings(payload.get("open_position_symbols", ())):
+            return True
+        for field in ("cash", "equity", "buying_power"):
+            value = self._decimal_from_payload(payload.get(field))
+            if value is not None and value != Decimal("0"):
+                return True
+        return False
+
+    def _build_dashboard_account_summary(
+        self,
+        *,
+        latest_account_cycle: Mapping[str, object] | None,
+        service_cycles: Sequence[Mapping[str, object]],
+        paper_summary: Mapping[str, object],
+    ) -> dict[str, str]:
+        if latest_account_cycle is None:
+            return {
+                "cash": str(paper_summary.get("latest_cash", "")),
+                "equity": str(paper_summary.get("latest_equity", "")),
+                "buying_power": "",
+                "daily_pnl": str(paper_summary.get("daily_pnl", "0")),
+            }
+        return {
+            "cash": str(latest_account_cycle.get("cash", "")),
+            "equity": str(latest_account_cycle.get("equity", "")),
+            "buying_power": str(latest_account_cycle.get("buying_power", "")),
+            "daily_pnl": self._daily_pnl_from_account_cycles(
+                service_cycles=service_cycles,
+                latest_account_cycle=latest_account_cycle,
+            ),
+        }
+
+    def _daily_pnl_from_account_cycles(
+        self,
+        *,
+        service_cycles: Sequence[Mapping[str, object]],
+        latest_account_cycle: Mapping[str, object],
+    ) -> str:
+        latest_completed = str(latest_account_cycle.get("completed_at_utc", ""))
+        latest_day = latest_completed.split("T")[0]
+        if not latest_day:
+            return "0"
+        same_day_account_cycles = [
+            payload
+            for payload in service_cycles
+            if str(payload.get("completed_at_utc", "")).startswith(latest_day)
+            and self._service_cycle_has_account_snapshot(payload)
+        ]
+        if not same_day_account_cycles:
+            return "0"
+        first_equity = self._decimal_from_payload(
+            same_day_account_cycles[0].get("equity")
+        )
+        last_equity = self._decimal_from_payload(
+            same_day_account_cycles[-1].get("equity")
+        )
+        if first_equity is None or last_equity is None:
+            return "0"
+        daily_pnl = last_equity - first_equity
+        return "0" if daily_pnl == 0 else str(daily_pnl)
+
+    def _decimal_from_payload(self, value: object) -> Decimal | None:
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
 
     def _latest_payload_timestamp(
         self,
@@ -822,8 +964,61 @@ class LocalWebReadModel:
     def get_service_state(self) -> WebServiceState:
         return self._service_manager.get_state()
 
+    def _build_effective_service_state(
+        self,
+        *,
+        service_cycles: Sequence[Mapping[str, object]],
+        latest_cycle: Mapping[str, object] | None,
+    ) -> WebServiceState:
+        manager_state = self._service_manager.get_state()
+        if manager_state.status != "idle" or not service_cycles:
+            return manager_state
+        active_symbols = (
+            self._payload_strings(latest_cycle.get("symbols", ()))
+            if latest_cycle is not None
+            else ()
+        )
+        return WebServiceState(
+            status="idle",
+            active_symbols=active_symbols,
+            interval_seconds=manager_state.interval_seconds,
+            cycles_completed=len(service_cycles),
+            started_at_utc=manager_state.started_at_utc,
+            last_completed_at_utc=self._payload_timestamp(
+                latest_cycle,
+                "completed_at_utc",
+                "started_at_utc",
+            ),
+            last_error=manager_state.last_error,
+        )
+
     def get_runtime_host_state(self) -> BotRuntimeState:
-        return self._runtime_host_manager.get_state()
+        manager_state = self._runtime_host_manager.get_state()
+        if manager_state.status != "idle":
+            return manager_state
+        payload_path = self._operator_platform_root / "runtime_host" / "state.json"
+        if not payload_path.exists():
+            return manager_state
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return manager_state
+        return BotRuntimeState(
+            status=str(payload.get("status", manager_state.status)),
+            status_reason=str(
+                payload.get("status_reason", manager_state.status_reason)
+            ),
+            active_symbols=self._payload_strings(payload.get("active_symbols", ())),
+            started_at_utc=self._payload_timestamp(payload, "started_at_utc"),
+            updated_at_utc=(
+                self._payload_timestamp(payload, "updated_at_utc")
+                or manager_state.updated_at_utc
+            ),
+            last_error=str(payload.get("last_error", "")),
+            active_strategy_id=str(payload.get("active_strategy_id", "")),
+            active_model_snapshot_id=str(payload.get("active_model_snapshot_id", "")),
+            latest_selection_id=str(payload.get("latest_selection_id", "")),
+        )
 
     def get_latest_historical_warmup(self) -> HistoricalWarmupRecord | None:
         payloads = self._operator_platform_store().list_artifact_payloads(

@@ -48,6 +48,7 @@ from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     build_default_runtime_registry,
 )
+from tradingx.strategy import DEFAULT_CANDIDATE_ID
 from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BlueprintActivationRecord,
@@ -59,6 +60,10 @@ from tradingx.types import (
     SleeveDecompositionRecord,
     TradingLoopResult,
 )
+
+
+def _operator_promotion_root() -> Path:
+    return Path("config/strategy/promotion")
 
 
 class TradingLoopControllerProtocol(Protocol):
@@ -304,11 +309,11 @@ class PaperTradingService:
                         initial_cycle_status=cycle_status,
                     )
                 elif not planner_failed:
-                    cycle_status = "recovery_required"
+                    cycle_status = "no_trade"
                     self._log_cycle_event(
                         event_type="planner_no_candidate",
-                        severity="warning",
-                        message="Runtime planner returned no executable plan.",
+                        severity="info",
+                        message="Runtime planner returned no executable trade plan.",
                         cycle_correlation_id=service_cycle_id,
                         fields={
                             "reason": "planner_returned_none",
@@ -765,7 +770,7 @@ def build_default_trading_service(
         runtime_snapshot_store=runtime_store,
         strategy_id_validator=runtime_registry.can_resolve,
         promotion_decision_provider=build_artifact_promotion_decision_provider(
-            config.runtime.artifact_root / "quant" / "promotion"
+            _operator_promotion_root()
         ),
         required_promotion_state=PromotionState.PAPER_TRADING,
         projection_root=Path("config/strategy/promotion"),
@@ -792,6 +797,7 @@ def build_default_trading_service(
         loop_controller=build_default_trading_loop_controller(
             config,
             broker_mode=decision.requested_mode,
+            strategy_id=DEFAULT_CANDIDATE_ID,
         ),
         portfolio=AlpacaPortfolioGateway(trading_client=trading_client),
         artifacts=paper_store,
@@ -834,14 +840,22 @@ def build_runtime_host_trading_service(
             warmup_service=HistoricalWarmupService(
                 market_data_gateway=market_data_gateway,
             ),
-            activation_gateway=LocalActivationGateway(
-                store=operator_store,
-                runtime_snapshot_store=runtime_store,
-                promotion_decision_provider=build_artifact_promotion_decision_provider(
-                    config.runtime.artifact_root / "quant" / "promotion"
-                ),
-                required_promotion_state=PromotionState.PAPER_TRADING,
-                projection_root=Path("config/strategy/promotion"),
+            activation_gateway=(
+                LocalActivationGateway(
+                    store=operator_store,
+                    runtime_snapshot_store=runtime_store,
+                    legacy_non_authority_mode=True,
+                )
+                if decision.requested_mode == "paper"
+                else LocalActivationGateway(
+                    store=operator_store,
+                    runtime_snapshot_store=runtime_store,
+                    promotion_decision_provider=build_artifact_promotion_decision_provider(
+                        _operator_promotion_root()
+                    ),
+                    required_promotion_state=PromotionState.PAPER_TRADING,
+                    projection_root=Path("config/strategy/promotion"),
+                )
             ),
             operator_store=operator_store,
         ),
