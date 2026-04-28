@@ -22,10 +22,6 @@ from tradingx.execution import (
     AlpacaPaperExecutionGateway,
     OrderRouteAuthorityGuard,
 )
-from tradingx.promotion import (
-    PromotionState,
-    build_artifact_promotion_decision_provider,
-)
 from tradingx.journal import SqliteOmsJournal
 from tradingx.live_enablement import (
     build_trading_client_for_mode,

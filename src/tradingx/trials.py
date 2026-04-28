@@ -5,11 +5,19 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
 from tradingx.authority import canonical_payload_hash
+from tradingx.stats import (
+    DEFAULT_PERIODS_PER_YEAR,
+    SharpePerPeriod,
+    SharpeVariancePerPeriod,
+    annualized_sharpe_to_per_period,
+    annualized_sharpe_variance_to_per_period,
+)
 from tradingx.types import TrialRecord, TrialStatistics
 
 _SCHEMA = """
@@ -38,6 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_trials_window
 
 class TrialsLedgerIntegrityError(ValueError):
     """Raised when an append-only trial record is rewritten with new content."""
+
+
+@dataclass(frozen=True)
+class TrialStatisticsPerPeriod:
+    n_trials: int
+    trial_sharpe_mean: SharpePerPeriod
+    trial_sharpe_variance: SharpeVariancePerPeriod
 
 
 class TrialsLedger:
@@ -129,17 +144,47 @@ class TrialsLedger:
         )
 
     def trial_statistics_for_family(self, family: str) -> TrialStatistics:
+        n_trials, trial_sharpe_mean, trial_sharpe_variance = (
+            self._annualized_trial_statistics_for_family(family)
+        )
+        return TrialStatistics(
+            n_trials=n_trials,
+            trial_sharpe_mean=trial_sharpe_mean,
+            trial_sharpe_variance=trial_sharpe_variance,
+        )
+
+    def trial_statistics_for_family_per_period(
+        self,
+        family: str,
+        *,
+        periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+    ) -> TrialStatisticsPerPeriod:
+        n_trials, trial_sharpe_mean, trial_sharpe_variance = (
+            self._annualized_trial_statistics_for_family(family)
+        )
+        return TrialStatisticsPerPeriod(
+            n_trials=n_trials,
+            trial_sharpe_mean=annualized_sharpe_to_per_period(
+                annualized_sharpe=trial_sharpe_mean,
+                periods_per_year=periods_per_year,
+            ),
+            trial_sharpe_variance=annualized_sharpe_variance_to_per_period(
+                annualized_sharpe_variance=trial_sharpe_variance,
+                periods_per_year=periods_per_year,
+            ),
+        )
+
+    def _annualized_trial_statistics_for_family(
+        self,
+        family: str,
+    ) -> tuple[int, float, float]:
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT observed_sharpe_net_of_costs FROM trials WHERE family = ?",
                 (family,),
             ).fetchall()
         if not rows:
-            return TrialStatistics(
-                n_trials=0,
-                trial_sharpe_mean=0.0,
-                trial_sharpe_variance=0.0,
-            )
+            return (0, 0.0, 0.0)
         sharpes = [float(Decimal(str(row[0]))) for row in rows]
         n_trials = len(sharpes)
         trial_sharpe_mean = sum(sharpes) / n_trials
@@ -149,11 +194,7 @@ class TrialsLedger:
             trial_sharpe_variance = sum(
                 (sharpe - trial_sharpe_mean) ** 2 for sharpe in sharpes
             ) / (n_trials - 1)
-        return TrialStatistics(
-            n_trials=n_trials,
-            trial_sharpe_mean=trial_sharpe_mean,
-            trial_sharpe_variance=trial_sharpe_variance,
-        )
+        return (n_trials, trial_sharpe_mean, trial_sharpe_variance)
 
 
 def _row_to_record(row: tuple[object, ...]) -> TrialRecord:
@@ -194,4 +235,4 @@ def _record_payload(trial: TrialRecord) -> dict[str, object]:
     }
 
 
-__all__ = ("TrialsLedger", "TrialsLedgerIntegrityError")
+__all__ = ("TrialStatisticsPerPeriod", "TrialsLedger", "TrialsLedgerIntegrityError")

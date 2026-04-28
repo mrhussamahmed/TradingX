@@ -15,6 +15,7 @@ import logging
 import math
 import random
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -38,6 +39,61 @@ DEFAULT_REQUIRED_BENCHMARKS = (
     "static_sleeve_baseline",
     "no_trade",
 )
+
+
+@dataclass(frozen=True)
+class SharpePerPeriod:
+    value: float
+
+
+@dataclass(frozen=True)
+class SharpeVariancePerPeriod:
+    value: float
+
+
+ZERO_SHARPE_PER_PERIOD = SharpePerPeriod(0.0)
+
+
+def annualized_sharpe_to_per_period(
+    *,
+    annualized_sharpe: float,
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+) -> SharpePerPeriod:
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive.")
+    return SharpePerPeriod(float(annualized_sharpe) / math.sqrt(periods_per_year))
+
+
+def annualized_sharpe_variance_to_per_period(
+    *,
+    annualized_sharpe_variance: float,
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+) -> SharpeVariancePerPeriod:
+    if annualized_sharpe_variance < 0:
+        raise ValueError("annualized_sharpe_variance must be non-negative.")
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive.")
+    return SharpeVariancePerPeriod(float(annualized_sharpe_variance) / periods_per_year)
+
+
+def _require_sharpe_per_period(
+    value: SharpePerPeriod,
+    *,
+    parameter_name: str,
+) -> SharpePerPeriod:
+    if not isinstance(value, SharpePerPeriod):
+        raise TypeError(f"{parameter_name} must be a SharpePerPeriod.")
+    return value
+
+
+def _require_sharpe_variance_per_period(
+    value: SharpeVariancePerPeriod,
+    *,
+    parameter_name: str,
+) -> SharpeVariancePerPeriod:
+    if not isinstance(value, SharpeVariancePerPeriod):
+        raise TypeError(f"{parameter_name} must be a SharpeVariancePerPeriod.")
+    return value
 
 
 def naive_annualized_sharpe_ratio(
@@ -176,52 +232,60 @@ def probabilistic_sharpe_ratio(
 def expected_max_sharpe(
     *,
     n_trials: int,
-    trial_sharpe_variance: float,
-    mean_trial_sharpe: float = 0.0,
-    periods_per_year: int = PAPER_PERIODS_PER_YEAR,
-) -> float:
+    trial_sharpe_variance_per_period: SharpeVariancePerPeriod,
+    mean_trial_sharpe_per_period: SharpePerPeriod = ZERO_SHARPE_PER_PERIOD,
+) -> SharpePerPeriod:
     if n_trials <= 0:
         raise ValueError("n_trials must be positive.")
-    if trial_sharpe_variance < 0:
-        raise ValueError("trial_sharpe_variance must be non-negative.")
-    if periods_per_year <= 0:
-        raise ValueError("periods_per_year must be positive.")
+    trial_sharpe_variance_per_period = _require_sharpe_variance_per_period(
+        trial_sharpe_variance_per_period,
+        parameter_name="trial_sharpe_variance_per_period",
+    )
+    mean_trial_sharpe_per_period = _require_sharpe_per_period(
+        mean_trial_sharpe_per_period,
+        parameter_name="mean_trial_sharpe_per_period",
+    )
+    if trial_sharpe_variance_per_period.value < 0:
+        raise ValueError("trial_sharpe_variance_per_period must be non-negative.")
     if n_trials == 1:
-        return mean_trial_sharpe
+        return mean_trial_sharpe_per_period
     max_z_score = ((1.0 - EULER_MASCHERONI) * norm.ppf(1.0 - (1.0 / n_trials))) + (
         EULER_MASCHERONI * norm.ppf(1.0 - (1.0 / (n_trials * math.e)))
     )
-    # The Bailey and Lopez de Prado paper reports the cross-trial variance in
-    # annualized Sharpe units, while PSR/DSR operate on the per-period Sharpe.
-    trial_sharpe_sigma = math.sqrt(trial_sharpe_variance / periods_per_year)
-    return float(mean_trial_sharpe + trial_sharpe_sigma * max_z_score)
+    trial_sharpe_sigma = math.sqrt(trial_sharpe_variance_per_period.value)
+    return SharpePerPeriod(
+        float(mean_trial_sharpe_per_period.value + trial_sharpe_sigma * max_z_score)
+    )
 
 
 def deflated_sharpe_ratio(
     *,
-    observed_sharpe: float,
+    observed_sharpe_per_period: SharpePerPeriod,
     sample_size: float,
     skewness: float,
     excess_kurtosis: float,
     n_trials: int,
-    trial_sharpe_variance: float,
-    mean_trial_sharpe: float = 0.0,
-    periods_per_year: int = PAPER_PERIODS_PER_YEAR,
+    trial_sharpe_variance_per_period: SharpeVariancePerPeriod,
+    mean_trial_sharpe_per_period: SharpePerPeriod = ZERO_SHARPE_PER_PERIOD,
 ) -> float:
     """Bailey & López de Prado (2014) DSR.
 
-    ``excess_kurtosis`` is kurtosis - 3 (Defect 4 rename).
+    All Sharpe inputs are per-period values. ``excess_kurtosis`` is
+    kurtosis - 3 (Defect 4 rename).
     """
 
-    benchmark_sharpe = expected_max_sharpe(
+    observed_sharpe_per_period = _require_sharpe_per_period(
+        observed_sharpe_per_period,
+        parameter_name="observed_sharpe_per_period",
+    )
+    benchmark_sharpe_per_period = expected_max_sharpe(
         n_trials=n_trials,
-        trial_sharpe_variance=trial_sharpe_variance,
-        mean_trial_sharpe=mean_trial_sharpe,
-        periods_per_year=periods_per_year,
+        trial_sharpe_variance_per_period=trial_sharpe_variance_per_period,
+        mean_trial_sharpe_per_period=mean_trial_sharpe_per_period,
     )
     return probabilistic_sharpe_ratio(
-        observed_sharpe=observed_sharpe,
-        benchmark_sharpe=benchmark_sharpe,
+        observed_sharpe=observed_sharpe_per_period.value,
+        benchmark_sharpe=benchmark_sharpe_per_period.value,
         sample_size=sample_size,
         skewness=skewness,
         excess_kurtosis=excess_kurtosis,
@@ -825,6 +889,10 @@ __all__ = (
     "DEFAULT_AUTOCORRELATION_LAGS",
     "DEFAULT_PERIODS_PER_YEAR",
     "PAPER_PERIODS_PER_YEAR",
+    "SharpePerPeriod",
+    "SharpeVariancePerPeriod",
+    "annualized_sharpe_to_per_period",
+    "annualized_sharpe_variance_to_per_period",
     "calmar_ratio",
     "build_paired_benchmark_uncertainty_report",
     "build_power_analysis_report",

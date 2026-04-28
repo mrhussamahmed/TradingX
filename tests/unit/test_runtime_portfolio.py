@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,7 +11,9 @@ from tradingx.portfolio.blueprint import StrategyAllocationLimit
 from tradingx.runtime_portfolio import (
     RuntimePortfolioPlanner,
     UnsupportedRuntimePortfolioPlanError,
+    _build_regime_snapshots,
 )
+from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationRecord,
@@ -79,8 +81,8 @@ class FakeActivationGateway:
 class FakeMarketData:
     def get_daily_bar_history(self, symbol: str, *, start_utc, end_utc):
         del start_utc, end_utc
-        index = pd.date_range("2026-04-14", periods=5, freq="B", tz="UTC")
-        prices = [100.0, 101.0, 102.0, 103.0, 104.0]
+        index = pd.date_range(end="2026-04-21", periods=220, freq="B", tz="UTC")
+        prices = [100.0 + float(index_value) for index_value in range(len(index))]
         base = 100.0 if symbol != "QQQ" else 200.0
         return pd.DataFrame(
             {
@@ -206,6 +208,90 @@ def test_runtime_portfolio_planner_returns_none_for_baseline_strategy() -> None:
     # Baseline execution is handled by ActivatedRuntimePlanner and the
     # BaselineLongOnlyPlanner.
     assert plan is None
+
+
+def test_runtime_regime_snapshots_require_200_prior_observations() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    index = pd.date_range("2025-01-02", periods=201, freq="B", tz="UTC")
+    closes = [float(100 + index_value) for index_value in range(201)]
+    bars = pd.DataFrame(
+        {
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1_000_000.0] * len(closes),
+        },
+        index=index,
+    )
+
+    regimes = _build_regime_snapshots(
+        benchmark_candidate=candidate,
+        bars_by_symbol={"SPY": bars},
+    )
+
+    assert set(regimes) == {bars.index[200].date()}
+    first_regime = regimes[bars.index[200].date()]
+    assert first_regime.spy_close == Decimal(str(closes[199]))
+    assert first_regime.spy_sma_200 == Decimal(str(sum(closes[:200]) / 200))
+
+
+def test_runtime_regime_snapshots_use_pit_macro_inputs(tmp_path: Path) -> None:
+    from tradingx.types import StrategyCandidate
+
+    candidate = StrategyCandidate(
+        candidate_id="macro-runtime-v1",
+        family="test",
+        benchmark_symbol="SPY",
+        universe=("SPY",),
+        parameter_set={},
+        status="under_evaluation",
+    )
+    index = pd.date_range("2025-07-14", periods=203, freq="B", tz="UTC")
+    closes = [100.0 + index_value for index_value in range(203)]
+    bars = {
+        "SPY": pd.DataFrame(
+            {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "bid": closes,
+                "ask": closes,
+                "volume": [1_000_000] * len(closes),
+            },
+            index=index,
+        )
+    }
+    vix_path = tmp_path / "vix_daily.csv"
+    treasury_path = tmp_path / "treasury_yields.csv"
+    decision_day = date(2026, 4, 20)
+    execution_day = date(2026, 4, 21)
+    pd.DataFrame(
+        {
+            "date": [decision_day.isoformat()],
+            "vix_close": [35.5],
+        }
+    ).to_csv(vix_path, index=False)
+    pd.DataFrame(
+        {
+            "date": [decision_day.isoformat()],
+            "dgs2": [4.6],
+            "dgs10": [4.1],
+            "spread_2s10s_bps": [-50.0],
+        }
+    ).to_csv(treasury_path, index=False)
+
+    regimes = _build_regime_snapshots(
+        benchmark_candidate=candidate,
+        bars_by_symbol=bars,
+        vix_cache_path=vix_path,
+        treasury_cache_path=treasury_path,
+    )
+
+    assert regimes[execution_day].vix_close == Decimal("35.5")
+    assert regimes[execution_day].yield_curve_spread_bps == Decimal("-50.0")
+    assert regimes[execution_day].regime == "stressed"
 
 
 def test_runtime_portfolio_planner_builds_reduce_then_buy_trade_intents(

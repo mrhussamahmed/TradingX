@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol
 
 from tradingx.activation import LocalActivationGateway
@@ -102,6 +103,8 @@ def build_default_runtime_registry(
     *,
     market_data_gateway: MarketDataGatewayProtocol,
     baseline_selector: OpportunitySelectorProtocol | None = None,
+    vix_cache_path: Path | None = None,
+    treasury_cache_path: Path | None = None,
 ) -> RuntimeStrategyRegistry:
     registry = RuntimeStrategyRegistry()
     registry.register(
@@ -121,6 +124,8 @@ def build_default_runtime_registry(
             RuntimePortfolioPlanner(
                 market_data=market_data_gateway,
                 strategy_id=strategy_id,
+                vix_cache_path=vix_cache_path,
+                treasury_cache_path=treasury_cache_path,
             ),
         )
     return registry

@@ -37,11 +37,12 @@ def build_sleeve_target_weight_history(
             )
             continue
 
+        # Event-clock contract: target_weights.loc[E] is filled at open[E].
+        # Sleeve decisions for E may only inspect bars strictly before E.
         context = SleeveContext(
             observation_date=timestamp.date(),
             bars_by_symbol={
-                symbol: bars.iloc[: position + 1]
-                for symbol, bars in bars_by_symbol.items()
+                symbol: bars.iloc[:position] for symbol, bars in bars_by_symbol.items()
             },
             regime=regime,
             current_weights_by_symbol=dict(running_weights),

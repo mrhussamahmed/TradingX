@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from tradingx import runtime_strategy_registry as registry_module
 from tradingx.baseline_runtime_planner import BaselineLongOnlyPlanner
 from tradingx.runtime_portfolio import RuntimePortfolioPlan
 from tradingx.runtime_strategy_registry import (
@@ -169,6 +170,44 @@ def _portfolio_state(*, positions: tuple[PositionSnapshot, ...] = ()) -> Portfol
         positions=positions,
         open_orders=(),
     )
+
+
+def test_default_runtime_registry_passes_macro_cache_paths_to_single_strategy_planners(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeRuntimePortfolioPlanner:
+        def __init__(self, **kwargs: object) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(
+        registry_module,
+        "RuntimePortfolioPlanner",
+        FakeRuntimePortfolioPlanner,
+    )
+
+    registry_module.build_default_runtime_registry(
+        market_data_gateway=FakeMarketData(),
+        vix_cache_path=tmp_path / "data" / "reference" / "vix_daily.csv",
+        treasury_cache_path=tmp_path
+        / "data"
+        / "reference"
+        / "treasury_yields_daily.csv",
+    )
+
+    strategy_planners = [
+        kwargs for kwargs in captured if kwargs.get("strategy_id") is not None
+    ]
+    assert len(strategy_planners) == 3
+    for kwargs in strategy_planners:
+        assert kwargs["vix_cache_path"] == (
+            tmp_path / "data" / "reference" / "vix_daily.csv"
+        )
+        assert kwargs["treasury_cache_path"] == (
+            tmp_path / "data" / "reference" / "treasury_yields_daily.csv"
+        )
 
 
 def test_baseline_long_only_planner_builds_open_position_and_entry_intents() -> None:

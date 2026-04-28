@@ -6,7 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
+from pathlib import Path
 from typing import Any, Protocol, cast
+
+import pandas as pd  # type: ignore[import-untyped]
 
 from tradingx.drift.sleeve_ledger import RESIDUAL_RESERVE_OWNER_ID
 from tradingx.features.regime import classify_regime
@@ -28,6 +31,12 @@ from tradingx.portfolio.sleeve_runtime import (
 from tradingx.portfolio_construction import (
     CandidateRuntimeWeights,
     build_candidate_runtime_weights,
+)
+from tradingx.risk_free import (
+    DEFAULT_TREASURY_YIELD_CACHE_PATH,
+    DEFAULT_VIX_CACHE_PATH,
+    vix_close_for_date,
+    yield_curve_spread_for_date_pit,
 )
 from tradingx.sleeves.base import SleeveProtocol, build_sleeve_from_candidate
 from tradingx.strategy import build_mandatory_candidate_registry
@@ -124,6 +133,8 @@ class RuntimePortfolioPlanner:
         drift_alarm_gateway: DriftAlarmGatewayProtocol | None = None,
         trials_ledger: TrialsLedgerReadProtocol | None = None,
         live_daily_returns_source: LiveDailyReturnsSourceProtocol | None = None,
+        vix_cache_path: Path | None = None,
+        treasury_cache_path: Path | None = None,
         history_lookback_days: int = HISTORY_LOOKBACK_DAYS,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
@@ -136,6 +147,10 @@ class RuntimePortfolioPlanner:
         self._drift_alarm_gateway = drift_alarm_gateway
         self._trials_ledger = trials_ledger
         self._live_daily_returns_source = live_daily_returns_source
+        self._vix_cache_path = vix_cache_path or DEFAULT_VIX_CACHE_PATH
+        self._treasury_cache_path = (
+            treasury_cache_path or DEFAULT_TREASURY_YIELD_CACHE_PATH
+        )
         self._history_lookback_days = history_lookback_days
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
 
@@ -372,6 +387,8 @@ class RuntimePortfolioPlanner:
         regimes = _build_regime_snapshots(
             benchmark_candidate=benchmark_candidate,
             bars_by_symbol=bars_by_symbol,
+            vix_cache_path=self._vix_cache_path,
+            treasury_cache_path=self._treasury_cache_path,
         )
         current_weights_by_sleeve_id = self._current_weights_by_sleeve_id(
             blueprint=blueprint
@@ -943,6 +960,8 @@ def _build_regime_snapshots(
     *,
     benchmark_candidate: StrategyCandidate,
     bars_by_symbol: dict[str, Any],
+    vix_cache_path: Path | None = DEFAULT_VIX_CACHE_PATH,
+    treasury_cache_path: Path | None = DEFAULT_TREASURY_YIELD_CACHE_PATH,
 ) -> dict[date, RegimeSnapshot]:
     benchmark_bars = bars_by_symbol.get(benchmark_candidate.benchmark_symbol)
     if benchmark_bars is None:
@@ -950,17 +969,49 @@ def _build_regime_snapshots(
             f"Missing benchmark bars for {benchmark_candidate.benchmark_symbol!r}."
         )
     closes = benchmark_bars["close"].astype(float)
-    sma_200 = closes.rolling(200, min_periods=1).mean()
+    prior_closes = closes.shift(1)
+    sma_200 = prior_closes.rolling(200, min_periods=200).mean()
     regimes: dict[date, RegimeSnapshot] = {}
     for timestamp in benchmark_bars.index:
+        prior_close = prior_closes.loc[timestamp]
+        prior_sma = sma_200.loc[timestamp]
+        if pd.isna(prior_close) or pd.isna(prior_sma):
+            continue
+        snapshot_date = timestamp.date()
         regimes[timestamp.date()] = classify_regime(
-            observation_date=timestamp.date(),
-            spy_close=Decimal(str(float(closes.loc[timestamp]))),
-            spy_sma_200=Decimal(str(float(sma_200.loc[timestamp]))),
-            vix_close=None,
-            yield_curve_spread_bps=None,
+            observation_date=snapshot_date,
+            spy_close=Decimal(str(float(prior_close))),
+            spy_sma_200=Decimal(str(float(prior_sma))),
+            vix_close=_vix_close_for_snapshot(
+                vix_cache_path,
+                as_of_date=snapshot_date,
+            ),
+            yield_curve_spread_bps=_yield_curve_spread_for_snapshot(
+                treasury_cache_path,
+                as_of_date=snapshot_date,
+            ),
         )
     return regimes
+
+
+def _vix_close_for_snapshot(
+    cache_path: Path | None,
+    *,
+    as_of_date: date,
+) -> Decimal | None:
+    if cache_path is None or not cache_path.exists():
+        return None
+    return vix_close_for_date(cache_path, as_of_date=as_of_date)
+
+
+def _yield_curve_spread_for_snapshot(
+    cache_path: Path | None,
+    *,
+    as_of_date: date,
+) -> Decimal | None:
+    if cache_path is None or not cache_path.exists():
+        return None
+    return yield_curve_spread_for_date_pit(cache_path, as_of_date=as_of_date)
 
 
 def _build_sleeve_context(
@@ -977,10 +1028,18 @@ def _build_sleeve_context(
     if benchmark_bars is None or benchmark_bars.empty:
         raise ValueError(f"Missing bars for sleeve {sleeve_id!r}.")
     timestamp = benchmark_bars.index[-1]
-    regime = regimes[timestamp.date()]
+    regime = regimes.get(timestamp.date())
+    if regime is None:
+        raise UnsupportedRuntimePortfolioPlanError(
+            f"Insufficient prior SMA(200) history for sleeve {sleeve_id!r}."
+        )
+    execution_position = len(benchmark_bars) - 1
     return SleeveContext(
         observation_date=timestamp.date(),
-        bars_by_symbol={symbol: bars for symbol, bars in bars_by_symbol.items()},
+        bars_by_symbol={
+            symbol: bars.iloc[:execution_position]
+            for symbol, bars in bars_by_symbol.items()
+        },
         regime=regime,
         current_weights_by_symbol=dict(current_weights_by_symbol),
         sleeve_budget_equity=Decimal("1.0"),

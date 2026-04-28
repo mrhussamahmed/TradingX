@@ -94,8 +94,7 @@ def _build_per_sleeve_contexts(
         sleeve.sleeve_id: SleeveContext(
             observation_date=timestamp.date(),
             bars_by_symbol={
-                symbol: bars.iloc[: position + 1]
-                for symbol, bars in bars_by_symbol.items()
+                symbol: bars.iloc[:position] for symbol, bars in bars_by_symbol.items()
             },
             regime=regime,
             current_weights_by_symbol=dict(

@@ -1,0 +1,64 @@
+{
+  "allowed_decisions": [
+    "go",
+    "stop_or_refocus",
+    "blocked_remediation_required",
+    "blocked_measurement_untrusted",
+    "blocked_insufficient_history",
+    "blocked_as_is_unreproducible",
+    "blocked_stress_coverage_missing"
+  ],
+  "as_is_replay": {
+    "artifact": "docs/reports/tradingx_tier0_wave0_as_is_preservation.md",
+    "status": "addressable"
+  },
+  "blocker_codes": [
+    "tier0a_memo_inputs_missing",
+    "fixed_stress_coverage_failed_or_missing",
+    "manifest_evidence_failed_or_missing",
+    "geometric_uncertainty_failed_or_missing",
+    "pbo_cpcv_gate_failed_or_missing",
+    "marginal_portfolio_contribution_failed_or_missing",
+    "cost_stress_failed_or_missing",
+    "hard_hurdles_failed_or_missing"
+  ],
+  "cost_stress": {
+    "reason": "capital scenarios and 1x/2x/4x lower-bound evidence require final Tier 0A data run",
+    "status": "missing"
+  },
+  "decision": "blocked_stress_coverage_missing",
+  "generated_at_utc": "2026-04-28T12:33:24.941896+00:00",
+  "geometric_uncertainty": {
+    "reason": "paired return evidence not generated because final Tier 0A run inputs are incomplete",
+    "status": "missing"
+  },
+  "hard_hurdles": {
+    "reason": "benchmark return evidence not generated because final Tier 0A run inputs are incomplete",
+    "status": "missing"
+  },
+  "kind": "tier0a_decision_payload",
+  "manifest_evidence": {
+    "reason": "return-accounting and executable-price manifests require final Tier 0A data run",
+    "status": "missing"
+  },
+  "marginal_portfolio_contribution": {
+    "reason": "not evaluated without final sleeve-backed candidate evidence",
+    "status": "missing"
+  },
+  "memo_inputs": {
+    "hurdle_policy": "",
+    "operator_model": "",
+    "plausible_next_higher_tiers": [],
+    "selected_capital_tier": "",
+    "shorting_policy": ""
+  },
+  "pbo_cpcv": {
+    "reason": "not evaluated without final Gate 1 evidence run",
+    "status": "missing"
+  },
+  "schema_version": "1.0",
+  "stress_coverage": {
+    "reason": "fixed stress windows not replayed in this implementation pass",
+    "status": "missing"
+  }
+}

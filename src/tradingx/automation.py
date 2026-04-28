@@ -50,7 +50,7 @@ from tradingx.promotion import (
     build_artifact_promotion_decision_provider,
 )
 from tradingx.replay_slippage import generate_replay_slippage_evidence
-from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH
+from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH, DEFAULT_VIX_CACHE_PATH
 from tradingx.runtime_host import PortfolioGatewayProtocol
 from tradingx.runtime_strategy_registry import build_default_runtime_registry
 from tradingx.service import PaperTradingService, build_default_trading_service
@@ -895,7 +895,13 @@ def build_default_market_day_automation_runner(
         broker_mode=decision.requested_mode,
     )
     runtime_registry = build_default_runtime_registry(
-        market_data_gateway=market_data_gateway
+        market_data_gateway=market_data_gateway,
+        vix_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_VIX_CACHE_PATH.name,
+        treasury_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_TREASURY_YIELD_CACHE_PATH.name,
     )
     activation_gateway = LocalActivationGateway(
         store=operator_store,
@@ -915,6 +921,9 @@ def build_default_market_day_automation_runner(
     )
     feature_reader = MarketDataFeatureSampleReader(
         market_data_gateway=market_data_gateway,
+        vix_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_VIX_CACHE_PATH.name,
         treasury_cache_path=treasury_cache_path,
         now_provider=now_provider,
     )

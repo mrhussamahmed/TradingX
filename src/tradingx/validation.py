@@ -31,6 +31,12 @@ from tradingx.features.regime import classify_regime
 from tradingx.pbo import cohort_window_id_for
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio_construction import build_candidate_target_weight_history
+from tradingx.risk_free import (
+    DEFAULT_TREASURY_YIELD_CACHE_PATH,
+    DEFAULT_VIX_CACHE_PATH,
+    vix_close_for_date,
+    yield_curve_spread_for_date_pit,
+)
 from tradingx.stats import (
     conditional_drawdown_at_risk,
     lo_adjusted_sharpe_ratio,
@@ -792,23 +798,57 @@ def _build_default_regime_snapshots(
     candidate: StrategyCandidate,
     *,
     bars_by_symbol: dict[str, pd.DataFrame],
+    vix_cache_path: Path | None = DEFAULT_VIX_CACHE_PATH,
+    treasury_cache_path: Path | None = DEFAULT_TREASURY_YIELD_CACHE_PATH,
 ) -> dict[date, RegimeSnapshot]:
     benchmark_bars = bars_by_symbol.get(candidate.benchmark_symbol)
     if benchmark_bars is None:
         raise ValueError(f"Missing benchmark bars for {candidate.benchmark_symbol!r}.")
 
     closes = benchmark_bars["close"].astype(float)
-    sma_200 = closes.rolling(200, min_periods=1).mean()
+    prior_closes = closes.shift(1)
+    sma_200 = prior_closes.rolling(200, min_periods=200).mean()
     regimes: dict[date, RegimeSnapshot] = {}
     for timestamp in benchmark_bars.index:
+        prior_close = prior_closes.loc[timestamp]
+        prior_sma = sma_200.loc[timestamp]
+        if pd.isna(prior_close) or pd.isna(prior_sma):
+            continue
+        snapshot_date = timestamp.date()
         regimes[timestamp.date()] = classify_regime(
-            observation_date=timestamp.date(),
-            spy_close=Decimal(str(float(closes.loc[timestamp]))),
-            spy_sma_200=Decimal(str(float(sma_200.loc[timestamp]))),
-            vix_close=None,
-            yield_curve_spread_bps=None,
+            observation_date=snapshot_date,
+            spy_close=Decimal(str(float(prior_close))),
+            spy_sma_200=Decimal(str(float(prior_sma))),
+            vix_close=_vix_close_for_snapshot(
+                vix_cache_path,
+                as_of_date=snapshot_date,
+            ),
+            yield_curve_spread_bps=_yield_curve_spread_for_snapshot(
+                treasury_cache_path,
+                as_of_date=snapshot_date,
+            ),
         )
     return regimes
+
+
+def _vix_close_for_snapshot(
+    cache_path: Path | None,
+    *,
+    as_of_date: date,
+) -> Decimal | None:
+    if cache_path is None or not cache_path.exists():
+        return None
+    return vix_close_for_date(cache_path, as_of_date=as_of_date)
+
+
+def _yield_curve_spread_for_snapshot(
+    cache_path: Path | None,
+    *,
+    as_of_date: date,
+) -> Decimal | None:
+    if cache_path is None or not cache_path.exists():
+        return None
+    return yield_curve_spread_for_date_pit(cache_path, as_of_date=as_of_date)
 
 
 def _candidate_with_parameter_overrides(

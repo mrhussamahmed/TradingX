@@ -38,9 +38,7 @@ WAVE_SUBCOMMANDS = (
 
 
 @pytest.mark.parametrize("subcommand", WAVE_SUBCOMMANDS)
-def test_wave_subcommand_returns_nonzero_with_no_refs(
-    subcommand: str, capsys
-) -> None:
+def test_wave_subcommand_returns_nonzero_with_no_refs(subcommand: str, capsys) -> None:
     """Calling without --ref must fail closed with missing_sources."""
 
     exit_code = cli.main((subcommand,))
@@ -89,7 +87,7 @@ def test_wave_subcommand_emits_canonical_json_with_clean_ref(
     }
     ref_path = tmp_path / "payload.json"
     ref_path.write_text(json.dumps(payload), encoding="utf-8")
-    exit_code = cli.main((subcommand, "--ref", str(ref_path)))
+    cli.main((subcommand, "--ref", str(ref_path)))
     output = json.loads(capsys.readouterr().out)
     assert output["command"] == subcommand
     assert isinstance(output["blocker_codes"], list)
@@ -99,9 +97,7 @@ def test_wave_subcommand_emits_canonical_json_with_clean_ref(
     # The key invariant is that the kind gate passed (no
     # ``does not match subcommand`` error) and the dispatcher returned
     # canonical JSON with a blocker_codes list.
-    assert "error" not in output or "does not match" not in str(
-        output.get("error", "")
-    )
+    assert "error" not in output or "does not match" not in str(output.get("error", ""))
 
 
 @pytest.mark.parametrize("subcommand", WAVE_SUBCOMMANDS)

@@ -456,7 +456,7 @@ def test_build_default_market_day_automation_runner_uses_generic_service_builder
     monkeypatch.setattr(
         automation_module,
         "build_default_runtime_registry",
-        lambda market_data_gateway: FakeRuntimeRegistry(),
+        lambda **kwargs: FakeRuntimeRegistry(),
     )
     monkeypatch.setattr(
         automation_module,

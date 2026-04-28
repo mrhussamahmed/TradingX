@@ -40,6 +40,51 @@ from tradingx.types import (
 )
 
 
+def test_tier0a_decision_report_writes_required_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    input_path = tmp_path / "tier0-input.json"
+    metrics_path = tmp_path / "metrics.json"
+    report_path = tmp_path / "report.md"
+    input_path.write_text(
+        json.dumps(
+            {
+                "memo_inputs": {},
+                "as_is_replay": {"status": "missing"},
+                "hard_hurdles": {"status": "missing"},
+                "geometric_uncertainty": {"status": "missing"},
+                "stress_coverage": {"status": "missing"},
+                "manifest_evidence": {"status": "missing"},
+                "pbo_cpcv": {"status": "missing"},
+                "marginal_portfolio_contribution": {"status": "missing"},
+                "cost_stress": {"status": "missing"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        (
+            "tier0a-decision-report",
+            "--input-file",
+            str(input_path),
+            "--metrics-output",
+            str(metrics_path),
+            "--report-output",
+            str(report_path),
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["decision"] == "blocked_as_is_unreproducible"
+    assert json.loads(metrics_path.read_text(encoding="utf-8"))["decision"] == (
+        "blocked_as_is_unreproducible"
+    )
+    assert "blocked_as_is_unreproducible" in report_path.read_text(encoding="utf-8")
+
+
 def test_promotion_check_reports_blockers_from_fixture_artifacts(capsys) -> None:
     exit_code = cli.main(
         (

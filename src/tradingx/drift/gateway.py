@@ -22,7 +22,11 @@ from tradingx.drift.reference import ReferenceDistributionSnapshot
 from tradingx.features.volatility import forecast_volatility
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio_construction import PortfolioConstructionConfig
-from tradingx.risk_free import load_treasury_yield_cache
+from tradingx.risk_free import (
+    DEFAULT_VIX_CACHE_PATH,
+    load_treasury_yield_cache,
+    load_vix_cache,
+)
 from tradingx.signals.trend import generate_trend_signal
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
 from tradingx.strategy import build_mandatory_candidate_registry
@@ -110,16 +114,21 @@ class MarketDataFeatureSampleReader:
         self,
         *,
         market_data_gateway: MarketDataHistoryProtocol,
+        vix_cache_path: Path | None = None,
         treasury_cache_path: Path | None = None,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._market_data = market_data_gateway
+        self._vix_cache_path = vix_cache_path or DEFAULT_VIX_CACHE_PATH
         self._treasury_cache_path = treasury_cache_path
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
 
     def live_samples(self, feature_name: str, *, window_days: int) -> pd.Series:
         if feature_name == "vix_level":
-            return pd.Series([], dtype=float)
+            if self._vix_cache_path is None or not self._vix_cache_path.exists():
+                return pd.Series([], dtype=float)
+            frame = load_vix_cache(self._vix_cache_path)
+            return frame.set_index("date")["vix_close"].astype(float).tail(window_days)
 
         end_utc = self._now_provider()
         start_utc = end_utc - timedelta(days=max(window_days + 260, 400))
@@ -131,7 +140,7 @@ class MarketDataFeatureSampleReader:
         closes = spy_bars["close"].astype(float)
 
         if feature_name == "spy_close_over_sma_200":
-            sma_200 = closes.rolling(200, min_periods=1).mean()
+            sma_200 = closes.shift(1).rolling(200, min_periods=200).mean()
             return (closes / sma_200).dropna().tail(window_days)
 
         if feature_name == "yield_curve_spread_bps":

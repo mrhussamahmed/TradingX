@@ -100,6 +100,38 @@ def test_trial_statistics_for_family_aggregates_across_candidates(
     assert abs(stats.trial_sharpe_variance - expected_variance) < 1e-9
 
 
+def test_trial_statistics_for_family_per_period_converts_annualized_sharpes(
+    tmp_path: Path,
+) -> None:
+    from tradingx.stats import DEFAULT_PERIODS_PER_YEAR
+
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    for idx, sharpe in enumerate(["0.5", "0.8", "1.1", "1.3"]):
+        ledger.record(_make_record(f"trial-{idx}", sharpe))
+
+    stats = ledger.trial_statistics_for_family_per_period(
+        "trend_following",
+        periods_per_year=DEFAULT_PERIODS_PER_YEAR,
+    )
+    annualized_mean = 0.925
+    annualized_variance = (
+        (0.5 - annualized_mean) ** 2
+        + (0.8 - annualized_mean) ** 2
+        + (1.1 - annualized_mean) ** 2
+        + (1.3 - annualized_mean) ** 2
+    ) / 3.0
+
+    assert stats.n_trials == 4
+    assert stats.trial_sharpe_mean.value == pytest.approx(
+        annualized_mean / (DEFAULT_PERIODS_PER_YEAR**0.5),
+        abs=1e-12,
+    )
+    assert stats.trial_sharpe_variance.value == pytest.approx(
+        annualized_variance / DEFAULT_PERIODS_PER_YEAR,
+        abs=1e-12,
+    )
+
+
 def test_trial_statistics_for_family_handles_single_trial(tmp_path: Path) -> None:
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
 

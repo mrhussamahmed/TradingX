@@ -1,0 +1,41 @@
+{
+  "as_is_replay": {
+    "artifact": "docs/reports/tradingx_tier0_wave0_as_is_preservation.md",
+    "status": "addressable"
+  },
+  "cost_stress": {
+    "reason": "capital scenarios and 1x/2x/4x lower-bound evidence require final Tier 0A data run",
+    "status": "missing"
+  },
+  "geometric_uncertainty": {
+    "reason": "paired return evidence not generated because final Tier 0A run inputs are incomplete",
+    "status": "missing"
+  },
+  "hard_hurdles": {
+    "reason": "benchmark return evidence not generated because final Tier 0A run inputs are incomplete",
+    "status": "missing"
+  },
+  "manifest_evidence": {
+    "reason": "return-accounting and executable-price manifests require final Tier 0A data run",
+    "status": "missing"
+  },
+  "marginal_portfolio_contribution": {
+    "reason": "not evaluated without final sleeve-backed candidate evidence",
+    "status": "missing"
+  },
+  "memo_inputs": {
+    "hurdle_policy": "",
+    "operator_model": "",
+    "plausible_next_higher_tiers": [],
+    "selected_capital_tier": "",
+    "shorting_policy": ""
+  },
+  "pbo_cpcv": {
+    "reason": "not evaluated without final Gate 1 evidence run",
+    "status": "missing"
+  },
+  "stress_coverage": {
+    "reason": "fixed stress windows not replayed in this implementation pass",
+    "status": "missing"
+  }
+}

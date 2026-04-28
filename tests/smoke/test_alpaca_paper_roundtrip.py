@@ -9,10 +9,10 @@ import pytest
 from alpaca.trading.client import TradingClient
 
 from tradingx.config import TradingConfig
+from tradingx.data import AlpacaRegularHoursCalendar
 from tradingx.legacy_paper_roundtrip import (
     build_legacy_paper_roundtrip_controller as build_default_controller,
 )
-from tradingx.data import AlpacaRegularHoursCalendar
 
 
 @pytest.mark.smoke

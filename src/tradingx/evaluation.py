@@ -15,7 +15,12 @@ from scipy.stats import kurtosis as scipy_kurtosis  # type: ignore[import-untype
 from scipy.stats import skew as scipy_skew
 
 from tradingx.costs import CostModelConfig
-from tradingx.stats import deflated_sharpe_ratio, lo_adjusted_sharpe_ratio
+from tradingx.stats import (
+    DEFAULT_PERIODS_PER_YEAR,
+    annualized_sharpe_to_per_period,
+    deflated_sharpe_ratio,
+    lo_adjusted_sharpe_ratio,
+)
 from tradingx.trials import TrialsLedger
 from tradingx.types import EvaluationEvidencePack, ScalarValue, StrategyCandidate
 
@@ -442,8 +447,11 @@ def evaluate_candidate(
             float(candidate_returns[0]),
         )
     ):
-        stats = trials_ledger.trial_statistics_for_family(candidate.family)
-        if stats.n_trials >= 2 and stats.trial_sharpe_variance > 0.0:
+        stats = trials_ledger.trial_statistics_for_family_per_period(
+            candidate.family,
+            periods_per_year=DEFAULT_PERIODS_PER_YEAR,
+        )
+        if stats.n_trials >= 2 and stats.trial_sharpe_variance.value > 0.0:
             returns_array = np.asarray(
                 _to_float_sequence(candidate_returns),
                 dtype=float,
@@ -458,13 +466,16 @@ def evaluate_candidate(
             if math.isfinite(skewness) and math.isfinite(excess_kurtosis):
                 try:
                     dsr_value = deflated_sharpe_ratio(
-                        observed_sharpe=observed_sharpe,
+                        observed_sharpe_per_period=annualized_sharpe_to_per_period(
+                            annualized_sharpe=observed_sharpe,
+                            periods_per_year=DEFAULT_PERIODS_PER_YEAR,
+                        ),
                         sample_size=float(len(candidate_returns)),
                         skewness=skewness,
                         excess_kurtosis=excess_kurtosis,
                         n_trials=stats.n_trials,
-                        trial_sharpe_variance=stats.trial_sharpe_variance,
-                        mean_trial_sharpe=stats.trial_sharpe_mean,
+                        trial_sharpe_variance_per_period=stats.trial_sharpe_variance,
+                        mean_trial_sharpe_per_period=stats.trial_sharpe_mean,
                     )
                 except ValueError:
                     dsr_value = None
@@ -510,6 +521,7 @@ def evaluate_candidate(
             "benchmark-relative comparison uses the same return window",
             "adversarial checks rerun the strategy through the supplied "
             "backtest context",
+            "deflated Sharpe ratio is reported_only for Tier 0",
         ),
         annualized_cost_drag_bps=annualized_cost_drag_bps,
         deflated_sharpe_ratio=deflated_sharpe,

@@ -38,6 +38,7 @@ from tradingx.promotion import (
     PromotionState,
     build_artifact_promotion_decision_provider,
 )
+from tradingx.risk_free import DEFAULT_TREASURY_YIELD_CACHE_PATH, DEFAULT_VIX_CACHE_PATH
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
@@ -752,6 +753,12 @@ def build_default_trading_service(
     runtime_registry = build_default_runtime_registry(
         market_data_gateway=market_data_gateway,
         baseline_selector=opportunity_selector,
+        vix_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_VIX_CACHE_PATH.name,
+        treasury_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_TREASURY_YIELD_CACHE_PATH.name,
     )
     activation_gateway = LocalActivationGateway(
         store=operator_store,
@@ -774,6 +781,12 @@ def build_default_trading_service(
         trials_ledger=TrialsLedger(
             database_path=config.runtime.data_root / "validation" / "trials.db"
         ),
+        vix_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_VIX_CACHE_PATH.name,
+        treasury_cache_path=config.runtime.data_root
+        / "reference"
+        / DEFAULT_TREASURY_YIELD_CACHE_PATH.name,
     )
     return PaperTradingService(
         loop_controller=build_default_trading_loop_controller(

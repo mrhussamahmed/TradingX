@@ -907,6 +907,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     monkeypatch, tmp_path
 ) -> None:
     helper_calls: dict[str, object] = {}
+    planner_kwargs: list[dict[str, object]] = []
 
     def fake_resolve_broker_mode(config, *, explicit_mode=None):
         del config
@@ -935,6 +936,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
             return True
 
     activation_kwargs: list[dict[str, object]] = []
+    registry_kwargs: list[dict[str, object]] = []
 
     monkeypatch.setattr(service_module, "resolve_broker_mode", fake_resolve_broker_mode)
     monkeypatch.setattr(
@@ -955,7 +957,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     monkeypatch.setattr(
         service_module,
         "build_default_runtime_registry",
-        lambda **kwargs: FakeRuntimeRegistry(),
+        lambda **kwargs: registry_kwargs.append(kwargs) or FakeRuntimeRegistry(),
     )
     monkeypatch.setattr(
         service_module,
@@ -965,7 +967,7 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     monkeypatch.setattr(
         service_module,
         "RuntimePortfolioPlanner",
-        lambda **kwargs: object(),
+        lambda **kwargs: planner_kwargs.append(kwargs) or object(),
     )
     monkeypatch.setattr(
         service_module,
@@ -999,3 +1001,17 @@ def test_build_default_trading_service_uses_mode_aware_helpers(
     assert activation_kwargs
     assert activation_kwargs[0]["promotion_decision_provider"] is not None
     assert str(activation_kwargs[0]["required_promotion_state"]) == "paper_trading"
+    assert registry_kwargs
+    assert registry_kwargs[0]["vix_cache_path"] == (
+        tmp_path / "data" / "reference" / "vix_daily.csv"
+    )
+    assert registry_kwargs[0]["treasury_cache_path"] == (
+        tmp_path / "data" / "reference" / "treasury_yields_daily.csv"
+    )
+    assert planner_kwargs
+    assert planner_kwargs[0]["vix_cache_path"] == (
+        tmp_path / "data" / "reference" / "vix_daily.csv"
+    )
+    assert planner_kwargs[0]["treasury_cache_path"] == (
+        tmp_path / "data" / "reference" / "treasury_yields_daily.csv"
+    )

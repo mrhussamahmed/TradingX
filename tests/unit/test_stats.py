@@ -6,6 +6,8 @@ import math
 import pytest
 
 from tradingx.stats import (
+    annualized_sharpe_to_per_period,
+    annualized_sharpe_variance_to_per_period,
     calmar_ratio,
     conditional_drawdown_at_risk,
     max_drawdown,
@@ -92,10 +94,13 @@ def test_expected_max_sharpe_reproduces_bailey_2014_threshold() -> None:
 
     threshold = module.expected_max_sharpe(
         n_trials=100,
-        trial_sharpe_variance=0.5,
+        trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+            annualized_sharpe_variance=0.5,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
     )
 
-    assert threshold == pytest.approx(0.1132, abs=1e-4)
+    assert threshold.value == pytest.approx(0.1132, abs=1e-4)
 
 
 def test_deflated_sharpe_ratio_reproduces_bailey_2014_example() -> None:
@@ -103,12 +108,18 @@ def test_deflated_sharpe_ratio_reproduces_bailey_2014_example() -> None:
 
     # Bailey (2014) worked example uses RAW γ4 = 10 (excess γ4 = 7).
     dsr = module.deflated_sharpe_ratio(
-        observed_sharpe=2.5 / math.sqrt(250.0),
+        observed_sharpe_per_period=annualized_sharpe_to_per_period(
+            annualized_sharpe=2.5,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
         sample_size=1250,
         skewness=-3.0,
         excess_kurtosis=7.0,
         n_trials=100,
-        trial_sharpe_variance=0.5,
+        trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+            annualized_sharpe_variance=0.5,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
     )
 
     assert dsr == pytest.approx(0.9004, abs=1e-4)
@@ -119,15 +130,73 @@ def test_deflated_sharpe_ratio_reproduces_bailey_2014_normal_case() -> None:
 
     # Normal returns: skew=0, excess γ4 = 0 (raw γ4 = 3).
     dsr = module.deflated_sharpe_ratio(
-        observed_sharpe=2.5 / math.sqrt(250.0),
+        observed_sharpe_per_period=annualized_sharpe_to_per_period(
+            annualized_sharpe=2.5,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
         sample_size=1250,
         skewness=0.0,
         excess_kurtosis=0.0,
         n_trials=88,
-        trial_sharpe_variance=0.5,
+        trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+            annualized_sharpe_variance=0.5,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
     )
 
     assert dsr == pytest.approx(0.9505, abs=1e-4)
+
+
+def test_deflated_sharpe_ratio_rejects_raw_float_sharpe_inputs() -> None:
+    module = importlib.import_module("tradingx.stats")
+
+    with pytest.raises(TypeError, match="observed_sharpe_per_period"):
+        module.deflated_sharpe_ratio(
+            observed_sharpe_per_period=2.5,
+            sample_size=1250,
+            skewness=0.0,
+            excess_kurtosis=0.0,
+            n_trials=88,
+            trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+                annualized_sharpe_variance=0.5,
+                periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+            ),
+        )
+
+
+def test_expected_max_sharpe_uses_per_period_mean_and_variance_together() -> None:
+    module = importlib.import_module("tradingx.stats")
+    annualized_mean = 1.25
+    annualized_variance = 0.5
+
+    threshold = module.expected_max_sharpe(
+        n_trials=100,
+        mean_trial_sharpe_per_period=annualized_sharpe_to_per_period(
+            annualized_sharpe=annualized_mean,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
+        trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+            annualized_sharpe_variance=annualized_variance,
+            periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+        ),
+    )
+
+    old_mixed_unit_threshold = (
+        annualized_mean
+        + module.expected_max_sharpe(
+            n_trials=100,
+            trial_sharpe_variance_per_period=annualized_sharpe_variance_to_per_period(
+                annualized_sharpe_variance=annualized_variance,
+                periods_per_year=module.PAPER_PERIODS_PER_YEAR,
+            ),
+        ).value
+    )
+    assert threshold.value == pytest.approx(
+        (annualized_mean / math.sqrt(module.PAPER_PERIODS_PER_YEAR))
+        + (old_mixed_unit_threshold - annualized_mean),
+        abs=1e-12,
+    )
+    assert threshold.value < old_mixed_unit_threshold
 
 
 def test_max_drawdown_flat_series_is_zero() -> None:
@@ -405,14 +474,13 @@ def test_stationary_bootstrap_block_lengths_are_geometric() -> None:
     import random
     from unittest.mock import patch
 
-    from scipy.stats import geom, kstest
+    from scipy.stats import kstest
 
     from tradingx.stats import _stationary_bootstrap_means
 
     # Capture every block length the implementation draws by patching
     # ``random.Random.expovariate`` (the function the agent's fix
     # documented as the geometric-block source).
-    rng = random.Random(2026)
     block_length = 8
     captured: list[float] = []
     real_expovariate = random.Random.expovariate

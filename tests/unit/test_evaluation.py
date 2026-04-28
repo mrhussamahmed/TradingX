@@ -8,7 +8,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
+import tradingx.evaluation as evaluation_module
 from tradingx.costs import CostModelConfig
 from tradingx.evaluation import (
     AdversarialCheckContext,
@@ -309,6 +311,56 @@ def test_evaluate_candidate_populates_dsr_when_trials_sufficient(
 
     assert evidence.deflated_sharpe_ratio is not None
     assert isinstance(evidence.deflated_sharpe_ratio, Decimal)
+    assert "deflated Sharpe ratio is reported_only for Tier 0" in evidence.assumptions
+
+
+def test_evaluate_candidate_passes_per_period_sharpe_units_to_dsr(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from tradingx.stats import (
+        DEFAULT_PERIODS_PER_YEAR,
+        SharpePerPeriod,
+        SharpeVariancePerPeriod,
+    )
+
+    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    base_returns = _moderate_positive_returns()
+    ledger = TrialsLedger(database_path=tmp_path / "trials.db")
+    _seed_family_trials(
+        ledger,
+        family="trend_following",
+        sharpes=["0.5", "0.8", "1.1", "1.3"],
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_dsr(**kwargs):
+        calls.append(kwargs)
+        return 0.42
+
+    monkeypatch.setattr(evaluation_module, "deflated_sharpe_ratio", fake_dsr)
+
+    evidence = evaluate_candidate(
+        candidate,
+        candidate_returns=base_returns,
+        benchmark_returns=_benchmark_returns(len(base_returns)),
+        window_start_utc=datetime(2026, 4, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 17, tzinfo=UTC),
+        annualized_cost_drag_bps=Decimal("7.0"),
+        trials_ledger=ledger,
+    )
+
+    assert evidence.deflated_sharpe_ratio == Decimal("0.42")
+    assert len(calls) == 1
+    call = calls[0]
+    assert isinstance(call["observed_sharpe_per_period"], SharpePerPeriod)
+    assert isinstance(call["mean_trial_sharpe_per_period"], SharpePerPeriod)
+    assert isinstance(call["trial_sharpe_variance_per_period"], SharpeVariancePerPeriod)
+    observed_annualized_sharpe = float(evidence.candidate_metrics["sharpe_ratio"])
+    assert call["observed_sharpe_per_period"].value == pytest.approx(
+        observed_annualized_sharpe / math.sqrt(DEFAULT_PERIODS_PER_YEAR),
+        abs=1e-12,
+    )
 
 
 def test_evaluate_candidate_dsr_is_none_when_trials_insufficient(tmp_path) -> None:

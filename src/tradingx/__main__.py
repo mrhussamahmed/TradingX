@@ -66,6 +66,8 @@ from tradingx.replay_slippage import generate_replay_slippage_evidence
 from tradingx.reporting import build_gate_decision_brief
 from tradingx.risk_free import (
     DEFAULT_RISK_FREE_CACHE_PATH,
+    DEFAULT_TREASURY_YIELD_CACHE_PATH,
+    DEFAULT_VIX_CACHE_PATH,
     build_default_risk_free_series,
     needs_risk_free_refresh,
     refresh_risk_free_cache,
@@ -82,6 +84,10 @@ from tradingx.service import (
 from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.stats import build_statistical_validation_report
 from tradingx.supervisor import build_default_operator_supervisor
+from tradingx.tier0_decision import (
+    build_tier0a_decision_payload,
+    write_tier0a_decision_artifacts,
+)
 from tradingx.types import BotRuntimeState
 from tradingx.validation import (
     load_benchmark_stack_payload,
@@ -144,6 +150,13 @@ def _format_code_list(value: object) -> str:
     if isinstance(value, list) and value:
         return ", ".join(str(item) for item in value)
     return "none"
+
+
+def _require_json_mapping(payload: dict[str, object], key: str) -> dict[str, Any]:
+    value = payload.get(key, {})
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} must be a JSON object.")
+    return value
 
 
 def _runtime_lock_path(config: TradingConfig) -> Path:
@@ -432,6 +445,17 @@ def build_parser() -> argparse.ArgumentParser:
     decision_parser.add_argument(
         "--paper-artifact-root",
         default="artifacts/paper_loop",
+    )
+
+    tier0a_parser = subparsers.add_parser("tier0a-decision-report")
+    tier0a_parser.add_argument("--input-file", required=True)
+    tier0a_parser.add_argument(
+        "--metrics-output",
+        default="docs/reports/tradingx_tier0a_benchmark_metrics.json",
+    )
+    tier0a_parser.add_argument(
+        "--report-output",
+        default="docs/reports/tradingx_tier0a_benchmark_decision_report.md",
     )
 
     benchmark_prep_parser = subparsers.add_parser(
@@ -843,6 +867,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 broker_mode=decision.requested_mode,
             ),
             activation_gateway=activation_gateway,
+            vix_cache_path=config.runtime.data_root
+            / "reference"
+            / DEFAULT_VIX_CACHE_PATH.name,
+            treasury_cache_path=config.runtime.data_root
+            / "reference"
+            / DEFAULT_TREASURY_YIELD_CACHE_PATH.name,
         )
         trading_client = build_trading_client_for_mode(config, decision)
         portfolio_state = AlpacaPortfolioGateway(
@@ -1096,6 +1126,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 0
+
+    if args.command == "tier0a-decision-report":
+        raw_payload = load_json_object(Path(args.input_file))
+        payload = build_tier0a_decision_payload(
+            memo_inputs=_require_json_mapping(raw_payload, "memo_inputs"),
+            as_is_replay=_require_json_mapping(raw_payload, "as_is_replay"),
+            hard_hurdles=_require_json_mapping(raw_payload, "hard_hurdles"),
+            geometric_uncertainty=_require_json_mapping(
+                raw_payload,
+                "geometric_uncertainty",
+            ),
+            stress_coverage=_require_json_mapping(raw_payload, "stress_coverage"),
+            manifest_evidence=_require_json_mapping(raw_payload, "manifest_evidence"),
+            pbo_cpcv=_require_json_mapping(raw_payload, "pbo_cpcv"),
+            marginal_portfolio_contribution=_require_json_mapping(
+                raw_payload,
+                "marginal_portfolio_contribution",
+            ),
+            cost_stress=_require_json_mapping(raw_payload, "cost_stress"),
+        )
+        write_tier0a_decision_artifacts(
+            payload,
+            metrics_path=Path(args.metrics_output),
+            report_path=Path(args.report_output),
+        )
+        print(json.dumps(_serialize(payload), sort_keys=True))
+        return 0 if payload["decision"] == "go" else 1
 
     if args.command in {"prepare-benchmark-closes", "prepare-benchmark-stack"}:
         config = TradingConfig.from_env_file(Path(args.env_file))

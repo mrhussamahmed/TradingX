@@ -11,6 +11,7 @@ from tradingx.drift.gateway import (
     DRIFT_ALARM_CONTROL_TYPE,
     ArtifactBackedDriftAlarmStateReader,
     DriftAlarmGateway,
+    MarketDataFeatureSampleReader,
 )
 from tradingx.drift.reference import (
     FeatureDistribution,
@@ -148,6 +149,15 @@ class _AlertGateway:
         self.alerts.append(alert)
 
 
+class _MarketDataHistory:
+    def __init__(self, bars: pd.DataFrame) -> None:
+        self._bars = bars
+
+    def get_daily_bar_history(self, symbol: str, *, start_utc, end_utc):
+        del symbol, start_utc, end_utc
+        return self._bars
+
+
 def _daily_record(
     *,
     sleeve_id: str,
@@ -185,6 +195,62 @@ def _rolling_records(
         )
         for offset in range(days)
     )
+
+
+def test_market_data_feature_reader_spy_sma_uses_200_prior_observations() -> None:
+    index = pd.date_range("2025-01-02", periods=201, freq="B", tz="UTC")
+    closes = [float(100 + index_value) for index_value in range(201)]
+    bars = pd.DataFrame(
+        {
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1_000_000.0] * len(closes),
+        },
+        index=index,
+    )
+    reader = MarketDataFeatureSampleReader(
+        market_data_gateway=_MarketDataHistory(bars),
+        now_provider=lambda: datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    samples = reader.live_samples("spy_close_over_sma_200", window_days=10)
+
+    assert samples.index.tolist() == [index[200]]
+    assert samples.iloc[0] == closes[200] / (sum(closes[:200]) / 200)
+
+
+def test_market_data_feature_reader_returns_vix_level_when_vixcls_cache_exists(
+    tmp_path,
+) -> None:
+    index = pd.date_range("2026-04-20", periods=5, freq="B", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "open": [100.0] * len(index),
+            "high": [100.0] * len(index),
+            "low": [100.0] * len(index),
+            "close": [100.0] * len(index),
+            "volume": [1_000_000.0] * len(index),
+        },
+        index=index,
+    )
+    vix_path = tmp_path / "vix_daily.csv"
+    pd.DataFrame(
+        {
+            "date": ["2026-04-20", "2026-04-21", "2026-04-22"],
+            "vix_close": [25.5, 26.5, 27.5],
+        }
+    ).to_csv(vix_path, index=False)
+    reader = MarketDataFeatureSampleReader(
+        market_data_gateway=_MarketDataHistory(bars),
+        vix_cache_path=vix_path,
+        now_provider=lambda: datetime(2026, 4, 24, tzinfo=UTC),
+    )
+
+    samples = reader.live_samples("vix_level", window_days=2)
+
+    assert samples.tolist() == [26.5, 27.5]
 
 
 def test_has_alarm_false_when_all_monitors_info(base_snapshot) -> None:

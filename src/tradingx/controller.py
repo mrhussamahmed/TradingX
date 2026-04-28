@@ -12,7 +12,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
-from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, TimeInForce
 
 from tradingx.alerts import (
@@ -33,10 +32,6 @@ from tradingx.execution import (
     OrderRejected,
     OrderRouteAuthorityGuard,
     classify_order_rejection_reason,
-)
-from tradingx.promotion import (
-    PromotionState,
-    build_artifact_promotion_decision_provider,
 )
 from tradingx.experiments import MetricVisibilityContext
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
@@ -60,6 +55,10 @@ from tradingx.policy import (
     build_week1_policy_snapshot,
 )
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.promotion import (
+    PromotionState,
+    build_artifact_promotion_decision_provider,
+)
 from tradingx.risk import PaperOnlyRiskEngine, PreTradeRiskContext
 from tradingx.runtime_logging import (
     StructuredRuntimeLogger,

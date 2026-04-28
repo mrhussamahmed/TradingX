@@ -127,6 +127,29 @@ def test_validation_module_shell_is_importable() -> None:
     assert hasattr(module, "__all__")
 
 
+def test_default_regime_snapshots_require_200_prior_observations() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    closes = [float(100 + index) for index in range(201)]
+    bars = _ohlcv_frame(closes)
+
+    regimes = _build_default_regime_snapshots(candidate, bars_by_symbol={"SPY": bars})
+
+    assert set(regimes) == {bars.index[200].date()}
+    first_regime = regimes[bars.index[200].date()]
+    assert first_regime.observation_date == bars.index[200].date()
+    assert first_regime.spy_close == Decimal(str(closes[199]))
+    assert first_regime.spy_sma_200 == Decimal(str(sum(closes[:200]) / 200))
+
+
+def test_default_regime_snapshots_do_not_count_execution_row_as_sma_history() -> None:
+    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    bars = _ohlcv_frame([float(100 + index) for index in range(200)])
+
+    regimes = _build_default_regime_snapshots(candidate, bars_by_symbol={"SPY": bars})
+
+    assert regimes == {}
+
+
 def test_build_gate_report_runs_real_backtests_from_daily_bars() -> None:
     bars_by_symbol = {
         "SPY": _ohlcv_frame(

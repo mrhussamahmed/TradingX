@@ -26,6 +26,8 @@ def test_registry_seeds_roadmap_deterministic_and_provisional_codes() -> None:
         "short_support_missing": PromotionState.RESEARCH_ONLY,
         "legacy_statistical_evidence": PromotionState.PAPER_SHADOW,
         "dependency_scope_unresolved": PromotionState.PAPER_SHADOW,
+        "invalid_geometric_return": PromotionState.PAPER_SHADOW,
+        "missing_required_benchmark": PromotionState.PAPER_SHADOW,
     }
 
     for code, max_state in expected.items():
