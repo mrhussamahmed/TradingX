@@ -200,12 +200,20 @@ describe('ControlCenterApp', () => {
   it('renders the shell with brand, top strip, left nav, canvas, and operator rail', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
-      expect(screen.getByLabelText(/TradeX/i)).toBeInTheDocument()
+      expect(screen.getByLabelText('TradeX')).toBeInTheDocument()
     })
     expect(screen.getByRole('banner')).toBeInTheDocument()
     expect(screen.getByLabelText(/Primary navigation/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/Center canvas$/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/Operator command rail/i)).toBeInTheDocument()
+  })
+
+  it('uses the selected Pulse Route wordmark and matching header glyph', async () => {
+    render(<ControlCenterApp />)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Pulse Route TradeX wordmark')).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Pulse Route TradeX glyph')).toBeInTheDocument()
   })
 
   it('renders the default Market Chart flavor on first load', async () => {

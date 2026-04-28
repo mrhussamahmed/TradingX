@@ -16,40 +16,54 @@
   grid-row: 1 / 2;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-4);
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-muted);
   border-right: 1px solid var(--border-muted);
   background: var(--bg-shell);
-  gap: 10px;
 }
 
-.brandMark {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--primary-bright), var(--primary));
-  display: grid;
-  place-items: center;
-  color: #001225;
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: -0.02em;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset, 0 4px 14px rgba(20, 124, 255, 0.4);
+.pulseRouteLogo {
+  flex-shrink: 0;
+  display: block;
+  overflow: visible;
 }
 
-.brandText {
-  display: flex;
-  align-items: baseline;
-  gap: 1px;
-  font-weight: 600;
-  font-size: 16px;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
+.pulseRouteWordmark {
+  width: 190px;
+  height: 44px;
 }
-.brandText em {
-  font-style: normal;
-  color: var(--primary-bright);
-  font-weight: 700;
+
+.pulseRouteGlyph {
+  width: 42px;
+  height: 24px;
+}
+
+.pulseRouteLine,
+.pulseRouteX {
+  fill: none;
+  stroke: var(--accent-cyan);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pulseRouteLine {
+  stroke-width: 4;
+}
+
+.pulseRouteX {
+  stroke-width: 5;
+}
+
+.pulseRouteText {
+  fill: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 27px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.pulseRouteTextAccent {
+  fill: var(--accent-cyan);
 }
 
 .topStrip {
@@ -366,23 +380,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px 4px 6px;
+  padding: 4px 8px 4px 7px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-muted);
   background: var(--bg-panel);
 }
-.profilePillAvatar {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--primary-bright), var(--primary));
-  color: #001225;
-  font-weight: 700;
-  font-size: 10px;
-  display: grid;
-  place-items: center;
-}
-
 .heartbeat {
   height: 16px;
 }

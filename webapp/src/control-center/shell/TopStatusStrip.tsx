@@ -9,6 +9,7 @@ import type {
   RuntimeHeartbeatSnapshot,
 } from '../../types'
 
+import { PulseRouteLogo } from './PulseRouteLogo'
 import styles from './Shell.module.css'
 
 export type RiskTone = 'good' | 'watch' | 'risk' | 'info' | 'neutral'
@@ -217,7 +218,7 @@ export function TopStatusStrip({
           ) : null}
         </button>
         <div className={styles.profilePill} aria-label="Operator profile">
-          <div className={styles.profilePillAvatar}>TX</div>
+          <PulseRouteLogo variant="glyph" />
           <ChevronDown size={14} color="var(--text-muted)" />
         </div>
       </div>
