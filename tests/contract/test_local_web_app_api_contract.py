@@ -18,6 +18,7 @@ from tradingx.types import (
     DailySessionDigest,
     DashboardSnapshot,
     DocumentRecord,
+    Gate3CriterionSnapshot,
     Gate3PromotionPackage,
     Gate3ReadinessReport,
     IncidentRecord,
@@ -30,7 +31,13 @@ from tradingx.types import (
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
+    RuntimeDecisionDetail,
+    RuntimeDecisionExecutionDetail,
+    RuntimeDecisionFreshnessDetail,
     RuntimeDecisionLadderRow,
+    RuntimeDecisionRegimeDetail,
+    RuntimeDecisionRiskDetail,
+    RuntimeDecisionSignalDetail,
     RuntimeHeartbeatSnapshot,
     RuntimeOperatorGuidance,
     RuntimeSymbolHeartbeatRow,
@@ -292,9 +299,25 @@ class FakeReadModel:
             report_id="gate3-1",
             generated_at_utc=timestamp,
             status="pending",
+            source_evidence_at_utc=timestamp,
+            oldest_required_source_evidence_at_utc=timestamp,
+            latest_source_evidence_at_utc=timestamp,
+            required_criterion_ids=("duration_or_trade_count",),
+            missing_source_criterion_ids=(),
             closed_trade_count=4,
             calendar_days_observed=7,
-            criteria=(),
+            criteria=(
+                Gate3CriterionSnapshot(
+                    criterion_id="duration_or_trade_count",
+                    status="pending",
+                    source_evidence_at_utc=timestamp,
+                    required=True,
+                    threshold="At least 180 calendar days or 100 closed trades",
+                    observed_value="4 trades / 7 days",
+                    details="Gate 3 is still collecting evidence.",
+                    evidence_refs=(),
+                ),
+            ),
             summary="Gate 3 is still collecting evidence.",
             required_operator_action="Continue paper trading and drills.",
             evidence_refs=("artifacts/validation/gate3_reports/gate3-1.json",),
@@ -553,6 +576,49 @@ class FakeReadModel:
                 recommendation="Investigate warmup failure",
                 detail="QQQ is still blocked by warmup, so TradingX is evaluating an incomplete universe.",
                 tone="watch",
+            ),
+        )
+
+    def build_runtime_decision_detail(self) -> RuntimeDecisionDetail | None:
+        timestamp = datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        return RuntimeDecisionDetail(
+            selection_id="selection-1",
+            decision_source_at_utc=timestamp,
+            decision="selected",
+            decision_reason="SPY cleared the threshold.",
+            mode="paper",
+            selected_symbol="SPY",
+            signal=RuntimeDecisionSignalDetail(
+                available=True,
+                symbol="SPY",
+                final_score="0.8",
+                base_signal="1.0",
+                model_weight="1.0",
+                regime_weight="1.0",
+                liquidity_weight="1.0",
+            ),
+            regime=RuntimeDecisionRegimeDetail(
+                label="neutral",
+                source="runtime_context",
+                context_source_at_utc=timestamp,
+            ),
+            risk=RuntimeDecisionRiskDetail(
+                eligible=True,
+                ineligibility_reason="",
+                threshold="0.50",
+                threshold_gap="0.30",
+                portfolio_overlap_penalty="0.0",
+            ),
+            execution=RuntimeDecisionExecutionDetail(
+                current_exposure="Flat",
+                pending_order_count=0,
+                latest_reject_reason="No recent rejects",
+                context_source_at_utc=timestamp,
+            ),
+            freshness=RuntimeDecisionFreshnessDetail(
+                decision_source_at_utc=timestamp,
+                runtime_context_source_at_utc=timestamp,
+                execution_context_source_at_utc=timestamp,
             ),
         )
 
@@ -995,6 +1061,7 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     runtime_activation = client.get("/api/runtime-host/activation/latest")
     runtime_model = client.get("/api/runtime-host/model/latest")
     runtime_selection = client.get("/api/runtime-host/selection/latest")
+    runtime_decision = client.get("/api/runtime-host/decision/latest")
 
     assert overview.status_code == 200
     assert overview.json()["service_status"]["status"] == "running"
@@ -1012,6 +1079,11 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert incidents.json()[0]["status"] == "open"
     assert gate3.status_code == 200
     assert gate3.json()["status"] == "pending"
+    assert gate3.json()["source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
+    assert gate3.json()["oldest_required_source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
+    assert gate3.json()["required_criterion_ids"] == ["duration_or_trade_count"]
+    assert gate3.json()["criteria"][0]["required"] is True
+    assert gate3.json()["criteria"][0]["source_evidence_at_utc"] == "2026-04-18T18:00:00+00:00"
     assert gate3_package.status_code == 200
     assert gate3_package.json()["package_id"] == "gate3-package-1"
     assert research.status_code == 200
@@ -1060,6 +1132,14 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     assert runtime_model.json()["snapshot_id"] == "snapshot-1"
     assert runtime_selection.status_code == 200
     assert runtime_selection.json()["selected_symbol"] == "SPY"
+    assert runtime_decision.status_code == 200
+    runtime_decision_payload = runtime_decision.json()
+    assert runtime_decision_payload["selection_id"] == "selection-1"
+    assert runtime_decision_payload["decision_source_at_utc"] == "2026-04-19T12:00:00+00:00"
+    assert runtime_decision_payload["signal"]["available"] is True
+    assert runtime_decision_payload["signal"] != {}
+    assert runtime_decision_payload["risk"] != {}
+    assert runtime_decision_payload["freshness"]["decision_source_at_utc"] == "2026-04-19T12:00:00+00:00"
 
 
 def test_wave1_v1_read_side_routes_expose_canonical_control_plane_contracts() -> None:

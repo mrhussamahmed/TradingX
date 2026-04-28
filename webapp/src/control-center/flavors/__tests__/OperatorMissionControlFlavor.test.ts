@@ -120,6 +120,22 @@ describe('deriveRequiredSafetyEvidence', () => {
     expect(result.latestRequiredTimestamp).toBeNull()
     expect(result.stale).toBe(true)
   })
+
+  it('uses explicit source evidence timestamps for portfolio, gate, and decision freshness', () => {
+    const result = deriveRequiredSafetyEvidence({
+      nowMs: new Date('2026-04-28T12:10:00Z').getTime(),
+      staleMinutes: 20,
+      heartbeatTimestamp: '2026-04-28T12:00:00Z',
+      gateTimestamp: '2026-04-28T11:55:00Z',
+      portfolioTimestamp: '2026-04-28T11:56:00Z',
+      decisionTimestamp: '2026-04-28T11:57:00Z',
+    })
+
+    expect(result.stale).toBe(false)
+    expect(result.missing).toEqual([])
+    expect(result.staleClasses).toEqual([])
+    expect(result.latestRequiredTimestamp).toBe('2026-04-28T12:00:00Z')
+  })
 })
 
 describe('deriveGateEvidenceTimestamp', () => {
@@ -155,6 +171,58 @@ describe('deriveGateEvidenceTimestamp', () => {
       }),
     ).toBeNull()
   })
+
+  it('uses Gate 3 oldest required source evidence when every required criterion has source evidence', () => {
+    expect(
+      deriveGateEvidenceTimestamp({
+        commandCenterGeneratedAt: '2026-04-28T12:00:00Z',
+        gateStatuses: {},
+        gate3GeneratedAt: '2026-04-28T12:00:00Z',
+        gate3Criteria: [
+          {
+            criterion_id: 'closed_trades',
+            status: 'pass',
+            required: true,
+            source_evidence_at_utc: '2026-04-28T11:58:00Z',
+          },
+          {
+            criterion_id: 'calendar_days',
+            status: 'pass',
+            required: true,
+            source_evidence_at_utc: '2026-04-28T11:55:00Z',
+          },
+        ],
+        oldestRequiredSourceEvidenceAtUtc: '2026-04-28T11:55:00Z',
+        missingSourceCriterionIds: [],
+      }),
+    ).toBe('2026-04-28T11:55:00Z')
+  })
+
+  it('keeps gate evidence missing when a required criterion has no source evidence', () => {
+    expect(
+      deriveGateEvidenceTimestamp({
+        commandCenterGeneratedAt: '2026-04-28T12:00:00Z',
+        gateStatuses: {},
+        gate3GeneratedAt: '2026-04-28T12:00:00Z',
+        gate3Criteria: [
+          {
+            criterion_id: 'closed_trades',
+            status: 'pass',
+            required: true,
+            source_evidence_at_utc: '2026-04-28T11:58:00Z',
+          },
+          {
+            criterion_id: 'calendar_days',
+            status: 'pass',
+            required: true,
+            source_evidence_at_utc: null,
+          },
+        ],
+        oldestRequiredSourceEvidenceAtUtc: '2026-04-28T11:58:00Z',
+        missingSourceCriterionIds: ['calendar_days'],
+      }),
+    ).toBeNull()
+  })
 })
 
 describe('deriveDecisionEvidenceTimestamp', () => {
@@ -169,15 +237,28 @@ describe('deriveDecisionEvidenceTimestamp', () => {
     ).toBeNull()
   })
 
-  it('uses opportunity selection generation time for real decision evidence', () => {
+  it('does not use opportunity selection generation time as source evidence', () => {
     expect(
       deriveDecisionEvidenceTimestamp({
         lastDecision: 'selected SPY',
         decision: 'buy',
         selectionId: 'selection-1',
         selectionGeneratedAt: '2026-04-28T12:00:00Z',
+        decisionSourceAtUtc: null,
       }),
-    ).toBe('2026-04-28T12:00:00Z')
+    ).toBeNull()
+  })
+
+  it('uses runtime decision detail source time for real decision evidence', () => {
+    expect(
+      deriveDecisionEvidenceTimestamp({
+        lastDecision: 'selected SPY',
+        decision: 'buy',
+        selectionId: 'selection-1',
+        selectionGeneratedAt: '2026-04-28T12:00:00Z',
+        decisionSourceAtUtc: '2026-04-28T11:59:00Z',
+      }),
+    ).toBe('2026-04-28T11:59:00Z')
   })
 })
 

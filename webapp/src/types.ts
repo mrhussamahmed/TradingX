@@ -164,6 +164,7 @@ export type PortfolioDiagnostic = {
 
 export type PortfolioWorkspaceSnapshot = {
   generated_at_utc: string
+  source_evidence_at_utc?: string | null
   trading_mode: string
   data_state: string
   source_summary: string
@@ -355,6 +356,40 @@ export type RuntimeHeartbeatSnapshot = {
   operator_guidance: RuntimeOperatorGuidance | null
 }
 
+export type RuntimeDecisionSignalDetail = {
+  source_evidence_at_utc?: string | null
+} & Record<string, unknown>
+
+export type RuntimeDecisionRegimeDetail = {
+  source_evidence_at_utc?: string | null
+} & Record<string, unknown>
+
+export type RuntimeDecisionRiskDetail = {
+  source_evidence_at_utc?: string | null
+} & Record<string, unknown>
+
+export type RuntimeDecisionExecutionDetail = {
+  source_evidence_at_utc?: string | null
+} & Record<string, unknown>
+
+export type RuntimeDecisionFreshnessDetail = {
+  decision_source_at_utc?: string | null
+  missing_source_fields?: string[]
+} & Record<string, unknown>
+
+export type RuntimeDecisionDetail = {
+  selection_id: string
+  generated_at_utc: string
+  decision_source_at_utc: string | null
+  decision: string
+  decision_reason: string
+  signal?: RuntimeDecisionSignalDetail | null
+  regime?: RuntimeDecisionRegimeDetail | null
+  risk?: RuntimeDecisionRiskDetail | null
+  execution?: RuntimeDecisionExecutionDetail | null
+  freshness?: RuntimeDecisionFreshnessDetail | null
+} & Record<string, unknown>
+
 export type HistoricalWarmupRecord = {
   warmup_id: string
   generated_at_utc: string
@@ -532,11 +567,18 @@ export type Gate3CriterionSnapshot = {
   observed_value: string
   details: string
   evidence_refs: string[]
+  source_evidence_at_utc?: string | null
+  required?: boolean
 }
 
 export type Gate3ReadinessReport = {
   report_id: string
   generated_at_utc: string
+  source_evidence_at_utc?: string | null
+  oldest_required_source_evidence_at_utc?: string | null
+  latest_source_evidence_at_utc?: string | null
+  missing_source_criterion_ids?: string[]
+  required_criterion_ids?: string[]
   status: string
   closed_trade_count: number
   calendar_days_observed: number

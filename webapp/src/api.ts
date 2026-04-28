@@ -28,6 +28,7 @@ import type {
   RecoveryDrillRecord,
   ResearchStudioSnapshot,
   RuntimeHeartbeatSnapshot,
+  RuntimeDecisionDetail,
   StrategyActivationRecord,
 } from './types'
 
@@ -180,6 +181,10 @@ export function getRuntimeHostModel() {
 
 export function getRuntimeHostSelection() {
   return request<OpportunitySelectionRecord | null>('/api/runtime-host/selection/latest')
+}
+
+export function getRuntimeHostDecisionDetail() {
+  return request<RuntimeDecisionDetail | null>('/api/runtime-host/decision/latest')
 }
 
 export function getConfigProposals() {

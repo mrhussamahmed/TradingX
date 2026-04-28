@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -82,6 +83,31 @@ def _write_execution_pair(
             entry_sleeve_attributions=sleeve_attributions,
             exit_sleeve_attributions=sleeve_attributions,
         )
+    )
+
+
+def _write_operator_alert_scan_window(
+    store: FilesystemArtifactStore,
+    *,
+    scan_id: str,
+    window_start_utc: datetime,
+    window_end_utc: datetime,
+) -> None:
+    scan_dir = store._root_dir / "operator_alert_scan_windows"
+    scan_dir.mkdir(parents=True, exist_ok=True)
+    (scan_dir / f"{scan_id}.json").write_text(
+        json.dumps(
+            {
+                "scan_id": scan_id,
+                "window_start_utc": window_start_utc.isoformat(),
+                "window_end_utc": window_end_utc.isoformat(),
+                "alert_categories": sorted(["bug", "runtime", "service_failure"]),
+                "artifact_source": "artifacts/paper_loop/operator_alerts/*.json",
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
     )
 
 
@@ -930,3 +956,165 @@ def test_gate3_governed_replay_passes_with_matched_governed_execution(
 
     assert criterion_statuses["replay_slippage_divergence"] == "pass"
     assert report.status == "pass"
+
+
+def test_gate3_zero_p1_without_scan_window_remains_missing_source(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 2, 1, 14, 30, tzinfo=UTC)
+
+    for index in range(100):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index < 60 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+        )
+
+    validation_store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="baseline-source-reference",
+            candidate_id="baseline-long-only-v1",
+            window_start_utc=start,
+            window_end_utc=start + timedelta(days=100),
+            benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+            candidate_metrics={
+                "sharpe_ratio": Decimal("1.4"),
+                "hit_rate": Decimal("0.60"),
+            },
+            adversarial_checks=("none",),
+            recommendation="keep",
+            assumptions=("reference expectation for Gate 3",),
+        )
+    )
+    paper_store.write_recovery_drill_record(
+        recovery_drill=RecoveryDrillRecord(
+            drill_id="recovery-source",
+            symbol="SPY",
+            started_at_utc=start,
+            completed_at_utc=start + timedelta(days=100, minutes=5),
+            status="completed",
+            summary="Recovery succeeded.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/recovery.json",),
+        )
+    )
+    paper_store.write_alert_drill_record(
+        alert_drill=AlertDrillRecord(
+            drill_id="smtp-source",
+            channel="smtp",
+            recorded_at_utc=start + timedelta(days=100, minutes=10),
+            status="completed",
+            summary="SMTP delivered.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/smtp.json",),
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+    p1_criterion = next(
+        criterion
+        for criterion in report.criteria
+        if criterion.criterion_id == "p1_bug_incidents"
+    )
+
+    assert p1_criterion.status == "pass"
+    assert p1_criterion.required is True
+    assert p1_criterion.source_evidence_at_utc is None
+    assert "p1_bug_incidents" in report.required_criterion_ids
+    assert report.missing_source_criterion_ids == ("p1_bug_incidents",)
+    assert report.oldest_required_source_evidence_at_utc is None
+    assert report.source_evidence_at_utc is None
+    assert report.latest_source_evidence_at_utc is not None
+    assert report.latest_source_evidence_at_utc != report.generated_at_utc
+
+
+def test_gate3_source_lineage_uses_oldest_required_and_ignores_optional_replay(
+    tmp_path,
+) -> None:
+    paper_store = FilesystemArtifactStore(tmp_path / "paper_loop")
+    validation_store = FilesystemArtifactStore(tmp_path / "validation")
+    start = datetime(2026, 3, 1, 14, 30, tzinfo=UTC)
+    scan_end = start
+
+    _write_operator_alert_scan_window(
+        paper_store,
+        scan_id="p1-bug-scan",
+        window_start_utc=start - timedelta(days=1),
+        window_end_utc=scan_end,
+    )
+    for index in range(100):
+        opened_at = start + timedelta(days=index)
+        closed_at = opened_at + timedelta(minutes=30)
+        pnl = Decimal("5.00") if index < 60 else Decimal("-2.00")
+        _write_execution_pair(
+            paper_store,
+            index=index,
+            opened_at=opened_at,
+            closed_at=closed_at,
+            pnl=pnl,
+        )
+
+    validation_store.write_evaluation_evidence(
+        EvaluationEvidencePack(
+            evidence_pack_id="baseline-oldest-reference",
+            candidate_id="baseline-long-only-v1",
+            window_start_utc=start,
+            window_end_utc=start + timedelta(days=100),
+            benchmark_metrics={"sharpe_ratio": Decimal("1.0")},
+            candidate_metrics={
+                "sharpe_ratio": Decimal("1.4"),
+                "hit_rate": Decimal("0.60"),
+            },
+            adversarial_checks=("none",),
+            recommendation="keep",
+            assumptions=("reference expectation for Gate 3",),
+        )
+    )
+    paper_store.write_recovery_drill_record(
+        recovery_drill=RecoveryDrillRecord(
+            drill_id="recovery-oldest",
+            symbol="SPY",
+            started_at_utc=start + timedelta(days=100),
+            completed_at_utc=start + timedelta(days=100, minutes=5),
+            status="completed",
+            summary="Recovery succeeded.",
+            evidence_refs=("artifacts/paper_loop/recovery_drills/recovery.json",),
+        )
+    )
+    paper_store.write_alert_drill_record(
+        alert_drill=AlertDrillRecord(
+            drill_id="smtp-oldest",
+            channel="smtp",
+            recorded_at_utc=start + timedelta(days=100, minutes=10),
+            status="completed",
+            summary="SMTP delivered.",
+            evidence_refs=("artifacts/paper_loop/alert_drills/smtp.json",),
+        )
+    )
+
+    report = build_gate3_readiness_report(
+        paper_store=paper_store,
+        validation_store=validation_store,
+    )
+    criteria_by_id = {
+        criterion.criterion_id: criterion for criterion in report.criteria
+    }
+
+    assert criteria_by_id["p1_bug_incidents"].source_evidence_at_utc == scan_end
+    assert criteria_by_id["replay_slippage_divergence"].required is False
+    assert "replay_slippage_divergence" not in report.required_criterion_ids
+    assert report.missing_source_criterion_ids == ()
+    assert report.oldest_required_source_evidence_at_utc == scan_end
+    assert report.source_evidence_at_utc == scan_end
+    assert report.latest_source_evidence_at_utc == start + timedelta(
+        days=100,
+        minutes=10,
+    )

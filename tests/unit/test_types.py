@@ -46,6 +46,12 @@ from tradingx.types import (
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
     RiskControlEvent,
+    RuntimeDecisionDetail,
+    RuntimeDecisionExecutionDetail,
+    RuntimeDecisionFreshnessDetail,
+    RuntimeDecisionRegimeDetail,
+    RuntimeDecisionRiskDetail,
+    RuntimeDecisionSignalDetail,
     ServiceCycleSnapshot,
     ServiceRunResult,
     ServiceSymbolResult,
@@ -786,12 +792,19 @@ def test_gate3_types_capture_lifecycle_drills_and_readiness() -> None:
         report_id="gate3-1",
         generated_at_utc=timestamp,
         status="pending",
+        source_evidence_at_utc=timestamp,
+        oldest_required_source_evidence_at_utc=timestamp,
+        latest_source_evidence_at_utc=timestamp,
+        required_criterion_ids=("duration_or_trade_count",),
+        missing_source_criterion_ids=(),
         closed_trade_count=1,
         calendar_days_observed=1,
         criteria=(
             Gate3CriterionSnapshot(
                 criterion_id="duration_or_trade_count",
                 status="pending",
+                source_evidence_at_utc=timestamp,
+                required=True,
                 threshold="At least 180 calendar days or 100 closed trades",
                 observed_value="1 trade / 1 day",
                 details="Not enough paper history yet.",
@@ -818,7 +831,61 @@ def test_gate3_types_capture_lifecycle_drills_and_readiness() -> None:
     assert alert.channel == "smtp"
     assert session.session_label == "session_preopen"
     assert report.criteria[0].criterion_id == "duration_or_trade_count"
+    assert report.source_evidence_at_utc == timestamp
+    assert report.required_criterion_ids == ("duration_or_trade_count",)
     assert package.criteria_statuses["duration_or_trade_count"] == "pending"
+
+
+def test_runtime_decision_detail_contract_captures_nested_freshness() -> None:
+    timestamp = datetime(2026, 4, 20, 14, 58, tzinfo=UTC)
+
+    detail = RuntimeDecisionDetail(
+        selection_id="selection-1",
+        decision_source_at_utc=timestamp,
+        decision="selected",
+        decision_reason="SPY cleared threshold.",
+        mode="paper",
+        selected_symbol="SPY",
+        signal=RuntimeDecisionSignalDetail(
+            available=True,
+            symbol="SPY",
+            final_score=Decimal("0.75"),
+            base_signal=Decimal("0.50"),
+            model_weight=Decimal("1.0"),
+            regime_weight=Decimal("1.1"),
+            liquidity_weight=Decimal("1.2"),
+        ),
+        regime=RuntimeDecisionRegimeDetail(
+            label="risk_on",
+            source="runtime_context",
+            context_source_at_utc=timestamp,
+        ),
+        risk=RuntimeDecisionRiskDetail(
+            eligible=True,
+            ineligibility_reason="",
+            threshold=Decimal("0.50"),
+            threshold_gap=Decimal("0.25"),
+            portfolio_overlap_penalty=Decimal("0.0"),
+        ),
+        execution=RuntimeDecisionExecutionDetail(
+            current_exposure="Flat",
+            pending_order_count=0,
+            latest_reject_reason="No recent rejects",
+            context_source_at_utc=timestamp,
+        ),
+        freshness=RuntimeDecisionFreshnessDetail(
+            decision_source_at_utc=timestamp,
+            runtime_context_source_at_utc=timestamp,
+            execution_context_source_at_utc=timestamp,
+        ),
+    )
+
+    payload = types_module._serialize_dataclass_payload(detail)
+
+    assert payload["decision_source_at_utc"] == timestamp.isoformat()
+    assert payload["signal"]["final_score"] == "0.75"
+    assert payload["risk"]["eligible"] is True
+    assert payload["freshness"]["decision_source_at_utc"] == timestamp.isoformat()
 
 
 def test_market_day_automation_types_capture_run_artifacts() -> None:

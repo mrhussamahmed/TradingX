@@ -38,6 +38,7 @@ from tradingx.types import (
     ReplaySession,
     ReplaySlippageSummary,
     ResearchStudioSnapshot,
+    RuntimeDecisionDetail,
     RuntimeHeartbeatSnapshot,
     StrategyActivationRecord,
     WebActionResult,
@@ -80,6 +81,8 @@ class ReadModelProtocol(Protocol):
     def get_latest_opportunity_selection(self) -> OpportunitySelectionRecord | None: ...
 
     def build_runtime_heartbeat_snapshot(self) -> RuntimeHeartbeatSnapshot: ...
+
+    def build_runtime_decision_detail(self) -> RuntimeDecisionDetail | None: ...
 
     def list_timeline_events(
         self,
@@ -1097,6 +1100,11 @@ def create_app(
         return JSONResponse(
             content=_serialize(selection) if selection is not None else None
         )
+
+    @app.get("/api/runtime-host/decision/latest")
+    def get_runtime_host_decision() -> JSONResponse:
+        detail = read_model.build_runtime_decision_detail()
+        return JSONResponse(content=_serialize(detail) if detail is not None else None)
 
     @app.get("/api/config/summary")
     def get_config_summary() -> JSONResponse:

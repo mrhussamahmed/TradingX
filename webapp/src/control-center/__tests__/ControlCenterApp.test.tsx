@@ -43,6 +43,7 @@ const blankConfig = {
 
 const blankPortfolio = {
   generated_at_utc: '2026-04-27T13:30:00Z',
+  source_evidence_at_utc: null,
   trading_mode: 'paper',
   data_state: 'available',
   source_summary: '',
@@ -115,6 +116,11 @@ const blankReplay = {
 const blankGate3 = {
   report_id: '',
   generated_at_utc: '',
+  source_evidence_at_utc: null,
+  oldest_required_source_evidence_at_utc: null,
+  latest_source_evidence_at_utc: null,
+  missing_source_criterion_ids: [],
+  required_criterion_ids: [],
   status: 'pending',
   closed_trade_count: 0,
   calendar_days_observed: 0,
@@ -151,6 +157,7 @@ const ROUTES: Record<string, unknown> = {
   '/api/runtime-host/activation/latest': null,
   '/api/runtime-host/model/latest': null,
   '/api/runtime-host/selection/latest': null,
+  '/api/runtime-host/decision/latest': null,
   '/api/platform/gate3/scheduler/state': blankScheduler,
 }
 
@@ -192,6 +199,7 @@ describe('ControlCenterApp', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     document.documentElement.removeAttribute('data-theme')
     document.documentElement.removeAttribute('data-density')
@@ -245,6 +253,114 @@ describe('ControlCenterApp', () => {
       expect(screen.getByText(/No structured trade decision is available/i)).toBeInTheDocument()
     } finally {
       ROUTES['/api/runtime-host/heartbeat'] = originalHeartbeat
+    }
+  })
+
+  it('fetches runtime decision detail and uses its source timestamp for Mission Control evidence', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-04-28T12:10:00Z'))
+    const originalHeartbeat = ROUTES['/api/runtime-host/heartbeat']
+    const originalPortfolio = ROUTES['/api/platform/portfolio']
+    const originalGate3 = ROUTES['/api/platform/gate3/readiness']
+    const originalDecision = ROUTES['/api/runtime-host/decision/latest']
+    ROUTES['/api/runtime-host/heartbeat'] = {
+      ...blankRuntimeHeartbeat,
+      last_evaluation_at_utc: '2026-04-28T12:00:00Z',
+      last_decision: 'selected SPY',
+      decision: 'buy',
+    }
+    ROUTES['/api/platform/portfolio'] = {
+      ...blankPortfolio,
+      generated_at_utc: '2026-04-28T12:00:00Z',
+      source_evidence_at_utc: '2026-04-28T11:58:00Z',
+    }
+    ROUTES['/api/platform/gate3/readiness'] = {
+      ...blankGate3,
+      generated_at_utc: '2026-04-28T12:00:00Z',
+      oldest_required_source_evidence_at_utc: '2026-04-28T11:57:00Z',
+      latest_source_evidence_at_utc: '2026-04-28T11:59:00Z',
+      missing_source_criterion_ids: [],
+      required_criterion_ids: ['closed_trades'],
+      criteria: [
+        {
+          criterion_id: 'closed_trades',
+          status: 'pass',
+          threshold: '',
+          observed_value: '',
+          details: '',
+          evidence_refs: [],
+          required: true,
+          source_evidence_at_utc: '2026-04-28T11:57:00Z',
+        },
+      ],
+    }
+    ROUTES['/api/runtime-host/decision/latest'] = {
+      selection_id: 'selection-1',
+      generated_at_utc: '2026-04-28T12:00:00Z',
+      decision_source_at_utc: '2026-04-28T11:56:00Z',
+      decision: 'buy',
+      decision_reason: 'Score crossed threshold.',
+    }
+
+    try {
+      const fetchSpy = setupFetchMock()
+      render(<ControlCenterApp />)
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
+      })
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/runtime-host/decision/latest',
+        expect.any(Object),
+      )
+      expect(await screen.findByText(/Decision evidence at .*:56/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Missing portfolio evidence/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Missing gate evidence/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Missing decision evidence/i)).not.toBeInTheDocument()
+    } finally {
+      ROUTES['/api/runtime-host/heartbeat'] = originalHeartbeat
+      ROUTES['/api/platform/portfolio'] = originalPortfolio
+      ROUTES['/api/platform/gate3/readiness'] = originalGate3
+      ROUTES['/api/runtime-host/decision/latest'] = originalDecision
+    }
+  })
+
+  it('keeps decision evidence missing when the decision detail endpoint is unavailable', async () => {
+    const originalHeartbeat = ROUTES['/api/runtime-host/heartbeat']
+    const originalSelection = ROUTES['/api/runtime-host/selection/latest']
+    const originalDecision = ROUTES['/api/runtime-host/decision/latest']
+    ROUTES['/api/runtime-host/heartbeat'] = {
+      ...blankRuntimeHeartbeat,
+      last_evaluation_at_utc: '2026-04-28T12:00:00Z',
+      last_decision: 'selected SPY',
+      decision: 'buy',
+    }
+    ROUTES['/api/runtime-host/selection/latest'] = {
+      selection_id: 'selection-1',
+      generated_at_utc: '2026-04-28T12:00:00Z',
+      strategy_id: 'strategy-1',
+      model_snapshot_id: 'model-1',
+      symbols_considered: ['SPY'],
+      ranked_opportunities: [],
+      selected_symbol: 'SPY',
+      decision: 'buy',
+      decision_reason: 'Score crossed threshold.',
+    }
+    ROUTES['/api/runtime-host/decision/latest'] = null
+
+    try {
+      render(<ControlCenterApp />)
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { selected: true, name: /Mission Control/i })).toBeInTheDocument()
+      })
+
+      expect(screen.getByText(/No decision evidence/i)).toBeInTheDocument()
+      expect(screen.getByText(/Missing selection-backed decision evidence/i)).toBeInTheDocument()
+      expect(screen.getAllByText(/Missing .*decision evidence/i).length).toBeGreaterThan(0)
+    } finally {
+      ROUTES['/api/runtime-host/heartbeat'] = originalHeartbeat
+      ROUTES['/api/runtime-host/selection/latest'] = originalSelection
+      ROUTES['/api/runtime-host/decision/latest'] = originalDecision
     }
   })
 

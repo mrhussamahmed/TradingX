@@ -76,6 +76,7 @@ export function OperatorMissionControlFlavor() {
     schedulerState,
     generatedAt,
     runtimeSelection,
+    runtimeDecisionDetail,
   } = data
 
   const gateTone = deriveCombinedGateTone({
@@ -89,21 +90,25 @@ export function OperatorMissionControlFlavor() {
     sourceTimestamps: [
       commandCenter.generated_at_utc,
       portfolio.generated_at_utc,
+      portfolio.source_evidence_at_utc,
       research.generated_at_utc,
       gate3Readiness.generated_at_utc,
+      gate3Readiness.oldest_required_source_evidence_at_utc,
+      gate3Readiness.latest_source_evidence_at_utc,
       digest?.generated_at_utc,
+      runtimeDecisionDetail?.decision_source_at_utc,
       runtimeHeartbeat.last_evaluation_at_utc,
       runtimeState.updated_at_utc,
       ...replay.events.map((event) => event.occurred_at_utc),
       ...explorer.map((record) => record.recorded_at_utc),
     ],
   })
-  const evidenceAge = latestEvidenceAt ? ageMinutes(latestEvidenceAt, nowMs) : null
   const decisionEvidenceAt = deriveDecisionEvidenceTimestamp({
     lastDecision: runtimeHeartbeat.last_decision,
     decision: runtimeHeartbeat.decision,
-    selectionId: runtimeSelection?.selection_id,
+    selectionId: runtimeDecisionDetail?.selection_id ?? runtimeSelection?.selection_id,
     selectionGeneratedAt: runtimeSelection?.generated_at_utc,
+    decisionSourceAtUtc: runtimeDecisionDetail?.decision_source_at_utc,
   })
   const requiredSafetyEvidence = deriveRequiredSafetyEvidence({
     nowMs,
@@ -114,11 +119,17 @@ export function OperatorMissionControlFlavor() {
       gateStatuses: commandCenter.gate_statuses,
       gate3GeneratedAt: gate3Readiness.generated_at_utc,
       gate3Criteria: gate3Readiness.criteria,
+      oldestRequiredSourceEvidenceAtUtc: gate3Readiness.oldest_required_source_evidence_at_utc,
+      missingSourceCriterionIds: gate3Readiness.missing_source_criterion_ids,
+      requiredCriterionIds: gate3Readiness.required_criterion_ids,
     }),
-    portfolioTimestamp: null,
+    portfolioTimestamp: portfolio.source_evidence_at_utc,
     decisionTimestamp: decisionEvidenceAt,
   })
   const staleEvidence = requiredSafetyEvidence.stale
+  const requiredEvidenceAge = requiredSafetyEvidence.latestRequiredTimestamp
+    ? ageMinutes(requiredSafetyEvidence.latestRequiredTimestamp, nowMs)
+    : null
 
   const tradePermission = describeTradePermission({
     liveTradingEnabled: configSummary.live_disable_report.live_trading_enabled,
@@ -202,14 +213,14 @@ export function OperatorMissionControlFlavor() {
         id: 'freshness',
         label: 'Evidence freshness',
         value: staleEvidence ? 'Stale or missing' : 'Current',
-        detail: latestEvidenceAt
-          ? `Newest local evidence is ${Math.max(0, Math.round(evidenceAge ?? 0))} minutes old.`
-          : 'No timestamped local evidence has been loaded.',
+        detail: requiredSafetyEvidence.latestRequiredTimestamp
+          ? `Newest required source evidence is ${Math.max(0, Math.round(requiredEvidenceAge ?? 0))} minutes old.`
+          : 'No required source evidence has been loaded.',
         tone: staleEvidence ? 'watch' : 'good',
         evidence: requiredSafetyEvidence.stale
           ? describeRequiredEvidenceGap(requiredSafetyEvidence.missing, requiredSafetyEvidence.staleClasses)
-          : latestEvidenceAt
-            ? `Latest evidence timestamp ${formatTimestamp(latestEvidenceAt)}`
+          : requiredSafetyEvidence.latestRequiredTimestamp
+            ? `Latest required source evidence ${formatTimestamp(requiredSafetyEvidence.latestRequiredTimestamp)}`
             : 'Missing evidence timestamp',
         route: 'evidence-replay',
       },
@@ -217,10 +228,11 @@ export function OperatorMissionControlFlavor() {
         id: 'decision',
         label: 'Last trade decision',
         value: decisionEvidenceAt
-          ? runtimeSelection?.decision || runtimeHeartbeat.last_decision || runtimeHeartbeat.decision || 'Decision evidence'
+          ? runtimeDecisionDetail?.decision || runtimeSelection?.decision || runtimeHeartbeat.last_decision || runtimeHeartbeat.decision || 'Decision evidence'
           : 'No decision evidence',
         detail: decisionEvidenceAt
-          ? runtimeSelection?.decision_reason ||
+          ? runtimeDecisionDetail?.decision_reason ||
+            runtimeSelection?.decision_reason ||
             runtimeHeartbeat.decision_reason ||
             'Decision evidence exists, but structured signal, regime, risk-check, and execution fields are not fully exposed.'
           : 'No opportunity-selection evidence is available. Placeholder decision labels are not treated as evidence.',
@@ -249,13 +261,13 @@ export function OperatorMissionControlFlavor() {
   }, [
     commandCenter,
     configSummary,
-    evidenceAge,
     gateTone.tone,
-    latestEvidenceAt,
     openPositions,
     portfolio,
     decisionEvidenceAt,
+    requiredEvidenceAge,
     runtimeHeartbeat,
+    runtimeDecisionDetail,
     runtimeSelection,
     runtimeState,
     schedulerState,

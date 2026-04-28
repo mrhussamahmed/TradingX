@@ -762,6 +762,8 @@ class Gate3CriterionSnapshot:
     observed_value: str
     details: str
     evidence_refs: tuple[str, ...]
+    source_evidence_at_utc: datetime | None = None
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -775,6 +777,11 @@ class Gate3ReadinessReport:
     summary: str
     required_operator_action: str
     evidence_refs: tuple[str, ...]
+    source_evidence_at_utc: datetime | None = None
+    oldest_required_source_evidence_at_utc: datetime | None = None
+    latest_source_evidence_at_utc: datetime | None = None
+    required_criterion_ids: tuple[str, ...] = ()
+    missing_source_criterion_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -860,6 +867,63 @@ class RuntimeOperatorGuidance:
     recommendation: str
     detail: str
     tone: str
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionSignalDetail:
+    available: bool
+    symbol: str | None
+    final_score: Decimal | str | None
+    base_signal: Decimal | str | None
+    model_weight: Decimal | str | None
+    regime_weight: Decimal | str | None
+    liquidity_weight: Decimal | str | None
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionRegimeDetail:
+    label: str
+    source: str
+    context_source_at_utc: datetime | None
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionRiskDetail:
+    eligible: bool | None
+    ineligibility_reason: str
+    threshold: Decimal | str | None
+    threshold_gap: Decimal | str | None
+    portfolio_overlap_penalty: Decimal | str | None
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionExecutionDetail:
+    current_exposure: str
+    pending_order_count: int
+    latest_reject_reason: str
+    context_source_at_utc: datetime | None
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionFreshnessDetail:
+    decision_source_at_utc: datetime
+    runtime_context_source_at_utc: datetime | None
+    execution_context_source_at_utc: datetime | None
+
+
+@dataclass(frozen=True)
+class RuntimeDecisionDetail:
+    selection_id: str
+    decision_source_at_utc: datetime
+    decision: str
+    decision_reason: str
+    mode: str
+    selected_symbol: str
+    signal: RuntimeDecisionSignalDetail
+    regime: RuntimeDecisionRegimeDetail
+    risk: RuntimeDecisionRiskDetail
+    execution: RuntimeDecisionExecutionDetail
+    freshness: RuntimeDecisionFreshnessDetail
 
 
 @dataclass(frozen=True)
@@ -1276,6 +1340,10 @@ class PortfolioWorkspaceSnapshot:
     execution_panel: PortfolioExecutionPanel
     positions_panel: PortfolioPositionsPanel
     diagnostics: tuple[PortfolioDiagnostic, ...]
+    source_evidence_at_utc: datetime | None = None
+    account_position_source_at_utc: datetime | None = None
+    execution_journal_source_at_utc: datetime | None = None
+    closed_trade_source_at_utc: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -1461,6 +1529,12 @@ __all__ = (
     "RegimeSnapshot",
     "RiskControlEvent",
     "RoundTripResult",
+    "RuntimeDecisionDetail",
+    "RuntimeDecisionExecutionDetail",
+    "RuntimeDecisionFreshnessDetail",
+    "RuntimeDecisionRegimeDetail",
+    "RuntimeDecisionRiskDetail",
+    "RuntimeDecisionSignalDetail",
     "RuntimeHeartbeatSnapshot",
     "ScalarValue",
     "SessionOpenPortfolioStateRecord",

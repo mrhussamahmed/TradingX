@@ -24,6 +24,7 @@ import {
   getReplay,
   getResearch,
   getRuntimeHostActivation,
+  getRuntimeHostDecisionDetail,
   getRuntimeHostHeartbeat,
   getRuntimeHostModel,
   getRuntimeHostSelection,
@@ -52,6 +53,7 @@ import type {
   ReplaySession,
   ResearchStudioSnapshot,
   RuntimeHeartbeatSnapshot,
+  RuntimeDecisionDetail,
   StrategyActivationRecord,
 } from '../../types'
 
@@ -87,6 +89,7 @@ export type DataState = {
   runtimeActivation: StrategyActivationRecord | null
   runtimeModel: ModelWeightSnapshot | null
   runtimeSelection: OpportunitySelectionRecord | null
+  runtimeDecisionDetail: RuntimeDecisionDetail | null
   schedulerState: MarketDaySchedulerState
 }
 
@@ -161,6 +164,7 @@ const defaultReplay: ReplaySession = {
 
 const defaultPortfolio: PortfolioWorkspaceSnapshot = {
   generated_at_utc: '',
+  source_evidence_at_utc: null,
   trading_mode: 'paper',
   data_state: 'waiting',
   source_summary: 'Portfolio analytics are loading.',
@@ -206,6 +210,11 @@ const defaultPortfolio: PortfolioWorkspaceSnapshot = {
 const defaultGate3Readiness: Gate3ReadinessReport = {
   report_id: '',
   generated_at_utc: '',
+  source_evidence_at_utc: null,
+  oldest_required_source_evidence_at_utc: null,
+  latest_source_evidence_at_utc: null,
+  missing_source_criterion_ids: [],
+  required_criterion_ids: [],
   status: 'pending',
   closed_trade_count: 0,
   calendar_days_observed: 0,
@@ -303,6 +312,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [runtimeActivation, setRuntimeActivation] = useState<StrategyActivationRecord | null>(null)
   const [runtimeModel, setRuntimeModel] = useState<ModelWeightSnapshot | null>(null)
   const [runtimeSelection, setRuntimeSelection] = useState<OpportunitySelectionRecord | null>(null)
+  const [runtimeDecisionDetail, setRuntimeDecisionDetail] = useState<RuntimeDecisionDetail | null>(null)
   const [schedulerState, setSchedulerState] =
     useState<MarketDaySchedulerState>(defaultSchedulerState)
   const [pageError, setPageError] = useState('')
@@ -343,6 +353,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           getRuntimeHostActivation(),
           getRuntimeHostModel(),
           getRuntimeHostSelection(),
+          getRuntimeHostDecisionDetail(),
           getSchedulerState(),
         ])
 
@@ -368,7 +379,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const nextRuntimeActivation = value<StrategyActivationRecord | null>(14, null)
         const nextRuntimeModel = value<ModelWeightSnapshot | null>(15, null)
         const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(16, null)
-        const nextSchedulerState = value(17, defaultSchedulerState)
+        const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(17, null)
+        const nextSchedulerState = value(18, defaultSchedulerState)
 
         startTransition(() => {
           setCommandCenter(nextCommandCenter)
@@ -388,6 +400,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           setRuntimeActivation(nextRuntimeActivation)
           setRuntimeModel(nextRuntimeModel)
           setRuntimeSelection(nextRuntimeSelection)
+          setRuntimeDecisionDetail(nextRuntimeDecisionDetail)
           setSchedulerState(nextSchedulerState)
           setGeneratedAt(
             nextPortfolio.generated_at_utc || nextCommandCenter.generated_at_utc || new Date().toISOString(),
@@ -518,6 +531,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeActivation,
       runtimeModel,
       runtimeSelection,
+      runtimeDecisionDetail,
       schedulerState,
       refresh,
       unlockWrites,
@@ -547,6 +561,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeActivation,
       runtimeModel,
       runtimeSelection,
+      runtimeDecisionDetail,
       schedulerState,
       refresh,
       unlockWrites,

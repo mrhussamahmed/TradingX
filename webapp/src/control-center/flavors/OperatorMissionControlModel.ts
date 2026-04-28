@@ -103,6 +103,12 @@ export type RequiredSafetyEvidence = {
   latestRequiredTimestamp: string | null
 }
 
+export type GateEvidenceCriterion = {
+  criterion_id?: string
+  required?: boolean
+  source_evidence_at_utc?: string | null
+} & Record<string, unknown>
+
 export function deriveRequiredSafetyEvidence(args: {
   nowMs: number
   staleMinutes: number
@@ -146,13 +152,37 @@ export function deriveGateEvidenceTimestamp(args: {
   commandCenterGeneratedAt: string | null | undefined
   gateStatuses: Record<string, string> | null | undefined
   gate3GeneratedAt: string | null | undefined
-  gate3Criteria: unknown[] | null | undefined
+  gate3Criteria: GateEvidenceCriterion[] | null | undefined
+  oldestRequiredSourceEvidenceAtUtc?: string | null | undefined
+  missingSourceCriterionIds?: string[] | null | undefined
+  requiredCriterionIds?: string[] | null | undefined
 }): string | null {
   void args.commandCenterGeneratedAt
   void args.gateStatuses
   void args.gate3GeneratedAt
-  void args.gate3Criteria
-  return null
+  const missingIds = args.missingSourceCriterionIds ?? []
+  if (missingIds.length > 0) {
+    return null
+  }
+  if (args.oldestRequiredSourceEvidenceAtUtc) {
+    return args.oldestRequiredSourceEvidenceAtUtc
+  }
+  const requiredIds = new Set(args.requiredCriterionIds ?? [])
+  const requiredCriteria = (args.gate3Criteria ?? []).filter((criterion) => {
+    if (criterion.required) return true
+    return Boolean(criterion.criterion_id && requiredIds.has(criterion.criterion_id))
+  })
+  if (requiredCriteria.length === 0) {
+    return null
+  }
+  const timestamps = requiredCriteria.map((criterion) => criterion.source_evidence_at_utc)
+  if (timestamps.some((timestamp) => !timestamp)) {
+    return null
+  }
+  if (timestamps.some((timestamp) => Number.isNaN(new Date(timestamp ?? '').getTime()))) {
+    return null
+  }
+  return oldestTimestamp(timestamps)
 }
 
 export function deriveDecisionEvidenceTimestamp(args: {
@@ -160,13 +190,28 @@ export function deriveDecisionEvidenceTimestamp(args: {
   decision: string | null | undefined
   selectionId: string | null | undefined
   selectionGeneratedAt: string | null | undefined
+  decisionSourceAtUtc?: string | null | undefined
 }): string | null {
+  void args.selectionGeneratedAt
   const label = `${args.lastDecision ?? ''} ${args.decision ?? ''}`.trim().toLowerCase()
   const placeholder = !label || /no decision|awaiting|pending|unavailable/.test(label)
-  if (placeholder || !args.selectionId || !args.selectionGeneratedAt) {
+  if (placeholder || !args.selectionId || !args.decisionSourceAtUtc) {
     return null
   }
-  return args.selectionGeneratedAt
+  return args.decisionSourceAtUtc
+}
+
+function oldestTimestamp(values: Array<string | null | undefined>): string | null {
+  let oldest: { value: string; ms: number } | null = null
+  for (const value of values) {
+    if (!value) continue
+    const ms = new Date(value).getTime()
+    if (Number.isNaN(ms)) continue
+    if (!oldest || ms < oldest.ms) {
+      oldest = { value, ms }
+    }
+  }
+  return oldest?.value ?? null
 }
 
 export function deriveCombinedGateTone(args: {

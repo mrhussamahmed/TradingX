@@ -64,7 +64,13 @@ from tradingx.types import (
     ReplaySlippageSummary,
     ResearchCandidateSummary,
     ResearchStudioSnapshot,
+    RuntimeDecisionDetail,
+    RuntimeDecisionExecutionDetail,
+    RuntimeDecisionFreshnessDetail,
     RuntimeDecisionLadderRow,
+    RuntimeDecisionRegimeDetail,
+    RuntimeDecisionRiskDetail,
+    RuntimeDecisionSignalDetail,
     RuntimeHeartbeatSnapshot,
     RuntimeOperatorGuidance,
     RuntimeSymbolHeartbeatRow,
@@ -289,6 +295,59 @@ class LocalWebReadModel:
             ),
         )
 
+    def _payload_timestamp(
+        self,
+        payload: dict[str, object] | None,
+        *fields: str,
+    ) -> datetime | None:
+        if payload is None:
+            return None
+        for field in fields:
+            raw_value = str(payload.get(field, "")).strip()
+            if raw_value:
+                return self._parse_datetime(raw_value)
+        return None
+
+    def _latest_payload_timestamp(
+        self,
+        payloads: list[dict[str, object]],
+        *fields: str,
+    ) -> datetime | None:
+        timestamps = [
+            timestamp
+            for payload in payloads
+            if (timestamp := self._payload_timestamp(payload, *fields)) is not None
+        ]
+        return max(timestamps) if timestamps else None
+
+    def _portfolio_account_position_source_at(
+        self,
+        service_cycles: list[dict[str, object]],
+    ) -> datetime | None:
+        latest_cycle = self._pick_latest_payload(
+            service_cycles,
+            timestamp_field="completed_at_utc",
+        )
+        if latest_cycle is None:
+            return None
+        account_source = self._payload_timestamp(
+            latest_cycle,
+            "account_source_at_utc",
+        )
+        position_source = self._payload_timestamp(
+            latest_cycle,
+            "position_source_at_utc",
+        )
+        if account_source is None or position_source is None:
+            return None
+        return min(account_source, position_source)
+
+    def _latest_oms_event_source_at(
+        self,
+        oms_events: list[dict[str, str]],
+    ) -> datetime | None:
+        return self._latest_payload_timestamp(list(oms_events), "recorded_at_utc")
+
     def build_portfolio_workspace_snapshot(self) -> PortfolioWorkspaceSnapshot:
         dashboard = self.build_dashboard_snapshot()
         runtime_state = self.get_runtime_host_state()
@@ -369,6 +428,15 @@ class LocalWebReadModel:
             default=equity,
         )
         oms_events = self._load_oms_events(limit=25)
+        account_position_source_at = self._portfolio_account_position_source_at(
+            service_cycles
+        )
+        execution_journal_source_at = self._latest_oms_event_source_at(oms_events)
+        closed_trade_source_at = self._latest_payload_timestamp(
+            closed_trades,
+            "closed_at_utc",
+            "recorded_at_utc",
+        )
         reject_events = [
             event for event in oms_events if event["event_type"] == "reject"
         ]
@@ -685,6 +753,10 @@ class LocalWebReadModel:
                 warmup=warmup,
                 reject_events=reject_events,
             ),
+            source_evidence_at_utc=account_position_source_at,
+            account_position_source_at_utc=account_position_source_at,
+            execution_journal_source_at_utc=execution_journal_source_at,
+            closed_trade_source_at_utc=closed_trade_source_at,
         )
 
     def build_performance_analytics_snapshot(self) -> PortfolioWorkspaceSnapshot:
@@ -982,6 +1054,147 @@ class LocalWebReadModel:
             symbol_rows=symbol_rows,
             decision_ladder=decision_ladder,
             operator_guidance=operator_guidance,
+        )
+
+    def build_runtime_decision_detail(self) -> RuntimeDecisionDetail | None:
+        selection = self.get_latest_opportunity_selection()
+        if selection is None:
+            return None
+        runtime_state = self.get_runtime_host_state()
+        activation = self.get_latest_strategy_activation()
+        latest_cycle_payload = self._pick_latest_payload(
+            self._paper_store.list_artifact_payloads("service_cycles"),
+            timestamp_field="completed_at_utc",
+        )
+        current_open_symbols = tuple(
+            self._payload_strings(latest_cycle_payload.get("open_position_symbols", ()))
+            if latest_cycle_payload is not None
+            else ()
+        )
+        positions_count = len(current_open_symbols)
+        current_exposure = (
+            "Flat" if positions_count == 0 else f"{positions_count} open position(s)"
+        )
+        oms_events = self._load_oms_events(limit=25)
+        reject_events = [
+            event for event in oms_events if event["event_type"] == "reject"
+        ]
+        latest_reject_reason = (
+            str(reject_events[0]["reason"]).replace("_", " ")
+            if reject_events
+            else "No recent rejects"
+        )
+        threshold = (
+            self._decimal_from_candidates(
+                activation.deploy_threshold,
+                default=Decimal("0"),
+            )
+            if activation is not None
+            else None
+        )
+        selected_score = (
+            next(
+                (
+                    score
+                    for score in selection.ranked_opportunities
+                    if score.symbol == selection.selected_symbol
+                ),
+                None,
+            )
+            if selection.decision == "selected"
+            else None
+        )
+        top_score = (
+            selection.ranked_opportunities[0]
+            if selection.ranked_opportunities
+            else None
+        )
+        score = selected_score if selected_score is not None else (
+            top_score if selection.decision == "no_trade" else None
+        )
+        integrity_reason = ""
+        if (
+            selection.decision == "selected"
+            and selection.selected_symbol
+            and selected_score is None
+        ):
+            integrity_reason = "selected_symbol missing from ranked_opportunities"
+
+        signal = RuntimeDecisionSignalDetail(
+            available=score is not None and not integrity_reason,
+            symbol=(score.symbol if score is not None and not integrity_reason else None),
+            final_score=(
+                score.final_score if score is not None and not integrity_reason else None
+            ),
+            base_signal=(
+                score.base_signal if score is not None and not integrity_reason else None
+            ),
+            model_weight=(
+                score.model_weight if score is not None and not integrity_reason else None
+            ),
+            regime_weight=(
+                score.regime_weight if score is not None and not integrity_reason else None
+            ),
+            liquidity_weight=(
+                score.liquidity_weight if score is not None and not integrity_reason else None
+            ),
+        )
+        eligible = None
+        ineligibility_reason = ""
+        threshold_gap = None
+        portfolio_overlap_penalty = None
+        if integrity_reason:
+            eligible = False
+            ineligibility_reason = integrity_reason
+        elif score is not None:
+            eligible = score.eligible
+            ineligibility_reason = score.ineligibility_reason
+            threshold_gap = (
+                score.final_score - threshold if threshold is not None else None
+            )
+            portfolio_overlap_penalty = score.portfolio_overlap_penalty
+
+        runtime_context_source_at = runtime_state.updated_at_utc
+        execution_context_source_at = self._latest_oms_event_source_at(oms_events)
+        return RuntimeDecisionDetail(
+            selection_id=selection.selection_id,
+            decision_source_at_utc=selection.generated_at_utc,
+            decision=selection.decision,
+            decision_reason=selection.decision_reason,
+            mode=(
+                "live"
+                if bool(self._config.live_disable_report().get("live_trading_enabled"))
+                else "paper"
+            ),
+            selected_symbol=selection.selected_symbol,
+            signal=signal,
+            regime=RuntimeDecisionRegimeDetail(
+                label=self._derive_current_regime(
+                    runtime_state=runtime_state,
+                    warmup=self.get_latest_historical_warmup(),
+                    selection=selection,
+                ),
+                source="runtime_context",
+                context_source_at_utc=runtime_context_source_at,
+            ),
+            risk=RuntimeDecisionRiskDetail(
+                eligible=eligible,
+                ineligibility_reason=ineligibility_reason,
+                threshold=threshold,
+                threshold_gap=threshold_gap,
+                portfolio_overlap_penalty=portfolio_overlap_penalty,
+            ),
+            execution=RuntimeDecisionExecutionDetail(
+                current_exposure=current_exposure,
+                pending_order_count=self._count_pending_orders(),
+                latest_reject_reason=latest_reject_reason,
+                context_source_at_utc=execution_context_source_at,
+            ),
+            freshness=RuntimeDecisionFreshnessDetail(
+                decision_source_at_utc=selection.generated_at_utc,
+                runtime_context_source_at_utc=runtime_context_source_at,
+                execution_context_source_at_utc=execution_context_source_at,
+            ),
         )
 
     def _artifact_root_path(self) -> Path:
@@ -2778,12 +2991,34 @@ class LocalWebReadModel:
                     observed_value=str(item.get("observed_value", "")),
                     details=str(item.get("details", "")),
                     evidence_refs=self._payload_strings(item.get("evidence_refs", ())),
+                    source_evidence_at_utc=(
+                        self._payload_timestamp(item, "source_evidence_at_utc")
+                    ),
+                    required=bool(item.get("required", True)),
                 )
                 for item in self._ensure_list(payload.get("criteria", ()))
             ),
             summary=str(payload.get("summary", "")),
             required_operator_action=str(payload.get("required_operator_action", "")),
             evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+            source_evidence_at_utc=self._payload_timestamp(
+                payload,
+                "source_evidence_at_utc",
+            ),
+            oldest_required_source_evidence_at_utc=self._payload_timestamp(
+                payload,
+                "oldest_required_source_evidence_at_utc",
+            ),
+            latest_source_evidence_at_utc=self._payload_timestamp(
+                payload,
+                "latest_source_evidence_at_utc",
+            ),
+            required_criterion_ids=self._payload_strings(
+                payload.get("required_criterion_ids", ())
+            ),
+            missing_source_criterion_ids=self._payload_strings(
+                payload.get("missing_source_criterion_ids", ())
+            ),
         )
 
     def get_latest_gate3_promotion_package(self) -> Gate3PromotionPackage | None:

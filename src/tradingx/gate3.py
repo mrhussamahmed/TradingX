@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from dataclasses import fields
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -36,6 +37,117 @@ GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS = Decimal("10")
 P1_BUG_CATEGORIES = frozenset(
     {"runtime", "service_failure", "execution_failure", "automation_failure", "bug"}
 )
+OPTIONAL_GATE3_CRITERION_IDS = frozenset({"replay_slippage_divergence"})
+
+
+def _accepted_dataclass_fields(cls: type[object]) -> frozenset[str]:
+    return frozenset(field.name for field in fields(cls))
+
+
+def _criterion(
+    *,
+    criterion_id: str,
+    status: str,
+    threshold: str,
+    observed_value: str,
+    details: str,
+    evidence_refs: tuple[str, ...],
+    source_evidence_at_utc: datetime | None,
+    required: bool = True,
+) -> Gate3CriterionSnapshot:
+    payload: dict[str, object] = {
+        "criterion_id": criterion_id,
+        "status": status,
+        "threshold": threshold,
+        "observed_value": observed_value,
+        "details": details,
+        "evidence_refs": evidence_refs,
+        "source_evidence_at_utc": source_evidence_at_utc,
+        "required": required,
+    }
+    accepted_fields = _accepted_dataclass_fields(Gate3CriterionSnapshot)
+    return Gate3CriterionSnapshot(
+        **{key: value for key, value in payload.items() if key in accepted_fields}
+    )
+
+
+def _readiness_report(
+    *,
+    report_id: str,
+    generated_at_utc: datetime,
+    status: str,
+    closed_trade_count: int,
+    calendar_days_observed: int,
+    criteria: tuple[Gate3CriterionSnapshot, ...],
+    summary: str,
+    required_operator_action: str,
+    evidence_refs: tuple[str, ...],
+) -> Gate3ReadinessReport:
+    required_criterion_ids = tuple(
+        criterion.criterion_id
+        for criterion in criteria
+        if getattr(criterion, "required", True)
+    )
+    missing_source_criterion_ids = tuple(
+        criterion.criterion_id
+        for criterion in criteria
+        if getattr(criterion, "required", True)
+        and getattr(criterion, "source_evidence_at_utc", None) is None
+    )
+    required_source_timestamps = [
+        source_evidence_at_utc
+        for criterion in criteria
+        if getattr(criterion, "required", True)
+        and (
+            source_evidence_at_utc := getattr(
+                criterion,
+                "source_evidence_at_utc",
+                None,
+            )
+        )
+        is not None
+    ]
+    all_source_timestamps = [
+        source_evidence_at_utc
+        for criterion in criteria
+        if (
+            source_evidence_at_utc := getattr(
+                criterion,
+                "source_evidence_at_utc",
+                None,
+            )
+        )
+        is not None
+    ]
+    oldest_required_source_evidence_at_utc = (
+        min(required_source_timestamps)
+        if required_source_timestamps and not missing_source_criterion_ids
+        else None
+    )
+    payload: dict[str, object] = {
+        "report_id": report_id,
+        "generated_at_utc": generated_at_utc,
+        "status": status,
+        "closed_trade_count": closed_trade_count,
+        "calendar_days_observed": calendar_days_observed,
+        "criteria": criteria,
+        "summary": summary,
+        "required_operator_action": required_operator_action,
+        "evidence_refs": evidence_refs,
+        "source_evidence_at_utc": oldest_required_source_evidence_at_utc,
+        "oldest_required_source_evidence_at_utc": (
+            oldest_required_source_evidence_at_utc
+        ),
+        "latest_source_evidence_at_utc": (
+            max(all_source_timestamps) if all_source_timestamps else None
+        ),
+        "required_criterion_ids": required_criterion_ids,
+        "missing_source_criterion_ids": missing_source_criterion_ids,
+    }
+    accepted_fields = _accepted_dataclass_fields(Gate3ReadinessReport)
+    return Gate3ReadinessReport(
+        **{key: value for key, value in payload.items() if key in accepted_fields}
+    )
 
 
 def _safe_decimal(value: object) -> Decimal | None:
@@ -43,6 +155,111 @@ def _safe_decimal(value: object) -> Decimal | None:
     if not raw:
         return None
     return Decimal(raw)
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    return datetime.fromisoformat(raw)
+
+
+def _latest_payload_timestamp(
+    payloads: list[dict[str, object]],
+    *,
+    timestamp_fields: tuple[str, ...],
+    predicate: Callable[[dict[str, object]], bool] | None = None,
+) -> datetime | None:
+    timestamps: list[datetime] = []
+    for payload in payloads:
+        if predicate is not None and not predicate(payload):
+            continue
+        for field in timestamp_fields:
+            timestamp = _parse_timestamp(payload.get(field, ""))
+            if timestamp is not None:
+                timestamps.append(timestamp)
+                break
+    return max(timestamps) if timestamps else None
+
+
+def _latest_closed_trade_source_at(
+    closed_trade_payloads: list[dict[str, object]],
+) -> datetime | None:
+    return _latest_payload_timestamp(
+        closed_trade_payloads,
+        timestamp_fields=("closed_at_utc",),
+    )
+
+
+def _latest_service_cycle_source_at(
+    service_cycles: list[dict[str, object]],
+) -> datetime | None:
+    return _latest_payload_timestamp(
+        service_cycles,
+        timestamp_fields=("completed_at_utc",),
+    )
+
+
+def _latest_evaluation_source_at(
+    validation_store: FilesystemArtifactStore,
+    *,
+    candidate_id: str,
+) -> datetime | None:
+    return _latest_payload_timestamp(
+        [
+            payload
+            for payload in validation_store.list_artifact_payloads(
+                "evaluation_evidence"
+            )
+            if str(payload.get("candidate_id", "")) == candidate_id
+        ],
+        timestamp_fields=("window_end_utc",),
+    )
+
+
+def _latest_operator_alert_scan_window_source_at(
+    scan_windows: list[dict[str, object]],
+) -> datetime | None:
+    return _latest_payload_timestamp(
+        scan_windows,
+        timestamp_fields=("window_end_utc", "scan_end_utc", "completed_at_utc"),
+        predicate=lambda payload: bool(
+            str(payload.get("artifact_source", "")).strip()
+        )
+        and bool(
+            payload.get("alert_categories")
+            or payload.get("categories")
+            or payload.get("scanned_categories")
+        ),
+    )
+
+
+def _p1_bug_source_at(
+    *,
+    operator_alerts: list[dict[str, object]],
+    scan_windows: list[dict[str, object]],
+    p1_bug_count: int,
+) -> datetime | None:
+    if p1_bug_count == 0:
+        return _latest_operator_alert_scan_window_source_at(scan_windows)
+    return _latest_payload_timestamp(
+        operator_alerts,
+        timestamp_fields=("sent_at_utc",),
+        predicate=lambda payload: str(payload.get("severity", "")) == "critical"
+        and str(payload.get("category", "")) in P1_BUG_CATEGORIES,
+    )
+
+
+def _latest_execution_source_at(
+    execution_records: tuple[ExecutionLifecycleRecord, ...],
+) -> datetime | None:
+    timestamps = [record.filled_at_utc for record in execution_records]
+    return max(timestamps) if timestamps else None
+
+
+def _latest_of(*timestamps: datetime | None) -> datetime | None:
+    present = [timestamp for timestamp in timestamps if timestamp is not None]
+    return max(present) if present else None
 
 
 def _mean_absolute_slippage(
@@ -620,6 +837,10 @@ def _build_shared_criteria(
     closed_trade_count: int,
     calendar_days: int,
     p1_bug_count: int,
+    duration_source_evidence_at_utc: datetime | None,
+    p1_bug_source_evidence_at_utc: datetime | None,
+    recovery_source_evidence_at_utc: datetime | None,
+    smtp_source_evidence_at_utc: datetime | None,
     recovery_completed: bool,
     recovery_failed: bool,
     smtp_completed: bool,
@@ -634,24 +855,27 @@ def _build_shared_criteria(
         )
         else "pending"
     )
+    replay_criterion_id = "replay_slippage_divergence"
     return (
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="duration_or_trade_count",
             status=duration_status,
             threshold="At least 180 calendar days or 100 closed trades",
             observed_value=f"{closed_trade_count} trades / {calendar_days} days",
             details="Gate 3 paper-history progress.",
             evidence_refs=(),
+            source_evidence_at_utc=duration_source_evidence_at_utc,
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="p1_bug_incidents",
             status="pass" if p1_bug_count == 0 else "fail",
             threshold="No P1 incidents caused by bugs",
             observed_value=str(p1_bug_count),
             details="Counts critical alerts in bug-oriented incident categories.",
             evidence_refs=(),
+            source_evidence_at_utc=p1_bug_source_evidence_at_utc,
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="recovery_drill",
             status=(
                 "pass"
@@ -662,17 +886,19 @@ def _build_shared_criteria(
             observed_value="completed" if recovery_completed else "not completed",
             details="At least one successful recovery drill must be persisted.",
             evidence_refs=(),
+            source_evidence_at_utc=recovery_source_evidence_at_utc,
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="smtp_alert_drill",
             status="pass" if smtp_completed else ("fail" if smtp_failed else "pending"),
             threshold="Initial SMTP emergency round trip passes",
             observed_value="completed" if smtp_completed else "not completed",
             details="SMTP drill status is taken from persisted alert-drill records.",
             evidence_refs=(),
+            source_evidence_at_utc=smtp_source_evidence_at_utc,
         ),
-        Gate3CriterionSnapshot(
-            criterion_id="replay_slippage_divergence",
+        _criterion(
+            criterion_id=replay_criterion_id,
             status=(
                 "pending"
                 if replay_summary is None or replay_summary.matched_execution_count == 0
@@ -693,6 +919,10 @@ def _build_shared_criteria(
                 else replay_summary.details
             ),
             evidence_refs=(),
+            source_evidence_at_utc=(
+                None if replay_summary is None else replay_summary.generated_at_utc
+            ),
+            required=replay_criterion_id not in OPTIONAL_GATE3_CRITERION_IDS,
         ),
     )
 
@@ -711,6 +941,12 @@ def _build_legacy_gate3_report(
         validation_store,
         candidate_id=candidate_id or LEGACY_GATE3_CANDIDATE_ID,
     )
+    reference_source_at = _latest_evaluation_source_at(
+        validation_store,
+        candidate_id=candidate_id or LEGACY_GATE3_CANDIDATE_ID,
+    )
+    execution_source_at = _latest_execution_source_at(execution_records)
+    closed_trade_source_at = _latest_closed_trade_source_at(closed_trade_payloads)
     slippage_limit = GATE3_BACKTEST_SLIPPAGE_REFERENCE_BPS * GATE3_SLIPPAGE_MULTIPLIER
     mean_slippage = _mean_absolute_slippage(execution_records)
     observed_hit_rate = _hit_rate(closed_trade_payloads)
@@ -723,7 +959,7 @@ def _build_legacy_gate3_report(
     criteria = (
         shared_criteria[0],
         shared_criteria[1],
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="realized_slippage",
             status=(
                 "pending"
@@ -737,8 +973,9 @@ def _build_legacy_gate3_report(
                 "backtest slippage reference."
             ),
             evidence_refs=(),
+            source_evidence_at_utc=execution_source_at,
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="hit_rate_alignment",
             status=(
                 "pending"
@@ -761,8 +998,12 @@ def _build_legacy_gate3_report(
                 "evidence for the active strategy."
             ),
             evidence_refs=(),
+            source_evidence_at_utc=_latest_of(
+                closed_trade_source_at,
+                reference_source_at,
+            ),
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="realized_sharpe",
             status=(
                 "pending"
@@ -783,6 +1024,10 @@ def _build_legacy_gate3_report(
                 "evidence for the active strategy."
             ),
             evidence_refs=(),
+            source_evidence_at_utc=_latest_of(
+                closed_trade_source_at,
+                reference_source_at,
+            ),
         ),
         *shared_criteria[2:],
     )
@@ -797,7 +1042,7 @@ def _build_legacy_gate3_report(
         "pending": "Gate 3 legacy non-authority evidence is still incomplete.",
         "fail": "Gate 3 contains failing criteria and must not advance.",
     }[status]
-    return Gate3ReadinessReport(
+    return _readiness_report(
         report_id=report_id,
         generated_at_utc=generated_at_utc,
         status=status,
@@ -829,6 +1074,14 @@ def _build_governed_gate3_report(
         sleeve_id: _latest_reference_metrics(validation_store, candidate_id=sleeve_id)
         for sleeve_id in sleeve_ids
     }
+    reference_source_at = _latest_of(
+        *(
+            _latest_evaluation_source_at(validation_store, candidate_id=sleeve_id)
+            for sleeve_id in sleeve_ids
+        )
+    )
+    execution_source_at = _latest_execution_source_at(execution_records)
+    closed_trade_source_at = _latest_closed_trade_source_at(closed_trade_payloads)
 
     realized_slippage_status, slippage_statuses = _per_sleeve_statuses(
         sleeve_ids,
@@ -912,7 +1165,7 @@ def _build_governed_gate3_report(
     criteria = (
         shared_criteria[0],
         shared_criteria[1],
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="realized_slippage",
             status=realized_slippage_status,
             threshold=(
@@ -928,8 +1181,9 @@ def _build_governed_gate3_report(
                 f"{slippage_details}"
             ),
             evidence_refs=(),
+            source_evidence_at_utc=execution_source_at,
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="hit_rate_alignment",
             status=hit_rate_status,
             threshold=(
@@ -946,8 +1200,12 @@ def _build_governed_gate3_report(
                 f"{hit_rate_details}"
             ),
             evidence_refs=(),
+            source_evidence_at_utc=_latest_of(
+                closed_trade_source_at,
+                reference_source_at,
+            ),
         ),
-        Gate3CriterionSnapshot(
+        _criterion(
             criterion_id="realized_sharpe",
             status=realized_sharpe_status,
             threshold="Realized Sharpe >= 0.5x each sleeve's reference Sharpe",
@@ -961,6 +1219,10 @@ def _build_governed_gate3_report(
                 f"{sharpe_details}"
             ),
             evidence_refs=(),
+            source_evidence_at_utc=_latest_of(
+                closed_trade_source_at,
+                reference_source_at,
+            ),
         ),
         *shared_criteria[2:],
     )
@@ -975,7 +1237,7 @@ def _build_governed_gate3_report(
         "pending": "Gate 3 legacy non-authority evidence is still incomplete.",
         "fail": "Gate 3 contains failing criteria and must not advance.",
     }[status]
-    return Gate3ReadinessReport(
+    return _readiness_report(
         report_id=report_id,
         generated_at_utc=generated_at_utc,
         status=status,
@@ -999,6 +1261,9 @@ def build_gate3_readiness_report(
     recovery_payloads = paper_store.list_artifact_payloads("recovery_drills")
     alert_payloads = paper_store.list_artifact_payloads("alert_drills")
     operator_alerts = paper_store.list_artifact_payloads("operator_alerts")
+    operator_alert_scan_windows = paper_store.list_artifact_payloads(
+        "operator_alert_scan_windows"
+    )
     service_cycles = paper_store.list_artifact_payloads("service_cycles")
 
     closed_trade_count = len(closed_trade_payloads)
@@ -1037,14 +1302,38 @@ def build_gate3_readiness_report(
             governed_start_at,
             timestamp_fields=("recorded_at_utc",),
         )
+        governed_operator_alert_scan_windows = _payloads_since(
+            operator_alert_scan_windows,
+            governed_start_at,
+            timestamp_fields=("window_end_utc", "scan_end_utc", "completed_at_utc"),
+        )
         recovery_completed, recovery_failed = _recovery_statuses(
             governed_recovery_payloads
         )
         smtp_completed, smtp_failed = _smtp_statuses(governed_alert_payloads)
+        p1_bug_count = _p1_bug_count(governed_operator_alerts)
         shared_criteria = _build_shared_criteria(
             closed_trade_count=closed_trade_count,
             calendar_days=calendar_days,
-            p1_bug_count=_p1_bug_count(governed_operator_alerts),
+            p1_bug_count=p1_bug_count,
+            duration_source_evidence_at_utc=_latest_of(
+                _latest_closed_trade_source_at(governed_closed_trade_payloads),
+                _latest_service_cycle_source_at(governed_service_cycles),
+            ),
+            p1_bug_source_evidence_at_utc=_p1_bug_source_at(
+                operator_alerts=governed_operator_alerts,
+                scan_windows=governed_operator_alert_scan_windows,
+                p1_bug_count=p1_bug_count,
+            ),
+            recovery_source_evidence_at_utc=_latest_payload_timestamp(
+                governed_recovery_payloads,
+                timestamp_fields=("completed_at_utc", "started_at_utc"),
+            ),
+            smtp_source_evidence_at_utc=_latest_payload_timestamp(
+                governed_alert_payloads,
+                timestamp_fields=("recorded_at_utc",),
+                predicate=lambda payload: str(payload.get("channel", "")) == "smtp",
+            ),
             recovery_completed=recovery_completed,
             recovery_failed=recovery_failed,
             smtp_completed=smtp_completed,
@@ -1065,13 +1354,32 @@ def build_gate3_readiness_report(
             sleeve_ids=sleeve_ids,
             closed_trade_count=closed_trade_count,
             calendar_days=calendar_days,
-        )
+    )
     recovery_completed, recovery_failed = _recovery_statuses(recovery_payloads)
     smtp_completed, smtp_failed = _smtp_statuses(alert_payloads)
+    p1_bug_count = _p1_bug_count(operator_alerts)
     shared_criteria = _build_shared_criteria(
         closed_trade_count=closed_trade_count,
         calendar_days=calendar_days,
-        p1_bug_count=_p1_bug_count(operator_alerts),
+        p1_bug_count=p1_bug_count,
+        duration_source_evidence_at_utc=_latest_of(
+            _latest_closed_trade_source_at(closed_trade_payloads),
+            _latest_service_cycle_source_at(service_cycles),
+        ),
+        p1_bug_source_evidence_at_utc=_p1_bug_source_at(
+            operator_alerts=operator_alerts,
+            scan_windows=operator_alert_scan_windows,
+            p1_bug_count=p1_bug_count,
+        ),
+        recovery_source_evidence_at_utc=_latest_payload_timestamp(
+            recovery_payloads,
+            timestamp_fields=("completed_at_utc", "started_at_utc"),
+        ),
+        smtp_source_evidence_at_utc=_latest_payload_timestamp(
+            alert_payloads,
+            timestamp_fields=("recorded_at_utc",),
+            predicate=lambda payload: str(payload.get("channel", "")) == "smtp",
+        ),
         recovery_completed=recovery_completed,
         recovery_failed=recovery_failed,
         smtp_completed=smtp_completed,

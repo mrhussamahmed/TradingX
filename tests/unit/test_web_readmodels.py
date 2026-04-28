@@ -11,7 +11,10 @@ from tradingx.journal import SqliteOmsJournal
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.types import (
     BotRuntimeState,
+    ClosedTradeRecord,
     EvaluationEvidencePack,
+    Gate3CriterionSnapshot,
+    Gate3ReadinessReport,
     GateAssessment,
     HistoricalWarmupRecord,
     MarketAutomationRunRecord,
@@ -83,6 +86,40 @@ def _minimal_read_model(tmp_path, timestamp: datetime) -> LocalWebReadModel:
         ),
         runtime_host_manager=FakeRuntimeHostManager(_minimal_runtime_state(timestamp)),
     )
+
+
+def _write_service_cycle(
+    paper_store: FilesystemArtifactStore,
+    *,
+    timestamp: datetime,
+    cycle_id: str = "cycle-1",
+    payload_overrides: dict[str, object] | None = None,
+) -> None:
+    paper_store.write_service_cycle_snapshot(
+        ServiceCycleSnapshot(
+            cycle_id=cycle_id,
+            started_at_utc=timestamp,
+            completed_at_utc=timestamp,
+            cycle_status="executed",
+            symbols=("SPY",),
+            symbol_results=(),
+            blocked_trade_count=0,
+            reconciliation_failure_count=0,
+            open_position_symbols=("SPY",),
+            cash=Decimal("99999.57"),
+            equity=Decimal("99999.57"),
+            buying_power=Decimal("399998.28"),
+        )
+    )
+    if payload_overrides:
+        path = (
+            paper_store._root_dir
+            / "service_cycles"
+            / f"{cycle_id}.json"
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.update(payload_overrides)
+        path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(
@@ -904,6 +941,143 @@ def test_local_web_read_model_labels_live_and_rehearsal_portfolio_sources(
     assert snapshot.execution_panel.provenance.label == "Live OMS journal"
 
 
+def test_portfolio_source_evidence_uses_service_cycle_account_position_source(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    _write_service_cycle(
+        paper_store,
+        timestamp=timestamp,
+        payload_overrides={
+            "account_source_at_utc": timestamp.isoformat(),
+            "position_source_at_utc": timestamp.isoformat(),
+        },
+    )
+    read_model = _minimal_read_model(tmp_path, timestamp)
+
+    snapshot = read_model.build_portfolio_workspace_snapshot()
+
+    assert snapshot.source_evidence_at_utc == timestamp
+    assert snapshot.account_position_source_at_utc == timestamp
+    assert snapshot.execution_journal_source_at_utc is None
+    assert snapshot.closed_trade_source_at_utc is None
+
+
+def test_portfolio_source_evidence_stays_missing_without_explicit_account_position_source(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    _write_service_cycle(paper_store, timestamp=timestamp)
+
+    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+
+    assert snapshot.source_evidence_at_utc is None
+    assert snapshot.account_position_source_at_utc is None
+
+
+def test_portfolio_source_evidence_keeps_one_sided_account_position_missing(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    account_time = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    position_time = datetime(2026, 4, 20, 14, 10, tzinfo=UTC)
+    _write_service_cycle(
+        paper_store,
+        timestamp=timestamp,
+        cycle_id="account-only",
+        payload_overrides={
+            "account_source_at_utc": account_time.isoformat(),
+            "position_source_at_utc": "",
+        },
+    )
+    account_only = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+
+    assert account_only.source_evidence_at_utc is None
+    assert account_only.account_position_source_at_utc is None
+
+    _write_service_cycle(
+        paper_store,
+        timestamp=timestamp,
+        cycle_id="position-only",
+        payload_overrides={
+            "account_source_at_utc": "",
+            "position_source_at_utc": position_time.isoformat(),
+        },
+    )
+    position_only = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+
+    assert position_only.source_evidence_at_utc is None
+    assert position_only.account_position_source_at_utc is None
+
+
+def test_portfolio_source_evidence_uses_older_split_account_position_source(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    account_time = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    position_time = datetime(2026, 4, 20, 14, 10, tzinfo=UTC)
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    _write_service_cycle(
+        paper_store,
+        timestamp=timestamp,
+        payload_overrides={
+            "account_source_at_utc": account_time.isoformat(),
+            "position_source_at_utc": position_time.isoformat(),
+        },
+    )
+
+    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+
+    assert snapshot.source_evidence_at_utc == position_time
+    assert snapshot.account_position_source_at_utc == position_time
+
+
+def test_portfolio_required_source_ignores_fresh_oms_and_closed_trade_without_account_position(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    paper_store.write_closed_trade_record(
+        ClosedTradeRecord(
+            trade_id="trade-1",
+            symbol="SPY",
+            entry_intent_id="intent-entry",
+            exit_intent_id="intent-exit",
+            opened_at_utc=timestamp,
+            closed_at_utc=timestamp,
+            quantity=Decimal("1"),
+            entry_price=Decimal("500"),
+            exit_price=Decimal("505"),
+            gross_pnl=Decimal("5"),
+            return_pct=Decimal("0.01"),
+            outcome="win",
+            holding_period_seconds=300,
+        )
+    )
+    journal = SqliteOmsJournal(tmp_path / "data" / "journal.db")
+    journal.append_event(
+        event_type="submit_attempt",
+        recorded_at_utc=timestamp,
+        decision_snapshot_id="decision-live",
+        cycle_correlation_id="cycle-live",
+        client_order_id="client-live",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "baseline_long_entry"},
+    )
+
+    snapshot = _minimal_read_model(tmp_path, timestamp).build_portfolio_workspace_snapshot()
+
+    assert snapshot.source_evidence_at_utc is None
+    assert snapshot.account_position_source_at_utc is None
+    assert snapshot.execution_journal_source_at_utc == timestamp
+    assert snapshot.closed_trade_source_at_utc == timestamp
+
+
 def test_local_web_read_model_builds_runtime_heartbeat_from_latest_cycle_and_selection(
     tmp_path,
 ) -> None:
@@ -1331,6 +1505,193 @@ def test_runtime_heartbeat_prefers_latest_operator_artifacts_by_timestamp(
     assert symbol_rows["IWM"].warmup_state == "Ready"
 
 
+def test_runtime_decision_detail_uses_selection_timestamp_and_selected_score(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 58, 30, tzinfo=UTC)
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    operator_store.write_strategy_activation_record(
+        StrategyActivationRecord(
+            activation_id="activation-1",
+            strategy_id="baseline-long-only-v1",
+            strategy_version="1.0.0",
+            approved_symbols=("SPY",),
+            deploy_threshold=Decimal("0.50"),
+            allow_fallback_weights=True,
+            status="approved",
+            activated_at_utc=timestamp,
+            notes="Approved.",
+        )
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY",),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("0.40"),
+                    regime_weight=Decimal("1.10"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.20"),
+                    spread_penalty=Decimal("0.01"),
+                    volatility_penalty=Decimal("0.02"),
+                    portfolio_overlap_penalty=Decimal("0.03"),
+                    execution_cost_penalty=Decimal("0.01"),
+                    final_score=Decimal("0.75"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="SPY cleared the threshold.",
+        )
+    )
+
+    detail = _minimal_read_model(tmp_path, timestamp).build_runtime_decision_detail()
+
+    assert detail is not None
+    assert detail.selection_id == "selection-1"
+    assert detail.decision_source_at_utc == timestamp
+    assert detail.signal.available is True
+    assert detail.signal.symbol == "SPY"
+    assert detail.signal.final_score == Decimal("0.75")
+    assert detail.risk.threshold == Decimal("0.50")
+    assert detail.risk.threshold_gap == Decimal("0.25")
+    assert detail.freshness.decision_source_at_utc == timestamp
+
+
+def test_runtime_decision_detail_missing_activation_keeps_threshold_unknown(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 58, 30, tzinfo=UTC)
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY",),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="SPY",
+                    base_signal=Decimal("0.40"),
+                    regime_weight=Decimal("1.10"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.20"),
+                    spread_penalty=Decimal("0.01"),
+                    volatility_penalty=Decimal("0.02"),
+                    portfolio_overlap_penalty=Decimal("0.03"),
+                    execution_cost_penalty=Decimal("0.01"),
+                    final_score=Decimal("0.75"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="SPY cleared the threshold.",
+        )
+    )
+
+    detail = _minimal_read_model(tmp_path, timestamp).build_runtime_decision_detail()
+
+    assert detail is not None
+    assert detail.risk.threshold is None
+    assert detail.risk.threshold_gap is None
+
+
+def test_runtime_decision_detail_selected_symbol_mismatch_fails_closed(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 58, 30, tzinfo=UTC)
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY", "QQQ"),
+            ranked_opportunities=(
+                OpportunityScore(
+                    symbol="QQQ",
+                    base_signal=Decimal("0.40"),
+                    regime_weight=Decimal("1.10"),
+                    model_weight=Decimal("1.0"),
+                    liquidity_weight=Decimal("1.20"),
+                    spread_penalty=Decimal("0.01"),
+                    volatility_penalty=Decimal("0.02"),
+                    portfolio_overlap_penalty=Decimal("0.03"),
+                    execution_cost_penalty=Decimal("0.01"),
+                    final_score=Decimal("0.75"),
+                    eligible=True,
+                    ineligibility_reason="",
+                ),
+            ),
+            selected_symbol="SPY",
+            decision="selected",
+            decision_reason="SPY was selected.",
+        )
+    )
+
+    detail = _minimal_read_model(tmp_path, timestamp).build_runtime_decision_detail()
+
+    assert detail is not None
+    assert detail.decision_source_at_utc == timestamp
+    assert detail.selected_symbol == "SPY"
+    assert detail.signal.available is False
+    assert detail.signal.symbol is None
+    assert detail.signal.final_score is None
+    assert detail.risk.eligible is False
+    assert (
+        detail.risk.ineligibility_reason
+        == "selected_symbol missing from ranked_opportunities"
+    )
+
+
+def test_runtime_decision_detail_no_trade_without_scores_keeps_null_signal_fields(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 58, 30, tzinfo=UTC)
+    operator_store = FilesystemArtifactStore(
+        tmp_path / "artifacts" / "operator_platform"
+    )
+    operator_store.write_opportunity_selection_record(
+        OpportunitySelectionRecord(
+            selection_id="selection-1",
+            generated_at_utc=timestamp,
+            strategy_id="baseline-long-only-v1",
+            model_snapshot_id="approved-baseline-long-only-v1",
+            symbols_considered=("SPY", "QQQ"),
+            ranked_opportunities=(),
+            selected_symbol="",
+            decision="no_trade",
+            decision_reason="No candidate score is currently available.",
+        )
+    )
+
+    detail = _minimal_read_model(tmp_path, timestamp).build_runtime_decision_detail()
+
+    assert detail is not None
+    assert detail.decision_source_at_utc == timestamp
+    assert detail.signal.available is False
+    assert detail.signal.final_score is None
+    assert detail.risk.eligible is None
+    assert detail.risk.threshold_gap is None
+
+
 def test_runtime_heartbeat_uses_active_approved_symbols_over_config_universe(
     tmp_path,
 ) -> None:
@@ -1467,3 +1828,84 @@ def test_runtime_heartbeat_uses_active_approved_symbols_over_config_universe(
 
     assert [row.symbol for row in heartbeat.symbol_rows] == list(approved_symbols)
     assert [row.symbol for row in heartbeat.decision_ladder] == list(approved_symbols)
+
+
+def test_gate3_readiness_preserves_persisted_source_lineage(tmp_path) -> None:
+    timestamp = datetime(2026, 4, 20, 14, 30, tzinfo=UTC)
+    oldest_source = datetime(2026, 4, 20, 14, 10, tzinfo=UTC)
+    latest_source = datetime(2026, 4, 20, 14, 25, tzinfo=UTC)
+    validation_store = FilesystemArtifactStore(tmp_path / "artifacts" / "validation")
+    validation_store.write_gate3_readiness_report(
+        Gate3ReadinessReport(
+            report_id="gate3-1",
+            generated_at_utc=timestamp,
+            status="pending",
+            closed_trade_count=4,
+            calendar_days_observed=7,
+            criteria=(
+                Gate3CriterionSnapshot(
+                    criterion_id="duration_or_trade_count",
+                    status="pending",
+                    threshold="At least 180 calendar days or 100 closed trades",
+                    observed_value="4 trades / 7 days",
+                    details="Gate 3 paper-history progress.",
+                    evidence_refs=("artifacts/paper_loop/service_cycles/cycle-1.json",),
+                    source_evidence_at_utc=oldest_source,
+                    required=True,
+                ),
+                Gate3CriterionSnapshot(
+                    criterion_id="replay_slippage_divergence",
+                    status="pending",
+                    threshold="Replay divergence <= limit",
+                    observed_value="not available",
+                    details="Diagnostic criterion.",
+                    evidence_refs=(),
+                    source_evidence_at_utc=latest_source,
+                    required=False,
+                ),
+            ),
+            summary="Gate 3 evidence is still incomplete.",
+            required_operator_action="Continue paper trading and drills.",
+            evidence_refs=("artifacts/validation/gate3_reports/gate3-1.json",),
+            source_evidence_at_utc=oldest_source,
+            oldest_required_source_evidence_at_utc=oldest_source,
+            latest_source_evidence_at_utc=latest_source,
+            required_criterion_ids=("duration_or_trade_count",),
+            missing_source_criterion_ids=(),
+        )
+    )
+
+    report = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=validation_store,
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="idle",
+                active_symbols=(),
+                interval_seconds=300,
+                cycles_completed=0,
+                started_at_utc=None,
+                last_completed_at_utc=None,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(_minimal_runtime_state(timestamp)),
+    ).build_gate3_readiness()
+
+    assert report.source_evidence_at_utc == oldest_source
+    assert report.oldest_required_source_evidence_at_utc == oldest_source
+    assert report.latest_source_evidence_at_utc == latest_source
+    assert report.required_criterion_ids == ("duration_or_trade_count",)
+    assert report.missing_source_criterion_ids == ()
+    assert report.criteria[0].source_evidence_at_utc == oldest_source
+    assert report.criteria[0].required is True
+    assert report.criteria[1].source_evidence_at_utc == latest_source
+    assert report.criteria[1].required is False
