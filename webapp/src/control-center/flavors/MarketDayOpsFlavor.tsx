@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   CalendarCheck2,
-  CircleDot,
   Download,
+  Info,
   LockKeyhole,
   LockOpen,
   Play,
@@ -19,7 +19,6 @@ import {
   postSessionPreopen,
 } from '../../api'
 import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
-import type { OperatorTimelineEvent } from '../../types'
 import { useData } from '../state/DataContext'
 import { useToast } from '../state/ToastContext'
 import {
@@ -31,47 +30,8 @@ import {
   type PaperRuntimeSizingSettings,
 } from '../state/paperRuntimeSizing'
 
-import { deriveTimelineSeverity } from './EvidenceTimeline'
+import { SessionTimelineChart } from './SessionTimelineChart'
 import styles from './Flavor.module.css'
-
-type Lane = {
-  id: string
-  label: string
-  matcher: (event: OperatorTimelineEvent) => boolean
-}
-
-const LANES: ReadonlyArray<Lane> = [
-  {
-    id: 'preopen',
-    label: 'Pre-open',
-    matcher: (event) => /preopen|warmup|prepare/i.test(event.event_type),
-  },
-  {
-    id: 'runtime',
-    label: 'Runtime',
-    matcher: (event) => /heartbeat|cycle|runtime|sync/i.test(event.event_type),
-  },
-  {
-    id: 'decisions',
-    label: 'Decisions',
-    matcher: (event) => /decision|selection|opportunity|trade|order/i.test(event.event_type),
-  },
-  {
-    id: 'incidents',
-    label: 'Incidents',
-    matcher: (event) => /incident|halt|kill|error|fail/i.test(event.event_type),
-  },
-  {
-    id: 'evidence',
-    label: 'Evidence',
-    matcher: (event) => /evidence|artifact|report|gate/i.test(event.event_type),
-  },
-  {
-    id: 'closeout',
-    label: 'Closeout',
-    matcher: (event) => /close|digest|reconcile/i.test(event.event_type),
-  },
-]
 
 type ActionState = 'idle' | 'running'
 
@@ -84,7 +44,9 @@ export function MarketDayOpsFlavor() {
     digest,
     portfolio,
     incidents,
-    replay,
+    sessionTimeline,
+    sessionTimelineDate,
+    setSessionTimelineDate,
     configSummary,
     writeMode,
     unlockWrites,
@@ -102,26 +64,13 @@ export function MarketDayOpsFlavor() {
     writePaperRuntimeSizingSettings(sizingSettings)
   }, [sizingSettings])
 
-  const sortedEvents = useMemo(() => {
-    return [...replay.events].sort((a, b) => {
-      const at = new Date(a.occurred_at_utc).getTime() || 0
-      const bt = new Date(b.occurred_at_utc).getTime() || 0
-      return at - bt
-    })
-  }, [replay.events])
-
-  const dayBounds = useMemo(() => {
-    if (sortedEvents.length === 0) return null
-    const earliest = new Date(sortedEvents[0].occurred_at_utc).getTime()
-    const latest = new Date(sortedEvents[sortedEvents.length - 1].occurred_at_utc).getTime()
-    if (Number.isNaN(earliest) || Number.isNaN(latest)) return null
-    const span = Math.max(60_000, latest - earliest)
-    return { earliest, latest, span }
-  }, [sortedEvents])
-
   const positions = portfolio.positions_panel.positions
   const exposure = commandCenter.exposure_breakdown
-  const exposureTotal = exposure.reduce((sum, item) => sum + parseNumericValue(item.value), 0) || 1
+  const exposureTotal =
+    exposure.reduce(
+      (sum, item) => (item.value == null ? sum : sum + Math.abs(parseNumericValue(item.value))),
+      0,
+    ) || 1
 
   const writeBlocked = !writeMode.enabled || !writeMode.unlocked
   const writeBlockedReason = writeMode.detail
@@ -187,77 +136,14 @@ export function MarketDayOpsFlavor() {
         </dl>
       </div>
 
-      <div className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <span>Operations Timeline</span>
-          <span className={styles.panelSub}>
-            {sortedEvents.length} events captured
-          </span>
-        </div>
-        <div className={styles.panelBody}>
-          {sortedEvents.length === 0 || !dayBounds ? (
-            <div className={styles.emptyState}>
-              <strong>No timeline events yet</strong>
-              <p>
-                Start the runtime or run pre-open checks to populate the lanes.
-              </p>
-            </div>
-          ) : (
-            <div className={styles.timelineWrap}>
-              <div className={styles.timelineLanes}>
-                {LANES.map((lane) => (
-                  <div key={lane.id} className={styles.timelineLaneLabel}>
-                    {lane.label}
-                  </div>
-                ))}
-              </div>
-              <div className={styles.timelineRows}>
-                <div className={styles.timelineHeader}>
-                  {Array.from({ length: 8 }, (_, i) => (
-                    <span key={i}>
-                      {formatTimestampSlice(dayBounds.earliest + (i * dayBounds.span) / 8)}
-                    </span>
-                  ))}
-                </div>
-                {LANES.map((lane) => {
-                  const events = sortedEvents.filter(lane.matcher)
-                  return (
-                    <div key={lane.id} className={styles.timelineRow}>
-                      {events.map((event) => {
-                        const ts = new Date(event.occurred_at_utc).getTime()
-                        const ratio = (ts - dayBounds.earliest) / dayBounds.span
-                        const severity = deriveTimelineSeverity(event.severity)
-                        const cls =
-                          severity === 'good'
-                            ? styles.timelineEventGood
-                            : severity === 'watch'
-                              ? styles.timelineEventWatch
-                              : severity === 'risk'
-                                ? styles.timelineEventRisk
-                                : styles.timelineEventInfo
-                        return (
-                          <span
-                            key={event.event_id}
-                            className={[styles.timelineEvent, cls].filter(Boolean).join(' ')}
-                            style={{
-                              left: `calc(${Math.max(0, Math.min(0.99, ratio)) * 100}% + 4px)`,
-                              maxWidth: 220,
-                            }}
-                            title={`${formatTimestamp(event.occurred_at_utc)} — ${event.headline}`}
-                          >
-                            <CircleDot size={10} /> {event.headline}
-                          </span>
-                        )
-                      })}
-                    </div>
-                  )
-                })}
-                <NowMarker dayBounds={dayBounds} />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <SessionTimelineChart
+        title="Operation Timeline"
+        description="Shows source-backed TradingX activity for the selected trading day. The horizontal scale uses persisted market-session open and close when available; missing close metadata is called out instead of inferred."
+        timeline={sessionTimeline}
+        selectedTradingDay={sessionTimelineDate}
+        onTradingDayChange={setSessionTimelineDate}
+        emptyStateMessage="Start the runtime or run pre-open checks to populate the selected trading day."
+      />
 
       <div className={styles.forgeRow}>
         <div className={styles.panel}>
@@ -410,7 +296,11 @@ export function MarketDayOpsFlavor() {
                         ? configSummary.config.symbol_universe
                         : ['SPY'],
                       quantity: paperRuntimeFallbackQuantity(sizingSettings),
-                      interval_seconds: Number(configSummary.config.service_interval_seconds || 300),
+                      interval_seconds: Number(
+                        runtimeHeartbeat.configured_cadence_seconds ??
+                          configSummary.config.service_interval_seconds ??
+                          300,
+                      ),
                       max_cycles: null,
                       sizing_policy: buildPaperRuntimeSizingPayload(sizingSettings),
                     }),
@@ -497,11 +387,19 @@ export function MarketDayOpsFlavor() {
                   {positions.map((position) => (
                     <tr key={position.symbol}>
                       <td className="mono">{position.symbol}</td>
-                      <td className="numeric">{position.quantity}</td>
                       <td className="numeric">
-                        {position.market_value ? toCurrency(position.market_value) : '—'}
+                        {position.quantity ?? prettyLabel(position.quantity_status ?? 'source_missing')}
                       </td>
-                      <td className="numeric">{position.exposure_pct}</td>
+                      <td className="numeric">
+                        {position.market_value != null
+                          ? toCurrency(position.market_value)
+                          : prettyLabel(position.price_status ?? 'unpriced')}
+                      </td>
+                      <td className="numeric">
+                        {position.exposure_pct != null
+                          ? `${position.exposure_pct}%`
+                          : prettyLabel(position.exposure_status ?? 'source_missing')}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -512,6 +410,12 @@ export function MarketDayOpsFlavor() {
           <div className={styles.panel}>
             <div className={styles.panelHeader}>
               <span>Exposure Allocation</span>
+              <span
+                className={styles.panelSub}
+                title="Shows current source-backed market value by symbol when position prices are available. Missing prices render as unavailable, never as zero or equal placeholder allocation."
+              >
+                <Info size={13} /> Market value by symbol
+              </span>
             </div>
             <div className={styles.panelBody}>
               {exposure.length === 0 ? (
@@ -521,17 +425,24 @@ export function MarketDayOpsFlavor() {
                 </div>
               ) : (
                 exposure.map((entry) => {
-                  const value = parseNumericValue(entry.value)
-                  const ratio = Math.min(1, Math.abs(value) / exposureTotal)
+                  const value = entry.value == null ? null : parseNumericValue(entry.value)
+                  const ratio = value == null ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
                   return (
                     <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span className="mono">{entry.symbol}</span>
-                        <span className="numeric">{toCurrency(value)}</span>
+                        <span className="numeric">
+                          {value == null
+                            ? prettyLabel(entry.value_status ?? 'source_missing')
+                            : toCurrency(value)}
+                        </span>
                       </div>
                       <div className={styles.exposureBar}>
                         <span style={{ width: `${ratio * 100}%` }} />
                       </div>
+                      {value == null && entry.missing_reason ? (
+                        <span className={styles.disabledNote}>{entry.missing_reason}</span>
+                      ) : null}
                     </div>
                   )
                 })
@@ -581,23 +492,4 @@ export function MarketDayOpsFlavor() {
       </div>
     </div>
   )
-}
-
-function NowMarker({ dayBounds }: { dayBounds: { earliest: number; span: number } }) {
-  const [nowMs, setNowMs] = useState<number>(() => Date.now())
-  useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 30_000)
-    return () => window.clearInterval(id)
-  }, [])
-  const ratio = (nowMs - dayBounds.earliest) / dayBounds.span
-  if (ratio < 0 || ratio > 1) return null
-  return <span className={styles.nowMarker} style={{ left: `${ratio * 100}%` }} />
-}
-
-function formatTimestampSlice(ms: number): string {
-  return new Intl.DateTimeFormat('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(ms))
 }

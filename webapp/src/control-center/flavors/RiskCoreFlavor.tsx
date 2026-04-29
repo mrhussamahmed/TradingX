@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { CheckCircle2, RefreshCcw, ShieldAlert, ShieldCheck } from 'lucide-react'
 
 import { postAcknowledgeIncident, postGate3Report } from '../../api'
-import { formatTimestamp, prettyLabel } from '../../platform/format'
+import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import type { Gate3CriterionSnapshot, IncidentRecord } from '../../types'
 import { useData } from '../state/DataContext'
 import { useToast } from '../state/ToastContext'
@@ -83,6 +83,24 @@ function buildGateNodes(args: {
   return nodes
 }
 
+function RiskSummaryCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <div className={styles.metric} title={`${label}: ${detail}`}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span className={styles.metricValue}>{value}</span>
+      <span className={styles.metricSub}>{detail}</span>
+    </div>
+  )
+}
+
 type FilterTone = 'all' | 'good' | 'watch' | 'risk' | 'info'
 
 export function RiskCoreFlavor() {
@@ -91,6 +109,7 @@ export function RiskCoreFlavor() {
     gate3Readiness,
     gate3Package,
     incidents,
+    portfolio,
     configSummary,
     writeMode,
     refresh,
@@ -138,9 +157,67 @@ export function RiskCoreFlavor() {
 
   const writeBlocked = !writeMode.enabled || !writeMode.unlocked
   const unacknowledged = incidents.filter((incident) => !incident.acknowledged_at_utc)
+  const pricedPositions = portfolio.positions_panel.positions.filter(
+    (position) => position.market_value != null,
+  )
+  const unpricedPositionCount = portfolio.positions_panel.positions.length - pricedPositions.length
+  const grossExposure = pricedPositions.reduce(
+    (sum, position) => sum + Math.abs(parseNumericValue(position.market_value)),
+    0,
+  )
+  const largestExposure = Math.max(
+    0,
+    ...pricedPositions.map((position) => Math.abs(parseNumericValue(position.market_value))),
+  )
+  const concentrationPct =
+    grossExposure > 0 && unpricedPositionCount === 0
+      ? (largestExposure / grossExposure) * 100
+      : null
 
   return (
     <div className={styles.riskCoreGrid}>
+      <div className={styles.panel} style={{ gridColumn: '1 / -1' }}>
+        <div className={styles.panelHeader}>
+          <span>Open Risk Summary</span>
+          <span className={styles.panelSub}>
+            Allocation, exposure, concentration, and limit status
+          </span>
+        </div>
+        <div className={styles.kpis}>
+          <RiskSummaryCard
+            label="Allocation by symbol"
+            value={
+              portfolio.positions_panel.positions.length
+                ? `${portfolio.positions_panel.positions.length} position${portfolio.positions_panel.positions.length === 1 ? '' : 's'}`
+                : 'Flat'
+            }
+            detail={portfolio.positions_panel.detail}
+          />
+          <RiskSummaryCard
+            label="Priced exposure"
+            value={pricedPositions.length ? toCurrency(grossExposure) : 'Missing prices'}
+            detail={
+              pricedPositions.length
+                ? `${pricedPositions.length} priced position${pricedPositions.length === 1 ? '' : 's'}; ${unpricedPositionCount} unpriced.`
+                : 'No market-value evidence is available, so exposure is not rendered as zero.'
+            }
+          />
+          <RiskSummaryCard
+            label="Concentration"
+            value={concentrationPct == null ? 'Unavailable' : `${concentrationPct.toFixed(1)}% largest`}
+            detail={
+              unpricedPositionCount
+                ? `${unpricedPositionCount} unpriced open position${unpricedPositionCount === 1 ? '' : 's'}; concentration is unavailable.`
+                : 'Largest position divided by priced gross exposure.'
+            }
+          />
+          <RiskSummaryCard
+            label="Risk limit status"
+            value={counts.risk ? `${counts.risk} breach/fail` : counts.watch ? `${counts.watch} warning` : 'No breach shown'}
+            detail="Gate failures and warnings are shown below; missing portfolio evidence is not treated as pass."
+          />
+        </div>
+      </div>
       <div className={styles.panel}>
         <div className={styles.panelHeader}>
           <span>Risk Core</span>

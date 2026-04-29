@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { Compass, Layers3 } from 'lucide-react'
+import { Compass, Info, Layers3 } from 'lucide-react'
 
 import { parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import type { PortfolioSeriesPoint } from '../../types'
@@ -90,7 +90,11 @@ export function MarketChartFlavor() {
 
   const gateEntries = Object.entries(commandCenter.gate_statuses ?? {})
   const exposure = commandCenter.exposure_breakdown ?? []
-  const exposureTotal = exposure.reduce((sum, item) => sum + parseNumericValue(item.value), 0) || 1
+  const exposureTotal =
+    exposure.reduce(
+      (sum, item) => (item.value == null ? sum : sum + Math.abs(parseNumericValue(item.value))),
+      0,
+    ) || 1
 
   return (
     <div className={styles.gridShell}>
@@ -291,7 +295,12 @@ export function MarketChartFlavor() {
           <div className={styles.panel}>
             <div className={styles.panelHeader}>
               <span>Exposure</span>
-              <span className={styles.panelSub}>By symbol</span>
+              <span
+                className={styles.panelSub}
+                title="Shows current source-backed market value by symbol when prices are available. Missing prices render as unavailable, never as zero or equal placeholder allocation."
+              >
+                <Info size={13} /> By symbol
+              </span>
             </div>
             <div className={styles.panelBody}>
               {exposure.length === 0 ? (
@@ -301,17 +310,24 @@ export function MarketChartFlavor() {
                 </div>
               ) : (
                 exposure.map((entry) => {
-                  const value = parseNumericValue(entry.value)
-                  const ratio = Math.min(1, Math.abs(value) / exposureTotal)
+                  const value = entry.value == null ? null : parseNumericValue(entry.value)
+                  const ratio = value == null ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
                   return (
                     <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                         <span className="mono">{entry.symbol}</span>
-                        <span className="numeric">{toCurrency(value)}</span>
+                        <span className="numeric">
+                          {value == null
+                            ? prettyLabel(entry.value_status ?? 'source_missing')
+                            : toCurrency(value)}
+                        </span>
                       </div>
                       <div className={styles.exposureBar}>
                         <span style={{ width: `${ratio * 100}%` }} />
                       </div>
+                      {value == null && entry.missing_reason ? (
+                        <span className={styles.disabledNote}>{entry.missing_reason}</span>
+                      ) : null}
                     </div>
                   )
                 })

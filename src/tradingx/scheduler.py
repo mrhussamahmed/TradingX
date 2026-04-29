@@ -179,6 +179,10 @@ class MarketDayScheduler:
                     automation_run_id="",
                     summary="Scheduled market day failed before completion.",
                     evidence_refs=(),
+                    session_open_at_utc=session_window.open_at_utc,
+                    session_close_at_utc=session_window.close_at_utc,
+                    exchange="XNYS",
+                    timezone="America/New_York",
                 )
                 latest_schedule_record_path = (
                     self._operator_store.write_market_day_schedule_record(
@@ -218,6 +222,10 @@ class MarketDayScheduler:
                     str(market_day_result.run_record_path),
                     *market_day_result.run_record.evidence_refs,
                 ),
+                session_open_at_utc=session_window.open_at_utc,
+                session_close_at_utc=session_window.close_at_utc,
+                exchange="XNYS",
+                timezone="America/New_York",
             )
             latest_schedule_record_path = (
                 self._operator_store.write_market_day_schedule_record(schedule_record)
@@ -293,6 +301,18 @@ class MarketDayScheduler:
             automation_run_id=str(payload.get("automation_run_id", "")),
             summary=str(payload.get("summary", "")),
             evidence_refs=tuple(str(item) for item in payload.get("evidence_refs", [])),
+            session_open_at_utc=(
+                datetime.fromisoformat(str(payload["session_open_at_utc"]))
+                if payload.get("session_open_at_utc")
+                else None
+            ),
+            session_close_at_utc=(
+                datetime.fromisoformat(str(payload["session_close_at_utc"]))
+                if payload.get("session_close_at_utc")
+                else None
+            ),
+            exchange=str(payload.get("exchange", "")),
+            timezone=str(payload.get("timezone", "")),
         )
 
     def _emit_state(

@@ -43,7 +43,12 @@ export type CommandCenterSnapshot = {
   session_mode: string
   account_summary: DashboardSnapshot['account_summary']
   equity_curve: Array<{ label: string; value: string }>
-  exposure_breakdown: Array<{ symbol: string; value: string }>
+  exposure_breakdown: Array<{
+    symbol: string
+    value: string | null
+    value_status?: string
+    missing_reason?: string
+  }>
   watchlist: Array<{ symbol: string; status: string }>
   gate_statuses: Record<string, string>
   recommendations: Record<string, number>
@@ -140,10 +145,17 @@ export type PortfolioExecutionPanel = {
 
 export type PortfolioPositionRow = {
   symbol: string
-  quantity: string
-  market_value: string
-  exposure_pct: string
+  quantity: string | null
+  market_value: string | null
+  exposure_pct: string | null
   status: string
+  quantity_status?: string
+  price_status?: string
+  exposure_status?: string
+  average_entry_price?: string | null
+  latest_price?: string | null
+  latest_price_at_utc?: string | null
+  source_evidence_at_utc?: string | null
 }
 
 export type PortfolioPositionsPanel = {
@@ -204,6 +216,52 @@ export type OperatorTimelineEvent = {
   occurred_at_utc: string
   artifact_path: string
   related_ids: string[]
+}
+
+export type SessionTimelineSession = {
+  trading_day: string
+  schedule_id: string
+  session_open_at_utc: string | null
+  session_close_at_utc: string | null
+  exchange: string
+  timezone: string
+  status: string
+  metadata_status: string
+  partial_reason: string
+}
+
+export type SessionTimelineEvent = {
+  event_id: string
+  event_type: string
+  symbol: string
+  severity: string
+  headline: string
+  details: string
+  occurred_at_utc: string
+  artifact_path: string
+  related_ids: string[]
+  shape: 'instant' | 'span' | string
+  started_at_utc: string | null
+  ended_at_utc: string | null
+  duration_seconds: number | null
+  status: string
+  reason: string
+  evidence_freshness: string
+  source_status: string
+}
+
+export type SessionTimelineFilters = {
+  trading_day: string
+  symbol: string | null
+  cycle_id: string | null
+  incident_id: string | null
+}
+
+export type SessionTimelineResponse = {
+  session: SessionTimelineSession
+  available_trading_days: string[]
+  events: SessionTimelineEvent[]
+  filters: SessionTimelineFilters
 }
 
 export type ReplaySession = {
@@ -354,6 +412,10 @@ export type RuntimeHeartbeatSnapshot = {
   symbol_rows: RuntimeSymbolHeartbeatRow[]
   decision_ladder: RuntimeDecisionLadderRow[]
   operator_guidance: RuntimeOperatorGuidance | null
+  configured_cadence_seconds?: number | null
+  running_cadence_seconds?: number | null
+  cadence_source?: string
+  cadence_applies_at?: string
 }
 
 export type RuntimeDecisionSignalDetail = {

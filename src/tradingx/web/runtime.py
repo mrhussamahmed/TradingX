@@ -467,20 +467,27 @@ class LocalWebActionRunner:
                 message="Runtime host manager is unavailable.",
                 evidence_refs=(),
             )
+        interval_seconds = self._runtime_cadence_seconds(interval_seconds)
         if sizing_policy is None:
-            return self._runtime_host_manager.start(
+            result = self._runtime_host_manager.start(
                 symbols=symbols,
                 quantity=Decimal(quantity),
                 interval_seconds=interval_seconds,
                 max_cycles=max_cycles,
             )
-        return self._runtime_host_manager.start(
+            if result.status in {"accepted", "completed"}:
+                self._write_running_cadence(interval_seconds)
+            return result
+        result = self._runtime_host_manager.start(
             symbols=symbols,
             quantity=Decimal(quantity),
             interval_seconds=interval_seconds,
             max_cycles=max_cycles,
             sizing_policy=sizing_policy,
         )
+        if result.status in {"accepted", "completed"}:
+            self._write_running_cadence(interval_seconds)
+        return result
 
     def stop_runtime_host(self) -> WebActionResult:
         if self._runtime_host_manager is None:
@@ -706,7 +713,9 @@ class LocalWebActionRunner:
         return self._automation_runner_builder().run_heartbeat(
             symbols=self._config.runtime.symbol_universe,
             quantity=Decimal("1"),
-            interval_seconds=self._config.runtime.service_interval_seconds,
+            interval_seconds=self._runtime_cadence_seconds(
+                self._config.runtime.service_interval_seconds
+            ),
         )
 
     def run_session_close(self) -> WebActionResult:
@@ -723,7 +732,7 @@ class LocalWebActionRunner:
         result = self._automation_runner_builder().run_market_day(
             symbols=symbols,
             quantity=Decimal(quantity),
-            interval_seconds=interval_seconds,
+            interval_seconds=self._runtime_cadence_seconds(interval_seconds),
             max_heartbeats=max_heartbeats,
         )
         return WebActionResult(
@@ -732,6 +741,75 @@ class LocalWebActionRunner:
             status=result.run_record.status,
             message=f"Market-day automation: {result.run_record.summary}",
             evidence_refs=(str(result.run_record_path),),
+        )
+
+    def set_runtime_cadence(self, *, cadence_seconds: int) -> WebActionResult:
+        allowed = {180, 300, 600, 1200, 1800, 3600, 7200}
+        if cadence_seconds not in allowed:
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="runtime_cadence_update",
+                status="blocked",
+                message="Unsupported runtime cadence.",
+                evidence_refs=(),
+            )
+        output_dir = (
+            self._config.runtime.artifact_root / "operator_platform" / "runtime_config"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "cadence.json"
+        output_path.write_text(
+            json.dumps(
+                {
+                    "configured_cadence_seconds": cadence_seconds,
+                    "cadence_source": "operator_override",
+                    "applies_at": "next_evaluation",
+                    "updated_at_utc": datetime.now(UTC).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="runtime_cadence_update",
+            status="completed",
+            message=f"Runtime cadence set to {cadence_seconds} seconds.",
+            evidence_refs=(str(output_path),),
+        )
+
+    def _runtime_cadence_seconds(self, fallback: int) -> int:
+        payload_path = (
+            self._config.runtime.artifact_root
+            / "operator_platform"
+            / "runtime_config"
+            / "cadence.json"
+        )
+        if not payload_path.exists():
+            return fallback
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            cadence = int(payload.get("configured_cadence_seconds", fallback))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return fallback
+        return cadence if cadence > 0 else fallback
+
+    def _write_running_cadence(self, cadence_seconds: int) -> None:
+        output_dir = (
+            self._config.runtime.artifact_root / "operator_platform" / "runtime_config"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "running_cadence.json").write_text(
+            json.dumps(
+                {
+                    "running_cadence_seconds": cadence_seconds,
+                    "started_at_utc": datetime.now(UTC).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
         )
 
     def run_recovery_drill(self, *, symbol: str) -> WebActionResult:

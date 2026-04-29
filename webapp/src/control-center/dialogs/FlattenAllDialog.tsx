@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { toCurrency } from '../../platform/format'
+import { prettyLabel, toCurrency } from '../../platform/format'
 import type { PortfolioPositionRow } from '../../types'
 
 import { ConfirmDialog } from './ConfirmDialog'
@@ -94,9 +94,13 @@ export function FlattenAllDialog({
               {positions.map((position) => (
                 <tr key={position.symbol}>
                   <td>{position.symbol}</td>
-                  <td className="numeric">{position.quantity}</td>
                   <td className="numeric">
-                    {position.market_value ? toCurrency(position.market_value) : '—'}
+                    {position.quantity ?? prettyLabel(position.quantity_status ?? 'source_missing')}
+                  </td>
+                  <td className="numeric">
+                    {position.market_value != null
+                      ? toCurrency(position.market_value)
+                      : prettyLabel(position.price_status ?? 'unpriced')}
                   </td>
                   <td>{position.status}</td>
                 </tr>

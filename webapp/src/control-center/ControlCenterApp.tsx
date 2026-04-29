@@ -64,11 +64,15 @@ function ControlCenterShell() {
     }
     setResumeBusy(true)
     try {
+      const cadenceSeconds =
+        data.runtimeHeartbeat.configured_cadence_seconds ??
+        data.configSummary.config.service_interval_seconds ??
+        300
       await data.runAction('Start Paper Runtime', () =>
         postRuntimeHostStart({
           symbols,
           quantity: paperRuntimeFallbackQuantity(sizingSettings),
-          interval_seconds: Number(data.configSummary.config.service_interval_seconds || 300),
+          interval_seconds: Number(cadenceSeconds),
           max_cycles: null,
           sizing_policy: buildPaperRuntimeSizingPayload(sizingSettings),
         }),
@@ -231,8 +235,9 @@ function ControlCenterShell() {
           Sizing: {resumeSizingSummary}.
         </p>
         <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
-          Cadence: every {data.configSummary.config.service_interval_seconds || 300}s. The runtime will
-          start from idle. If a gate degrades during startup, the runtime will halt automatically.
+          Cadence: every {data.runtimeHeartbeat.configured_cadence_seconds ?? data.configSummary.config.service_interval_seconds ?? 300}s
+          {data.runtimeHeartbeat.cadence_source === 'operator_override' ? ' from operator override' : ' from config'}.
+          The runtime will start from idle. If a gate degrades during startup, the runtime will halt automatically.
         </p>
       </ConfirmDialog>
     </>
