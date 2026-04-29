@@ -81,7 +81,7 @@ export function deriveAutoSwitchSuggestion(input: AutoSwitchContext): AutoSwitch
     return {
       flavor: 'market-day-ops',
       reason: 'pre-open-checklist',
-      detail: 'Pre-open window active — Market Day Ops shows the readiness timeline.',
+      detail: 'Pre-open window active — Paper Trading shows the readiness timeline.',
     }
   }
   if (gate3Pending(input.gate3Readiness) && input.gate3Readiness.criteria.length > 0) {

@@ -2,18 +2,16 @@ import { useEffect, useState } from 'react'
 import {
   Activity,
   Bell,
-  BookOpen,
-  CalendarClock,
-  Cpu,
-  FileEdit,
+  BarChart3,
+  ClipboardList,
   FileText,
-  FlaskConical,
   FlaskRound,
   GitBranch,
   PieChart,
+  PlayCircle,
   Server,
   Settings,
-  Shield,
+  ShieldCheck,
 } from 'lucide-react'
 
 import type { ConfigSummary } from '../../types'
@@ -23,18 +21,15 @@ import type { ViewFlavor } from '../state/types'
 import styles from './Shell.module.css'
 
 type NavId =
-  | 'happening-now'
-  | 'bot-status'
-  | 'today-activity'
-  | 'why-explorer'
-  | 'risk'
-  | 'performance'
-  | 'strategy-quality'
-  | 'operator-decisions'
-  | 'evidence-trust'
+  | 'command-center'
+  | 'paper-trading'
+  | 'portfolio-graphs'
+  | 'orders-positions'
+  | 'strategy-signals'
+  | 'risk-gates'
+  | 'evidence-audit'
+  | 'open-risk'
   | 'alerts'
-  | 'audit'
-  | 'research'
   | 'settings'
   | 'system'
 
@@ -49,30 +44,27 @@ type NavItem = {
 }
 
 const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { id: 'happening-now', label: 'What is happening now', icon: Activity, flavor: 'mission-control', group: 'primary' },
-  { id: 'bot-status', label: 'Is the bot safe', icon: Shield, flavor: 'risk-core', group: 'primary' },
-  { id: 'today-activity', label: 'What did it do', icon: CalendarClock, flavor: 'market-day-ops', group: 'primary' },
-  { id: 'why-explorer', label: 'Why did it happen', icon: Cpu, flavor: 'evidence-replay', group: 'primary' },
-  { id: 'risk', label: 'What risk is open', icon: PieChart, flavor: 'portfolio-constellation', group: 'primary' },
-  { id: 'performance', label: 'Is it working', icon: FileText, flavor: 'market-chart', group: 'primary' },
-  { id: 'strategy-quality', label: 'Which strategy next', icon: GitBranch, flavor: 'strategy-forge', group: 'primary' },
-  { id: 'operator-decisions', label: 'What can I do', icon: FileEdit, flavor: 'market-day-ops', group: 'primary' },
-  { id: 'evidence-trust', label: 'Can I trust it', icon: BookOpen, flavor: 'evidence-replay', group: 'expansion' },
+  { id: 'command-center', label: 'Command Center', icon: Activity, flavor: 'mission-control', group: 'primary' },
+  { id: 'paper-trading', label: 'Paper Trading', icon: PlayCircle, flavor: 'market-day-ops', group: 'primary' },
+  { id: 'portfolio-graphs', label: 'Portfolio Graphs', icon: BarChart3, flavor: 'market-chart', group: 'primary' },
+  { id: 'orders-positions', label: 'Orders & Positions', icon: ClipboardList, flavor: 'market-day-ops', group: 'primary' },
+  { id: 'strategy-signals', label: 'Strategy Signals', icon: GitBranch, flavor: 'strategy-forge', group: 'primary' },
+  { id: 'risk-gates', label: 'Risk & Gates', icon: ShieldCheck, flavor: 'risk-core', group: 'primary' },
+  { id: 'evidence-audit', label: 'Evidence & Audit', icon: FileText, flavor: 'evidence-replay', group: 'primary' },
+  { id: 'open-risk', label: 'Open Risk', icon: PieChart, flavor: 'portfolio-constellation', group: 'expansion' },
   { id: 'alerts', label: 'Alerts', icon: Bell, flavor: 'risk-core', group: 'expansion' },
-  { id: 'audit', label: 'Audit Trail', icon: FileText, flavor: 'evidence-replay', group: 'expansion' },
-  { id: 'research', label: 'Research', icon: FlaskConical, flavor: 'strategy-forge', group: 'expansion' },
   { id: 'settings', label: 'Settings', icon: Settings, flavor: null, group: 'expansion' },
   { id: 'system', label: 'System', icon: Server, flavor: null, group: 'expansion' },
 ]
 
 const CANONICAL_FOR_FLAVOR: Record<ViewFlavor, NavId> = {
-  'mission-control': 'happening-now',
-  'market-chart': 'performance',
-  'strategy-forge': 'strategy-quality',
-  'market-day-ops': 'today-activity',
-  'risk-core': 'bot-status',
-  'portfolio-constellation': 'risk',
-  'evidence-replay': 'evidence-trust',
+  'mission-control': 'command-center',
+  'market-chart': 'portfolio-graphs',
+  'strategy-forge': 'strategy-signals',
+  'market-day-ops': 'paper-trading',
+  'risk-core': 'risk-gates',
+  'portfolio-constellation': 'open-risk',
+  'evidence-replay': 'evidence-audit',
 }
 
 export type LeftNavProps = {
@@ -127,7 +119,7 @@ export function LeftNav({ onOpenSettings, configSummary, alertCount }: LeftNavPr
             onClick={() => handleNav(item)}
           />
         ))}
-        <div className={styles.navHeader}>Expansion</div>
+        <div className={styles.navHeader}>Tools</div>
         {expansion.map((item) => (
           <NavRow
             key={item.id}

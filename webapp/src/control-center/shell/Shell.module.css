@@ -1,14 +1,15 @@
 .shell {
   display: grid;
-  grid-template-columns: var(--leftnav-width) 1fr var(--rail-width);
+  grid-template-columns: var(--leftnav-width) minmax(0, 1fr) var(--rail-width);
   grid-template-rows: var(--header-height) 1fr;
   height: 100vh;
   width: 100vw;
   background: var(--bg-shell);
+  overflow: hidden;
 }
 
 .shellRailCollapsed {
-  grid-template-columns: var(--leftnav-width) 1fr var(--rail-collapsed-width);
+  grid-template-columns: var(--leftnav-width) minmax(0, 1fr) var(--rail-collapsed-width);
 }
 
 .brandRow {
@@ -20,6 +21,17 @@
   border-bottom: 1px solid var(--border-muted);
   border-right: 1px solid var(--border-muted);
   background: var(--bg-shell);
+}
+
+.brandWordmark {
+  color: var(--text-primary);
+  font-size: 28px;
+  font-weight: 720;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.brandWordmark span {
+  color: var(--accent-cyan);
 }
 
 .pulseRouteLogo {
@@ -73,7 +85,10 @@
   align-items: stretch;
   border-bottom: 1px solid var(--border-muted);
   background: var(--bg-shell);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  min-width: 0;
 }
 
 .leftNav {
@@ -278,16 +293,35 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 14px;
+  justify-content: center;
+  padding: 7px 10px;
   border-right: 1px solid var(--border-muted);
-  min-width: 130px;
-  flex-shrink: 0;
+  flex: 0 0 108px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.statusCard:nth-child(1) {
+  flex-basis: 182px;
+}
+.statusCard:nth-child(3) {
+  flex-basis: 260px;
+}
+.statusCard:nth-child(5),
+.statusCard:nth-child(8) {
+  flex-basis: 132px;
+}
+.statusCard:nth-child(7) {
+  flex-basis: 120px;
 }
 .statusCardLabel {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .statusCardValue {
   font-weight: 600;
@@ -296,10 +330,16 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .statusCardSub {
   font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .statusCardChip {
   display: inline-flex;
@@ -311,6 +351,12 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusCardChip svg {
+  flex-shrink: 0;
 }
 .statusCardChipGood {
   background: rgba(40, 224, 120, 0.1);
@@ -343,12 +389,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 8px;
+  flex-shrink: 0;
 }
 .iconButton {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-muted);
   background: var(--bg-panel);
@@ -359,6 +406,26 @@
 .iconButton:hover {
   background: var(--bg-panel-raised);
   color: var(--text-primary);
+}
+
+@media (max-width: 1320px) {
+  .statusCard:nth-child(3) {
+    flex-basis: 210px;
+  }
+
+  .statusCard:nth-child(8) {
+    display: none;
+  }
+}
+
+@media (max-width: 1120px) {
+  .statusCard:nth-child(6) {
+    display: none;
+  }
+}
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .iconButtonBadge {
   position: absolute;

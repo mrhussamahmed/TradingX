@@ -80,13 +80,27 @@ describe('Signing boundary regression', () => {
   })
 
   describe('POST request signing', () => {
-    it('allows writes without unlocking the browser session', async () => {
+    it('leaves writes unsigned when the browser session is locked', async () => {
       const { calls } = recordingFetchMock()
       await postRuntimeHostStart({
         symbols: ['SPY'],
         quantity: '1',
         interval_seconds: 60,
         max_cycles: null,
+        sizing_policy: {
+          mode: 'percent_equity',
+          fixed_quantity: '10',
+          equity_percent: '5',
+          max_order_notional: '5000',
+          cash_reserve_percent: '20',
+        },
+      })
+      expect(JSON.parse(calls[0].body ?? '{}').sizing_policy).toEqual({
+        mode: 'percent_equity',
+        fixed_quantity: '10',
+        equity_percent: '5',
+        max_order_notional: '5000',
+        cash_reserve_percent: '20',
       })
       const writeCalls = calls.filter((call) => call.method === 'POST')
       expect(writeCalls.length).toBeGreaterThan(0)
@@ -96,6 +110,24 @@ describe('Signing boundary regression', () => {
         expect(call.headers.get('X-TradingX-Timestamp')).toBeNull()
         expect(idempotency.length).toBeGreaterThan(0)
       }
+    })
+
+    it('signs writes after unlocking the browser session', async () => {
+      const { calls } = recordingFetchMock()
+      unlockWebWrites(SECRET_LITERAL)
+
+      await postRuntimeHostStart({
+        symbols: ['SPY'],
+        quantity: '1',
+        interval_seconds: 60,
+        max_cycles: null,
+      })
+
+      const postCall = calls.find((call) => call.method === 'POST')
+      expect(postCall).toBeDefined()
+      expect(postCall?.headers.get('X-TradingX-Timestamp')).toMatch(/^\d+$/)
+      expect(postCall?.headers.get('X-TradingX-Signature')).toMatch(/^[a-f0-9]{64}$/)
+      expect(postCall?.headers.get('X-TradingX-Signature')).not.toContain(SECRET_LITERAL)
     })
 
     it('never includes the raw secret in any outbound request header, body, or URL', async () => {
@@ -170,7 +202,8 @@ describe('Signing boundary regression', () => {
         },
       } as unknown as Parameters<typeof describeWriteMode>[0]
       const writeMode = describeWriteMode(withInjectedSecret, false)
-      expect(writeMode.unlocked).toBe(true)
+      expect(writeMode.unlocked).toBe(false)
+      expect(writeMode.detail).toMatch(/signing secret/i)
       expect(writeMode.detail.includes(SECRET_LITERAL)).toBe(false)
       expect(JSON.stringify(writeMode).includes(SECRET_LITERAL)).toBe(false)
     })

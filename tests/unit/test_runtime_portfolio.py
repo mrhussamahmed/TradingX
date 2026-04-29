@@ -13,6 +13,7 @@ from tradingx.runtime_portfolio import (
     UnsupportedRuntimePortfolioPlanError,
     _build_regime_snapshots,
 )
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
@@ -556,6 +557,253 @@ def test_runtime_portfolio_planner_builds_blueprint_plan_with_attributions(
         ("vol-target-v1", Decimal("0.5")),
     )
     assert qqq_intent.sleeve_attributions == (("trend-following-v1", Decimal("1")),)
+
+
+def test_runtime_portfolio_planner_applies_sizing_policy_to_blueprint_buys(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint_path = tmp_path / "bp-runtime.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-runtime",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    strategy_id: trend-following-v1",
+                "    budget_fraction_of_equity: 1.0",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+
+    monkeypatch.setattr(
+        module,
+        "build_portfolio_cycle_target_weights",
+        lambda **kwargs: (
+            {"QQQ": Decimal("0.50"), "SPY": Decimal("0.50")},
+            (
+                module.SleeveTargetWeights(
+                    sleeve_id="trend-following-v1",
+                    target_weights_by_symbol=(
+                        ("QQQ", Decimal("0.50")),
+                        ("SPY", Decimal("0.50")),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY", "QQQ"),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("1000"),
+            equity=Decimal("1000"),
+            buying_power=Decimal("1000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="percent_equity",
+            equity_percent=Decimal("50"),
+            cash_reserve_percent=Decimal("20"),
+        ),
+    )
+
+    assert plan is not None
+    buy_intents = tuple(intent for intent in plan.trade_intents if intent.side == "buy")
+    assert [(intent.symbol, intent.quantity) for intent in buy_intents] == [
+        ("QQQ", Decimal("4")),
+        ("SPY", Decimal("3")),
+    ]
+    assert plan.target_weights == {
+        "QQQ": Decimal("0.4"),
+        "SPY": Decimal("0.3"),
+    }
+    assert sum(
+        trade.delta_quantity * trade.last_trade_price
+        for trade in plan.planned_trades
+        if trade.side == "buy"
+    ) == Decimal("700")
+
+
+def test_runtime_portfolio_planner_caps_blueprint_buys_to_fixed_sizing_policy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint_path = tmp_path / "bp-runtime.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-runtime",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    strategy_id: trend-following-v1",
+                "    budget_fraction_of_equity: 1.0",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_portfolio_cycle_target_weights",
+        lambda **kwargs: ({"SPY": Decimal("0.50")}, ()),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("1000"),
+            equity=Decimal("1000"),
+            buying_power=Decimal("1000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="fixed_shares",
+            fixed_quantity=Decimal("2"),
+            cash_reserve_percent=Decimal("0"),
+        ),
+    )
+
+    assert plan is not None
+    assert [(intent.symbol, intent.quantity) for intent in plan.trade_intents] == [
+        ("SPY", Decimal("2")),
+    ]
+    assert plan.target_weights == {"SPY": Decimal("0.2")}
+
+
+def test_runtime_portfolio_planner_caps_blueprint_buys_at_marketable_limit_price(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint_path = tmp_path / "bp-runtime.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-runtime",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    strategy_id: trend-following-v1",
+                "    budget_fraction_of_equity: 1.0",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+    monkeypatch.setattr(
+        module,
+        "build_portfolio_cycle_target_weights",
+        lambda **kwargs: ({"SPY": Decimal("2.0")}, ()),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("100000"),
+            equity=Decimal("100000"),
+            buying_power=Decimal("100000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="fixed_shares",
+            fixed_quantity=Decimal("20"),
+            max_order_notional=Decimal("1000"),
+            cash_reserve_percent=Decimal("0"),
+        ),
+    )
+
+    assert plan is not None
+    assert [(intent.symbol, intent.quantity) for intent in plan.trade_intents] == [
+        ("SPY", Decimal("9")),
+    ]
 
 
 def test_runtime_portfolio_planner_enforces_activation_allocation_limits(

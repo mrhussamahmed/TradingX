@@ -44,6 +44,9 @@ export function Canvas({ drawerOpen, onDrawerOpenChange }: CanvasProps) {
   useFlavorShortcuts(showTransition)
 
   const flavorMeta = FLAVORS.find((flavor) => flavor.id === prefs.activeFlavor) ?? FLAVORS[0]
+  const evidenceToggleLabel = prefs.showEvidenceLayer
+    ? 'Hide evidence details'
+    : 'Show evidence details'
 
   const suggestion = useAutoSwitchSuggestion({
     enabled: prefs.autoSwitchByWorkflow,
@@ -96,9 +99,9 @@ export function Canvas({ drawerOpen, onDrawerOpenChange }: CanvasProps) {
             className="btn"
             aria-pressed={prefs.showEvidenceLayer}
             onClick={() => setToggle('showEvidenceLayer', !prefs.showEvidenceLayer)}
-            title="Toggle evidence layer overlay"
+            title={evidenceToggleLabel}
           >
-            <Layers size={14} /> Evidence: {prefs.showEvidenceLayer ? 'On' : 'Off'}
+            <Layers size={14} /> {evidenceToggleLabel}
           </button>
           <button
             type="button"

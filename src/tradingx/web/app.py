@@ -6,7 +6,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 import uvicorn
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from tradingx.config import TradingConfig
 from tradingx.live_enablement import resolve_broker_mode
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BotRuntimeState,
@@ -134,6 +135,7 @@ class ActionRunnerProtocol(Protocol):
         quantity: str,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult: ...
 
     def stop_service(self) -> WebActionResult: ...
@@ -145,6 +147,7 @@ class ActionRunnerProtocol(Protocol):
         quantity: str,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult: ...
 
     def stop_runtime_host(self) -> WebActionResult: ...
@@ -231,6 +234,28 @@ class PaperLoopRequest(BaseModel):
     quantity: str
 
 
+class RuntimeSizingPolicyRequest(BaseModel):
+    mode: Literal["fixed_shares", "percent_equity"] = "fixed_shares"
+    fixed_quantity: str = "1"
+    equity_percent: str = "5"
+    max_order_notional: str | None = None
+    cash_reserve_percent: str = "20"
+
+    def to_domain(self) -> RuntimeSizingPolicy:
+        max_order_notional = (
+            None
+            if self.max_order_notional is None or not self.max_order_notional.strip()
+            else Decimal(self.max_order_notional)
+        )
+        return RuntimeSizingPolicy(
+            mode=self.mode,
+            fixed_quantity=Decimal(self.fixed_quantity),
+            equity_percent=Decimal(self.equity_percent),
+            max_order_notional=max_order_notional,
+            cash_reserve_percent=Decimal(self.cash_reserve_percent),
+        )
+
+
 class ConfigProposalRequest(BaseModel):
     target_area: str
     proposed_values: dict[str, object]
@@ -242,6 +267,7 @@ class ServiceStartRequest(BaseModel):
     quantity: str
     interval_seconds: int
     max_cycles: int | None = None
+    sizing_policy: RuntimeSizingPolicyRequest | None = None
 
 
 class RuntimeHostStartRequest(BaseModel):
@@ -249,6 +275,7 @@ class RuntimeHostStartRequest(BaseModel):
     quantity: str
     interval_seconds: int
     max_cycles: int | None = None
+    sizing_policy: RuntimeSizingPolicyRequest | None = None
 
 
 class RecoverRequest(BaseModel):
@@ -1124,14 +1151,26 @@ def create_app(
         request: Request,
         payload: ServiceStartRequest,
     ) -> JSONResponse:
-        return await _run_authorized_write(
-            request,
-            lambda: action_runner.start_service(
-                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+        def start_service_action() -> WebActionResult:
+            symbols = tuple(symbol.upper() for symbol in payload.symbols)
+            if payload.sizing_policy is None:
+                return action_runner.start_service(
+                    symbols=symbols,
+                    quantity=payload.quantity,
+                    interval_seconds=payload.interval_seconds,
+                    max_cycles=payload.max_cycles,
+                )
+            return action_runner.start_service(
+                symbols=symbols,
                 quantity=payload.quantity,
                 interval_seconds=payload.interval_seconds,
                 max_cycles=payload.max_cycles,
-            ),
+                sizing_policy=payload.sizing_policy.to_domain(),
+            )
+
+        return await _run_authorized_write(
+            request,
+            start_service_action,
         )
 
     @app.post("/api/actions/service/stop")
@@ -1143,14 +1182,26 @@ def create_app(
         request: Request,
         payload: RuntimeHostStartRequest,
     ) -> JSONResponse:
-        return await _run_authorized_write(
-            request,
-            lambda: action_runner.start_runtime_host(
-                symbols=tuple(symbol.upper() for symbol in payload.symbols),
+        def start_runtime_host_action() -> WebActionResult:
+            symbols = tuple(symbol.upper() for symbol in payload.symbols)
+            if payload.sizing_policy is None:
+                return action_runner.start_runtime_host(
+                    symbols=symbols,
+                    quantity=payload.quantity,
+                    interval_seconds=payload.interval_seconds,
+                    max_cycles=payload.max_cycles,
+                )
+            return action_runner.start_runtime_host(
+                symbols=symbols,
                 quantity=payload.quantity,
                 interval_seconds=payload.interval_seconds,
                 max_cycles=payload.max_cycles,
-            ),
+                sizing_policy=payload.sizing_policy.to_domain(),
+            )
+
+        return await _run_authorized_write(
+            request,
+            start_runtime_host_action,
         )
 
     @app.post("/api/actions/runtime-host/stop")

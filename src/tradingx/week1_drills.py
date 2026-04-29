@@ -22,6 +22,7 @@ from tradingx.policy import (
     build_week1_policy_snapshot,
 )
 from tradingx.runtime_host import LocalRuntimeHostManager
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.strategy import DeterministicBaselineStrategy
 from tradingx.types import (
@@ -129,8 +130,9 @@ class _NoopServiceManager:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
-        del symbols, quantity, interval_seconds, max_cycles
+        del symbols, quantity, interval_seconds, max_cycles, sizing_policy
         return WebActionResult(
             action_id="action-start",
             action_type="runtime_host_start",

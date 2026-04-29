@@ -180,14 +180,23 @@ npm --prefix webapp run build
 
 On macOS, this workspace also includes `TradingX Control Center.app` in
 the repo root. Double-clicking it starts the local control center if it
-is not already running, then opens the dashboard in your default
-browser.
+is not already running, then opens the dashboard in your default browser
+without opening a Terminal window.
+
+The no-terminal app uses
+`~/Library/Application Support/TradingX/runtime` as its operational
+runtime mirror when this workspace is under Desktop. This avoids macOS
+privacy controls blocking the background Python process.
 
 Requirements:
 
 - `.venv` exists from `uv sync --all-groups`
 - `.env` exists and is populated
 - the app bundle stays in the repo root so it can find the workspace
+- startup diagnostics are written to
+  `~/Library/Application Support/TradingX/runtime/data/logs/control_center_app.log`
+  and background server output is written to
+  `~/Library/Application Support/TradingX/runtime/data/logs/control_center_background.out.log`
 
 ### 5. Verify the config loads safely
 
@@ -273,6 +282,10 @@ This is now the preferred operator workflow.
 Preferred no-terminal path on macOS:
 
 - double-click `TradingX Control Center.app`
+
+The app opens the dashboard from the runtime mirror at
+`~/Library/Application Support/TradingX/runtime`; no Terminal window is
+required.
 
 CLI launcher equivalent:
 

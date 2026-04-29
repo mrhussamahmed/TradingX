@@ -153,6 +153,15 @@ class DeterministicBaselineStrategy:
                 observation_timestamp=market_snapshot.timestamp,
             )
 
+        if quantity <= Decimal("0"):
+            return self._build_intent(
+                symbol=market_snapshot.symbol,
+                side="hold",
+                quantity=None,
+                reason_code="entry_size_below_minimum",
+                observation_timestamp=market_snapshot.timestamp,
+            )
+
         return self._build_intent(
             symbol=market_snapshot.symbol,
             side="buy",

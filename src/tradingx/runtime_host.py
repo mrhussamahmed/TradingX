@@ -11,6 +11,7 @@ from typing import Any, Final, Protocol, cast
 
 from tradingx.config import TradingConfig
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BotRuntimeState,
@@ -31,6 +32,7 @@ class ServiceManagerProtocol(Protocol):
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult: ...
 
     def stop(self) -> WebActionResult: ...
@@ -86,6 +88,7 @@ class _PendingStartRequest:
     quantity: Decimal
     interval_seconds: int
     max_cycles: int | None
+    sizing_policy: RuntimeSizingPolicy | None = None
 
 
 SERVICE_STOP_SUCCESS_STATUSES: Final[frozenset[str]] = frozenset(
@@ -161,6 +164,7 @@ class LocalRuntimeHostManager:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -191,6 +195,7 @@ class LocalRuntimeHostManager:
                 quantity=quantity,
                 interval_seconds=interval_seconds,
                 max_cycles=max_cycles,
+                sizing_policy=sizing_policy,
             )
             self._thread = threading.Thread(
                 target=self._bootstrap_and_start,
@@ -199,6 +204,7 @@ class LocalRuntimeHostManager:
                     "quantity": quantity,
                     "interval_seconds": interval_seconds,
                     "max_cycles": max_cycles,
+                    "sizing_policy": sizing_policy,
                 },
                 daemon=True,
             )
@@ -328,6 +334,7 @@ class LocalRuntimeHostManager:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> None:
         try:
             activation, snapshot = (
@@ -377,12 +384,21 @@ class LocalRuntimeHostManager:
                 status_reason="Strategy activation is loaded.",
                 latest_selection_id=selection.selection_id,
             )
-            service_result = self._service_manager.start(
-                symbols=symbols,
-                quantity=quantity,
-                interval_seconds=interval_seconds,
-                max_cycles=max_cycles,
-            )
+            if sizing_policy is None:
+                service_result = self._service_manager.start(
+                    symbols=symbols,
+                    quantity=quantity,
+                    interval_seconds=interval_seconds,
+                    max_cycles=max_cycles,
+                )
+            else:
+                service_result = self._service_manager.start(
+                    symbols=symbols,
+                    quantity=quantity,
+                    interval_seconds=interval_seconds,
+                    max_cycles=max_cycles,
+                    sizing_policy=sizing_policy,
+                )
             if service_result.status not in {"accepted", "completed"}:
                 raise RuntimeError(service_result.message)
             self._set_state(
@@ -406,12 +422,21 @@ class LocalRuntimeHostManager:
                 return
             pending_start = self._pending_start_request
             if pending_start is not None:
-                service_result = self._service_manager.start(
-                    symbols=pending_start.symbols,
-                    quantity=pending_start.quantity,
-                    interval_seconds=pending_start.interval_seconds,
-                    max_cycles=pending_start.max_cycles,
-                )
+                if pending_start.sizing_policy is None:
+                    service_result = self._service_manager.start(
+                        symbols=pending_start.symbols,
+                        quantity=pending_start.quantity,
+                        interval_seconds=pending_start.interval_seconds,
+                        max_cycles=pending_start.max_cycles,
+                    )
+                else:
+                    service_result = self._service_manager.start(
+                        symbols=pending_start.symbols,
+                        quantity=pending_start.quantity,
+                        interval_seconds=pending_start.interval_seconds,
+                        max_cycles=pending_start.max_cycles,
+                        sizing_policy=pending_start.sizing_policy,
+                    )
                 if service_result.status not in {"accepted", "completed"}:
                     raise RuntimeError(service_result.message)
             self._set_state(

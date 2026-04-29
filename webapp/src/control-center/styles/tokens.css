@@ -72,7 +72,7 @@
   --shadow-glow-blue: 0 0 0 1px rgba(46, 161, 255, 0.5), 0 0 28px -4px rgba(46, 161, 255, 0.45);
   --shadow-glow-red: 0 0 0 1px rgba(255, 51, 71, 0.55), 0 0 24px -4px rgba(255, 51, 71, 0.55);
 
-  --header-height: 60px;
+  --header-height: 72px;
   --leftnav-width: 220px;
   --rail-width: 320px;
   --rail-collapsed-width: 56px;

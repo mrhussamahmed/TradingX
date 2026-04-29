@@ -14,6 +14,7 @@ import pandas as pd  # type: ignore[import-untyped]
 
 from tradingx.activation import LocalActivationGateway
 from tradingx.config import TradingConfig
+from tradingx.costs import CostModelConfig
 from tradingx.data import build_market_data_gateway_for_mode
 from tradingx.drift.attribution import SleeveAttributionRecorder
 from tradingx.drift.backtest_reference import (
@@ -714,6 +715,7 @@ def _ensure_backtest_reference_returns(
 ) -> None:
     end_utc = now_provider()
     start_utc = end_utc - timedelta(days=400)
+    reference_cost_model = CostModelConfig(half_spread_multiplier=0.0)
     for candidate in build_mandatory_candidate_registry(config.runtime.symbol_universe):
         if candidate.sleeve_class_path is None:
             continue
@@ -743,6 +745,7 @@ def _ensure_backtest_reference_returns(
             bars_by_symbol=bars_by_symbol,
             regime_snapshots_by_date=regimes,
             sleeve_budget_equity=Decimal("1.0"),
+            cost_model_config=reference_cost_model,
         )
         write_backtest_reference_returns(
             artifact_root=config.runtime.artifact_root,

@@ -61,19 +61,19 @@ export function deriveResumeBlocker(args: {
   if (!args.configSummary.config.web_write_mode_enabled) {
     return {
       blocked: true,
-      reason: 'Resume blocked: server write mode is disabled.',
+      reason: 'Start blocked: server write mode is disabled.',
     }
   }
   if (!args.writeUnlocked) {
     return {
       blocked: true,
-      reason: 'Resume blocked: enter the local signing secret to unlock writes.',
+      reason: 'Start blocked: enter the local signing secret to unlock writes.',
     }
   }
   if (args.configSummary.live_disable_report.manual_kill_switch_active) {
     return {
       blocked: true,
-      reason: 'Resume blocked: manual kill switch is active. Clear the kill-switch evidence before resuming.',
+      reason: 'Start blocked: manual kill switch is active. Clear the kill-switch evidence before starting.',
     }
   }
   if (
@@ -82,13 +82,13 @@ export function deriveResumeBlocker(args: {
   ) {
     return {
       blocked: true,
-      reason: 'Resume blocked: configured symbol universe is empty. Configure at least one symbol before resuming.',
+      reason: 'Start blocked: configured symbol universe is empty. Configure at least one symbol before starting.',
     }
   }
   if (args.runtimeState.status === 'running' || args.runtimeState.status === 'starting') {
     return {
       blocked: true,
-      reason: 'Resume blocked: runtime host is already running.',
+      reason: 'Start blocked: runtime host is already running.',
     }
   }
   const risk = deriveRiskTone(args.commandCenter.gate_statuses)
@@ -99,7 +99,7 @@ export function deriveResumeBlocker(args: {
     const gateName = failingGate ? prettyLabel(failingGate[0]) : 'a risk gate'
     return {
       blocked: true,
-      reason: `Resume blocked: ${gateName} is failing. Open Risk Core to inspect required action.`,
+      reason: `Start blocked: ${gateName} is failing. Open Risk Core to inspect required action.`,
     }
   }
   return { blocked: false, reason: '' }
@@ -218,8 +218,8 @@ export function OperatorRail({
             className={`${styles.railCollapsedAction} ${styles.resume}`}
             onClick={onRequestResume}
             disabled={resumeBlocker.blocked}
-            aria-label="Resume Runtime"
-            title={resumeBlocker.blocked ? resumeBlocker.reason : 'Resume Runtime'}
+            aria-label="Start Paper Runtime"
+            title={resumeBlocker.blocked ? resumeBlocker.reason : 'Start Paper Runtime'}
           >
             <Play size={18} />
           </button>
@@ -280,9 +280,9 @@ export function OperatorRail({
           >
             <Play className={styles.commandIcon} aria-hidden />
             <div className={styles.commandLabel}>
-              <span>Resume Runtime</span>
+              <span>Start Paper Runtime</span>
               <span className={styles.commandSub}>
-                {resumeBlocker.blocked ? resumeBlocker.reason : 'Resume normal ops'}
+                {resumeBlocker.blocked ? resumeBlocker.reason : 'Start paper evaluation loop'}
               </span>
             </div>
           </button>

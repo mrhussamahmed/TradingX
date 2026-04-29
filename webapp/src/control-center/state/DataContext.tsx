@@ -272,18 +272,40 @@ const defaultSchedulerState: MarketDaySchedulerState = {
 // eslint-disable-next-line react-refresh/only-export-components
 export function describeWriteMode(
   config: ConfigSummary,
-  _unlocked: boolean,
+  unlockedFromSession: boolean,
 ): WriteMode {
   const enabled = Boolean(config.config.web_write_mode_enabled)
   const configured = Boolean(config.config.web_write_signing_configured)
-  const unlocked = enabled
-  let detail = ''
   if (!enabled) {
-    detail = 'Write mode is disabled on the server.'
-  } else {
-    detail = 'Local write actions are enabled.'
+    return {
+      enabled: false,
+      configured,
+      unlocked: false,
+      detail: 'Write mode is disabled on the server.',
+    }
   }
-  return { enabled, configured, unlocked, detail }
+  if (!configured) {
+    return {
+      enabled: false,
+      configured,
+      unlocked: false,
+      detail: 'Signed web writes are not configured on the server.',
+    }
+  }
+  if (!unlockedFromSession) {
+    return {
+      enabled: true,
+      configured,
+      unlocked: false,
+      detail: 'Enter the local signing secret to unlock writes.',
+    }
+  }
+  return {
+    enabled: true,
+    configured,
+    unlocked: true,
+    detail: 'Local write actions are enabled and signed.',
+  }
 }
 
 const DataContext = createContext<DataContextValue | null>(null)

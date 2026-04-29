@@ -3,6 +3,8 @@ import {
   CalendarCheck2,
   CircleDot,
   Download,
+  LockKeyhole,
+  LockOpen,
   Play,
   RefreshCcw,
   Square,
@@ -20,6 +22,14 @@ import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../
 import type { OperatorTimelineEvent } from '../../types'
 import { useData } from '../state/DataContext'
 import { useToast } from '../state/ToastContext'
+import {
+  buildPaperRuntimeSizingPayload,
+  describePaperRuntimeSizing,
+  paperRuntimeFallbackQuantity,
+  readPaperRuntimeSizingSettings,
+  writePaperRuntimeSizingSettings,
+  type PaperRuntimeSizingSettings,
+} from '../state/paperRuntimeSizing'
 
 import { deriveTimelineSeverity } from './EvidenceTimeline'
 import styles from './Flavor.module.css'
@@ -77,10 +87,20 @@ export function MarketDayOpsFlavor() {
     replay,
     configSummary,
     writeMode,
+    unlockWrites,
+    lockWrites,
     runAction,
   } = useData()
   const { pushToast } = useToast()
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [writeSecret, setWriteSecret] = useState('')
+  const [sizingSettings, setSizingSettings] = useState<PaperRuntimeSizingSettings>(
+    readPaperRuntimeSizingSettings,
+  )
+
+  useEffect(() => {
+    writePaperRuntimeSizingSettings(sizingSettings)
+  }, [sizingSettings])
 
   const sortedEvents = useMemo(() => {
     return [...replay.events].sort((a, b) => {
@@ -121,6 +141,19 @@ export function MarketDayOpsFlavor() {
 
   function getActionState(key: string): ActionState {
     return busyAction === key ? 'running' : 'idle'
+  }
+
+  function handleUnlockWrites() {
+    const result = unlockWrites(writeSecret)
+    if (!result.ok) {
+      pushToast(result.error ?? 'Unable to unlock writes.', 'watch')
+      return
+    }
+    setWriteSecret('')
+  }
+
+  function updateSizingSettings(patch: Partial<PaperRuntimeSizingSettings>) {
+    setSizingSettings((current) => ({ ...current, ...patch }))
   }
 
   return (
@@ -235,6 +268,116 @@ export function MarketDayOpsFlavor() {
             </span>
           </div>
           <div className={styles.panelBody}>
+            {writeMode.enabled && writeMode.configured ? (
+              <div className={styles.writeUnlockPanel}>
+                {writeMode.unlocked ? (
+                  <>
+                    <span className={styles.writeUnlockStatus}>Signed writes unlocked</span>
+                    <button type="button" className="btn" onClick={lockWrites}>
+                      <LockKeyhole size={14} /> Lock Writes
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <label className={styles.sizingField}>
+                      <span>Local signing secret</span>
+                      <input
+                        aria-label="Local signing secret"
+                        type="password"
+                        value={writeSecret}
+                        onChange={(event) => setWriteSecret(event.currentTarget.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={!writeSecret.trim()}
+                      onClick={handleUnlockWrites}
+                    >
+                      <LockOpen size={14} /> Unlock Writes
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
+            <div className={styles.sizingControls} aria-label="Paper order sizing">
+              <div className={styles.sizingHeader}>
+                <span>Paper order sizing</span>
+                <span className={styles.sizingSummary}>
+                  {describePaperRuntimeSizing(sizingSettings)}
+                </span>
+              </div>
+              <div className={styles.sizingGrid}>
+                <label className={styles.sizingField}>
+                  <span>Sizing mode</span>
+                  <select
+                    aria-label="Sizing mode"
+                    value={sizingSettings.mode}
+                    onChange={(event) =>
+                      updateSizingSettings({
+                        mode: event.currentTarget.value as PaperRuntimeSizingSettings['mode'],
+                      })
+                    }
+                  >
+                    <option value="fixed_shares">Fixed shares</option>
+                    <option value="percent_equity">Percent equity</option>
+                  </select>
+                </label>
+                <label className={styles.sizingField}>
+                  <span>Fixed shares</span>
+                  <input
+                    aria-label="Fixed shares"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={sizingSettings.fixedQuantity}
+                    onChange={(event) =>
+                      updateSizingSettings({ fixedQuantity: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <label className={styles.sizingField}>
+                  <span>Equity per new position</span>
+                  <input
+                    aria-label="Equity per new position"
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={sizingSettings.equityPercent}
+                    onChange={(event) =>
+                      updateSizingSettings({ equityPercent: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <label className={styles.sizingField}>
+                  <span>Max order notional</span>
+                  <input
+                    aria-label="Max order notional"
+                    type="number"
+                    min="0"
+                    step="100"
+                    value={sizingSettings.maxOrderNotional}
+                    onChange={(event) =>
+                      updateSizingSettings({ maxOrderNotional: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <label className={styles.sizingField}>
+                  <span>Cash reserve</span>
+                  <input
+                    aria-label="Cash reserve"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={sizingSettings.cashReservePercent}
+                    onChange={(event) =>
+                      updateSizingSettings({ cashReservePercent: event.currentTarget.value })
+                    }
+                  />
+                </label>
+              </div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <button
                 type="button"
@@ -261,19 +404,20 @@ export function MarketDayOpsFlavor() {
                   getActionState('start-runtime') === 'running'
                 }
                 onClick={() =>
-                  callAction('Start Runtime', 'start-runtime', () =>
+                  callAction('Start Paper Runtime', 'start-runtime', () =>
                     postRuntimeHostStart({
                       symbols: configSummary.config.symbol_universe.length
                         ? configSummary.config.symbol_universe
                         : ['SPY'],
-                      quantity: '1',
+                      quantity: paperRuntimeFallbackQuantity(sizingSettings),
                       interval_seconds: Number(configSummary.config.service_interval_seconds || 300),
                       max_cycles: null,
+                      sizing_policy: buildPaperRuntimeSizingPayload(sizingSettings),
                     }),
                   )
                 }
               >
-                <Play size={14} /> Start Runtime
+                <Play size={14} /> Start Paper Runtime
               </button>
               <button
                 type="button"

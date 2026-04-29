@@ -33,6 +33,8 @@ import type {
 } from './types'
 
 const IDEMPOTENCY_HEADER = 'X-TradingX-Idempotency-Key'
+const SIGNATURE_HEADER = 'X-TradingX-Signature'
+const TIMESTAMP_HEADER = 'X-TradingX-Timestamp'
 const WRITE_SECRET_SESSION_KEY = 'tradingx.web.writeSigningSecret'
 
 function getWriteSigningSecret(): string {
@@ -60,19 +62,74 @@ export function areWebWritesUnlocked() {
   return getWriteSigningSecret().length > 0
 }
 
-function writeHeaders() {
+function toHex(buffer: ArrayBuffer) {
+  return [...new Uint8Array(buffer)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+async function sha256Hex(value: string) {
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(value),
+  )
+  return toHex(digest)
+}
+
+async function hmacSha256Hex(secret: string, value: string) {
+  const key = await globalThis.crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await globalThis.crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(value),
+  )
+  return toHex(signature)
+}
+
+function requestPath(url: string) {
+  if (typeof window === 'undefined') {
+    return url
+  }
+  return new URL(url, window.location.origin).pathname
+}
+
+async function writeHeaders(url: string, method: string, body: string) {
   const idempotencyKey =
     globalThis.crypto.randomUUID?.() ??
     `idem-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  return {
+  const headers: Record<string, string> = {
     [IDEMPOTENCY_HEADER]: idempotencyKey,
   }
+  const secret = getWriteSigningSecret()
+  if (!secret) {
+    return headers
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000).toString()
+  const bodyHash = await sha256Hex(body)
+  const signaturePayload = [
+    method.toUpperCase(),
+    requestPath(url),
+    timestamp,
+    idempotencyKey,
+    bodyHash,
+  ].join('\n')
+  headers[TIMESTAMP_HEADER] = timestamp
+  headers[SIGNATURE_HEADER] = await hmacSha256Hex(secret, signaturePayload)
+  return headers
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? 'GET'
   const isWrite = method === 'POST'
-  const idempotencyHeaders = isWrite ? writeHeaders() : {}
+  const body = typeof init?.body === 'string' ? init.body : ''
+  const idempotencyHeaders = isWrite ? await writeHeaders(url, method, body) : {}
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
@@ -239,6 +296,7 @@ export function postServiceStart(payload: {
   quantity: string
   interval_seconds: number
   max_cycles: number | null
+  sizing_policy?: RuntimeSizingPolicyPayload
 }) {
   return request<ActionResult>('/api/actions/service/start', {
     method: 'POST',
@@ -257,11 +315,20 @@ export function postRuntimeHostStart(payload: {
   quantity: string
   interval_seconds: number
   max_cycles: number | null
+  sizing_policy?: RuntimeSizingPolicyPayload
 }) {
   return request<ActionResult>('/api/actions/runtime-host/start', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export type RuntimeSizingPolicyPayload = {
+  mode: 'fixed_shares' | 'percent_equity'
+  fixed_quantity: string
+  equity_percent: string
+  max_order_notional: string | null
+  cash_reserve_percent: string
 }
 
 export function postRuntimeHostStop() {

@@ -20,6 +20,12 @@ import { ConfirmDialog } from './dialogs/ConfirmDialog'
 import { DataProvider, useData } from './state/DataContext'
 import { PreferencesProvider, usePreferences } from './state/PreferencesContext'
 import { ToastProvider, useToast } from './state/ToastContext'
+import {
+  buildPaperRuntimeSizingPayload,
+  describePaperRuntimeSizing,
+  paperRuntimeFallbackQuantity,
+  readPaperRuntimeSizingSettings,
+} from './state/paperRuntimeSizing'
 
 import shellStyles from './shell/Shell.module.css'
 import './styles/global.css'
@@ -47,9 +53,10 @@ function ControlCenterShell() {
 
   const onConfirmResume = useCallback(async () => {
     const symbols = data.configSummary.config.symbol_universe
+    const sizingSettings = readPaperRuntimeSizingSettings()
     if (!Array.isArray(symbols) || symbols.length === 0) {
       pushToast(
-        'Resume Runtime: configured symbol universe is empty. Configure at least one symbol before resuming.',
+        'Start Paper Runtime: configured symbol universe is empty. Configure at least one symbol before starting.',
         'risk',
       )
       setResumeOpen(false)
@@ -57,12 +64,13 @@ function ControlCenterShell() {
     }
     setResumeBusy(true)
     try {
-      await data.runAction('Resume Runtime', () =>
+      await data.runAction('Start Paper Runtime', () =>
         postRuntimeHostStart({
           symbols,
-          quantity: '1',
+          quantity: paperRuntimeFallbackQuantity(sizingSettings),
           interval_seconds: Number(data.configSummary.config.service_interval_seconds || 300),
           max_cycles: null,
+          sizing_policy: buildPaperRuntimeSizingPayload(sizingSettings),
         }),
       )
     } finally {
@@ -102,7 +110,7 @@ function ControlCenterShell() {
   }, [pushToast, setActiveFlavor])
   const onOpenRuntimeHost = useCallback(() => {
     setActiveFlavor('market-day-ops', 'manual')
-    pushToast('Opened Market Day Ops for runtime detail.', 'info')
+    pushToast('Opened Paper Trading for runtime detail.', 'info')
   }, [pushToast, setActiveFlavor])
 
   if (data.isBooting) {
@@ -123,6 +131,7 @@ function ControlCenterShell() {
   }
 
   const alertCount = data.incidents.filter((incident) => !incident.acknowledged_at_utc).length
+  const resumeSizingSummary = describePaperRuntimeSizing(readPaperRuntimeSizingSettings())
 
   return (
     <>
@@ -134,6 +143,7 @@ function ControlCenterShell() {
           runtimeHeartbeat={data.runtimeHeartbeat}
           incidents={data.incidents}
           generatedAt={data.generatedAt}
+          onOpenAlertsCenter={onOpenAlertsCenter}
         />
         <LeftNav
           onOpenSettings={onOpenSettings}
@@ -206,10 +216,10 @@ function ControlCenterShell() {
 
       <ConfirmDialog
         open={resumeOpen}
-        title="Resume runtime host"
-        subtitle="Re-start the runtime with the configured symbol universe."
+        title="Start paper runtime"
+        subtitle="Start the paper runtime with the configured symbol universe."
         tone="info"
-        confirmLabel="Resume Runtime"
+        confirmLabel="Start Paper Runtime"
         busy={resumeBusy}
         onClose={() => setResumeOpen(false)}
         onConfirm={onConfirmResume}
@@ -218,8 +228,11 @@ function ControlCenterShell() {
           Symbol universe: {data.configSummary.config.symbol_universe.join(', ') || 'SPY'}
         </p>
         <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
+          Sizing: {resumeSizingSummary}.
+        </p>
+        <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
           Cadence: every {data.configSummary.config.service_interval_seconds || 300}s. The runtime will
-          resume from idle. If a gate degrades during startup, the runtime will halt automatically.
+          start from idle. If a gate degrades during startup, the runtime will halt automatically.
         </p>
       </ConfirmDialog>
     </>

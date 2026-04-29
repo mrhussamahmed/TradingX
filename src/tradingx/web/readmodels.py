@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -93,6 +93,8 @@ from tradingx.weights import (
     ApprovedWeightSnapshotStore,
 )
 
+_STALE_DAY_ORDER_PENDING_AFTER = timedelta(hours=12)
+
 
 class ServiceManagerProtocol(Protocol):
     def get_state(self) -> WebServiceState: ...
@@ -147,6 +149,7 @@ class LocalWebReadModel:
         service_manager: ServiceManagerProtocol,
         runtime_host_manager: RuntimeHostManagerProtocol | None = None,
         scheduler_manager: SchedulerManagerProtocol | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
         self._paper_store = paper_store
@@ -156,6 +159,7 @@ class LocalWebReadModel:
         self._service_manager = service_manager
         self._runtime_host_manager = runtime_host_manager or _IdleRuntimeHostManager()
         self._scheduler_manager = scheduler_manager or _IdleSchedulerManager()
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
         artifact_root = config.runtime.artifact_root
         self._operator_platform_root = artifact_root / "operator_platform"
         self._approved_snapshot_store = ApprovedWeightSnapshotStore(
@@ -1890,7 +1894,10 @@ class LocalWebReadModel:
         journal_path = self._data_root_path() / "journal.db"
         if not journal_path.exists():
             return 0
-        query = "select row_id, client_order_id, event_type from oms_journal order by row_id desc"
+        query = (
+            "select row_id, client_order_id, event_type, recorded_at_utc "
+            "from oms_journal order by row_id desc"
+        )
         active_event_types = {"submit_attempt", "ack", "order_recovered"}
         terminal_event_types = {
             "fill",
@@ -1909,13 +1916,17 @@ class LocalWebReadModel:
                 rows = connection.execute(query).fetchall()
         except sqlite3.Error:
             return 0
-        for _row_id, client_order_id, event_type in rows:
+        now = self._now_provider().astimezone(UTC)
+        for _row_id, client_order_id, event_type, recorded_at_utc in rows:
             client_order = str(client_order_id)
             if not client_order or client_order in seen_client_order_ids:
                 continue
             seen_client_order_ids.add(client_order)
             normalized_event_type = str(event_type)
             if normalized_event_type in active_event_types:
+                event_time = self._parse_datetime(str(recorded_at_utc))
+                if now - event_time > _STALE_DAY_ORDER_PENDING_AFTER:
+                    continue
                 pending_count += 1
             elif normalized_event_type in terminal_event_types:
                 continue

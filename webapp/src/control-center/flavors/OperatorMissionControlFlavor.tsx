@@ -542,8 +542,8 @@ export function OperatorMissionControlFlavor() {
         />
         <DrilldownPanel
           title="Review performance and risk"
-          detail="Open P&L / Positions for the equity curve, benchmark rows, account state, and exposure context."
-          button="Open P&L / Positions"
+          detail="Open Portfolio Graphs for the equity curve, benchmark rows, account state, and exposure context."
+          button="Open Portfolio Graphs"
           route="market-chart"
           onOpen={setActiveFlavor}
         />

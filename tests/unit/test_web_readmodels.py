@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -137,6 +137,60 @@ def test_dashboard_service_status_uses_persisted_cycles_when_web_manager_idle(
     assert snapshot.service_status.cycles_completed == 1
     assert snapshot.service_status.active_symbols == ("SPY", "QQQ", "IWM")
     assert snapshot.service_status.last_completed_at_utc == timestamp
+
+
+def test_count_pending_orders_ignores_stale_day_order_events(tmp_path) -> None:
+    now = datetime(2026, 4, 29, 13, 30, tzinfo=UTC)
+    read_model = LocalWebReadModel(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+                "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            }
+        ),
+        paper_store=FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop"),
+        validation_store=FilesystemArtifactStore(tmp_path / "artifacts" / "validation"),
+        docs_root=tmp_path / "docs",
+        repo_root=tmp_path,
+        service_manager=FakeServiceManager(
+            WebServiceState(
+                status="running",
+                active_symbols=("SPY",),
+                interval_seconds=300,
+                cycles_completed=1,
+                started_at_utc=now,
+                last_completed_at_utc=now,
+                last_error="",
+            )
+        ),
+        runtime_host_manager=FakeRuntimeHostManager(_minimal_runtime_state(now)),
+        now_provider=lambda: now,
+    )
+    journal = SqliteOmsJournal(tmp_path / "data" / "journal.db")
+    journal.append_event(
+        event_type="ack",
+        recorded_at_utc=now - timedelta(hours=13),
+        decision_snapshot_id="decision-stale",
+        cycle_correlation_id="cycle-stale",
+        client_order_id="stale-client",
+        broker_order_id="stale-broker-order",
+        symbol="XLE",
+        side="buy",
+        payload={"status": "pending_new"},
+    )
+    journal.append_event(
+        event_type="submit_attempt",
+        recorded_at_utc=now - timedelta(minutes=10),
+        decision_snapshot_id="decision-fresh",
+        cycle_correlation_id="cycle-fresh",
+        client_order_id="fresh-client",
+        broker_order_id="",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "baseline_long_entry"},
+    )
+
+    assert read_model._count_pending_orders() == 1
 
 
 def test_command_center_keeps_last_account_snapshot_after_market_closed_cycle(

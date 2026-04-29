@@ -38,7 +38,14 @@ const THUMBS: Record<ViewFlavor, ReactNode> = {
       ))}
     </div>
   ),
-  'risk-core': <div className={styles.thumbRisk} />,
+  'risk-core': (
+    <div className={styles.thumbRisk}>
+      <span />
+      <span />
+      <span />
+      <i />
+    </div>
+  ),
   'portfolio-constellation': (
     <div className={styles.thumbConst}>
       <span />
@@ -50,7 +57,7 @@ const THUMBS: Record<ViewFlavor, ReactNode> = {
   ),
   'evidence-replay': (
     <div className={styles.thumbReplay}>
-      {Array.from({ length: 6 }, (_, i) => (
+      {Array.from({ length: 4 }, (_, i) => (
         <span key={i} />
       ))}
     </div>

@@ -38,6 +38,12 @@ from tradingx.risk_free import (
     vix_close_for_date,
     yield_curve_spread_for_date_pit,
 )
+from tradingx.sizing import (
+    RuntimeSizingPolicy,
+    build_runtime_sizing_budget,
+    cap_entry_quantity,
+    entry_marketable_limit_price,
+)
 from tradingx.sleeves.base import SleeveProtocol, build_sleeve_from_candidate
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
@@ -160,6 +166,7 @@ class RuntimePortfolioPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal = Decimal("0"),
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None:
         del default_quantity
         blueprint_activation = (
@@ -172,6 +179,7 @@ class RuntimePortfolioPlanner:
                 blueprint_activation=blueprint_activation,
                 symbols=symbols,
                 portfolio_state=portfolio_state,
+                sizing_policy=sizing_policy,
             )
 
         runtime_symbols = symbols
@@ -265,12 +273,23 @@ class RuntimePortfolioPlanner:
                     account_equity=portfolio_state.equity,
                 )
             planned_trade_rows.append(trade)
-        planned_trades = tuple(planned_trade_rows)
+        planned_trades = _apply_runtime_sizing_policy_to_buys(
+            planned_trades=tuple(planned_trade_rows),
+            portfolio_state=portfolio_state,
+            sizing_policy=sizing_policy,
+            market_snapshots=market_snapshots,
+        )
         ordered_trades = tuple(
             sorted(
                 planned_trades,
                 key=lambda trade: (_side_priority(trade.side), trade.symbol),
             )
+        )
+        plan_target_weights = _target_weights_for_plan(
+            tracked_symbols=tracked_symbols,
+            original_target_weights=runtime_weights.target_weights,
+            planned_trades=ordered_trades,
+            sizing_policy=sizing_policy,
         )
         trade_intents = tuple(
             _trade_intent_for_plan_item(
@@ -294,10 +313,7 @@ class RuntimePortfolioPlanner:
                 symbol: current_weights.get(symbol, Decimal("0"))
                 for symbol in tracked_symbols
             },
-            target_weights={
-                symbol: runtime_weights.target_weights.get(symbol, Decimal("0"))
-                for symbol in tracked_symbols
-            },
+            target_weights=plan_target_weights,
             trade_intents=trade_intents,
             planned_trades=ordered_trades,
             market_snapshots=market_snapshots,
@@ -309,6 +325,7 @@ class RuntimePortfolioPlanner:
         blueprint_activation: BlueprintActivationRecord,
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
+        sizing_policy: RuntimeSizingPolicy | None,
     ) -> RuntimePortfolioPlan:
         blueprint = load_portfolio_blueprint(blueprint_activation.source_blueprint_path)
         binding_by_sleeve_id = {
@@ -502,11 +519,23 @@ class RuntimePortfolioPlanner:
                         account_equity=portfolio_state.equity,
                     )
             planned_trade_rows.append(trade)
+        planned_trades = _apply_runtime_sizing_policy_to_buys(
+            planned_trades=tuple(planned_trade_rows),
+            portfolio_state=portfolio_state,
+            sizing_policy=sizing_policy,
+            market_snapshots=market_snapshots,
+        )
         ordered_trades = tuple(
             sorted(
-                tuple(planned_trade_rows),
+                planned_trades,
                 key=lambda trade: (_side_priority(trade.side), trade.symbol),
             )
+        )
+        plan_target_weights = _target_weights_for_plan(
+            tracked_symbols=tracked_symbols,
+            original_target_weights=aggregate_target_weights,
+            planned_trades=ordered_trades,
+            sizing_policy=sizing_policy,
         )
         registry_order_by_sleeve_id = {
             binding.sleeve_id: index
@@ -547,10 +576,7 @@ class RuntimePortfolioPlanner:
                 symbol: current_weights.get(symbol, Decimal("0"))
                 for symbol in tracked_symbols
             },
-            target_weights={
-                symbol: aggregate_target_weights.get(symbol, Decimal("0"))
-                for symbol in tracked_symbols
-            },
+            target_weights=plan_target_weights,
             trade_intents=trade_intents,
             planned_trades=ordered_trades,
             market_snapshots=market_snapshots,
@@ -781,6 +807,109 @@ def _target_quantity(
         return Decimal("0")
     raw_quantity = (target_weight * account_equity) / last_trade_price
     return raw_quantity.quantize(Decimal("1"), rounding=ROUND_DOWN)
+
+
+def _apply_runtime_sizing_policy_to_buys(
+    *,
+    planned_trades: tuple[RuntimePortfolioTrade, ...],
+    portfolio_state: PortfolioState,
+    sizing_policy: RuntimeSizingPolicy | None,
+    market_snapshots: dict[str, MarketSnapshot],
+) -> tuple[RuntimePortfolioTrade, ...]:
+    if sizing_policy is None:
+        return planned_trades
+
+    sizing_budget = build_runtime_sizing_budget(
+        policy=sizing_policy,
+        portfolio_state=portfolio_state,
+    )
+    adjusted_trades: list[RuntimePortfolioTrade] = []
+    for trade in planned_trades:
+        if trade.side != "buy" or trade.delta_quantity <= Decimal("0"):
+            adjusted_trades.append(trade)
+            continue
+
+        market_snapshot = market_snapshots.get(trade.symbol)
+        entry_price = (
+            entry_marketable_limit_price(
+                market_snapshot,
+                buffer_bps=sizing_policy.entry_marketable_limit_bps,
+            )
+            if market_snapshot is not None
+            else trade.last_trade_price
+        )
+        capped_delta = cap_entry_quantity(
+            policy=sizing_policy,
+            portfolio_state=portfolio_state,
+            last_trade_price=trade.last_trade_price,
+            entry_price=entry_price,
+            requested_quantity=trade.delta_quantity,
+            sizing_budget=sizing_budget,
+        )
+        target_quantity = trade.current_quantity + capped_delta
+        target_weight = _weight_for_quantity(
+            account_equity=portfolio_state.equity,
+            quantity=target_quantity,
+            last_trade_price=trade.last_trade_price,
+        )
+        if capped_delta <= Decimal("0"):
+            adjusted_trade = dataclasses.replace(
+                trade,
+                side="hold",
+                reason_code="entry_size_below_minimum",
+                target_weight=target_weight,
+                target_quantity=target_quantity,
+                delta_quantity=Decimal("0"),
+            )
+        else:
+            adjusted_trade = dataclasses.replace(
+                trade,
+                target_weight=target_weight,
+                target_quantity=target_quantity,
+                delta_quantity=capped_delta,
+            )
+            sizing_budget.consume(capped_delta * entry_price)
+        adjusted_trades.append(adjusted_trade)
+    return tuple(adjusted_trades)
+
+
+def _target_weights_for_plan(
+    *,
+    tracked_symbols: tuple[str, ...],
+    original_target_weights: dict[str, Decimal],
+    planned_trades: tuple[RuntimePortfolioTrade, ...],
+    sizing_policy: RuntimeSizingPolicy | None,
+) -> dict[str, Decimal]:
+    if sizing_policy is None:
+        return {
+            symbol: original_target_weights.get(symbol, Decimal("0"))
+            for symbol in tracked_symbols
+        }
+    target_weight_by_symbol = {
+        trade.symbol: trade.target_weight for trade in planned_trades
+    }
+    return {
+        symbol: target_weight_by_symbol.get(
+            symbol,
+            original_target_weights.get(symbol, Decimal("0")),
+        )
+        for symbol in tracked_symbols
+    }
+
+
+def _weight_for_quantity(
+    *,
+    account_equity: Decimal,
+    quantity: Decimal,
+    last_trade_price: Decimal,
+) -> Decimal:
+    if (
+        account_equity <= Decimal("0")
+        or quantity <= Decimal("0")
+        or last_trade_price <= Decimal("0")
+    ):
+        return Decimal("0")
+    return (quantity * last_trade_price) / account_equity
 
 
 def _trade_intent_for_plan_item(

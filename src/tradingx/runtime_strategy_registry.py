@@ -15,6 +15,7 @@ from tradingx.runtime_portfolio import (
     RuntimePortfolioPlan,
     RuntimePortfolioPlanner,
 )
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import BlueprintActivationRecord, PortfolioState
 
 
@@ -25,6 +26,7 @@ class RuntimeStrategyResolver(Protocol):
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None: ...
 
 
@@ -61,6 +63,7 @@ class ActivatedRuntimePlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None:
         active_blueprint = self._activation_gateway.get_active_blueprint_activation()
         if self._blueprint_planner is not None and active_blueprint is not None:
@@ -69,6 +72,7 @@ class ActivatedRuntimePlanner:
                 symbols=symbols,
                 portfolio_state=portfolio_state,
                 default_quantity=default_quantity,
+                sizing_policy=sizing_policy,
             )
         activation, _snapshot = self._activation_gateway.load_or_create_active_records(
             symbols
@@ -78,10 +82,17 @@ class ActivatedRuntimePlanner:
         resolver = self._registry.resolve(activation.strategy_id)
         if resolver is None:
             return None
+        if sizing_policy is None:
+            return resolver.plan_for_service(
+                symbols=runtime_symbols,
+                portfolio_state=portfolio_state,
+                default_quantity=default_quantity,
+            )
         return resolver.plan_for_service(
             symbols=runtime_symbols,
             portfolio_state=portfolio_state,
             default_quantity=default_quantity,
+            sizing_policy=sizing_policy,
         )
 
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:

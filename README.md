@@ -144,9 +144,14 @@ records and a replay-slippage summary under `artifacts/validation/`.
 
 On macOS, you can start the control center without Terminal by
 double-clicking `TradingX Control Center.app` in the repo root. That
-launcher starts the local web control plane if needed and opens the
-dashboard in your browser. Actual bot start and stop still happen from
-the website `Runtime Host` panel.
+launcher starts the local web control plane in the background if needed
+and opens the dashboard in your browser without opening a Terminal
+window. Actual bot start and stop still happen from the website
+`Runtime Host` panel.
+
+When the workspace lives under Desktop, the launcher runs from the
+operational mirror at `~/Library/Application Support/TradingX/runtime`
+so macOS privacy controls do not block the background Python server.
 
 ```bash
 npm --prefix webapp install
@@ -154,6 +159,11 @@ npm --prefix webapp run build
 uv run tradingx launch-control-center --env-file .env
 uv run tradingx web --env-file .env
 ```
+
+The double-click launcher writes startup diagnostics to
+`~/Library/Application Support/TradingX/runtime/data/logs/control_center_app.log`
+and background server output to
+`~/Library/Application Support/TradingX/runtime/data/logs/control_center_background.out.log`.
 
 By default the site binds to `127.0.0.1:8765`, serves a local-only
 dashboard, and keeps all write actions disabled. Set

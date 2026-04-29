@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
+import { unlockWebWrites } from '../../api'
 import { ControlCenterApp } from '../ControlCenterApp'
 
 const blankCommandCenter = {
@@ -195,10 +196,12 @@ function setupFetchMock() {
 describe('ControlCenterApp', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    window.sessionStorage.clear()
     setupFetchMock()
   })
 
   afterEach(() => {
+    window.sessionStorage.clear()
     vi.useRealTimers()
     vi.restoreAllMocks()
     document.documentElement.removeAttribute('data-theme')
@@ -216,12 +219,15 @@ describe('ControlCenterApp', () => {
     expect(screen.getByLabelText(/Operator command rail/i)).toBeInTheDocument()
   })
 
-  it('uses the selected Pulse Route wordmark and matching header glyph', async () => {
+  it('uses a text-only TradeX brand without decorative route graphics', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
-      expect(screen.getByLabelText('Pulse Route TradeX wordmark')).toBeInTheDocument()
+      expect(screen.getByLabelText('TradeX')).toBeInTheDocument()
     })
-    expect(screen.getByLabelText('Pulse Route TradeX glyph')).toBeInTheDocument()
+    const brand = screen.getByLabelText('TradeX')
+    expect(brand).toHaveTextContent(/^TradeX$/)
+    expect(screen.queryByLabelText(/Pulse Route TradeX wordmark/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Pulse Route TradeX glyph/i)).not.toBeInTheDocument()
   })
 
   it('renders the default Mission Control flavor on first load', async () => {
@@ -396,14 +402,36 @@ describe('ControlCenterApp', () => {
     })
   })
 
-  it('uses trader-intent navigation labels instead of internal architecture labels', async () => {
+  it('uses operator-action navigation labels instead of duplicate question shortcuts', async () => {
     render(<ControlCenterApp />)
     await waitFor(() => {
       expect(screen.getByLabelText(/Primary navigation/i)).toBeInTheDocument()
     })
-    expect(screen.getByRole('button', { name: /What is happening now/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Why did it happen/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Can I trust it/i })).toBeInTheDocument()
+    const nav = within(screen.getByLabelText(/Primary navigation/i))
+    expect(nav.getByRole('button', { name: /Command Center/i })).toBeInTheDocument()
+    expect(nav.getByRole('button', { name: /Paper Trading/i })).toBeInTheDocument()
+    expect(nav.getByRole('button', { name: /Portfolio Graphs/i })).toBeInTheDocument()
+    expect(nav.getByRole('button', { name: /Orders & Positions/i })).toBeInTheDocument()
+    expect(nav.getByRole('button', { name: /Strategy Signals/i })).toBeInTheDocument()
+    expect(nav.queryByRole('button', { name: /What is happening now/i })).not.toBeInTheDocument()
+  })
+
+  it('keeps the evidence details toggle persistent and clear', async () => {
+    render(<ControlCenterApp />)
+    const button = await screen.findByRole('button', { name: /Hide evidence details/i })
+    expect(button).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(button)
+    expect(screen.getByRole('button', { name: /Show evidence details/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+  })
+
+  it('uses one active alerts and messages control in the top strip', async () => {
+    render(<ControlCenterApp />)
+    const alertsButton = await screen.findByRole('button', { name: /Alerts and messages: 0 unacknowledged/i })
+    expect(alertsButton).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: /^Messages$/i })).not.toBeInTheDocument()
   })
 
   it('opens the view defaults drawer with operator-first flavors and density options', async () => {
@@ -433,7 +461,7 @@ describe('ControlCenterApp', () => {
       expect(screen.getByRole('button', { name: /Kill Switch/i })).toBeInTheDocument()
     })
     expect(screen.getByRole('button', { name: /Flatten All/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Resume Runtime/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Start Paper Runtime/i })).toBeInTheDocument()
   })
 
   it('opens the kill switch dialog and requires the typed phrase', async () => {
@@ -447,7 +475,31 @@ describe('ControlCenterApp', () => {
     expect(screen.getByRole('button', { name: /Activate Kill Switch/i })).toBeDisabled()
   })
 
-  it('enables Resume Runtime when server write mode is enabled', async () => {
+  it('enables Start Paper Runtime when signed web writes are unlocked', async () => {
+    const originalConfig = ROUTES['/api/config/summary']
+    try {
+      unlockWebWrites('test-secret')
+      ROUTES['/api/config/summary'] = {
+        ...blankConfig,
+        config: {
+          ...blankConfig.config,
+          web_write_mode_enabled: true,
+          web_write_signing_configured: true,
+        },
+      }
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
+      window.dispatchEvent(new Event('resize'))
+      render(<ControlCenterApp />)
+      const button = await screen.findByRole('button', {
+        name: /Start Paper Runtime/i,
+      })
+      await waitFor(() => expect(button).not.toBeDisabled())
+    } finally {
+      ROUTES['/api/config/summary'] = originalConfig
+    }
+  })
+
+  it('shows write unlock controls when signed web writes are configured', async () => {
     const originalConfig = ROUTES['/api/config/summary']
     try {
       ROUTES['/api/config/summary'] = {
@@ -455,18 +507,35 @@ describe('ControlCenterApp', () => {
         config: {
           ...blankConfig.config,
           web_write_mode_enabled: true,
+          web_write_signing_configured: true,
         },
       }
-      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1600 })
-      window.dispatchEvent(new Event('resize'))
       render(<ControlCenterApp />)
-      const button = await screen.findByRole('button', {
-        name: /Resume Runtime/i,
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: /Paper Trading/i })).toBeInTheDocument()
       })
-      await waitFor(() => expect(button).not.toBeDisabled())
+      fireEvent.click(screen.getByRole('tab', { name: /Paper Trading/i }))
+
+      expect(screen.getByLabelText(/Local signing secret/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Unlock Writes' })).toBeInTheDocument()
     } finally {
       ROUTES['/api/config/summary'] = originalConfig
     }
+  })
+
+  it('shows paper runtime sizing controls in the Paper Trading view', async () => {
+    render(<ControlCenterApp />)
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Paper Trading/i })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('tab', { name: /Paper Trading/i }))
+
+    expect(screen.getByText(/Paper order sizing/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Sizing mode/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Fixed shares/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Equity per new position/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Max order notional/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/Cash reserve/i)).toBeInTheDocument()
   })
 
   it('persists default flavor when saved and reloads from localStorage', async () => {

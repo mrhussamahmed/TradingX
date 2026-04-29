@@ -7,6 +7,12 @@ from decimal import Decimal
 from typing import Protocol
 
 from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioTrade
+from tradingx.sizing import (
+    RuntimeSizingPolicy,
+    build_runtime_sizing_budget,
+    entry_marketable_limit_price,
+    resolve_entry_quantity,
+)
 from tradingx.strategy import DeterministicBaselineStrategy
 from tradingx.types import (
     MarketSnapshot,
@@ -53,6 +59,7 @@ class BaselineLongOnlyPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan:
         symbols = tuple(dict.fromkeys(symbols))
         current_weights = _current_weights(portfolio_state)
@@ -104,14 +111,41 @@ class BaselineLongOnlyPlanner:
             else:
                 selected_entry_symbols = ()
 
+        sizing_budget = (
+            build_runtime_sizing_budget(
+                policy=sizing_policy,
+                portfolio_state=portfolio_state,
+            )
+            if sizing_policy is not None
+            else None
+        )
         for symbol in selected_entry_symbols:
             snapshot = self._market_data.get_market_snapshot(symbol)
             market_snapshots[symbol] = snapshot
+            entry_quantity = resolve_entry_quantity(
+                policy=sizing_policy,
+                portfolio_state=portfolio_state,
+                market_snapshot=snapshot,
+                fallback_quantity=default_quantity,
+                sizing_budget=sizing_budget,
+            )
             intent = self._strategy.generate_trade_intent(
                 market_snapshot=snapshot,
                 portfolio_state=portfolio_state,
-                quantity=default_quantity,
+                quantity=entry_quantity,
             )
+            if (
+                sizing_budget is not None
+                and sizing_policy is not None
+                and intent.side == "buy"
+            ):
+                sizing_budget.consume(
+                    entry_quantity
+                    * entry_marketable_limit_price(
+                        snapshot,
+                        buffer_bps=sizing_policy.entry_marketable_limit_bps,
+                    )
+                )
             trade_intents.append(intent)
             planned_trades.append(
                 _planned_trade_for_intent(

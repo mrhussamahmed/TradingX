@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from tradingx.config import TradingConfig
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BotRuntimeState,
@@ -831,7 +833,9 @@ class FakeActionRunner:
         quantity: str,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
+        del sizing_policy
         return WebActionResult(
             action_id="action-runtime-start",
             action_type="runtime_host_start",
@@ -1510,3 +1514,69 @@ def test_local_web_app_allows_safe_mutations_when_write_mode_is_enabled() -> Non
     assert recovery_drill.status_code == 200
     assert alert_drill.status_code == 200
     assert acknowledge.status_code == 200
+
+
+def test_runtime_host_start_accepts_sizing_policy_payload() -> None:
+    class CapturingActionRunner(FakeActionRunner):
+        def __init__(self) -> None:
+            self.sizing_policy: RuntimeSizingPolicy | None = None
+
+        def start_runtime_host(
+            self,
+            *,
+            symbols: tuple[str, ...],
+            quantity: str,
+            interval_seconds: int,
+            max_cycles: int | None = None,
+            sizing_policy: RuntimeSizingPolicy | None = None,
+        ) -> WebActionResult:
+            del symbols, quantity, interval_seconds, max_cycles
+            self.sizing_policy = sizing_policy
+            return WebActionResult(
+                action_id="action-runtime-start",
+                action_type="runtime_host_start",
+                status="accepted",
+                message="Runtime host started.",
+                evidence_refs=(),
+            )
+
+    runner = CapturingActionRunner()
+    app = create_app(
+        config=TradingConfig.from_mapping(
+            {
+                "TRADINGX_WEB_WRITE_MODE_ENABLED": "true",
+                "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret",
+            }
+        ),
+        read_model=FakeReadModel(),
+        action_runner=runner,
+    )
+    client = TestClient(app)
+
+    response = _signed_post(
+        client,
+        "/api/actions/runtime-host/start",
+        idempotency_key=f"idem-runtime-sizing-policy-contract-{datetime.now(UTC).timestamp()}",
+        payload={
+            "symbols": ["SPY"],
+            "quantity": "1",
+            "interval_seconds": 300,
+            "max_cycles": None,
+            "sizing_policy": {
+                "mode": "percent_equity",
+                "fixed_quantity": "10",
+                "equity_percent": "5",
+                "max_order_notional": "5000",
+                "cash_reserve_percent": "20",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runner.sizing_policy == RuntimeSizingPolicy(
+        mode="percent_equity",
+        fixed_quantity=Decimal("10"),
+        equity_percent=Decimal("5"),
+        max_order_notional=Decimal("5000"),
+        cash_reserve_percent=Decimal("20"),
+    )

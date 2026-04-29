@@ -11,6 +11,7 @@ from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     RuntimeStrategyRegistry,
 )
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationRecord,
@@ -37,6 +38,21 @@ class FakeMarketData:
             last_trade_price=price,
             bid_price=price - Decimal("0.05"),
             ask_price=price + Decimal("0.05"),
+            average_daily_volume_30d=Decimal("1500000"),
+            timestamp=datetime(2026, 4, 19, 13, 30, tzinfo=UTC),
+        )
+
+
+class FixedPriceMarketData:
+    def __init__(self, *, price: Decimal = Decimal("100")) -> None:
+        self.price = price
+
+    def get_market_snapshot(self, symbol: str) -> MarketSnapshot:
+        return MarketSnapshot(
+            symbol=symbol,
+            last_trade_price=self.price,
+            bid_price=self.price - Decimal("0.05"),
+            ask_price=self.price + Decimal("0.05"),
             average_daily_volume_30d=Decimal("1500000"),
             timestamp=datetime(2026, 4, 19, 13, 30, tzinfo=UTC),
         )
@@ -147,7 +163,9 @@ class CapturingResolver:
 
 class CapturingBlueprintPlanner:
     def __init__(self) -> None:
-        self.calls: list[tuple[tuple[str, ...], Decimal]] = []
+        self.calls: list[
+            tuple[tuple[str, ...], Decimal, RuntimeSizingPolicy | None]
+        ] = []
 
     def plan_for_service(
         self,
@@ -155,9 +173,10 @@ class CapturingBlueprintPlanner:
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None:
         del portfolio_state
-        self.calls.append((symbols, default_quantity))
+        self.calls.append((symbols, default_quantity, sizing_policy))
         return None
 
 
@@ -265,6 +284,61 @@ def test_baseline_long_only_planner_uses_selector_for_entry_symbol() -> None:
     assert [intent.side for intent in plan.trade_intents] == ["hold", "buy"]
 
 
+def test_baseline_long_only_planner_sizes_entries_from_percent_equity_policy() -> None:
+    planner = BaselineLongOnlyPlanner(
+        market_data=FakeMarketData(),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("QQQ",),
+        portfolio_state=_portfolio_state(),
+        default_quantity=Decimal("1"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="percent_equity",
+            equity_percent=Decimal("10"),
+            cash_reserve_percent=Decimal("20"),
+        ),
+    )
+
+    assert [intent.symbol for intent in plan.trade_intents] == ["QQQ"]
+    assert [intent.side for intent in plan.trade_intents] == ["buy"]
+    assert [intent.quantity for intent in plan.trade_intents] == [Decimal("4")]
+    assert [trade.delta_quantity for trade in plan.planned_trades] == [Decimal("4")]
+
+
+def test_baseline_long_only_planner_reserves_cash_across_entry_cycle() -> None:
+    planner = BaselineLongOnlyPlanner(
+        market_data=FixedPriceMarketData(price=Decimal("100")),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("AAA", "BBB"),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 19, 13, 29, tzinfo=UTC),
+            cash=Decimal("1000"),
+            equity=Decimal("1000"),
+            buying_power=Decimal("1000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("1"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="percent_equity",
+            equity_percent=Decimal("50"),
+            cash_reserve_percent=Decimal("20"),
+        ),
+    )
+
+    buy_intents = tuple(intent for intent in plan.trade_intents if intent.side == "buy")
+    assert [intent.symbol for intent in buy_intents] == ["AAA", "BBB"]
+    assert [intent.quantity for intent in buy_intents] == [Decimal("4"), Decimal("3")]
+    assert sum(
+        trade.delta_quantity * trade.last_trade_price
+        for trade in plan.planned_trades
+        if trade.side == "buy"
+    ) == Decimal("700")
+
+
 def test_activated_runtime_planner_passes_activation_quantity() -> None:
     resolver = CapturingResolver()
     registry = RuntimeStrategyRegistry()
@@ -320,9 +394,24 @@ def test_activated_runtime_planner_uses_blueprint_planner_when_active() -> None:
         symbols=("SPY",),
         portfolio_state=_portfolio_state(),
         default_quantity=Decimal("3"),
+        sizing_policy=RuntimeSizingPolicy(
+            mode="fixed_shares",
+            fixed_quantity=Decimal("10"),
+            cash_reserve_percent=Decimal("20"),
+        ),
     )
 
     assert plan is None
     assert resolver.calls == []
-    assert blueprint_planner.calls == [(("SPY",), Decimal("3"))]
+    assert blueprint_planner.calls == [
+        (
+            ("SPY",),
+            Decimal("3"),
+            RuntimeSizingPolicy(
+                mode="fixed_shares",
+                fixed_quantity=Decimal("10"),
+                cash_reserve_percent=Decimal("20"),
+            ),
+        )
+    ]
     assert planner.last_strategy_id == "bp-runtime"

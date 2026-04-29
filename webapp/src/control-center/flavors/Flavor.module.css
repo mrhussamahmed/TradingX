@@ -483,6 +483,67 @@
   gap: 8px;
 }
 
+.sizingControls {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  background: rgba(46, 161, 255, 0.04);
+}
+.writeUnlockPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  background: rgba(14, 22, 33, 0.72);
+}
+.writeUnlockStatus {
+  align-self: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.sizingHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.sizingSummary {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  text-align: right;
+}
+.sizingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: 8px;
+}
+.sizingField {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.sizingField span {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sizingField input,
+.sizingField select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  font-size: var(--fs-xs);
+}
+
 .kpis {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

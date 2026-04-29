@@ -114,6 +114,22 @@ def test_baseline_strategy_holds_when_spread_is_too_wide() -> None:
     assert intent.reason_code == "spread_too_wide"
 
 
+def test_baseline_strategy_holds_when_entry_sizing_is_below_one_share() -> None:
+    strategy = DeterministicBaselineStrategy(
+        now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)
+    )
+
+    intent = strategy.generate_trade_intent(
+        market_snapshot=make_market_snapshot(),
+        portfolio_state=make_portfolio_state(),
+        quantity=Decimal("0"),
+    )
+
+    assert intent.side == "hold"
+    assert intent.quantity is None
+    assert intent.reason_code == "entry_size_below_minimum"
+
+
 def test_baseline_strategy_exits_on_take_profit_threshold() -> None:
     strategy = DeterministicBaselineStrategy(
         now_provider=lambda: datetime(2026, 4, 17, 17, 0, tzinfo=UTC)

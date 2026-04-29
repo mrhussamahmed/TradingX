@@ -55,8 +55,8 @@ export const FLAVORS: ReadonlyArray<FlavorMeta> = [
   },
   {
     id: 'market-chart',
-    label: 'P&L / Positions',
-    subtitle: 'Performance, exposure & benchmarks',
+    label: 'Portfolio Graphs',
+    subtitle: 'Equity, cash, exposure & benchmarks',
     shortcut: 'Cmd+2',
     index: 2,
     depth: 'full',
@@ -71,8 +71,8 @@ export const FLAVORS: ReadonlyArray<FlavorMeta> = [
   },
   {
     id: 'market-day-ops',
-    label: "Today's Activity",
-    subtitle: 'Runtime, decisions & session flow',
+    label: 'Paper Trading',
+    subtitle: 'Runtime, orders & session flow',
     shortcut: 'Cmd+4',
     index: 4,
     depth: 'full',

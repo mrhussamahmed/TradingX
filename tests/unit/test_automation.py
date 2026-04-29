@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
+
 from tradingx import automation as automation_module
 from tradingx.automation import MarketDayAutomationRunner
 from tradingx.config import TradingConfig
@@ -91,6 +93,34 @@ class _SpyAttributionRecorder:
     ) -> None:
         del trading_day, open_portfolio_state, close_portfolio_state
         self.record_session_call_count += 1
+
+
+class _PlainOhlcvMarketDataStub:
+    def __init__(self) -> None:
+        index = pd.date_range("2025-01-01", periods=430, freq="B", tz="UTC")
+        closes = [100.0 + index_ * 0.1 for index_ in range(len(index))]
+        self._frame = pd.DataFrame(
+            {
+                "open": closes,
+                "high": [close * 1.005 for close in closes],
+                "low": [close * 0.995 for close in closes],
+                "close": closes,
+                "volume": [1_000_000.0 for _ in closes],
+            },
+            index=index,
+        )
+
+    def get_daily_bar_history(
+        self,
+        symbol: str,
+        *,
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> pd.DataFrame:
+        del symbol
+        return self._frame.loc[
+            (self._frame.index >= start_utc) & (self._frame.index <= end_utc)
+        ].copy()
 
 
 def _portfolio_state(*, equity: str) -> PortfolioState:
@@ -408,6 +438,29 @@ def test_automation_close_without_preopen_refreshes_drift_but_skips_attribution(
 
     assert drift_gateway.refresh_call_count == 1
     assert attribution_recorder.record_session_call_count == 0
+
+
+def test_backtest_reference_generation_accepts_plain_ohlcv_bars(tmp_path) -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+            "TRADINGX_DATA_ROOT": str(tmp_path / "data"),
+            "TRADINGX_SYMBOL_UNIVERSE": "SPY",
+        }
+    )
+
+    automation_module._ensure_backtest_reference_returns(
+        config=config,
+        market_data_gateway=_PlainOhlcvMarketDataStub(),
+        now_provider=lambda: datetime(2026, 4, 18, 13, 0, tzinfo=UTC),
+        force_rebuild=True,
+    )
+
+    for sleeve_id in ("trend-following-v1", "vol-target-v1"):
+        assert automation_module.backtest_reference_artifact_path(
+            artifact_root=config.runtime.artifact_root,
+            sleeve_id=sleeve_id,
+        ).exists()
 
 
 def test_build_default_market_day_automation_runner_uses_generic_service_builder(

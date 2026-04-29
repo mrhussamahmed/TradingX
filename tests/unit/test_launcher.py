@@ -36,6 +36,60 @@ class FakeProcess:
         return value
 
 
+def test_macos_app_wrapper_launches_without_terminal() -> None:
+    launcher_path = (
+        Path("TradingX Control Center.app")
+        / "Contents"
+        / "MacOS"
+        / "TradingXControlCenter"
+    )
+    launcher = launcher_path.read_text(encoding="utf-8")
+
+    assert 'tell application "Terminal"' not in launcher
+    assert "do shell script" in launcher
+    assert "start_control_center_server.command" in launcher
+
+
+def test_macos_app_wrapper_avoids_direct_venv_python_startup() -> None:
+    launcher_path = (
+        Path("TradingX Control Center.app")
+        / "Contents"
+        / "MacOS"
+        / "TradingXControlCenter"
+    )
+    launcher = launcher_path.read_text(encoding="utf-8")
+
+    assert '"$VENV_PYTHON_BIN" -m tradingx' not in launcher
+    assert "Path(sys.argv[1]).resolve()" not in launcher
+    assert "launch-control-center" not in launcher
+    assert "REAL_PYTHON_BIN" not in launcher
+
+
+def test_macos_app_wrapper_captures_shell_startup_diagnostics() -> None:
+    launcher_path = (
+        Path("TradingX Control Center.app")
+        / "Contents"
+        / "MacOS"
+        / "TradingXControlCenter"
+    )
+    launcher = launcher_path.read_text(encoding="utf-8")
+
+    assert 'exec 2>> "$LOG_FILE"' in launcher
+    assert "launcher_shell_exit" in launcher
+    assert "server_script_checked" in launcher
+
+
+def test_control_center_server_script_does_not_glob_for_site_packages() -> None:
+    launcher = Path("scripts/start_control_center_server.command").read_text(
+        encoding="utf-8"
+    )
+
+    assert "python*/site-packages" not in launcher
+    assert "PYTHON_SITE_VERSION" in launcher
+    assert "-I" in launcher
+    assert "-S" in launcher
+
+
 def test_launch_control_center_reuses_existing_server() -> None:
     config = TradingConfig.from_mapping(
         {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, Bell, ChevronDown, MessageCircle } from 'lucide-react'
+import { Activity, Bell } from 'lucide-react'
 
 import { parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import type {
@@ -9,7 +9,6 @@ import type {
   RuntimeHeartbeatSnapshot,
 } from '../../types'
 
-import { PulseRouteLogo } from './PulseRouteLogo'
 import styles from './Shell.module.css'
 
 export type RiskTone = 'good' | 'watch' | 'risk' | 'info' | 'neutral'
@@ -73,6 +72,7 @@ export type TopStatusStripProps = {
   runtimeHeartbeat: RuntimeHeartbeatSnapshot
   incidents: IncidentRecord[]
   generatedAt: string
+  onOpenAlertsCenter: () => void
 }
 
 export function TopStatusStrip({
@@ -81,6 +81,7 @@ export function TopStatusStrip({
   runtimeHeartbeat,
   incidents,
   generatedAt,
+  onOpenAlertsCenter,
 }: TopStatusStripProps) {
   const [now, setNow] = useState(() => new Date())
 
@@ -131,20 +132,21 @@ export function TopStatusStrip({
   const heartbeatLabel = runtimeHeartbeat.last_evaluation_at_utc
     ? formatAgo(runtimeHeartbeat.last_evaluation_at_utc, now.getTime())
     : 'Awaiting first heartbeat'
+  const marketStatusLabel = compactMarketSession(commandCenter.market_session_label || 'Market Closed')
 
   return (
     <header className={styles.topStrip} role="banner">
-      <StatusCard label="Market Status">
+      <StatusCard label="Market">
         <div className={`${styles.statusCardChip} ${chipClass(risk.tone)}`}>
           <span className={dotClass(risk.tone)} />
-          {prettyLabel(commandCenter.market_session_label || 'Market Closed')}
+          {marketStatusLabel}
         </div>
         <span className={styles.statusCardSub}>
           {prettyLabel(commandCenter.session_mode || 'standby')}
         </span>
       </StatusCard>
 
-      <StatusCard label="Time (Local)">
+      <StatusCard label="Local Time">
         <span className={`${styles.statusCardValue} numeric`}>{formatTime(now)}</span>
         <span className={styles.statusCardSub}>{formatDate(now)}</span>
       </StatusCard>
@@ -158,16 +160,16 @@ export function TopStatusStrip({
         <span className={styles.statusCardSub}>{heartbeatLabel}</span>
       </StatusCard>
 
-      <StatusCard label="Account Mode">
+      <StatusCard label="Mode">
         <div className={`${styles.statusCardChip} ${chipClass(accountModeTone)}`}>{accountMode}</div>
         <span className={styles.statusCardSub}>
           {configSummary.live_disable_report.manual_kill_switch_active
             ? 'Kill switch active'
-            : 'No live execution'}
+            : 'No live'}
         </span>
       </StatusCard>
 
-      <StatusCard label="Account Equity">
+      <StatusCard label="Equity">
         <span className={`${styles.statusCardValue} numeric`}>{equity}</span>
         <span className={`${styles.statusCardSub} numeric`}>Cash: {cash}</span>
       </StatusCard>
@@ -187,7 +189,7 @@ export function TopStatusStrip({
         </span>
       </StatusCard>
 
-      <StatusCard label="Risk Status">
+      <StatusCard label="Risk">
         <div className={`${styles.statusCardChip} ${chipClass(risk.tone)}`}>
           <span className={dotClass(risk.tone)} />
           {risk.label}
@@ -203,27 +205,28 @@ export function TopStatusStrip({
       </StatusCard>
 
       <div className={styles.statusActions}>
-        <button type="button" className={styles.iconButton} aria-label="Messages" disabled>
-          <MessageCircle size={16} />
-        </button>
         <button
           type="button"
           className={styles.iconButton}
-          aria-label={`Notifications: ${unacknowledgedIncidents} unacknowledged`}
-          disabled={unacknowledgedIncidents === 0}
+          aria-label={`Alerts and messages: ${unacknowledgedIncidents} unacknowledged`}
+          title="Alerts and messages"
+          onClick={onOpenAlertsCenter}
         >
           <Bell size={16} />
           {unacknowledgedIncidents > 0 ? (
             <span className={styles.iconButtonBadge}>{unacknowledgedIncidents}</span>
           ) : null}
         </button>
-        <div className={styles.profilePill} aria-label="Operator profile">
-          <PulseRouteLogo variant="glyph" />
-          <ChevronDown size={14} color="var(--text-muted)" />
-        </div>
       </div>
     </header>
   )
+}
+
+function compactMarketSession(value: string): string {
+  const label = prettyLabel(value)
+  if (/market closed posture/i.test(label)) return 'Market Closed'
+  if (/local operator monitor/i.test(label)) return 'Monitor'
+  return label
 }
 
 function chipClass(tone: RiskTone): string {

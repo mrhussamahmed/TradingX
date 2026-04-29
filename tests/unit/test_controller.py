@@ -10,7 +10,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from prometheus_client import CollectorRegistry
 
 from tradingx.controller import PaperTradingLoopController, RoundTripController
-from tradingx.execution import OrderRejected, OrderTimeout
+from tradingx.execution import OrderRejected, OrderRouteAuthorityError, OrderTimeout
 from tradingx.journal import SqliteOmsJournal, build_client_order_id
 from tradingx.monitoring import StageMetrics
 from tradingx.operator_control import OperatorControlState
@@ -334,6 +334,23 @@ class TimeoutExecution(FakeExecution):
         raise OrderTimeout(f"Timed out waiting for order {order_id} to fill.")
 
 
+class AuthorityFailingExecution(FakeExecution):
+    def submit_marketable_limit_order(
+        self,
+        symbol: str,
+        quantity: Decimal,
+        side: OrderSide,
+        *,
+        limit_price: Decimal,
+        time_in_force: TimeInForce,
+        client_order_id: str | None = None,
+    ) -> OrderRecord:
+        del symbol, quantity, side, limit_price, time_in_force, client_order_id
+        raise OrderRouteAuthorityError(
+            "paper_order route for baseline-long-only-v1 is capped at disabled"
+        )
+
+
 def test_write_closed_trade_records_rejects_naive_entry_timestamp(tmp_path) -> None:
     artifacts = FilesystemArtifactStore(tmp_path / "artifacts")
     execution_dir = tmp_path / "artifacts" / "execution_lifecycles"
@@ -644,6 +661,51 @@ def test_paper_trading_loop_controller_records_rejected_order_and_forces_reconci
         "reject",
     ]
     assert journal_rows[-1].payload["reason_code"] == "insufficient_buying_power"
+
+
+def test_paper_trading_loop_controller_records_route_authority_failure_as_terminal(
+    tmp_path: Path,
+) -> None:
+    execution = AuthorityFailingExecution()
+    policy_snapshot = build_week1_policy_snapshot(
+        generated_at_utc=datetime(2026, 4, 19, 8, 0, tzinfo=UTC),
+        artifact_root=tmp_path / "artifacts",
+        git_sha="abc1234",
+        dry_run=False,
+    )
+    controller = PaperTradingLoopController(
+        market_data=FakeMarketData(),
+        execution=execution,
+        portfolio=FakePortfolio(),
+        risk=FakeLoopRiskEngine(),
+        strategy=DeterministicBaselineStrategy(
+            now_provider=lambda: datetime(2026, 4, 19, 12, 0, tzinfo=UTC)
+        ),
+        artifacts=FilesystemArtifactStore(tmp_path / "artifacts"),
+        metrics=StageMetrics(registry=CollectorRegistry()),
+        regular_hours_checker=FakeRegularHours(),
+        now_provider=lambda: datetime(2026, 4, 19, 12, 0, tzinfo=UTC),
+        policy_snapshot=policy_snapshot,
+        policy_store=PolicySnapshotStore(tmp_path / "data" / "policy"),
+        snapshot_store=ContentAddressedSnapshotStore(tmp_path / "data" / "snapshots"),
+        journal=SqliteOmsJournal(tmp_path / "data" / "journal.db"),
+        git_sha="abc1234",
+        dry_run=False,
+    )
+
+    result = controller.run_trading_cycle("SPY", Decimal("1"))
+
+    assert result.terminal_state == "blocked_trade"
+    assert result.order_record is None
+    assert result.reconciliation.resolved is False
+    assert result.reconciliation.differences == ("order_route_authority",)
+    journal_rows = SqliteOmsJournal(tmp_path / "data" / "journal.db").list_events()
+    assert [row.event_type for row in journal_rows] == [
+        "intent",
+        "submit_attempt",
+        "reject",
+    ]
+    assert journal_rows[-1].payload["reason_code"] == "order_route_authority"
 
 
 def test_paper_trading_loop_controller_records_order_timeout_as_recovery_required(

@@ -48,6 +48,7 @@ from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     build_default_runtime_registry,
 )
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.strategy import DEFAULT_CANDIDATE_ID
 from tradingx.trials import TrialsLedger
 from tradingx.types import (
@@ -83,6 +84,7 @@ class PortfolioPlannerProtocol(Protocol):
         symbols: tuple[str, ...],
         portfolio_state: PortfolioState,
         default_quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None: ...
 
 
@@ -133,6 +135,7 @@ class PaperTradingService:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> ServiceRunResult:
         cycles_completed = 0
         artifact_paths = []
@@ -141,6 +144,7 @@ class PaperTradingService:
             last_cycle = self._run_single_cycle(
                 symbols=tuple(symbols),
                 quantity=quantity,
+                sizing_policy=sizing_policy,
             )
             artifact_paths.append(
                 self._artifacts.write_service_cycle_snapshot(last_cycle)
@@ -164,6 +168,7 @@ class PaperTradingService:
         *,
         symbols: tuple[str, ...],
         quantity: Decimal,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> ServiceCycleSnapshot:
         started_at = self._now_provider()
         cycle_started_at = self._monotonic_fn()
@@ -215,15 +220,21 @@ class PaperTradingService:
                 cycle_status = "executed"
                 planner_failed = False
                 try:
-                    portfolio_plan = (
-                        self._portfolio_planner.plan_for_service(
+                    if self._portfolio_planner is None:
+                        portfolio_plan = None
+                    elif sizing_policy is None:
+                        portfolio_plan = self._portfolio_planner.plan_for_service(
                             symbols=symbols,
                             portfolio_state=initial_portfolio_state,
                             default_quantity=quantity,
                         )
-                        if self._portfolio_planner is not None
-                        else None
-                    )
+                    else:
+                        portfolio_plan = self._portfolio_planner.plan_for_service(
+                            symbols=symbols,
+                            portfolio_state=initial_portfolio_state,
+                            default_quantity=quantity,
+                            sizing_policy=sizing_policy,
+                        )
                 except Exception as error:
                     cycle_status = "recovery_required"
                     planner_failed = True

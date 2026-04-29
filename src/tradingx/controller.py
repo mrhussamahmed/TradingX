@@ -30,6 +30,7 @@ from tradingx.data import (
 from tradingx.execution import (
     AlpacaPaperExecutionGateway,
     OrderRejected,
+    OrderRouteAuthorityError,
     OrderRouteAuthorityGuard,
     OrderTimeout,
     classify_order_rejection_reason,
@@ -65,6 +66,7 @@ from tradingx.runtime_logging import (
     StructuredRuntimeLogger,
     build_default_runtime_logger,
 )
+from tradingx.sizing import entry_marketable_limit_price
 from tradingx.snapshots import (
     CandidateIntentSnapshot,
     ContentAddressedSnapshotStore,
@@ -878,6 +880,15 @@ class PaperTradingLoopController:
                 error=error,
                 recovered=recovered,
             )
+        except OrderRouteAuthorityError as error:
+            return self._build_route_authority_blocked_trade_result(
+                trade_intent=trade_intent,
+                portfolio_state=portfolio_state,
+                decision_path=decision_path,
+                trade_path=trade_path,
+                client_order_id=client_order_id,
+                error=error,
+            )
         except OrderRejected as error:
             return self._build_rejected_trade_result(
                 trade_intent=trade_intent,
@@ -1031,6 +1042,68 @@ class PaperTradingLoopController:
                 if path is not None
             ),
             recovered=recovered,
+        )
+
+    def _build_route_authority_blocked_trade_result(
+        self,
+        *,
+        trade_intent: TradeIntent,
+        portfolio_state: PortfolioState,
+        decision_path: Path,
+        trade_path: Path,
+        client_order_id: str,
+        error: OrderRouteAuthorityError,
+    ) -> TradingLoopResult:
+        reason_code = "order_route_authority"
+        self._log_runtime_event(
+            event_type="order_route_authority_blocked",
+            severity="error",
+            message="Order route authority blocked the paper submission.",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            fields={"reason_code": reason_code},
+        )
+        self._append_journal_event(
+            event_type="reject",
+            decision_path=decision_path,
+            trade_intent=trade_intent,
+            client_order_id=client_order_id,
+            broker_order_id="",
+            payload={
+                "reason_code": reason_code,
+                "message": str(error),
+            },
+        )
+        reconciliation = self._build_reconciliation(
+            trade_intent=trade_intent,
+            portfolio_state=portfolio_state,
+            differences=(reason_code,),
+            resolved=False,
+        )
+        reconciliation_path = self._artifacts.write_reconciliation_snapshot(
+            reconciliation
+        )
+        self._metrics.record_evidence_artifact("reconciliation")
+        self._metrics.record_trade_terminal_state("blocked_trade")
+        self._metrics.record_reconciliation_age_seconds(
+            reconciliation.broker_state_age_seconds
+        )
+        return TradingLoopResult(
+            terminal_state="blocked_trade",
+            trade_intent=trade_intent,
+            order_record=None,
+            risk_event=None,
+            reconciliation=reconciliation,
+            artifact_paths=tuple(
+                path
+                for path in (
+                    trade_path,
+                    self._policy_path,
+                    decision_path,
+                    reconciliation_path,
+                )
+                if path is not None
+            ),
         )
 
     def _build_rejected_trade_result(
@@ -1391,15 +1464,17 @@ class PaperTradingLoopController:
         else:
             buffer_bps = self._policy_snapshot.exit_marketable_limit_bps
         if trade_intent.side == "buy":
-            reference_price = market_snapshot.ask_price
-            multiplier = Decimal("1") + (buffer_bps / Decimal("10000"))
+            return entry_marketable_limit_price(
+                market_snapshot,
+                buffer_bps=buffer_bps,
+            )
         else:
             reference_price = market_snapshot.bid_price
             multiplier = Decimal("1") - (buffer_bps / Decimal("10000"))
-        return (reference_price * multiplier).quantize(
-            Decimal("0.01"),
-            rounding=ROUND_HALF_UP,
-        )
+            return (reference_price * multiplier).quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
 
     def _find_existing_order_by_client_id(
         self,

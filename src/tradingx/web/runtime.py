@@ -52,6 +52,7 @@ from tradingx.service import (
     build_default_trading_service,
     build_runtime_host_trading_service,
 )
+from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     AlertDrillRecord,
     BotRuntimeState,
@@ -92,6 +93,7 @@ class RuntimeHostManagerProtocol(Protocol):
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult: ...
 
     def stop(self) -> WebActionResult: ...
@@ -132,6 +134,7 @@ class LocalServiceManager:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -159,6 +162,7 @@ class LocalServiceManager:
                     "quantity": quantity,
                     "interval_seconds": interval_seconds,
                     "max_cycles": max_cycles,
+                    "sizing_policy": sizing_policy,
                 },
                 daemon=True,
             )
@@ -190,6 +194,7 @@ class LocalServiceManager:
         quantity: Decimal,
         interval_seconds: int,
         max_cycles: int | None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> None:
         service = self._service_builder()
         cycles_completed = 0
@@ -197,12 +202,21 @@ class LocalServiceManager:
             while not self._stop_event.is_set() and (
                 max_cycles is None or cycles_completed < max_cycles
             ):
-                result = service.run(
-                    symbols=symbols,
-                    quantity=quantity,
-                    interval_seconds=interval_seconds,
-                    max_cycles=1,
-                )
+                if sizing_policy is None:
+                    result = service.run(
+                        symbols=symbols,
+                        quantity=quantity,
+                        interval_seconds=interval_seconds,
+                        max_cycles=1,
+                    )
+                else:
+                    result = service.run(
+                        symbols=symbols,
+                        quantity=quantity,
+                        interval_seconds=interval_seconds,
+                        max_cycles=1,
+                        sizing_policy=sizing_policy,
+                    )
                 cycles_completed += result.cycles_completed
                 with self._lock:
                     self._state = replace(
@@ -416,12 +430,21 @@ class LocalWebActionRunner:
         quantity: str,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
+        if sizing_policy is None:
+            return self._service_manager.start(
+                symbols=symbols,
+                quantity=Decimal(quantity),
+                interval_seconds=interval_seconds,
+                max_cycles=max_cycles,
+            )
         return self._service_manager.start(
             symbols=symbols,
             quantity=Decimal(quantity),
             interval_seconds=interval_seconds,
             max_cycles=max_cycles,
+            sizing_policy=sizing_policy,
         )
 
     def stop_service(self) -> WebActionResult:
@@ -434,6 +457,7 @@ class LocalWebActionRunner:
         quantity: str,
         interval_seconds: int,
         max_cycles: int | None = None,
+        sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> WebActionResult:
         if self._runtime_host_manager is None:
             return WebActionResult(
@@ -443,11 +467,19 @@ class LocalWebActionRunner:
                 message="Runtime host manager is unavailable.",
                 evidence_refs=(),
             )
+        if sizing_policy is None:
+            return self._runtime_host_manager.start(
+                symbols=symbols,
+                quantity=Decimal(quantity),
+                interval_seconds=interval_seconds,
+                max_cycles=max_cycles,
+            )
         return self._runtime_host_manager.start(
             symbols=symbols,
             quantity=Decimal(quantity),
             interval_seconds=interval_seconds,
             max_cycles=max_cycles,
+            sizing_policy=sizing_policy,
         )
 
     def stop_runtime_host(self) -> WebActionResult:
