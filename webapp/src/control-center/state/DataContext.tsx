@@ -31,6 +31,7 @@ import {
   getRuntimeHostState,
   getRuntimeHostWarmup,
   getSchedulerState,
+  getSessionTimeline,
   lockWebWrites,
   unlockWebWrites,
 } from '../../api'
@@ -54,6 +55,7 @@ import type {
   ResearchStudioSnapshot,
   RuntimeHeartbeatSnapshot,
   RuntimeDecisionDetail,
+  SessionTimelineResponse,
   StrategyActivationRecord,
 } from '../../types'
 
@@ -78,6 +80,8 @@ export type DataState = {
   incidents: IncidentRecord[]
   research: ResearchStudioSnapshot
   replay: ReplaySession
+  sessionTimeline: SessionTimelineResponse
+  sessionTimelineDate: string
   explorer: ExplorerRecord[]
   digest: DailySessionDigest | null
   portfolio: PortfolioWorkspaceSnapshot
@@ -95,6 +99,7 @@ export type DataState = {
 
 export type DataContextValue = DataState & {
   refresh: () => Promise<void>
+  setSessionTimelineDate: (tradingDay: string) => void
   unlockWrites: (secret: string) => { ok: boolean; error?: string }
   lockWrites: () => void
   runAction: (
@@ -160,6 +165,28 @@ const defaultReplay: ReplaySession = {
   headline: 'Replay unavailable',
   events: [],
   summary: 'Replay is waiting for the first recorded event.',
+}
+
+const defaultSessionTimeline: SessionTimelineResponse = {
+  session: {
+    trading_day: '',
+    schedule_id: '',
+    session_open_at_utc: null,
+    session_close_at_utc: null,
+    exchange: '',
+    timezone: '',
+    status: 'missing_session_metadata',
+    metadata_status: 'schedule_missing',
+    partial_reason: 'Session timeline is waiting for backend evidence.',
+  },
+  available_trading_days: [],
+  events: [],
+  filters: {
+    trading_day: '',
+    symbol: null,
+    cycle_id: null,
+    incident_id: null,
+  },
 }
 
 const defaultPortfolio: PortfolioWorkspaceSnapshot = {
@@ -256,6 +283,10 @@ const defaultRuntimeHeartbeat: RuntimeHeartbeatSnapshot = {
   symbol_rows: [],
   decision_ladder: [],
   operator_guidance: null,
+  configured_cadence_seconds: 180,
+  running_cadence_seconds: 180,
+  cadence_source: 'config',
+  cadence_applies_at: 'next_start',
 }
 
 const defaultSchedulerState: MarketDaySchedulerState = {
@@ -319,6 +350,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [incidents, setIncidents] = useState<IncidentRecord[]>([])
   const [research, setResearch] = useState<ResearchStudioSnapshot>(defaultResearch)
   const [replay, setReplay] = useState<ReplaySession>(defaultReplay)
+  const [sessionTimeline, setSessionTimeline] =
+    useState<SessionTimelineResponse>(defaultSessionTimeline)
+  const [sessionTimelineDate, setSessionTimelineDateState] = useState('')
   const [explorer, setExplorer] = useState<ExplorerRecord[]>([])
   const [digest, setDigest] = useState<DailySessionDigest | null>(null)
   const [portfolio, setPortfolio] = useState<PortfolioWorkspaceSnapshot>(defaultPortfolio)
@@ -341,6 +375,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [generatedAt, setGeneratedAt] = useState('')
   const inFlightRef = useRef<Promise<void> | null>(null)
   const watchlistSymbolRef = useRef<string>('SPY')
+  const sessionTimelineDateRef = useRef<string>('')
 
   useEffect(() => {
     watchlistSymbolRef.current = commandCenter.watchlist[0]?.symbol ?? 'SPY'
@@ -354,6 +389,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setIsRefreshing(true)
       try {
         const watchlistSymbol = watchlistSymbolRef.current
+        const selectedTradingDay = sessionTimelineDateRef.current
         const settled = await Promise.allSettled([
           getCommandCenter(),
           getConfigSummary(),
@@ -361,6 +397,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
           getIncidents(),
           getResearch(),
           getReplay({ symbol: watchlistSymbol }),
+          getSessionTimeline({
+            trading_day: selectedTradingDay || undefined,
+          }),
           getExplorer({ query: '' }),
           getLatestDigest(),
           getPortfolioWorkspace(),
@@ -378,7 +417,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         const value = <T,>(index: number, fallback: T): T => {
           const result = settled[index]
-          return result.status === 'fulfilled' ? (result.value as T) : fallback
+          return result.status === 'fulfilled' && result.value !== undefined
+            ? (result.value as T)
+            : fallback
         }
 
         const nextCommandCenter = value(0, defaultCommandCenter)
@@ -387,19 +428,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const nextIncidents = value<IncidentRecord[]>(3, [])
         const nextResearch = value(4, defaultResearch)
         const nextReplay = value(5, defaultReplay)
-        const nextExplorer = value<ExplorerRecord[]>(6, [])
-        const nextDigest = value<DailySessionDigest | null>(7, null)
-        const nextPortfolio = value(8, defaultPortfolio)
-        const nextGate3Readiness = value(9, defaultGate3Readiness)
-        const nextGate3Package = value<Gate3PromotionPackage | null>(10, null)
-        const nextRuntimeState = value(11, defaultRuntimeState)
-        const nextRuntimeHeartbeat = value(12, defaultRuntimeHeartbeat)
-        const nextRuntimeWarmup = value<HistoricalWarmupRecord | null>(13, null)
-        const nextRuntimeActivation = value<StrategyActivationRecord | null>(14, null)
-        const nextRuntimeModel = value<ModelWeightSnapshot | null>(15, null)
-        const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(16, null)
-        const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(17, null)
-        const nextSchedulerState = value(18, defaultSchedulerState)
+        const nextSessionTimeline = value(6, defaultSessionTimeline)
+        const nextExplorer = value<ExplorerRecord[]>(7, [])
+        const nextDigest = value<DailySessionDigest | null>(8, null)
+        const nextPortfolio = value(9, defaultPortfolio)
+        const nextGate3Readiness = value(10, defaultGate3Readiness)
+        const nextGate3Package = value<Gate3PromotionPackage | null>(11, null)
+        const nextRuntimeState = value(12, defaultRuntimeState)
+        const nextRuntimeHeartbeat = value(13, defaultRuntimeHeartbeat)
+        const nextRuntimeWarmup = value<HistoricalWarmupRecord | null>(14, null)
+        const nextRuntimeActivation = value<StrategyActivationRecord | null>(15, null)
+        const nextRuntimeModel = value<ModelWeightSnapshot | null>(16, null)
+        const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(17, null)
+        const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(18, null)
+        const nextSchedulerState = value(19, defaultSchedulerState)
 
         startTransition(() => {
           setCommandCenter(nextCommandCenter)
@@ -408,6 +450,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
           setIncidents(nextIncidents)
           setResearch(nextResearch)
           setReplay(nextReplay)
+          const currentTimelineDate = sessionTimelineDateRef.current
+          const requestStillCurrent =
+            currentTimelineDate === selectedTradingDay ||
+            (!selectedTradingDay && !currentTimelineDate)
+          if (requestStillCurrent) {
+            setSessionTimeline(nextSessionTimeline)
+          }
+          if (
+            requestStillCurrent &&
+            !sessionTimelineDateRef.current &&
+            nextSessionTimeline.filters.trading_day
+          ) {
+            sessionTimelineDateRef.current = nextSessionTimeline.filters.trading_day
+            setSessionTimelineDateState(nextSessionTimeline.filters.trading_day)
+          }
           setExplorer(nextExplorer)
           setDigest(nextDigest)
           setPortfolio(nextPortfolio)
@@ -455,6 +512,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
     })
     return work
+  }, [])
+
+  const setSessionTimelineDate = useCallback((tradingDay: string) => {
+    sessionTimelineDateRef.current = tradingDay
+    setSessionTimelineDateState(tradingDay)
+    const requestedTradingDay = tradingDay
+    void getSessionTimeline({ trading_day: requestedTradingDay || undefined })
+      .then((nextTimeline) => {
+        if (sessionTimelineDateRef.current !== requestedTradingDay) {
+          return
+        }
+        setSessionTimeline(nextTimeline)
+        if (nextTimeline.filters.trading_day) {
+          sessionTimelineDateRef.current = nextTimeline.filters.trading_day
+          setSessionTimelineDateState(nextTimeline.filters.trading_day)
+        }
+      })
+      .catch((error) => {
+        setPageError(
+          error instanceof Error
+            ? `Timeline refresh failed: ${error.message}`
+            : 'Timeline refresh failed.',
+        )
+      })
   }, [])
 
   useEffect(() => {
@@ -539,6 +620,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
       incidents,
       research,
       replay,
+      sessionTimeline,
+      sessionTimelineDate,
       explorer,
       digest,
       portfolio,
@@ -553,6 +636,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeDecisionDetail,
       schedulerState,
       refresh,
+      setSessionTimelineDate,
       unlockWrites,
       lockWrites,
       runAction,
@@ -569,6 +653,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
       incidents,
       research,
       replay,
+      sessionTimeline,
+      sessionTimelineDate,
       explorer,
       digest,
       portfolio,
@@ -583,6 +669,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeDecisionDetail,
       schedulerState,
       refresh,
+      setSessionTimelineDate,
       unlockWrites,
       lockWrites,
       runAction,

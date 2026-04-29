@@ -41,6 +41,7 @@ from tradingx.types import (
     ResearchStudioSnapshot,
     RuntimeDecisionDetail,
     RuntimeHeartbeatSnapshot,
+    SessionTimelineResponse,
     StrategyActivationRecord,
     WebActionResult,
 )
@@ -92,6 +93,15 @@ class ReadModelProtocol(Protocol):
         cycle_id: str | None = None,
         incident_id: str | None = None,
     ) -> tuple[object, ...]: ...
+
+    def build_session_timeline(
+        self,
+        *,
+        trading_day: str | None = None,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> SessionTimelineResponse: ...
 
     def list_incidents(self) -> tuple[IncidentRecord, ...]: ...
 
@@ -151,6 +161,8 @@ class ActionRunnerProtocol(Protocol):
     ) -> WebActionResult: ...
 
     def stop_runtime_host(self) -> WebActionResult: ...
+
+    def set_runtime_cadence(self, *, cadence_seconds: int) -> WebActionResult: ...
 
     def start_market_scheduler(
         self,
@@ -276,6 +288,10 @@ class RuntimeHostStartRequest(BaseModel):
     interval_seconds: int
     max_cycles: int | None = None
     sizing_policy: RuntimeSizingPolicyRequest | None = None
+
+
+class RuntimeCadenceRequest(BaseModel):
+    cadence_seconds: int
 
 
 class RecoverRequest(BaseModel):
@@ -987,6 +1003,24 @@ def create_app(
             )
         )
 
+    @app.get("/api/platform/session-timeline")
+    def get_session_timeline(
+        trading_day: str | None = None,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(
+                read_model.build_session_timeline(
+                    trading_day=trading_day,
+                    symbol=symbol,
+                    cycle_id=cycle_id,
+                    incident_id=incident_id,
+                )
+            )
+        )
+
     @app.get("/api/platform/incidents")
     def get_incidents() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.list_incidents()))
@@ -1207,6 +1241,18 @@ def create_app(
     @app.post("/api/actions/runtime-host/stop")
     async def post_runtime_host_stop(request: Request) -> JSONResponse:
         return await _run_authorized_write(request, action_runner.stop_runtime_host)
+
+    @app.post("/api/actions/runtime-host/cadence")
+    async def post_runtime_host_cadence(
+        request: Request,
+        payload: RuntimeCadenceRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.set_runtime_cadence(
+                cadence_seconds=payload.cadence_seconds
+            ),
+        )
 
     @app.post("/api/actions/scheduler/start")
     async def post_scheduler_start(

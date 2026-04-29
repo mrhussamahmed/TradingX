@@ -11,7 +11,7 @@ import { useData } from '../state/DataContext'
 
 import styles from './Flavor.module.css'
 
-type Filter = 'all' | 'long' | 'short' | 'flat'
+type Filter = 'all' | 'long' | 'short' | 'flat' | 'unpriced'
 
 const CENTER_X = 50
 const CENTER_Y = 50
@@ -19,6 +19,7 @@ const SLEEVE_RADIUS = 22
 const SYMBOL_RADIUS = 38
 
 function classifyPosition(position: PortfolioPositionRow): Filter {
+  if (position.market_value == null) return 'unpriced'
   const value = parseNumericValue(position.market_value)
   const status = position.status?.toLowerCase() ?? ''
   if (status.includes('flat') || value === 0) return 'flat'
@@ -50,7 +51,11 @@ export function PortfolioConstellationFlavor() {
   }, [positions, filter])
 
   const positionsTotal =
-    positions.reduce((sum, position) => sum + Math.abs(parseNumericValue(position.market_value)), 0) ||
+    positions.reduce(
+      (sum, position) =>
+        position.market_value == null ? sum : sum + Math.abs(parseNumericValue(position.market_value)),
+      0,
+    ) ||
     1
 
   const hasGraphData = positions.length > 0 || strategies.length > 0
@@ -106,6 +111,7 @@ export function PortfolioConstellationFlavor() {
                 <option value="long">Long</option>
                 <option value="short">Short</option>
                 <option value="flat">Flat</option>
+                <option value="unpriced">Unpriced</option>
               </select>
               <button
                 type="button"
@@ -261,11 +267,19 @@ export function PortfolioConstellationFlavor() {
                         {prettyLabel(side)}
                       </span>
                     </td>
-                    <td className="numeric">{position.quantity}</td>
                     <td className="numeric">
-                      {position.market_value ? toCurrency(position.market_value) : '—'}
+                      {position.quantity ?? prettyLabel(position.quantity_status ?? 'source_missing')}
                     </td>
-                    <td className="numeric">{position.exposure_pct}</td>
+                    <td className="numeric">
+                      {position.market_value != null
+                        ? toCurrency(position.market_value)
+                        : prettyLabel(position.price_status ?? 'unpriced')}
+                    </td>
+                    <td className="numeric">
+                      {position.exposure_pct != null
+                        ? `${position.exposure_pct}%`
+                        : prettyLabel(position.exposure_status ?? 'source_missing')}
+                    </td>
                     <td>{position.status}</td>
                   </tr>
                 )
@@ -390,7 +404,10 @@ function ConstellationGraph({
           )
         })}
         {placedSymbols.map(({ position, x, y }) => {
-          const ratio = Math.abs(parseNumericValue(position.market_value)) / positionsTotal
+          const ratio =
+            position.market_value == null
+              ? 0
+              : Math.abs(parseNumericValue(position.market_value)) / positionsTotal
           return (
             <line
               key={`s-${position.symbol}`}

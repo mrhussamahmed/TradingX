@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertTriangle,
   ArrowRight,
@@ -12,7 +12,13 @@ import {
 } from 'lucide-react'
 
 import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
-import type { IncidentRecord } from '../../types'
+import { postRuntimeHostCadence } from '../../api'
+import type {
+  IncidentRecord,
+  OpportunitySelectionRecord,
+  RuntimeDecisionDetail,
+  RuntimeHeartbeatSnapshot,
+} from '../../types'
 import { describePnl } from '../shell/TopStatusStrip'
 import { useData } from '../state/DataContext'
 import { usePreferences } from '../state/PreferencesContext'
@@ -48,11 +54,13 @@ type AttentionItem = {
 }
 
 const STALE_MINUTES = 20
+const CADENCE_OPTIONS = [180, 300, 600, 1200, 1800, 3600, 7200]
 
 export function OperatorMissionControlFlavor() {
   const data = useData()
   const { setActiveFlavor } = usePreferences()
   const [nowMs, setNowMs] = useState(() => Date.now())
+  const [cadenceSaving, setCadenceSaving] = useState(false)
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -77,6 +85,7 @@ export function OperatorMissionControlFlavor() {
     generatedAt,
     runtimeSelection,
     runtimeDecisionDetail,
+    runAction,
   } = data
 
   const gateTone = deriveCombinedGateTone({
@@ -144,6 +153,12 @@ export function OperatorMissionControlFlavor() {
   const requiredEvidenceAge = requiredSafetyEvidence.latestRequiredTimestamp
     ? ageMinutes(requiredSafetyEvidence.latestRequiredTimestamp, nowMs)
     : null
+  const nextEvaluationCountdown = countdownLabel(
+    runtimeHeartbeat.next_evaluation_at_utc,
+    nowMs,
+  )
+  const configuredCadence =
+    runtimeHeartbeat.configured_cadence_seconds ?? runtimeHeartbeat.cadence_seconds
 
   const tradePermission = describeTradePermission({
     liveTradingEnabled: configSummary.live_disable_report.live_trading_enabled,
@@ -157,8 +172,11 @@ export function OperatorMissionControlFlavor() {
   const cards = useMemo<StatusCardModel[]>(() => {
     const runtimeTone = runtimeStatusTone(runtimeState.status, runtimeHeartbeat.heartbeat_tone)
     const pnl = describePnl(commandCenter.account_summary.daily_pnl)
-    const positionValue = openPositions.reduce(
-      (sum, position) => sum + Math.abs(parseNumericValue(position.market_value)),
+    const pricedPositions = openPositions.filter((position) => position.market_value != null)
+    const unpricedPositions = openPositions.length - pricedPositions.length
+    const positionValue = pricedPositions.reduce(
+      (sum, position) =>
+        sum + Math.abs(parseNumericValue(position.market_value)),
       0,
     )
 
@@ -204,7 +222,9 @@ export function OperatorMissionControlFlavor() {
         label: 'Open risk',
         value: openPositions.length ? `${openPositions.length} position${openPositions.length === 1 ? '' : 's'}` : 'Flat',
         detail: openPositions.length
-          ? `${toCurrency(positionValue)} gross position value from portfolio snapshot.`
+          ? pricedPositions.length > 0
+            ? `${toCurrency(positionValue)} gross priced position value from portfolio snapshot${unpricedPositions ? `; ${unpricedPositions} unpriced.` : '.'}`
+            : `${unpricedPositions} open position${unpricedPositions === 1 ? '' : 's'} missing price or market-value evidence.`
           : portfolio.positions_panel.detail || 'No open paper positions reported.',
         tone: gateTone.tone === 'risk' ? 'risk' : openPositions.length ? 'watch' : 'good',
         evidence: portfolio.generated_at_utc
@@ -439,6 +459,69 @@ export function OperatorMissionControlFlavor() {
         ))}
       </div>
 
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <span>Next Evaluation</span>
+          <span className={styles.panelSub}>
+            {runtimeHeartbeat.next_evaluation_at_utc
+              ? `Countdown ${nextEvaluationCountdown}`
+              : 'No active schedule'}
+          </span>
+        </div>
+        <div className={styles.panelBody}>
+          <div className={styles.sizingControls}>
+            <label className={styles.sizingField}>
+              <span>Evaluation cadence</span>
+              <select
+                aria-label="Evaluation cadence"
+                value={configuredCadence}
+                disabled={cadenceSaving}
+                onChange={async (event) => {
+                  const nextCadence = Number(event.currentTarget.value)
+                  setCadenceSaving(true)
+                  try {
+                    await runAction('Update evaluation cadence', () =>
+                      postRuntimeHostCadence(nextCadence),
+                    )
+                  } finally {
+                    setCadenceSaving(false)
+                  }
+                }}
+              >
+                {CADENCE_OPTIONS.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {cadenceLabel(seconds)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <DigestRow
+              icon={<CalendarClock size={14} />}
+              label="Next run"
+              value={
+                runtimeHeartbeat.next_evaluation_at_utc
+                  ? formatTimestamp(runtimeHeartbeat.next_evaluation_at_utc)
+                  : 'Not scheduled'
+              }
+              detail={`Configured ${cadenceLabel(configuredCadence)} · running ${cadenceLabel(runtimeHeartbeat.running_cadence_seconds ?? runtimeHeartbeat.cadence_seconds)} · source ${prettyLabel(runtimeHeartbeat.cadence_source ?? 'config')} · applies ${prettyLabel(runtimeHeartbeat.cadence_applies_at ?? 'next_start')}`}
+            />
+            <DigestRow
+              icon={<Gauge size={14} />}
+              label="Countdown"
+              value={nextEvaluationCountdown}
+              detail={cadenceSaving ? 'Saving cadence change...' : 'Updates live from the next evaluation timestamp.'}
+            />
+          </div>
+        </div>
+      </div>
+
+      <LastDecisionPanel
+        runtimeHeartbeat={runtimeHeartbeat}
+        runtimeDecisionDetail={runtimeDecisionDetail}
+        runtimeSelection={runtimeSelection}
+        onOpen={setActiveFlavor}
+      />
+
       <div className={styles.forgeRow}>
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
@@ -578,13 +661,94 @@ function MissionCard({
   )
 }
 
+function LastDecisionPanel({
+  runtimeHeartbeat,
+  runtimeDecisionDetail,
+  runtimeSelection,
+  onOpen,
+}: {
+  runtimeHeartbeat: RuntimeHeartbeatSnapshot
+  runtimeDecisionDetail: RuntimeDecisionDetail | null
+  runtimeSelection: OpportunitySelectionRecord | null
+  onOpen: (flavor: ViewFlavor, source: 'manual') => void
+}) {
+  const topEligible =
+    runtimeHeartbeat.decision_ladder.find((row) =>
+      /selected|ready/i.test(row.disposition),
+    ) ?? null
+  const topOpportunity =
+    topEligible ??
+    runtimeHeartbeat.decision_ladder.find((row) => row.threshold_gap !== 'n/a') ??
+    null
+  const symbolContext =
+    runtimeHeartbeat.selected_symbol ||
+    runtimeDecisionDetail?.symbol ||
+    runtimeSelection?.selected_symbol ||
+    topEligible?.symbol ||
+    'global universe'
+  return (
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <span>Last Trade Decision</span>
+        <span className={styles.panelSub}>
+          {symbolContext === 'global universe' ? 'Global across all symbols' : `Symbol ${symbolContext}`}
+        </span>
+      </div>
+      <div className={styles.panelBody}>
+        <div className={styles.gateRecRow}>
+          <ToneIcon tone={runtimeHeartbeat.last_decision === 'No trade' ? 'watch' : 'info'} />
+          <span style={{ flex: 1 }}>
+            <strong>{runtimeHeartbeat.last_decision || 'No decision evidence'}</strong>
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11 }}>
+              {runtimeHeartbeat.decision_reason ||
+                'No opportunity-selection evidence is available.'}
+            </span>
+          </span>
+        </div>
+        {topOpportunity ? (
+          <table className={styles.simpleTable}>
+            <thead>
+              <tr>
+                <th>{topEligible ? 'Last eligible opportunity' : 'Closest non-eligible opportunity'}</th>
+                <th>Score</th>
+                <th>Threshold</th>
+                <th>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="mono">{topOpportunity.symbol}</td>
+                <td className="numeric">{topOpportunity.final_score}</td>
+                <td className="numeric">{topOpportunity.threshold}</td>
+                <td>{topOpportunity.primary_driver || topOpportunity.disposition}</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          <div className={styles.emptyState}>
+            <strong>No eligible opportunity recorded</strong>
+            <p>The backend has not recorded a deployable opportunity in the current decision ladder.</p>
+          </div>
+        )}
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => onOpen('evidence-replay', 'manual')}
+        >
+          Open Evidence & Why <ArrowRight size={12} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function DigestRow({
   icon,
   label,
   value,
   detail,
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   value: string
   detail: string
@@ -664,6 +828,27 @@ function worstIncidentTone(incidents: IncidentRecord[]): VerdictTone {
 
 function ageMinutes(timestamp: string, nowMs: number): number {
   return (nowMs - new Date(timestamp).getTime()) / 60_000
+}
+
+function cadenceLabel(seconds: number): string {
+  if (seconds >= 3600) {
+    const hours = seconds / 3600
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  return `${Math.round(seconds / 60)} minutes`
+}
+
+function countdownLabel(timestamp: string | null, nowMs: number): string {
+  if (!timestamp) return 'Not scheduled'
+  const target = new Date(timestamp).getTime()
+  if (!Number.isFinite(target)) return 'Unknown'
+  const remaining = Math.max(0, Math.ceil((target - nowMs) / 1000))
+  const hours = Math.floor(remaining / 3600)
+  const minutes = Math.floor((remaining % 3600) / 60)
+  const seconds = remaining % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
 }
 
 function toneColor(tone: VerdictTone): string {

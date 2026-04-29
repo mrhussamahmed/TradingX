@@ -22,6 +22,9 @@ from tradingx.types import (
     OperatorAlert,
     OpportunityScore,
     OpportunitySelectionRecord,
+    PortfolioState,
+    PositionSnapshot,
+    ReconciliationSnapshot,
     ServiceCycleSnapshot,
     StrategyActivationRecord,
     ValidationCandidateResult,
@@ -240,6 +243,544 @@ def test_command_center_keeps_last_account_snapshot_after_market_closed_cycle(
     assert watchlist["SPY"] == "active"
     assert watchlist["QQQ"] == "active"
     assert watchlist["IWM"] == "active"
+
+
+def test_command_center_does_not_emit_equal_placeholder_exposure_for_two_or_three_positions(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    cases = (
+        (("SPY", "QQQ"), "50"),
+        (("SPY", "QQQ", "IWM"), "33"),
+    )
+    for symbols, forbidden_placeholder in cases:
+        case_root = tmp_path / f"case-{len(symbols)}"
+        read_model = _minimal_read_model(case_root, timestamp)
+        _write_service_cycle(
+            read_model._paper_store,
+            timestamp=timestamp,
+            cycle_id="cycle-symbol-only",
+            payload_overrides={
+                "symbols": symbols,
+                "open_position_symbols": symbols,
+            },
+        )
+
+        snapshot = read_model.build_command_center_snapshot()
+
+        assert [entry["symbol"] for entry in snapshot.exposure_breakdown] == list(
+            symbols
+        )
+        assert {entry["value"] for entry in snapshot.exposure_breakdown} == {None}
+        assert {entry["value_status"] for entry in snapshot.exposure_breakdown} == {
+            "source_missing"
+        }
+        assert forbidden_placeholder not in {
+            str(entry.get("value")) for entry in snapshot.exposure_breakdown
+        }
+
+
+def test_portfolio_positions_use_reconciliation_quantities_and_exposure(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-real-positions",
+            portfolio_state=PortfolioState(
+                as_of_utc=timestamp,
+                cash=Decimal("98000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("390000"),
+                positions=(
+                    PositionSnapshot(
+                        symbol="SPY",
+                        quantity=Decimal("2"),
+                        average_entry_price=Decimal("500"),
+                        market_value=Decimal("1000"),
+                    ),
+                    PositionSnapshot(
+                        symbol="QQQ",
+                        quantity=Decimal("3"),
+                        average_entry_price=Decimal("300"),
+                        market_value=Decimal("900"),
+                    ),
+                ),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+
+    portfolio = read_model.build_portfolio_workspace_snapshot()
+    rows = {row.symbol: row for row in portfolio.positions_panel.positions}
+
+    assert rows["SPY"].quantity == "2"
+    assert rows["SPY"].market_value == "1000"
+    assert rows["SPY"].exposure_pct == "1.00"
+    assert rows["SPY"].quantity_status == "fresh"
+    assert rows["SPY"].price_status == "fresh"
+    assert rows["SPY"].exposure_status == "fresh"
+    assert rows["QQQ"].quantity == "3"
+    assert rows["QQQ"].market_value == "900"
+    assert rows["QQQ"].exposure_pct == "0.90"
+
+
+def test_command_center_uses_reconciliation_positions_for_exposure(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-real-positions",
+            portfolio_state=PortfolioState(
+                as_of_utc=timestamp,
+                cash=Decimal("98000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("390000"),
+                positions=(
+                    PositionSnapshot(
+                        symbol="SPY",
+                        quantity=Decimal("2"),
+                        average_entry_price=Decimal("500"),
+                        market_value=Decimal("1000"),
+                    ),
+                    PositionSnapshot(
+                        symbol="QQQ",
+                        quantity=Decimal("3"),
+                        average_entry_price=Decimal("300"),
+                        market_value=Decimal("900"),
+                    ),
+                ),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+
+    snapshot = read_model.build_command_center_snapshot()
+
+    assert snapshot.exposure_breakdown == (
+        {
+            "symbol": "SPY",
+            "value": "1000",
+            "value_status": "fresh",
+            "missing_reason": "",
+        },
+        {
+            "symbol": "QQQ",
+            "value": "900",
+            "value_status": "fresh",
+            "missing_reason": "",
+        },
+    )
+
+
+def test_flat_reconciliation_suppresses_stale_service_cycle_exposure(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp - timedelta(minutes=5),
+        cycle_id="cycle-stale-open",
+        payload_overrides={
+            "symbols": ("SPY", "QQQ"),
+            "open_position_symbols": ("SPY", "QQQ"),
+        },
+    )
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-flat",
+            portfolio_state=PortfolioState(
+                as_of_utc=timestamp,
+                cash=Decimal("100000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("400000"),
+                positions=(),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+
+    snapshot = read_model.build_command_center_snapshot()
+    heartbeat = read_model.build_runtime_heartbeat_snapshot()
+
+    assert snapshot.exposure_breakdown == ()
+    assert heartbeat.current_exposure == "Flat"
+    watchlist = {row["symbol"]: row["status"] for row in snapshot.watchlist}
+    assert watchlist["SPY"] == "monitor"
+    assert watchlist["QQQ"] == "monitor"
+
+
+def test_newer_service_cycle_overrides_stale_flat_reconciliation(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-stale-flat",
+            portfolio_state=PortfolioState(
+                as_of_utc=timestamp - timedelta(minutes=5),
+                cash=Decimal("100000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("400000"),
+                positions=(),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-newer-open",
+        payload_overrides={
+            "symbols": ("SPY",),
+            "open_position_symbols": ("SPY",),
+        },
+    )
+
+    snapshot = read_model.build_command_center_snapshot()
+    portfolio = read_model.build_portfolio_workspace_snapshot()
+
+    assert snapshot.exposure_breakdown == (
+        {
+            "symbol": "SPY",
+            "value": None,
+            "value_status": "source_missing",
+            "missing_reason": "Only open-position symbols are available; market values are missing.",
+        },
+    )
+    assert portfolio.positions_panel.positions[0].symbol == "SPY"
+    assert portfolio.positions_panel.positions[0].quantity is None
+    assert portfolio.positions_panel.positions[0].market_value is None
+    assert portfolio.positions_panel.positions[0].exposure_pct is None
+    assert portfolio.positions_panel.positions[0].quantity_status == "source_missing"
+    assert portfolio.positions_panel.positions[0].price_status == "unpriced"
+    assert portfolio.positions_panel.positions[0].exposure_status == "source_missing"
+
+
+def test_symbol_only_positions_render_null_numeric_values_with_status(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-symbol-only",
+        payload_overrides={
+            "symbols": ("SPY",),
+            "open_position_symbols": ("SPY",),
+        },
+    )
+
+    portfolio = read_model.build_portfolio_workspace_snapshot()
+    row = portfolio.positions_panel.positions[0]
+
+    assert row.symbol == "SPY"
+    assert row.quantity is None
+    assert row.market_value is None
+    assert row.exposure_pct is None
+    assert row.quantity_status == "source_missing"
+    assert row.price_status == "unpriced"
+    assert row.exposure_status == "source_missing"
+
+
+def test_runtime_heartbeat_uses_persisted_operator_cadence_override(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._operator_platform_store()._write_json(
+        "runtime_config",
+        "cadence.json",
+        {
+            "configured_cadence_seconds": 600,
+            "cadence_source": "operator_override",
+            "applies_at": "next_evaluation",
+            "updated_at_utc": timestamp.isoformat(),
+        },
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-cadence",
+    )
+
+    heartbeat = read_model.build_runtime_heartbeat_snapshot()
+
+    assert heartbeat.cadence_seconds == 300
+    assert heartbeat.cadence_label == "Every 5m"
+    assert heartbeat.configured_cadence_seconds == 600
+    assert heartbeat.running_cadence_seconds == 300
+    assert heartbeat.cadence_source == "operator_override"
+    assert heartbeat.cadence_applies_at == "next_start"
+
+    read_model._operator_platform_store()._write_json(
+        "runtime_config",
+        "running_cadence.json",
+        {
+            "running_cadence_seconds": 600,
+            "started_at_utc": timestamp.isoformat(),
+        },
+    )
+
+    running_heartbeat = read_model.build_runtime_heartbeat_snapshot()
+
+    assert running_heartbeat.cadence_seconds == 600
+    assert running_heartbeat.running_cadence_seconds == 600
+
+
+def test_session_timeline_filters_selected_trading_day_and_keeps_instants(
+    tmp_path,
+) -> None:
+    first_day = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    second_day = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, second_day)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=first_day,
+        cycle_id="cycle-first-day",
+        payload_overrides={"symbols": ("SPY",), "open_position_symbols": ()},
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=second_day,
+        cycle_id="cycle-second-day",
+        payload_overrides={"symbols": ("QQQ",), "open_position_symbols": ()},
+    )
+
+    timeline = read_model.build_session_timeline(trading_day="2026-04-17")
+
+    assert timeline.filters.trading_day == "2026-04-17"
+    assert timeline.available_trading_days == ("2026-04-18", "2026-04-17")
+    assert timeline.session.trading_day == "2026-04-17"
+    assert timeline.session.status == "missing_session_metadata"
+    assert {event.event_id for event in timeline.events} == {"cycle-first-day"}
+    event = timeline.events[0]
+    assert event.shape == "instant"
+    assert event.started_at_utc is None
+    assert event.ended_at_utc is None
+    assert event.duration_seconds is None
+
+
+def test_session_timeline_old_schedule_without_close_is_partial_not_inferred(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 18, 13, 30, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._operator_platform_store()._write_json(
+        "market_day_schedules",
+        "schedule-old.json",
+        {
+            "schedule_id": "schedule-old",
+            "trading_day": "2026-04-18",
+            "scheduled_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "launched_at_utc": "2026-04-18T13:30:00+00:00",
+            "completed_at_utc": "2026-04-18T20:01:00+00:00",
+            "status": "completed",
+            "automation_run_id": "automation-1",
+            "summary": "Historical schedule without explicit close metadata.",
+            "evidence_refs": (),
+        },
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-old-schedule",
+        payload_overrides={"symbols": ("SPY",), "open_position_symbols": ()},
+    )
+
+    timeline = read_model.build_session_timeline(trading_day="2026-04-18")
+
+    assert timeline.session.schedule_id == "schedule-old"
+    assert timeline.session.session_open_at_utc == timestamp
+    assert timeline.session.session_close_at_utc is None
+    assert timeline.session.status == "partial_session_metadata"
+    assert timeline.session.metadata_status == "session_close_missing"
+    assert "close" in timeline.session.partial_reason.lower()
+
+
+def test_session_timeline_surfaces_failed_schedule_as_failed_event(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 18, 13, 30, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._operator_platform_store()._write_json(
+        "market_day_schedules",
+        "schedule-failed.json",
+        {
+            "schedule_id": "schedule-failed",
+            "trading_day": "2026-04-18",
+            "scheduled_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_close_at_utc": "2026-04-18T20:00:00+00:00",
+            "launched_at_utc": "2026-04-18T13:31:00+00:00",
+            "completed_at_utc": "2026-04-18T13:32:00+00:00",
+            "status": "failed",
+            "automation_run_id": "",
+            "summary": "Scheduled market day failed before completion.",
+            "evidence_refs": (),
+            "exchange": "XNYS",
+            "timezone": "America/New_York",
+        },
+    )
+
+    timeline = read_model.build_session_timeline(trading_day="2026-04-18")
+
+    assert timeline.session.status == "schedule_failed"
+    assert timeline.session.metadata_status == "complete"
+    assert timeline.events[0].event_id == "schedule-failed"
+    assert timeline.events[0].event_type == "market_day_schedule"
+    assert timeline.events[0].status == "failed"
+    assert "failed before completion" in timeline.events[0].reason
+
+
+def test_session_timeline_keeps_same_day_close_artifacts_after_session_close(
+    tmp_path,
+) -> None:
+    close_time = datetime(2026, 4, 18, 20, 0, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, close_time)
+    read_model._operator_platform_store()._write_json(
+        "market_day_schedules",
+        "schedule-complete.json",
+        {
+            "schedule_id": "schedule-complete",
+            "trading_day": "2026-04-18",
+            "scheduled_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_close_at_utc": "2026-04-18T20:00:00+00:00",
+            "launched_at_utc": "2026-04-18T13:31:00+00:00",
+            "completed_at_utc": "2026-04-18T20:02:00+00:00",
+            "status": "completed",
+            "automation_run_id": "automation-1",
+            "summary": "Scheduled market day completed.",
+            "evidence_refs": (),
+            "exchange": "XNYS",
+            "timezone": "America/New_York",
+        },
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=close_time + timedelta(minutes=1),
+        cycle_id="cycle-close-digest",
+        payload_overrides={"symbols": ("SPY",), "open_position_symbols": ()},
+    )
+
+    timeline = read_model.build_session_timeline(trading_day="2026-04-18")
+
+    assert "cycle-close-digest" in {event.event_id for event in timeline.events}
+
+
+def test_session_timeline_does_not_emit_order_events_without_source_timestamp(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 18, 13, 30, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._paper_store._write_json(
+        "orders",
+        "order-without-time.json",
+        {
+            "order_id": "order-1",
+            "client_order_id": "client-1",
+            "symbol": "SPY",
+            "side": "buy",
+            "status": "filled",
+            "filled_qty": "1",
+            "filled_avg_price": "500",
+        },
+    )
+
+    timeline = read_model.build_session_timeline(trading_day="2026-04-18")
+
+    assert all(event.event_type != "order" for event in timeline.events)
+
+
+def test_session_timeline_focus_filter_defaults_to_focused_event_day(
+    tmp_path,
+) -> None:
+    first_day = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    second_day = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, second_day)
+    read_model._operator_platform_store()._write_json(
+        "market_day_schedules",
+        "schedule-newer.json",
+        {
+            "schedule_id": "schedule-newer",
+            "trading_day": "2026-04-18",
+            "scheduled_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_close_at_utc": "2026-04-18T20:00:00+00:00",
+            "launched_at_utc": "2026-04-18T13:31:00+00:00",
+            "completed_at_utc": "2026-04-18T20:02:00+00:00",
+            "status": "completed",
+            "automation_run_id": "automation-newer",
+            "summary": "Newer unrelated scheduled day.",
+            "evidence_refs": (),
+        },
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=first_day,
+        cycle_id="cycle-focused",
+        payload_overrides={"symbols": ("SPY",), "open_position_symbols": ()},
+    )
+
+    timeline = read_model.build_session_timeline(cycle_id="cycle-focused")
+
+    assert timeline.filters.trading_day == "2026-04-17"
+    assert [event.event_id for event in timeline.events] == ["cycle-focused"]
+
+
+def test_session_timeline_default_keeps_latest_schedule_only_failed_day(
+    tmp_path,
+) -> None:
+    older_event_day = datetime(2026, 4, 17, 18, 0, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, older_event_day)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=older_event_day,
+        cycle_id="cycle-older",
+        payload_overrides={"symbols": ("SPY",), "open_position_symbols": ()},
+    )
+    read_model._operator_platform_store()._write_json(
+        "market_day_schedules",
+        "schedule-newer-failed.json",
+        {
+            "schedule_id": "schedule-newer-failed",
+            "trading_day": "2026-04-18",
+            "scheduled_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_open_at_utc": "2026-04-18T13:30:00+00:00",
+            "session_close_at_utc": "2026-04-18T20:00:00+00:00",
+            "launched_at_utc": "2026-04-18T13:31:00+00:00",
+            "completed_at_utc": "2026-04-18T13:32:00+00:00",
+            "status": "failed",
+            "automation_run_id": "",
+            "summary": "Newest schedule failed.",
+            "evidence_refs": (),
+        },
+    )
+
+    timeline = read_model.build_session_timeline()
+
+    assert timeline.filters.trading_day == "2026-04-18"
+    assert timeline.session.status == "schedule_failed"
+    assert [event.event_id for event in timeline.events] == ["schedule-newer-failed"]
 
 
 def test_local_web_read_model_builds_dashboard_from_artifacts_and_docs(

@@ -582,6 +582,10 @@ class MarketDayScheduleRecord:
     automation_run_id: str
     summary: str
     evidence_refs: tuple[str, ...]
+    session_open_at_utc: datetime | None = None
+    session_close_at_utc: datetime | None = None
+    exchange: str = ""
+    timezone: str = ""
 
 
 @dataclass(frozen=True)
@@ -829,6 +833,10 @@ class RuntimeHeartbeatSnapshot:
     symbol_rows: tuple[RuntimeSymbolHeartbeatRow, ...] = ()
     decision_ladder: tuple[RuntimeDecisionLadderRow, ...] = ()
     operator_guidance: RuntimeOperatorGuidance | None = None
+    configured_cadence_seconds: int | None = None
+    running_cadence_seconds: int | None = None
+    cadence_source: str = "config"
+    cadence_applies_at: str = "next_start"
 
 
 @dataclass(frozen=True)
@@ -1093,6 +1101,56 @@ class OperatorTimelineEvent:
 
 
 @dataclass(frozen=True)
+class SessionTimelineSession:
+    trading_day: str
+    schedule_id: str
+    session_open_at_utc: datetime | None
+    session_close_at_utc: datetime | None
+    exchange: str
+    timezone: str
+    status: str
+    metadata_status: str
+    partial_reason: str
+
+
+@dataclass(frozen=True)
+class SessionTimelineEvent:
+    event_id: str
+    event_type: str
+    symbol: str
+    severity: str
+    headline: str
+    details: str
+    occurred_at_utc: datetime
+    artifact_path: str
+    related_ids: tuple[str, ...]
+    shape: str
+    started_at_utc: datetime | None
+    ended_at_utc: datetime | None
+    duration_seconds: int | None
+    status: str
+    reason: str
+    evidence_freshness: str
+    source_status: str
+
+
+@dataclass(frozen=True)
+class SessionTimelineFilters:
+    trading_day: str
+    symbol: str | None
+    cycle_id: str | None
+    incident_id: str | None
+
+
+@dataclass(frozen=True)
+class SessionTimelineResponse:
+    session: SessionTimelineSession
+    available_trading_days: tuple[str, ...]
+    events: tuple[SessionTimelineEvent, ...]
+    filters: SessionTimelineFilters
+
+
+@dataclass(frozen=True)
 class IncidentRecord:
     incident_id: str
     title: str
@@ -1189,7 +1247,7 @@ class CommandCenterSnapshot:
     session_mode: str
     account_summary: dict[str, str]
     equity_curve: tuple[dict[str, str], ...]
-    exposure_breakdown: tuple[dict[str, str], ...]
+    exposure_breakdown: tuple[dict[str, object], ...]
     watchlist: tuple[dict[str, str], ...]
     gate_statuses: dict[str, str]
     recommendations: dict[str, int]
@@ -1302,10 +1360,17 @@ class PortfolioExecutionPanel:
 @dataclass(frozen=True)
 class PortfolioPositionRow:
     symbol: str
-    quantity: str
-    market_value: str
-    exposure_pct: str
+    quantity: str | None
+    market_value: str | None
+    exposure_pct: str | None
     status: str
+    quantity_status: str = "unknown"
+    price_status: str = "unknown"
+    exposure_status: str = "unknown"
+    average_entry_price: str | None = None
+    latest_price: str | None = None
+    latest_price_at_utc: datetime | None = None
+    source_evidence_at_utc: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -1537,6 +1602,10 @@ __all__ = (
     "RuntimeDecisionSignalDetail",
     "RuntimeHeartbeatSnapshot",
     "ScalarValue",
+    "SessionTimelineEvent",
+    "SessionTimelineFilters",
+    "SessionTimelineResponse",
+    "SessionTimelineSession",
     "SessionOpenPortfolioStateRecord",
     "ServiceCycleSnapshot",
     "ServiceRunResult",

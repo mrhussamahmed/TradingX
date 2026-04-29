@@ -82,6 +82,10 @@ from tradingx.types import (
     RuntimeSymbolHeartbeatRow,
     RuntimeTruthItem,
     ScalarValue,
+    SessionTimelineEvent,
+    SessionTimelineFilters,
+    SessionTimelineResponse,
+    SessionTimelineSession,
     SleeveDailyAttributionRecord,
     StrategyActivationRecord,
     StrategyAttributionRow,
@@ -299,10 +303,20 @@ class LocalWebReadModel:
         dashboard = self.build_dashboard_snapshot()
         runtime_heartbeat = self.build_runtime_heartbeat_snapshot()
         service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
-        latest_open_positions = tuple(
-            position["symbol"] for position in dashboard.positions if position["symbol"]
+        latest_account_cycle = self._pick_latest_account_cycle(service_cycles)
+        latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
+            minimum_as_of=self._payload_timestamp(
+                latest_account_cycle, "completed_at_utc"
+            ),
         )
-        exposure_breakdown = self._build_exposure_breakdown(latest_open_positions)
+        latest_open_positions = self._latest_open_position_symbols(
+            fallback_positions=dashboard.positions,
+            latest_portfolio_state=latest_portfolio_state,
+        )
+        exposure_breakdown = self._build_exposure_breakdown(
+            latest_open_positions=latest_open_positions,
+            latest_portfolio_state=latest_portfolio_state,
+        )
         watchlist = tuple(
             {
                 "symbol": symbol,
@@ -356,6 +370,30 @@ class LocalWebReadModel:
                 }
                 for incident in incidents[:3]
             ),
+        )
+
+    def _latest_open_position_symbols(
+        self,
+        *,
+        fallback_positions: tuple[dict[str, str], ...],
+        latest_portfolio_state: dict[str, object] | None,
+    ) -> tuple[str, ...]:
+        if latest_portfolio_state is not None:
+            return tuple(
+                symbol
+                for position in self._ensure_list(
+                    latest_portfolio_state.get("positions", ())
+                )
+                if isinstance(position, Mapping)
+                and (symbol := str(position.get("symbol", "")).strip())
+                and (
+                    self._decimal_from_payload(position.get("quantity")) is None
+                    or self._decimal_from_payload(position.get("quantity"))
+                    != Decimal("0")
+                )
+            )
+        return tuple(
+            position["symbol"] for position in fallback_positions if position["symbol"]
         )
 
     def _payload_timestamp(
@@ -893,7 +931,15 @@ class LocalWebReadModel:
                 provenance=live_journal_note,
             ),
             positions_panel=self._build_portfolio_positions_panel(
-                positions=dashboard.positions,
+                positions=self._portfolio_position_inputs(
+                    fallback_positions=dashboard.positions,
+                    latest_portfolio_state=self._latest_reconciliation_portfolio_state_payload(
+                        minimum_as_of=self._payload_timestamp(
+                            self._pick_latest_account_cycle(service_cycles),
+                            "completed_at_utc",
+                        ),
+                    ),
+                ),
             ),
             diagnostics=self._build_portfolio_diagnostics(
                 runtime_state=runtime_state,
@@ -1086,7 +1132,8 @@ class LocalWebReadModel:
             and str(latest_cycle_payload.get("completed_at_utc", "")).strip()
             else None
         )
-        cadence_seconds = self._config.runtime.service_interval_seconds
+        cadence_settings = self._runtime_cadence_settings(runtime_state=runtime_state)
+        cadence_seconds = int(cadence_settings["running_cadence_seconds"])
         cadence_label = (
             f"Every {cadence_seconds // 60}m"
             if cadence_seconds % 60 == 0
@@ -1106,10 +1153,25 @@ class LocalWebReadModel:
             )
             next_evaluation_at_utc = anchor + timedelta(seconds=cadence_seconds)
 
-        current_open_symbols = tuple(
-            self._payload_strings(latest_cycle_payload.get("open_position_symbols", ()))
-            if latest_cycle_payload is not None
-            else ()
+        latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
+            minimum_as_of=self._payload_timestamp(
+                latest_cycle_payload,
+                "completed_at_utc",
+            ),
+        )
+        fallback_open_positions = tuple(
+            {"symbol": symbol}
+            for symbol in (
+                self._payload_strings(
+                    latest_cycle_payload.get("open_position_symbols", ())
+                )
+                if latest_cycle_payload is not None
+                else ()
+            )
+        )
+        current_open_symbols = self._latest_open_position_symbols(
+            fallback_positions=fallback_open_positions,
+            latest_portfolio_state=latest_portfolio_state,
         )
         pending_orders_count = self._count_pending_orders()
         positions_count = len(current_open_symbols)
@@ -1254,7 +1316,59 @@ class LocalWebReadModel:
             symbol_rows=symbol_rows,
             decision_ladder=decision_ladder,
             operator_guidance=operator_guidance,
+            configured_cadence_seconds=cadence_settings["configured_cadence_seconds"],
+            running_cadence_seconds=cadence_settings["running_cadence_seconds"],
+            cadence_source=str(cadence_settings["cadence_source"]),
+            cadence_applies_at=str(cadence_settings["cadence_applies_at"]),
         )
+
+    def _runtime_cadence_settings(
+        self,
+        *,
+        runtime_state: BotRuntimeState,
+    ) -> dict[str, object]:
+        configured = self._config.runtime.service_interval_seconds
+        running = self._config.runtime.service_interval_seconds
+        source = "config"
+        applies_at = "next_start"
+        payload_path = self._operator_platform_root / "runtime_config" / "cadence.json"
+        if payload_path.exists():
+            try:
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                override = int(payload.get("configured_cadence_seconds", configured))
+                if override > 0:
+                    configured = override
+                    source = str(payload.get("cadence_source", "operator_override"))
+                    applies_at = (
+                        "next_evaluation"
+                        if runtime_state.status
+                        in {"idle", "halted", "stopping", "error"}
+                        else "next_start"
+                    )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        if runtime_state.status in {"idle", "halted", "stopping", "error"}:
+            running = configured
+        else:
+            running_payload_path = (
+                self._operator_platform_root / "runtime_config" / "running_cadence.json"
+            )
+            if running_payload_path.exists():
+                try:
+                    running_payload = json.loads(
+                        running_payload_path.read_text(encoding="utf-8")
+                    )
+                    running = int(
+                        running_payload.get("running_cadence_seconds", running)
+                    )
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    pass
+        return {
+            "configured_cadence_seconds": configured,
+            "running_cadence_seconds": running,
+            "cadence_source": source,
+            "cadence_applies_at": applies_at,
+        }
 
     def build_runtime_decision_detail(self) -> RuntimeDecisionDetail | None:
         selection = self.get_latest_opportunity_selection()
@@ -1593,6 +1707,11 @@ class LocalWebReadModel:
                     if attribution is not None
                     else "pending"
                 )
+                attribution_date = (
+                    attribution.trading_day
+                    if attribution is not None
+                    else "unavailable"
+                )
                 rows.append(
                     PortfolioStrategyRow(
                         strategy_id=binding.sleeve_id,
@@ -1609,7 +1728,9 @@ class LocalWebReadModel:
                         win_rate="n/a",
                         max_drawdown="n/a",
                         detail=(
-                            f"Daily return {daily_return}; drift {drift_by_sleeve.get(binding.sleeve_id, 'pending')}."
+                            f"Sleeve {binding.sleeve_id}; strategy {binding.strategy_id}; "
+                            f"attribution date {attribution_date}; daily return {daily_return}; "
+                            f"drift {drift_by_sleeve.get(binding.sleeve_id, 'pending')}."
                         ),
                         drift_severity=drift_by_sleeve.get(
                             binding.sleeve_id, "pending"
@@ -1767,10 +1888,49 @@ class LocalWebReadModel:
             provenance=provenance,
         )
 
+    def _latest_reconciliation_portfolio_state_payload(
+        self,
+        *,
+        minimum_as_of: datetime | None = None,
+    ) -> dict[str, object] | None:
+        latest_payload: dict[str, object] | None = None
+        latest_timestamp: datetime | None = None
+        for payload in self._paper_store.list_artifact_payloads("reconciliation"):
+            portfolio_state = self._ensure_mapping(payload.get("portfolio_state", {}))
+            timestamp = self._payload_timestamp(portfolio_state, "as_of_utc")
+            if timestamp is None:
+                continue
+            if minimum_as_of is not None and timestamp < minimum_as_of:
+                continue
+            if latest_timestamp is None or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+                latest_payload = dict(portfolio_state)
+        return latest_payload
+
+    def _portfolio_position_inputs(
+        self,
+        *,
+        fallback_positions: tuple[dict[str, str], ...],
+        latest_portfolio_state: dict[str, object] | None,
+    ) -> tuple[dict[str, object], ...]:
+        if latest_portfolio_state is None:
+            return tuple(dict(position) for position in fallback_positions)
+        source_at = str(latest_portfolio_state.get("as_of_utc", "")).strip()
+        positions = []
+        for position in self._ensure_list(latest_portfolio_state.get("positions", ())):
+            if not isinstance(position, Mapping):
+                continue
+            row = dict(position)
+            if source_at:
+                row["source_evidence_at_utc"] = source_at
+            row["portfolio_equity"] = latest_portfolio_state.get("equity")
+            positions.append(row)
+        return tuple(positions)
+
     def _build_portfolio_positions_panel(
         self,
         *,
-        positions: tuple[dict[str, str], ...],
+        positions: tuple[dict[str, object], ...],
     ) -> PortfolioPositionsPanel:
         if not positions:
             return PortfolioPositionsPanel(
@@ -1779,22 +1939,84 @@ class LocalWebReadModel:
                 detail="The account is flat right now.",
                 positions=(),
             )
-        rows = tuple(
-            PortfolioPositionRow(
-                symbol=str(position.get("symbol", "")),
-                quantity=str(position.get("quantity", "") or "n/a"),
-                market_value=str(position.get("market_value", "") or "n/a"),
-                exposure_pct="n/a",
-                status="open",
+        rows: list[PortfolioPositionRow] = []
+        for position in positions:
+            symbol = str(position.get("symbol", "")).strip()
+            quantity = self._nullable_decimal_string(position.get("quantity"))
+            market_value = self._nullable_decimal_string(position.get("market_value"))
+            average_entry_price = self._nullable_decimal_string(
+                position.get("average_entry_price")
             )
-            for position in positions
-        )
+            latest_price = self._position_latest_price(
+                quantity=quantity,
+                market_value=market_value,
+            )
+            portfolio_equity = self._decimal_from_payload(
+                position.get("portfolio_equity")
+            )
+            market_value_decimal = self._decimal_from_payload(market_value)
+            exposure_pct = None
+            exposure_status = "source_missing"
+            if (
+                market_value_decimal is not None
+                and portfolio_equity is not None
+                and portfolio_equity > Decimal("0")
+            ):
+                exposure_pct = self._format_plain_decimal(
+                    (abs(market_value_decimal) / portfolio_equity) * Decimal("100"),
+                    decimals=2,
+                )
+                exposure_status = "fresh"
+            quantity_status = "fresh" if quantity is not None else "source_missing"
+            price_status = "fresh" if market_value is not None else "unpriced"
+            source_evidence_at = self._payload_timestamp(
+                position,
+                "source_evidence_at_utc",
+            )
+            rows.append(
+                PortfolioPositionRow(
+                    symbol=symbol,
+                    quantity=quantity,
+                    market_value=market_value,
+                    exposure_pct=exposure_pct,
+                    status=("missing_price" if market_value is None else "open"),
+                    quantity_status=quantity_status,
+                    price_status=price_status,
+                    exposure_status=exposure_status,
+                    average_entry_price=average_entry_price,
+                    latest_price=latest_price,
+                    latest_price_at_utc=source_evidence_at,
+                    source_evidence_at_utc=source_evidence_at,
+                )
+            )
         return PortfolioPositionsPanel(
             status="available",
             headline="Open positions are available",
             detail="These are the current positions reported by the latest account snapshot.",
-            positions=rows,
+            positions=tuple(rows),
         )
+
+    def _nullable_decimal_string(self, value: object) -> str | None:
+        decimal_value = self._decimal_from_payload(value)
+        if decimal_value is None:
+            return None
+        return str(decimal_value)
+
+    def _position_latest_price(
+        self,
+        *,
+        quantity: str | None,
+        market_value: str | None,
+    ) -> str | None:
+        quantity_decimal = self._decimal_from_payload(quantity)
+        market_value_decimal = self._decimal_from_payload(market_value)
+        if (
+            quantity_decimal is None
+            or quantity_decimal == Decimal("0")
+            or market_value_decimal is None
+        ):
+            return None
+        return str((market_value_decimal / quantity_decimal).quantize(Decimal("0.01")))
 
     def _build_portfolio_diagnostics(
         self,
@@ -2905,6 +3127,260 @@ class LocalWebReadModel:
             ]
         return tuple(sorted(events, key=lambda item: item.occurred_at_utc))
 
+    def build_session_timeline(
+        self,
+        *,
+        trading_day: str | None = None,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> SessionTimelineResponse:
+        all_events = self.list_timeline_events(
+            symbol=symbol,
+            cycle_id=cycle_id,
+            incident_id=incident_id,
+        )
+        available_trading_days = self._available_session_timeline_days(all_events)
+        filtered_event_days = tuple(
+            sorted(
+                {event.occurred_at_utc.date().isoformat() for event in all_events},
+                reverse=True,
+            )
+        )
+        should_default_to_event_day = cycle_id is not None or incident_id is not None
+        selected_trading_day = trading_day or (
+            filtered_event_days[0]
+            if should_default_to_event_day and filtered_event_days
+            else (
+                available_trading_days[0]
+                if available_trading_days
+                else datetime.now(UTC).date().isoformat()
+            )
+        )
+        session = self._session_timeline_session(selected_trading_day)
+        schedule_payload = self._session_timeline_schedule_payload(selected_trading_day)
+        filtered_events = [
+            self._session_timeline_event(event)
+            for event in all_events
+            if self._event_belongs_to_trading_day(event, session)
+        ]
+        schedule_event = self._session_schedule_timeline_event(schedule_payload)
+        if schedule_event is not None and self._schedule_event_matches_filters(
+            schedule_event,
+            cycle_id=cycle_id,
+            incident_id=incident_id,
+        ):
+            filtered_events.insert(0, schedule_event)
+        return SessionTimelineResponse(
+            session=session,
+            available_trading_days=available_trading_days,
+            events=tuple(filtered_events),
+            filters=SessionTimelineFilters(
+                trading_day=selected_trading_day,
+                symbol=symbol,
+                cycle_id=cycle_id,
+                incident_id=incident_id,
+            ),
+        )
+
+    def _available_session_timeline_days(
+        self,
+        events: tuple[OperatorTimelineEvent, ...],
+    ) -> tuple[str, ...]:
+        days = {event.occurred_at_utc.date().isoformat() for event in events}
+        days.update(
+            str(payload.get("trading_day", "")).strip()
+            for payload in self._operator_platform_store().list_artifact_payloads(
+                "market_day_schedules"
+            )
+            if str(payload.get("trading_day", "")).strip()
+        )
+        return tuple(sorted(days, reverse=True))
+
+    def _session_timeline_session(self, trading_day: str) -> SessionTimelineSession:
+        schedule_payload = self._session_timeline_schedule_payload(trading_day)
+        if schedule_payload is None:
+            return SessionTimelineSession(
+                trading_day=trading_day,
+                schedule_id="",
+                session_open_at_utc=None,
+                session_close_at_utc=None,
+                exchange="",
+                timezone="",
+                status="missing_session_metadata",
+                metadata_status="schedule_missing",
+                partial_reason=(
+                    "No market-day schedule metadata was found for this trading day."
+                ),
+            )
+
+        explicit_open = self._payload_timestamp(schedule_payload, "session_open_at_utc")
+        scheduled_open = self._payload_timestamp(
+            schedule_payload,
+            "scheduled_open_at_utc",
+        )
+        session_open = explicit_open or scheduled_open
+        session_close = self._payload_timestamp(
+            schedule_payload, "session_close_at_utc"
+        )
+        if session_close is None:
+            return SessionTimelineSession(
+                trading_day=trading_day,
+                schedule_id=str(schedule_payload.get("schedule_id", "")),
+                session_open_at_utc=session_open,
+                session_close_at_utc=None,
+                exchange=str(schedule_payload.get("exchange", "")),
+                timezone=str(schedule_payload.get("timezone", "")),
+                status="partial_session_metadata",
+                metadata_status="session_close_missing",
+                partial_reason=(
+                    "Historical schedule lacks session_close_at_utc; close was not inferred."
+                ),
+            )
+        schedule_status = str(schedule_payload.get("status", "")).strip().lower()
+        return SessionTimelineSession(
+            trading_day=trading_day,
+            schedule_id=str(schedule_payload.get("schedule_id", "")),
+            session_open_at_utc=session_open,
+            session_close_at_utc=session_close,
+            exchange=str(schedule_payload.get("exchange", "")),
+            timezone=str(schedule_payload.get("timezone", "")),
+            status=(
+                "schedule_failed"
+                if schedule_status == "failed"
+                else "complete_session_metadata"
+            ),
+            metadata_status="complete",
+            partial_reason="",
+        )
+
+    def _session_timeline_schedule_payload(
+        self,
+        trading_day: str,
+    ) -> Mapping[str, object] | None:
+        payloads = [
+            self._ensure_mapping(payload)
+            for payload in self._operator_platform_store().list_artifact_payloads(
+                "market_day_schedules"
+            )
+            if str(payload.get("trading_day", "")).strip() == trading_day
+        ]
+        if not payloads:
+            return None
+        return max(payloads, key=lambda item: str(item.get("launched_at_utc", "")))
+
+    def _event_belongs_to_trading_day(
+        self,
+        event: OperatorTimelineEvent,
+        session: SessionTimelineSession,
+    ) -> bool:
+        if (
+            session.session_open_at_utc is not None
+            and session.session_close_at_utc is not None
+            and session.session_open_at_utc
+            <= event.occurred_at_utc
+            <= session.session_close_at_utc
+        ):
+            return True
+        return event.occurred_at_utc.date().isoformat() == session.trading_day
+
+    def _session_schedule_timeline_event(
+        self,
+        schedule_payload: Mapping[str, object] | None,
+    ) -> SessionTimelineEvent | None:
+        if schedule_payload is None:
+            return None
+        schedule_id = str(schedule_payload.get("schedule_id", "")).strip()
+        if not schedule_id:
+            return None
+        occurred_at = self._payload_timestamp(
+            schedule_payload,
+            "completed_at_utc",
+            "launched_at_utc",
+            "scheduled_open_at_utc",
+        )
+        if occurred_at is None:
+            return None
+        status = str(schedule_payload.get("status", "")).strip() or "unknown"
+        summary = str(schedule_payload.get("summary", "")).strip()
+        return SessionTimelineEvent(
+            event_id=schedule_id,
+            event_type="market_day_schedule",
+            symbol="",
+            severity=("warning" if status == "failed" else "info"),
+            headline=f"Market-day schedule {status}",
+            details=summary,
+            occurred_at_utc=occurred_at,
+            artifact_path=str(
+                self._config.runtime.artifact_root
+                / "operator_platform"
+                / "market_day_schedules"
+                / f"{schedule_id}.json"
+            ),
+            related_ids=tuple(
+                item
+                for item in (
+                    schedule_id,
+                    str(schedule_payload.get("automation_run_id", "")).strip(),
+                )
+                if item
+            ),
+            shape="instant",
+            started_at_utc=None,
+            ended_at_utc=None,
+            duration_seconds=None,
+            status=status,
+            reason=summary,
+            evidence_freshness="source_timestamp",
+            source_status="authoritative_instant",
+        )
+
+    def _schedule_event_matches_filters(
+        self,
+        event: SessionTimelineEvent,
+        *,
+        cycle_id: str | None,
+        incident_id: str | None,
+    ) -> bool:
+        focus_ids = tuple(item for item in (cycle_id, incident_id) if item)
+        if not focus_ids:
+            return True
+        event_ids = {event.event_id, *event.related_ids}
+        return any(focus_id in event_ids for focus_id in focus_ids)
+
+    def _session_timeline_event(
+        self,
+        event: OperatorTimelineEvent,
+    ) -> SessionTimelineEvent:
+        return SessionTimelineEvent(
+            event_id=event.event_id,
+            event_type=event.event_type,
+            symbol=event.symbol,
+            severity=event.severity,
+            headline=event.headline,
+            details=event.details,
+            occurred_at_utc=event.occurred_at_utc,
+            artifact_path=event.artifact_path,
+            related_ids=event.related_ids,
+            shape="instant",
+            started_at_utc=None,
+            ended_at_utc=None,
+            duration_seconds=None,
+            status=self._session_timeline_event_status(event),
+            reason=event.details,
+            evidence_freshness="source_timestamp",
+            source_status="authoritative_instant",
+        )
+
+    def _session_timeline_event_status(self, event: OperatorTimelineEvent) -> str:
+        if event.severity in {"critical", "error", "warning"}:
+            return event.severity
+        if "failed" in event.details.lower():
+            return "failed"
+        if "blocked" in event.details.lower():
+            return "blocked"
+        return "completed"
+
     def list_incidents(self) -> tuple[IncidentRecord, ...]:
         acknowledgements = self._incident_ack_map()
         incidents: list[IncidentRecord] = []
@@ -3186,6 +3662,16 @@ class LocalWebReadModel:
             automation_run_id=str(payload.get("automation_run_id", "")),
             summary=str(payload.get("summary", "")),
             evidence_refs=self._payload_strings(payload.get("evidence_refs", ())),
+            session_open_at_utc=self._payload_timestamp(
+                payload,
+                "session_open_at_utc",
+            ),
+            session_close_at_utc=self._payload_timestamp(
+                payload,
+                "session_close_at_utc",
+            ),
+            exchange=str(payload.get("exchange", "")),
+            timezone=str(payload.get("timezone", "")),
         )
 
     def build_gate3_readiness(self) -> Gate3ReadinessReport:
@@ -3473,14 +3959,54 @@ class LocalWebReadModel:
 
     def _build_exposure_breakdown(
         self,
+        *,
         latest_open_positions: tuple[str, ...],
-    ) -> tuple[dict[str, str], ...]:
+        latest_portfolio_state: dict[str, object] | None = None,
+    ) -> tuple[dict[str, object], ...]:
         if not latest_open_positions:
             return ()
-        share = max(1, round(100 / len(latest_open_positions)))
-        return tuple(
-            {"symbol": symbol, "value": str(share)} for symbol in latest_open_positions
-        )
+        positions_by_symbol: dict[str, Mapping[str, object]] = {}
+        if latest_portfolio_state is not None:
+            for position in self._ensure_list(
+                latest_portfolio_state.get("positions", ())
+            ):
+                if isinstance(position, Mapping):
+                    symbol = str(position.get("symbol", "")).strip()
+                    if symbol:
+                        positions_by_symbol[symbol] = position
+        rows: list[dict[str, object]] = []
+        for symbol in latest_open_positions:
+            position = positions_by_symbol.get(symbol)
+            market_value = (
+                self._decimal_from_payload(position.get("market_value"))
+                if position is not None
+                else None
+            )
+            if market_value is None:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "value": None,
+                        "value_status": (
+                            "unpriced" if position is not None else "source_missing"
+                        ),
+                        "missing_reason": (
+                            "Position market value is missing."
+                            if position is not None
+                            else "Only open-position symbols are available; market values are missing."
+                        ),
+                    }
+                )
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "value": str(market_value),
+                    "value_status": "fresh",
+                    "missing_reason": "",
+                }
+            )
+        return tuple(rows)
 
     def _parse_datetime(self, raw_value: str) -> datetime:
         if not raw_value:
@@ -3581,6 +4107,15 @@ class LocalWebReadModel:
             order_id = str(payload.get("order_id", ""))
             symbol = str(payload.get("symbol", ""))
             client_order_id = str(payload.get("client_order_id", ""))
+            occurred_at = self._payload_timestamp(
+                payload,
+                "submitted_at_utc",
+                "filled_at_utc",
+                "recorded_at_utc",
+                "updated_at_utc",
+            )
+            if occurred_at is None:
+                continue
             events.append(
                 OperatorTimelineEvent(
                     event_id=order_id or client_order_id,
@@ -3589,7 +4124,7 @@ class LocalWebReadModel:
                     severity="info",
                     headline=f"Order for {symbol}",
                     details=f"Status: {payload.get('status', '')}.",
-                    occurred_at_utc=datetime.now(UTC),
+                    occurred_at_utc=occurred_at,
                     artifact_path=str(
                         self._config.runtime.artifact_root / "paper_loop" / "orders"
                     ),

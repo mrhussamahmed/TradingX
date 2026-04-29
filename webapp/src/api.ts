@@ -29,6 +29,7 @@ import type {
   ResearchStudioSnapshot,
   RuntimeHeartbeatSnapshot,
   RuntimeDecisionDetail,
+  SessionTimelineResponse,
   StrategyActivationRecord,
 } from './types'
 
@@ -233,6 +234,31 @@ export function getReplay(params: {
   return request<ReplaySession>(`/api/platform/replay?${query.toString()}`)
 }
 
+export function getSessionTimeline(params: {
+  trading_day?: string
+  symbol?: string
+  cycle_id?: string
+  incident_id?: string
+}) {
+  const query = new URLSearchParams()
+  if (params.trading_day) {
+    query.set('trading_day', params.trading_day)
+  }
+  if (params.symbol) {
+    query.set('symbol', params.symbol)
+  }
+  if (params.cycle_id) {
+    query.set('cycle_id', params.cycle_id)
+  }
+  if (params.incident_id) {
+    query.set('incident_id', params.incident_id)
+  }
+  const suffix = query.toString()
+  return request<SessionTimelineResponse>(
+    `/api/platform/session-timeline${suffix ? `?${suffix}` : ''}`,
+  )
+}
+
 export function getExplorer(params: { query?: string; category?: string }) {
   const query = new URLSearchParams()
   if (params.query) {
@@ -334,6 +360,13 @@ export type RuntimeSizingPolicyPayload = {
 export function postRuntimeHostStop() {
   return request<ActionResult>('/api/actions/runtime-host/stop', {
     method: 'POST',
+  })
+}
+
+export function postRuntimeHostCadence(cadence_seconds: number) {
+  return request<ActionResult>('/api/actions/runtime-host/cadence', {
+    method: 'POST',
+    body: JSON.stringify({ cadence_seconds }),
   })
 }
 

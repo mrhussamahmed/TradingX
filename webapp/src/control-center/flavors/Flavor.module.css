@@ -359,6 +359,77 @@
 .timelineEventWatch { background: rgba(255, 174, 47, 0.14); border-color: rgba(255, 174, 47, 0.5); color: var(--watch); }
 .timelineEventRisk { background: rgba(255, 51, 71, 0.14); border-color: rgba(255, 51, 71, 0.5); color: var(--risk); }
 .timelineEventPending { border-style: dashed; color: var(--text-muted); }
+.timelineControls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.timelineInfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  padding: 7px 8px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-raised);
+}
+.timelineWarning {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 174, 47, 0.4);
+  color: var(--watch);
+  background: rgba(255, 174, 47, 0.08);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+.timelineLegend {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.timelineLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.timelineLegend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.sessionTimelineScroller {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+}
+.sessionTimelineEvent {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  min-width: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;
+  background: var(--bg-panel-raised);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: help;
+}
+.sessionTimelineEvent small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+}
 .nowMarker {
   position: absolute;
   top: 0;

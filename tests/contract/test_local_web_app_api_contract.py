@@ -44,6 +44,10 @@ from tradingx.types import (
     RuntimeOperatorGuidance,
     RuntimeSymbolHeartbeatRow,
     RuntimeTruthItem,
+    SessionTimelineEvent,
+    SessionTimelineFilters,
+    SessionTimelineResponse,
+    SessionTimelineSession,
     StrategyActivationRecord,
     WebActionResult,
     WebServiceState,
@@ -274,6 +278,56 @@ class FakeReadModel:
                 or event["event_id"] == incident_id
             )
         return filtered
+
+    def build_session_timeline(
+        self,
+        *,
+        trading_day: str | None = None,
+        symbol: str | None = None,
+        cycle_id: str | None = None,
+        incident_id: str | None = None,
+    ) -> SessionTimelineResponse:
+        timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
+        event = SessionTimelineEvent(
+            event_id="event-1",
+            event_type="service_cycle",
+            symbol="SPY",
+            severity="info",
+            headline="Evaluation cycle completed",
+            details="TradingX completed a paper evaluation cycle.",
+            occurred_at_utc=timestamp,
+            artifact_path="artifacts/paper_loop/service_cycles/cycle-1.json",
+            related_ids=("cycle-1", "incident-alert-1"),
+            shape="instant",
+            started_at_utc=None,
+            ended_at_utc=None,
+            duration_seconds=None,
+            status="completed",
+            reason="TradingX completed a paper evaluation cycle.",
+            evidence_freshness="source_timestamp",
+            source_status="authoritative_instant",
+        )
+        return SessionTimelineResponse(
+            session=SessionTimelineSession(
+                trading_day=trading_day or "2026-04-18",
+                schedule_id="schedule-1",
+                session_open_at_utc=timestamp,
+                session_close_at_utc=None,
+                exchange="",
+                timezone="",
+                status="partial_session_metadata",
+                metadata_status="session_close_missing",
+                partial_reason="Historical schedule lacks session_close_at_utc; close was not inferred.",
+            ),
+            available_trading_days=("2026-04-18",),
+            events=(event,),
+            filters=SessionTimelineFilters(
+                trading_day=trading_day or "2026-04-18",
+                symbol=symbol,
+                cycle_id=cycle_id,
+                incident_id=incident_id,
+            ),
+        )
 
     def list_incidents(self) -> tuple[IncidentRecord, ...]:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
@@ -853,6 +907,15 @@ class FakeActionRunner:
             evidence_refs=(),
         )
 
+    def set_runtime_cadence(self, *, cadence_seconds: int) -> WebActionResult:
+        return WebActionResult(
+            action_id="action-runtime-cadence",
+            action_type="runtime_cadence_update",
+            status="completed",
+            message=f"Runtime cadence set to {cadence_seconds} seconds.",
+            evidence_refs=(),
+        )
+
     def run_paper_loop(self, *, symbol: str, quantity: str) -> WebActionResult:
         return WebActionResult(
             action_id="action-1",
@@ -1051,6 +1114,10 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
     gate3 = client.get("/api/platform/gate3/readiness")
     gate3_package = client.get("/api/platform/gate3/promotions/latest")
     research = client.get("/api/platform/research")
+    timeline = client.get("/api/platform/timeline?symbol=SPY")
+    session_timeline = client.get(
+        "/api/platform/session-timeline?trading_day=2026-04-18&symbol=SPY"
+    )
     replay = client.get("/api/platform/replay?symbol=SPY")
     explorer = client.get("/api/platform/explorer?query=Gate")
     digest = client.get("/api/platform/digests/latest")
@@ -1101,6 +1168,14 @@ def test_local_web_app_exposes_dashboard_and_document_endpoints() -> None:
         research.json()["candidate_summaries"][0]["candidate_id"]
         == "trend-following-v1"
     )
+    assert timeline.status_code == 200
+    assert isinstance(timeline.json(), list)
+    assert timeline.json()[0]["event_id"] == "event-1"
+    assert session_timeline.status_code == 200
+    assert session_timeline.json()["filters"]["trading_day"] == "2026-04-18"
+    assert session_timeline.json()["session"]["status"] == "partial_session_metadata"
+    assert session_timeline.json()["session"]["session_close_at_utc"] is None
+    assert session_timeline.json()["events"][0]["shape"] == "instant"
     assert replay.status_code == 200
     assert replay.json()["focus_value"] == "SPY"
     assert explorer.status_code == 200
