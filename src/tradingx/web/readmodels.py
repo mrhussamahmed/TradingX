@@ -306,7 +306,9 @@ class LocalWebReadModel:
         latest_account_cycle = self._pick_latest_account_cycle(service_cycles)
         latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
             minimum_as_of=self._payload_timestamp(
-                latest_account_cycle, "completed_at_utc"
+                latest_account_cycle,
+                "started_at_utc",
+                "completed_at_utc",
             ),
         )
         latest_open_positions = self._latest_open_position_symbols(
@@ -936,6 +938,7 @@ class LocalWebReadModel:
                     latest_portfolio_state=self._latest_reconciliation_portfolio_state_payload(
                         minimum_as_of=self._payload_timestamp(
                             self._pick_latest_account_cycle(service_cycles),
+                            "started_at_utc",
                             "completed_at_utc",
                         ),
                     ),
@@ -1156,6 +1159,7 @@ class LocalWebReadModel:
         latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
             minimum_as_of=self._payload_timestamp(
                 latest_cycle_payload,
+                "started_at_utc",
                 "completed_at_utc",
             ),
         )
@@ -1339,12 +1343,7 @@ class LocalWebReadModel:
                 if override > 0:
                     configured = override
                     source = str(payload.get("cadence_source", "operator_override"))
-                    applies_at = (
-                        "next_evaluation"
-                        if runtime_state.status
-                        in {"idle", "halted", "stopping", "error"}
-                        else "next_start"
-                    )
+                    applies_at = "next_start"
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 pass
         if runtime_state.status in {"idle", "halted", "stopping", "error"}:
@@ -1363,6 +1362,12 @@ class LocalWebReadModel:
                     )
                 except (OSError, ValueError, TypeError, json.JSONDecodeError):
                     pass
+        if (
+            runtime_state.status not in {"idle", "halted", "stopping", "error"}
+            and source == "operator_override"
+            and running == configured
+        ):
+            applies_at = "current_run"
         return {
             "configured_cadence_seconds": configured,
             "running_cadence_seconds": running,
@@ -1380,10 +1385,26 @@ class LocalWebReadModel:
             self._paper_store.list_artifact_payloads("service_cycles"),
             timestamp_field="completed_at_utc",
         )
-        current_open_symbols = tuple(
-            self._payload_strings(latest_cycle_payload.get("open_position_symbols", ()))
-            if latest_cycle_payload is not None
-            else ()
+        latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
+            minimum_as_of=self._payload_timestamp(
+                latest_cycle_payload,
+                "started_at_utc",
+                "completed_at_utc",
+            ),
+        )
+        fallback_open_positions = tuple(
+            {"symbol": symbol}
+            for symbol in (
+                self._payload_strings(
+                    latest_cycle_payload.get("open_position_symbols", ())
+                )
+                if latest_cycle_payload is not None
+                else ()
+            )
+        )
+        current_open_symbols = self._latest_open_position_symbols(
+            fallback_positions=fallback_open_positions,
+            latest_portfolio_state=latest_portfolio_state,
         )
         positions_count = len(current_open_symbols)
         current_exposure = (

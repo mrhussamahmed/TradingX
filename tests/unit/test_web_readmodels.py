@@ -382,6 +382,53 @@ def test_command_center_uses_reconciliation_positions_for_exposure(
     )
 
 
+def test_same_cycle_reconciliation_before_cycle_completion_is_used_for_exposure(
+    tmp_path,
+) -> None:
+    started_at = datetime(2026, 4, 28, 19, 40, tzinfo=UTC)
+    completed_at = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    reconciliation_at = datetime(2026, 4, 28, 19, 42, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, completed_at)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=completed_at,
+        cycle_id="cycle-same-source",
+        payload_overrides={
+            "started_at_utc": started_at.isoformat(),
+            "open_position_symbols": ("SPY",),
+        },
+    )
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-same-cycle",
+            portfolio_state=PortfolioState(
+                as_of_utc=reconciliation_at,
+                cash=Decimal("99000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("390000"),
+                positions=(
+                    PositionSnapshot(
+                        symbol="SPY",
+                        quantity=Decimal("2"),
+                        average_entry_price=Decimal("500"),
+                        market_value=Decimal("1000"),
+                    ),
+                ),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+
+    command_center = read_model.build_command_center_snapshot()
+    portfolio = read_model.build_portfolio_workspace_snapshot()
+
+    assert command_center.exposure_breakdown[0]["value"] == "1000"
+    assert portfolio.positions_panel.positions[0].market_value == "1000"
+
+
 def test_flat_reconciliation_suppresses_stale_service_cycle_exposure(
     tmp_path,
 ) -> None:
@@ -544,6 +591,7 @@ def test_runtime_heartbeat_uses_persisted_operator_cadence_override(
 
     assert running_heartbeat.cadence_seconds == 600
     assert running_heartbeat.running_cadence_seconds == 600
+    assert running_heartbeat.cadence_applies_at == "current_run"
 
 
 def test_session_timeline_filters_selected_trading_day_and_keeps_instants(
@@ -2262,6 +2310,32 @@ def test_runtime_decision_detail_uses_selection_timestamp_and_selected_score(
             decision_reason="SPY cleared the threshold.",
         )
     )
+    paper_store = FilesystemArtifactStore(tmp_path / "artifacts" / "paper_loop")
+    _write_service_cycle(
+        paper_store,
+        timestamp=timestamp,
+        cycle_id="cycle-stale-open",
+        payload_overrides={
+            "symbols": ("SPY",),
+            "open_position_symbols": ("SPY",),
+        },
+    )
+    paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-flat",
+            portfolio_state=PortfolioState(
+                as_of_utc=timestamp,
+                cash=Decimal("100000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("400000"),
+                positions=(),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
 
     detail = _minimal_read_model(tmp_path, timestamp).build_runtime_decision_detail()
 
@@ -2273,6 +2347,7 @@ def test_runtime_decision_detail_uses_selection_timestamp_and_selected_score(
     assert detail.signal.final_score == Decimal("0.75")
     assert detail.risk.threshold == Decimal("0.50")
     assert detail.risk.threshold_gap == Decimal("0.25")
+    assert detail.execution.current_exposure == "Flat"
     assert detail.freshness.decision_source_at_utc == timestamp
 
 
