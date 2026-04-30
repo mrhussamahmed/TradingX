@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Info } from 'lucide-react'
 
 import { formatTimestamp, prettyLabel } from '../../platform/format'
@@ -34,6 +35,7 @@ export function SessionTimelineChart({
   onTradingDayChange,
   emptyStateMessage,
 }: Props) {
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null)
   const events = timeline.events
   const lanes = Array.from(new Set(events.map((event) => event.event_type || 'event')))
   const colorByType = new Map(lanes.map((lane, index) => [lane, EVENT_COLORS[index % EVENT_COLORS.length]]))
@@ -123,6 +125,7 @@ export function SessionTimelineChart({
             <div className={styles.sessionTimelineScroller}>
               <div className={styles.timelineWrap} style={{ minWidth: 1040 }}>
                 <div className={styles.timelineLanes}>
+                  <div className={styles.timelineLaneHeader} aria-hidden />
                   {lanes.map((lane) => (
                     <div key={lane} className={styles.timelineLaneLabel}>
                       {prettyLabel(lane)}
@@ -150,6 +153,8 @@ export function SessionTimelineChart({
                             event={event}
                             bounds={bounds}
                             color={colorByType.get(lane) ?? EVENT_COLORS[0]}
+                            onShowTooltip={setTooltip}
+                            onHideTooltip={() => setTooltip(null)}
                           />
                         ))}
                         {renderedLane.clusters.map((cluster) => (
@@ -158,6 +163,8 @@ export function SessionTimelineChart({
                             cluster={cluster}
                             bounds={bounds}
                             color={colorByType.get(lane) ?? EVENT_COLORS[0]}
+                            onShowTooltip={setTooltip}
+                            onHideTooltip={() => setTooltip(null)}
                           />
                         ))}
                       </div>
@@ -166,6 +173,15 @@ export function SessionTimelineChart({
                 </div>
               </div>
             </div>
+            {tooltip ? (
+              <div
+                className={styles.sessionTimelineTooltip}
+                style={{ left: tooltip.x, top: tooltip.y }}
+                role="tooltip"
+              >
+                {tooltip.text}
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -193,10 +209,14 @@ function TimelineCluster({
   cluster,
   bounds,
   color,
+  onShowTooltip,
+  onHideTooltip,
 }: {
   cluster: TimelineEventCluster
   bounds: TimelineBounds
   color: string
+  onShowTooltip: (tooltip: { text: string; x: number; y: number }) => void
+  onHideTooltip: () => void
 }) {
   const leftPct = clamp(((cluster.start - bounds.start) / bounds.span) * 100, 0, 100)
   const widthPct = Math.max(0.7, ((cluster.end - cluster.start) / bounds.span) * 100)
@@ -206,6 +226,7 @@ function TimelineCluster({
     <button
       type="button"
       className={`${styles.sessionTimelineCluster} ${isSingle ? styles.sessionTimelineSingleInstant : ''}`}
+      data-tooltip={tooltip}
       style={{
         left: `${leftPct}%`,
         width: `${Math.min(widthPct, 8)}%`,
@@ -213,6 +234,16 @@ function TimelineCluster({
         backgroundColor: color,
       }}
       title={tooltip}
+      onMouseEnter={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect()
+        onShowTooltip({ text: tooltip, x: rect.left + rect.width / 2, y: rect.top - 10 })
+      }}
+      onMouseLeave={onHideTooltip}
+      onFocus={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect()
+        onShowTooltip({ text: tooltip, x: rect.left + rect.width / 2, y: rect.top - 10 })
+      }}
+      onBlur={onHideTooltip}
       aria-label={`${prettyLabel(cluster.eventType)} ${isSingle ? cluster.events[0].headline : `${cluster.events.length} events`}`}
     >
       <span>{isSingle ? instantLabel(cluster.events[0]) : cluster.events.length}</span>
@@ -224,10 +255,14 @@ function TimelineBar({
   event,
   bounds,
   color,
+  onShowTooltip,
+  onHideTooltip,
 }: {
   event: SessionTimelineEvent
   bounds: TimelineBounds
   color: string
+  onShowTooltip: (tooltip: { text: string; x: number; y: number }) => void
+  onHideTooltip: () => void
 }) {
   const startTime = eventTime(event, 'start')
   const endTime = eventTime(event, 'end')
@@ -240,6 +275,7 @@ function TimelineBar({
     <button
       type="button"
       className={styles.sessionTimelineEvent}
+      data-tooltip={tooltip}
       style={{
         left: `${leftPct}%`,
         width: `${safeWidth}%`,
@@ -248,6 +284,16 @@ function TimelineBar({
         color,
       }}
       title={tooltip}
+      onMouseEnter={(mouseEvent) => {
+        const rect = mouseEvent.currentTarget.getBoundingClientRect()
+        onShowTooltip({ text: tooltip, x: rect.left + rect.width / 2, y: rect.top - 10 })
+      }}
+      onMouseLeave={onHideTooltip}
+      onFocus={(focusEvent) => {
+        const rect = focusEvent.currentTarget.getBoundingClientRect()
+        onShowTooltip({ text: tooltip, x: rect.left + rect.width / 2, y: rect.top - 10 })
+      }}
+      onBlur={onHideTooltip}
       aria-label={`${prettyLabel(event.event_type)} ${event.headline}`}
     >
       <span>{event.symbol || prettyLabel(event.event_type)}</span>

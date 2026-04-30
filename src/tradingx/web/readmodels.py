@@ -951,7 +951,7 @@ class LocalWebReadModel:
                     if has_rehearsal_baseline
                     else ""
                 )
-                + "Benchmark comparison and strategy attribution stay hidden until TradingX records real portfolio history."
+                + "Benchmark and strategy attribution panels disclose missing sources instead of hiding unavailable values."
             ),
             source_notes=source_notes,
             metric_cards=metric_cards,
@@ -1766,9 +1766,12 @@ class LocalWebReadModel:
                     portfolio_return=self._format_percent(
                         portfolio_return, signed=True
                     ),
-                    benchmark_return="n/a",
-                    excess_return="n/a",
-                    detail="Prepare or refresh benchmark data to unlock a trustworthy comparison.",
+                    benchmark_return="source missing",
+                    excess_return="source missing",
+                    detail=(
+                        "Portfolio return is source-backed, but no aligned S&P 500 benchmark price series "
+                        "was found for the same window."
+                    ),
                 ),
             ),
         )
@@ -1851,26 +1854,81 @@ class LocalWebReadModel:
                 ),
                 strategies=(),
             )
+        active_strategy_id = runtime_state.active_strategy_id or "unknown"
+        approved_strategy_ids = self._approved_strategy_ids()
+        inactive_strategy_rows = tuple(
+            PortfolioStrategyRow(
+                strategy_id=strategy_id,
+                label=strategy_id.replace("-", " ").title(),
+                status="configured_not_active",
+                pnl="not active",
+                trade_count="0",
+                win_rate="not active",
+                max_drawdown="not active",
+                detail=(
+                    "Approved strategy config exists, but no active blueprint binding assigns it to the "
+                    "running portfolio."
+                ),
+                drift_severity="pending",
+            )
+            for strategy_id in approved_strategy_ids
+            if strategy_id != active_strategy_id
+        )
         return PortfolioStrategyPanel(
             status="partial",
             headline="Strategy attribution is partially available",
-            detail="Closed trades exist, but richer realized P&L breakdowns are still limited.",
+            detail=(
+                "Closed trades exist, but no active blueprint activation was found. The active runtime "
+                "strategy is shown separately from approved-but-inactive strategy configs."
+            ),
             strategies=(
                 PortfolioStrategyRow(
-                    strategy_id=runtime_state.active_strategy_id or "unknown",
-                    label=(runtime_state.active_strategy_id or "Runtime strategy")
+                    strategy_id=active_strategy_id,
+                    label=(active_strategy_id or "Runtime strategy")
                     .replace("-", " ")
                     .title(),
                     status=runtime_state.status,
-                    pnl="n/a",
+                    pnl="source missing",
                     trade_count=str(len(closed_trades)),
-                    win_rate="n/a",
-                    max_drawdown="n/a",
-                    detail="Only closed-trade count is available right now.",
+                    win_rate="source missing",
+                    max_drawdown="source missing",
+                    detail=(
+                        "Only closed-trade count is available; realized P&L and win/loss attribution "
+                        "are not present in the current closed-trade records."
+                    ),
                     drift_severity="pending",
                 ),
-            ),
+            )
+            + inactive_strategy_rows,
         )
+
+    def _approved_strategy_ids(self) -> tuple[str, ...]:
+        weights_root = self._repo_root / "config" / "strategy" / "weights"
+        if not weights_root.exists():
+            return ()
+        strategy_ids: list[str] = []
+        for path in sorted(weights_root.glob("*.yaml")):
+            payload = self._parse_simple_yaml(path)
+            strategy_id = str(payload.get("strategy_id", "")).strip()
+            status = str(payload.get("status", "")).strip().lower()
+            if strategy_id and status == "approved":
+                strategy_ids.append(strategy_id)
+        return tuple(strategy_ids)
+
+    def _parse_simple_yaml(self, path: Path) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#") or ":" not in stripped:
+                    continue
+                key, _, value = stripped.partition(":")
+                if raw_line.startswith(" ") or not value.strip():
+                    continue
+                payload[key.strip()] = value.strip()
+        except OSError:
+            return {}
+        return payload
 
     def _latest_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
         records = self._operator_platform_store().list_blueprint_activation_records()

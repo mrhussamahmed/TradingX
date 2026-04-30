@@ -121,6 +121,9 @@ export type PortfolioStrategyPanel = {
   headline: string
   detail: string
   strategies: PortfolioStrategyRow[]
+  active_blueprint_id?: string | null
+  constituent_sleeve_ids?: string[]
+  narrowing_notice?: string | null
 }
 
 export type PortfolioKeyValue = {

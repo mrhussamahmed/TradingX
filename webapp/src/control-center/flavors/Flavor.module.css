@@ -311,6 +311,21 @@
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 14px;
 }
+.panelBodyFlush {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.sourceDisclosure {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(46, 161, 255, 0.28);
+  background: rgba(46, 161, 255, 0.07);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.sourceDisclosure strong {
+  color: var(--text-primary);
+}
 .statusPill {
   display: inline-flex;
   padding: 2px 8px;
@@ -375,11 +390,17 @@
   border: 1px solid var(--border-muted);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
-  overflow: hidden;
+  overflow: visible;
 }
 .timelineLanes {
   display: flex;
   flex-direction: column;
+}
+.timelineLaneHeader {
+  height: 24px;
+  border-right: 1px solid var(--border-muted);
+  border-bottom: 1px solid var(--border-muted);
+  background: rgba(255, 255, 255, 0.01);
 }
 .timelineLaneLabel {
   display: flex;
@@ -399,7 +420,7 @@
 }
 .timelineRows {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 .timelineHeader {
   display: grid;
@@ -523,6 +544,7 @@
 }
 .sessionTimelineScroller {
   overflow-x: auto;
+  overflow-y: visible;
   border-radius: var(--radius-md);
 }
 .sessionTimelineEvent {
@@ -568,6 +590,22 @@
 .sessionTimelineEvent:hover {
   filter: brightness(1.18);
   z-index: 2;
+}
+.sessionTimelineTooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 360px;
+  transform: translate(-50%, -100%);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: rgba(9, 18, 31, 0.98);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-elevated);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+  pointer-events: none;
 }
 .sessionTimelineSingleInstant {
   border-radius: 999px;

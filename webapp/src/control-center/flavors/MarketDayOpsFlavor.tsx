@@ -59,6 +59,7 @@ export function MarketDayOpsFlavor() {
   const [sizingSettings, setSizingSettings] = useState<PaperRuntimeSizingSettings>(
     readPaperRuntimeSizingSettings,
   )
+  const [positionSymbolFilter, setPositionSymbolFilter] = useState('all')
 
   useEffect(() => {
     writePaperRuntimeSizingSettings(sizingSettings)
@@ -66,8 +67,19 @@ export function MarketDayOpsFlavor() {
 
   const positions = portfolio.positions_panel.positions
   const exposure = commandCenter.exposure_breakdown
-  const pricedExposure = exposure.filter((item) => item.value != null)
-  const missingExposure = exposure.filter((item) => item.value == null)
+  const filterSymbols = Array.from(
+    new Set([...positions.map((position) => position.symbol), ...exposure.map((entry) => entry.symbol)]),
+  ).sort()
+  const filteredPositions =
+    positionSymbolFilter === 'all'
+      ? positions
+      : positions.filter((position) => position.symbol === positionSymbolFilter)
+  const filteredExposure =
+    positionSymbolFilter === 'all'
+      ? exposure
+      : exposure.filter((entry) => entry.symbol === positionSymbolFilter)
+  const pricedExposure = filteredExposure.filter((item) => item.value != null)
+  const missingExposure = filteredExposure.filter((item) => item.value == null)
   const exposureTotal =
     pricedExposure.reduce(
       (sum, item) => sum + Math.abs(parseNumericValue(item.value)),
@@ -365,14 +377,35 @@ export function MarketDayOpsFlavor() {
             <div className={styles.panelHeader}>
               <span>Active Positions</span>
               <span className={styles.panelSub}>
-                {positions.length} open · {prettyLabel(portfolio.positions_panel.status)}
+                {positions.length} open · {filteredPositions.length} shown · {prettyLabel(portfolio.positions_panel.status)}
               </span>
+              <div className={styles.panelHeaderActions}>
+                <select
+                  aria-label="Filter active positions by symbol"
+                  value={positionSymbolFilter}
+                  onChange={(event) => setPositionSymbolFilter(event.currentTarget.value)}
+                >
+                  <option value="all">All symbols</option>
+                  {filterSymbols.map((symbol) => (
+                    <option key={symbol} value={symbol}>
+                      {symbol}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             {positions.length === 0 ? (
               <div className={styles.panelBody}>
                 <div className={styles.emptyState}>
                   <strong>{portfolio.positions_panel.headline}</strong>
                   <p>{portfolio.positions_panel.detail}</p>
+                </div>
+              </div>
+            ) : filteredPositions.length === 0 ? (
+              <div className={styles.panelBody}>
+                <div className={styles.emptyState}>
+                  <strong>No positions match this filter</strong>
+                  <p>Select All symbols or another symbol with open exposure.</p>
                 </div>
               </div>
             ) : (
@@ -386,7 +419,7 @@ export function MarketDayOpsFlavor() {
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map((position) => (
+                  {filteredPositions.map((position) => (
                     <tr key={position.symbol}>
                       <td className="mono">{position.symbol}</td>
                       <td className="numeric">
@@ -429,7 +462,7 @@ export function MarketDayOpsFlavor() {
                 <div className={styles.emptyState}>
                   <strong>Exposure unavailable</strong>
                   <p>
-                    Open-position symbols are available ({exposure.map((entry) => entry.symbol).join(', ')}), but
+                    Open-position symbols are available ({filteredExposure.map((entry) => entry.symbol).join(', ')}), but
                     source-backed market values are missing. No allocation chart is shown.
                   </p>
                 </div>

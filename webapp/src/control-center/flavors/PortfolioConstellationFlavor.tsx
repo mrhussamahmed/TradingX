@@ -38,6 +38,7 @@ function classifyStrategy(strategy: PortfolioStrategyRow): 'good' | 'watch' | 'r
 export function PortfolioConstellationFlavor() {
   const { portfolio, refresh } = useData()
   const [filter, setFilter] = useState<Filter>('all')
+  const [symbolFilter, setSymbolFilter] = useState('all')
   const [showBudget, setShowBudget] = useState(true)
 
   const positions = portfolio.positions_panel.positions
@@ -46,9 +47,14 @@ export function PortfolioConstellationFlavor() {
   const diagnostics = portfolio.diagnostics
 
   const filteredPositions = useMemo(() => {
-    if (filter === 'all') return positions
-    return positions.filter((position) => classifyPosition(position) === filter)
-  }, [positions, filter])
+    return positions.filter((position) => {
+      const symbolMatches = symbolFilter === 'all' || position.symbol === symbolFilter
+      const typeMatches = filter === 'all' || classifyPosition(position) === filter
+      return symbolMatches && typeMatches
+    })
+  }, [positions, filter, symbolFilter])
+  const positionSymbols = Array.from(new Set(positions.map((position) => position.symbol))).sort()
+  const activeSleeveCount = portfolio.strategy_panel.constituent_sleeve_ids?.length ?? strategies.length
 
   const positionsTotal =
     positions.reduce(
@@ -74,7 +80,9 @@ export function PortfolioConstellationFlavor() {
           <dd>{prettyLabel(portfolio.data_state)}</dd>
           <dt>Positions</dt>
           <dd className="numeric">{positions.length}</dd>
-          <dt>Sleeves</dt>
+          <dt>Active Sleeves</dt>
+          <dd className="numeric">{activeSleeveCount}</dd>
+          <dt>Strategies</dt>
           <dd className="numeric">{strategies.length}</dd>
           <dt>Benchmarks</dt>
           <dd className="numeric">{benchmarks.length}</dd>
@@ -103,7 +111,7 @@ export function PortfolioConstellationFlavor() {
             </span>
             <div className={styles.panelHeaderActions}>
               <select
-                aria-label="Filter exposure"
+                aria-label="Filter exposure by side"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value as Filter)}
               >
@@ -112,6 +120,18 @@ export function PortfolioConstellationFlavor() {
                 <option value="short">Short</option>
                 <option value="flat">Flat</option>
                 <option value="unpriced">Unpriced</option>
+              </select>
+              <select
+                aria-label="Filter exposure by symbol"
+                value={symbolFilter}
+                onChange={(event) => setSymbolFilter(event.currentTarget.value)}
+              >
+                <option value="all">All symbols</option>
+                {positionSymbols.map((symbol) => (
+                  <option key={symbol} value={symbol}>
+                    {symbol}
+                  </option>
+                ))}
               </select>
               <button
                 type="button"
@@ -146,6 +166,25 @@ export function PortfolioConstellationFlavor() {
             <span>Strategy Attribution</span>
             <span className={styles.panelSub}>{prettyLabel(portfolio.strategy_panel.status)}</span>
           </div>
+          <div className={styles.panelBodyFlush}>
+            <div className={styles.sourceDisclosure}>
+              {portfolio.strategy_panel.active_blueprint_id ? (
+                <>
+                  Active blueprint: <strong>{portfolio.strategy_panel.active_blueprint_id}</strong>
+                  {' · '}
+                  active sleeves: <strong>{activeSleeveCount}</strong>
+                  {portfolio.strategy_panel.narrowing_notice ? (
+                    <span> · {portfolio.strategy_panel.narrowing_notice}</span>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  No active blueprint activation was found. Rows marked configured_not_active are approved
+                  configs, not running sleeves.
+                </>
+              )}
+            </div>
+          </div>
           {strategies.length === 0 ? (
             <div className={styles.panelBody}>
               <div className={styles.emptyState}>
@@ -175,9 +214,9 @@ export function PortfolioConstellationFlavor() {
                           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{strategy.detail}</span>
                         </div>
                       </td>
-                      <td className="numeric">{strategy.pnl}</td>
+                      <td className="numeric" title={strategy.detail}>{strategy.pnl}</td>
                       <td className="numeric">{strategy.trade_count}</td>
-                      <td className="numeric">{strategy.win_rate}</td>
+                      <td className="numeric" title={strategy.detail}>{strategy.win_rate}</td>
                       <td>
                         <span className={`badge badge-${tone}`}>{prettyLabel(strategy.status)}</span>
                       </td>
@@ -335,9 +374,9 @@ function BenchmarkRowView({ row }: { row: PortfolioBenchmarkRow }) {
     <tr>
       <td>{row.label}</td>
       <td className="numeric">{row.portfolio_return}</td>
-      <td className="numeric">{row.benchmark_return}</td>
+      <td className="numeric" title={row.detail}>{row.benchmark_return}</td>
       <td>
-        <span className={`badge badge-${tone}`}>{row.excess_return}</span>
+        <span className={`badge badge-${tone}`} title={row.detail}>{row.excess_return}</span>
       </td>
     </tr>
   )
