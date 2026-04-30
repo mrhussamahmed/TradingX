@@ -9,7 +9,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
-from tradingx.activation import LocalActivationGateway
+from tradingx.activation import (
+    BlueprintActivationValidationError,
+    LocalActivationGateway,
+)
 from tradingx.alerts import (
     OperatorAlertDispatcher,
     SmtpAlertTransport,
@@ -549,12 +552,21 @@ class LocalWebActionRunner:
         blueprint_path = self._blueprint_path(blueprint_id)
         blueprint = load_portfolio_blueprint(blueprint_path)
         activation_gateway = self._blueprint_activation_gateway()
-        record = activation_gateway.stage_blueprint_activation_for_next_start(
-            blueprint=blueprint,
-            operator_identifier="local-operator",
-            source_blueprint_path=blueprint_path,
-            preview_hash=preview_hash,
-        )
+        try:
+            record = activation_gateway.stage_blueprint_activation_for_next_start(
+                blueprint=blueprint,
+                operator_identifier="local-operator",
+                source_blueprint_path=blueprint_path,
+                preview_hash=preview_hash,
+            )
+        except (BlueprintActivationValidationError, ValueError) as exc:
+            return WebActionResult(
+                action_id=f"action-{uuid.uuid4()}",
+                action_type="blueprint_activate",
+                status="blocked",
+                message=str(exc),
+                evidence_refs=(),
+            )
         output_path = (
             self._operator_platform_root
             / "blueprint_activation"

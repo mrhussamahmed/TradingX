@@ -258,8 +258,36 @@ def test_stage_blueprint_activation_writes_pending_next_start_not_active(
     )
 
     assert record.status == "pending_next_start"
+    assert record.blueprint_content_hash == report.blueprint_content_hash
+    assert record.blueprint_payload is not None
     assert gateway.get_active_blueprint_activation() is None
     assert gateway.list_pending_blueprint_activations() == (record,)
+
+
+def test_stage_blueprint_activation_pins_approved_payload(
+    tmp_path: Path,
+) -> None:
+    snapshots = {
+        "trend-following-v1": _snapshot("trend-following-v1", "snap-trend-1"),
+        "vol-target-v1": _snapshot("vol-target-v1", "snap-vol-1"),
+    }
+    gateway = _gateway(tmp_path, _StubSnapshotStore(snapshots))
+    blueprint = _blueprint()
+    report = gateway.preflight_blueprint_activation(
+        blueprint=blueprint,
+        source_blueprint_path=Path("config/portfolio/blueprints/bp-test-v1.yaml"),
+    )
+
+    record = gateway.stage_blueprint_activation_for_next_start(
+        blueprint=blueprint,
+        operator_identifier="operator:test",
+        source_blueprint_path=Path("config/portfolio/blueprints/bp-test-v1.yaml"),
+        preview_hash=report.preview_hash,
+    )
+
+    assert record.blueprint_payload is not None
+    assert record.blueprint_payload["blueprint_id"] == "bp-test-v1"
+    assert record.blueprint_content_hash == report.blueprint_content_hash
 
 
 def test_apply_pending_blueprint_activation_on_start_supersedes_previous_active(

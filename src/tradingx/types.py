@@ -989,6 +989,7 @@ class BlueprintActivationPreflight:
     captured_snapshot_ids: tuple[str, ...]
     source_blueprint_path: Path
     preview_hash: str
+    blueprint_content_hash: str
     would_reuse_active_activation: bool = False
 
 
@@ -1027,6 +1028,8 @@ class BlueprintActivationRecord:
     approved_at_utc: datetime
     approved_by: str
     source_blueprint_path: Path
+    blueprint_content_hash: str | None = None
+    blueprint_payload: dict[str, object] | None = None
     superseded_at_utc: datetime | None = None
     supersedes_activation_id: str | None = None
 

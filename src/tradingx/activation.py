@@ -14,7 +14,9 @@ from tradingx.portfolio.blueprint import (
     PortfolioBlueprint,
     StrategyAllocationLimit,
     effective_strategy_id,
-    load_portfolio_blueprint,
+    portfolio_blueprint_content_hash,
+    portfolio_blueprint_from_activation,
+    portfolio_blueprint_to_payload,
 )
 from tradingx.promotion import (
     PromotionDecision,
@@ -173,10 +175,12 @@ class LocalActivationGateway:
 
         active = self.get_active_blueprint_activation()
         normalized_bindings = tuple(bindings)
+        blueprint_content_hash = portfolio_blueprint_content_hash(blueprint)
         if active is not None:
             if (
                 active.blueprint_id == blueprint.blueprint_id
                 and active.sleeve_activation_bindings == normalized_bindings
+                and active.blueprint_content_hash == blueprint_content_hash
             ):
                 self.ensure_activation_snapshot_payloads(active)
                 return active
@@ -189,6 +193,8 @@ class LocalActivationGateway:
             approved_at_utc=self._now(),
             approved_by=operator_identifier,
             source_blueprint_path=source_blueprint_path,
+            blueprint_content_hash=blueprint_content_hash,
+            blueprint_payload=portfolio_blueprint_to_payload(blueprint),
         )
         self._store.write_blueprint_activation_record(record)
         for binding in record.sleeve_activation_bindings:
@@ -334,10 +340,14 @@ class LocalActivationGateway:
             else "ready_to_activate"
         )
         active = self.get_active_blueprint_activation()
+        blueprint_payload = portfolio_blueprint_to_payload(blueprint)
+        blueprint_content_hash = portfolio_blueprint_content_hash(blueprint)
         preview_payload = {
             "blueprint_id": blueprint.blueprint_id,
             "status": status,
             "source_blueprint_path": str(source_blueprint_path),
+            "blueprint_content_hash": blueprint_content_hash,
+            "blueprint_payload": blueprint_payload,
             "bindings": [
                 dataclasses.asdict(binding)
                 for binding in bindings
@@ -357,10 +367,12 @@ class LocalActivationGateway:
             ),
             source_blueprint_path=source_blueprint_path,
             preview_hash=preview_hash,
+            blueprint_content_hash=blueprint_content_hash,
             would_reuse_active_activation=(
                 active is not None
                 and active.blueprint_id == blueprint.blueprint_id
                 and active.sleeve_activation_bindings == tuple(bindings)
+                and active.blueprint_content_hash == blueprint_content_hash
             ),
         )
 
@@ -413,6 +425,8 @@ class LocalActivationGateway:
             approved_at_utc=now,
             approved_by=operator_identifier,
             source_blueprint_path=source_blueprint_path,
+            blueprint_content_hash=report.blueprint_content_hash,
+            blueprint_payload=portfolio_blueprint_to_payload(blueprint),
         )
         self._store.write_blueprint_activation_record(record)
         for binding in record.sleeve_activation_bindings:
@@ -430,7 +444,16 @@ class LocalActivationGateway:
             return self.get_active_blueprint_activation()
         pending = pending_records[-1]
         try:
-            blueprint = load_portfolio_blueprint(pending.source_blueprint_path)
+            blueprint = self._blueprint_from_activation(pending)
+            if (
+                pending.blueprint_content_hash is not None
+                and pending.blueprint_content_hash
+                != portfolio_blueprint_content_hash(blueprint)
+            ):
+                raise BlueprintActivationValidationError(
+                    "Pending blueprint activation payload hash does not match "
+                    "the approved content hash."
+                )
             report = self.preflight_blueprint_activation(
                 blueprint=blueprint,
                 source_blueprint_path=pending.source_blueprint_path,
@@ -479,6 +502,12 @@ class LocalActivationGateway:
                 )
             )
         return applied
+
+    def _blueprint_from_activation(
+        self,
+        activation: BlueprintActivationRecord,
+    ) -> PortfolioBlueprint:
+        return portfolio_blueprint_from_activation(activation)
 
     def ensure_activation_snapshot_payloads(
         self,

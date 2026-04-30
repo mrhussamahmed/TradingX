@@ -28,7 +28,10 @@ from tradingx.operator_control import OperatorControlStore
 from tradingx.opportunity import LiveOpportunitySelector
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
-from tradingx.portfolio.blueprint import PortfolioBlueprint, load_portfolio_blueprint
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    portfolio_blueprint_from_activation,
+)
 from tradingx.portfolio.fallback import (
     ActivationGatewaySupersedeProtocol,
     BlueprintExhaustionError,
@@ -708,7 +711,7 @@ class PaperTradingService:
         self,
         activation: BlueprintActivationRecord,
     ) -> PortfolioBlueprint:
-        blueprint = load_portfolio_blueprint(activation.source_blueprint_path)
+        blueprint = portfolio_blueprint_from_activation(activation)
         active_sleeve_ids = {
             binding.sleeve_id for binding in activation.sleeve_activation_bindings
         }

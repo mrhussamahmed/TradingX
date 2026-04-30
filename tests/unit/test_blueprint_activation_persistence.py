@@ -27,6 +27,11 @@ def _record(activation_id: str = "act-1") -> BlueprintActivationRecord:
         approved_at_utc=datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
         approved_by="operator:hussam",
         source_blueprint_path=Path("config/portfolio/blueprints/bp-default-v1.yaml"),
+        blueprint_content_hash="sha256:blueprint",
+        blueprint_payload={
+            "blueprint_id": "bp-default-v1",
+            "sleeve_budgets": [],
+        },
     )
 
 

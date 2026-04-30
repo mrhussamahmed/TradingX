@@ -1279,6 +1279,16 @@ class FilesystemArtifactStore:
             approved_at_utc=datetime.fromisoformat(str(payload["approved_at_utc"])),
             approved_by=str(payload["approved_by"]),
             source_blueprint_path=Path(str(payload["source_blueprint_path"])),
+            blueprint_content_hash=(
+                str(payload["blueprint_content_hash"])
+                if payload.get("blueprint_content_hash") is not None
+                else None
+            ),
+            blueprint_payload=(
+                dict(payload["blueprint_payload"])
+                if isinstance(payload.get("blueprint_payload"), dict)
+                else None
+            ),
             superseded_at_utc=(
                 datetime.fromisoformat(str(payload["superseded_at_utc"]))
                 if payload.get("superseded_at_utc") is not None

@@ -58,6 +58,13 @@ class ActivatedRuntimePlanner:
         self._applied_blueprint_activation = (
             activation_gateway.get_active_blueprint_activation()
         )
+        if (
+            self._blueprint_planner is not None
+            and hasattr(self._blueprint_planner, "set_run_scoped_blueprint_activation")
+        ):
+            self._blueprint_planner.set_run_scoped_blueprint_activation(  # type: ignore[attr-defined]
+                self._applied_blueprint_activation
+            )
         self.last_strategy_id = ""
 
     def plan_for_service(
@@ -99,7 +106,7 @@ class ActivatedRuntimePlanner:
         )
 
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
-        return self._activation_gateway.get_active_blueprint_activation()
+        return self._applied_blueprint_activation
 
     def supersede_active_blueprint(
         self,

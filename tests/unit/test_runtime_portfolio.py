@@ -7,7 +7,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from tradingx.portfolio.blueprint import StrategyAllocationLimit
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    StrategyAllocationLimit,
+    portfolio_blueprint_content_hash,
+    portfolio_blueprint_to_payload,
+)
 from tradingx.runtime_portfolio import (
     RuntimePortfolioPlanner,
     UnsupportedRuntimePortfolioPlanError,
@@ -557,6 +563,81 @@ def test_runtime_portfolio_planner_builds_blueprint_plan_with_attributions(
         ("vol-target-v1", Decimal("0.5")),
     )
     assert qqq_intent.sleeve_attributions == (("trend-following-v1", Decimal("1")),)
+
+
+def test_runtime_portfolio_planner_uses_pinned_blueprint_payload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import tradingx.runtime_portfolio as module
+
+    blueprint = PortfolioBlueprint(
+        blueprint_id="bp-runtime",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-1",
+        blueprint_id="bp-runtime",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=tmp_path / "deleted-after-approval.yaml",
+        blueprint_content_hash=portfolio_blueprint_content_hash(blueprint),
+        blueprint_payload=portfolio_blueprint_to_payload(blueprint),
+    )
+    monkeypatch.setattr(
+        module,
+        "build_portfolio_cycle_target_weights",
+        lambda **kwargs: (
+            {"SPY": Decimal("0.50")},
+            (
+                module.SleeveTargetWeights(
+                    sleeve_id="trend-following-v1",
+                    target_weights_by_symbol=(("SPY", Decimal("0.50")),),
+                ),
+            ),
+        ),
+    )
+
+    planner = module.RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY", "QQQ"),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("10000"),
+            equity=Decimal("10000"),
+            buying_power=Decimal("20000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+    )
+
+    assert plan is not None
+    assert plan.strategy_id == "bp-runtime"
+    assert plan.per_sleeve_target_weights[0].sleeve_id == "trend-following-v1"
 
 
 def test_runtime_portfolio_planner_applies_sizing_policy_to_blueprint_buys(

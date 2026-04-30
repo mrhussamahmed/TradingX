@@ -17,7 +17,7 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio.blueprint import (
     PortfolioBlueprint,
     StrategyAllocationLimit,
-    load_portfolio_blueprint,
+    portfolio_blueprint_from_activation,
 )
 from tradingx.portfolio.live_construction import build_portfolio_cycle_target_weights
 from tradingx.portfolio.sleeve_runtime import (
@@ -143,6 +143,7 @@ class RuntimePortfolioPlanner:
         treasury_cache_path: Path | None = None,
         history_lookback_days: int = HISTORY_LOOKBACK_DAYS,
         now_provider: Callable[[], datetime] | None = None,
+        applied_blueprint_activation: BlueprintActivationRecord | None = None,
     ) -> None:
         self._market_data = market_data
         self._activation_gateway = activation_gateway
@@ -159,6 +160,13 @@ class RuntimePortfolioPlanner:
         )
         self._history_lookback_days = history_lookback_days
         self._now_provider = now_provider or (lambda: datetime.now(UTC))
+        self._applied_blueprint_activation = applied_blueprint_activation
+
+    def set_run_scoped_blueprint_activation(
+        self,
+        activation: BlueprintActivationRecord | None,
+    ) -> None:
+        self._applied_blueprint_activation = activation
 
     def plan_for_service(
         self,
@@ -169,11 +177,11 @@ class RuntimePortfolioPlanner:
         sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None:
         del default_quantity
-        blueprint_activation = (
-            self._activation_gateway.get_active_blueprint_activation()
-            if self._activation_gateway is not None
-            else None
-        )
+        blueprint_activation = self._applied_blueprint_activation
+        if blueprint_activation is None and self._activation_gateway is not None:
+            blueprint_activation = (
+                self._activation_gateway.get_active_blueprint_activation()
+            )
         if blueprint_activation is not None:
             return self._plan_for_blueprint(
                 blueprint_activation=blueprint_activation,
@@ -327,7 +335,7 @@ class RuntimePortfolioPlanner:
         portfolio_state: PortfolioState,
         sizing_policy: RuntimeSizingPolicy | None,
     ) -> RuntimePortfolioPlan:
-        blueprint = load_portfolio_blueprint(blueprint_activation.source_blueprint_path)
+        blueprint = portfolio_blueprint_from_activation(blueprint_activation)
         binding_by_sleeve_id = {
             binding.sleeve_id: binding
             for binding in blueprint_activation.sleeve_activation_bindings

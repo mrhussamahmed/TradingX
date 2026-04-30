@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from tradingx.activation import BlueprintActivationValidationError
 from tradingx.config import TradingConfig
 from tradingx.service import ServiceRunResult
 from tradingx.types import ServiceCycleSnapshot
@@ -354,6 +355,55 @@ def test_build_default_local_web_components_shares_runtime_service_manager(
     assert "legacy_non_authority_mode" not in activation_kwargs[0]
     assert "promotion_decision_provider" in activation_kwargs[0]
     assert "required_promotion_state" in activation_kwargs[0]
+
+
+def test_activate_blueprint_returns_blocked_for_validation_error(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    blueprint_dir = tmp_path / "config" / "portfolio" / "blueprints"
+    blueprint_dir.mkdir(parents=True)
+    (blueprint_dir / "bp-test-v1.yaml").write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-test-v1",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    budget_fraction_of_equity: 1.0",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    class RejectingActivationGateway:
+        def stage_blueprint_activation_for_next_start(self, **kwargs):
+            del kwargs
+            raise BlueprintActivationValidationError(
+                "Blueprint activation preview is stale; rerun preflight."
+            )
+
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_blueprint_activation_gateway",
+        lambda: RejectingActivationGateway(),
+    )
+
+    result = runner.activate_blueprint(
+        blueprint_id="bp-test-v1",
+        preview_hash="sha256:stale",
+    )
+
+    assert result.status == "blocked"
+    assert result.action_type == "blueprint_activate"
+    assert "stale" in result.message
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:

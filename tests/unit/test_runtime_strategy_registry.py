@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tradingx import runtime_strategy_registry as registry_module
 from tradingx.baseline_runtime_planner import BaselineLongOnlyPlanner
-from tradingx.runtime_portfolio import RuntimePortfolioPlan
+from tradingx.runtime_portfolio import RuntimePortfolioPlan, RuntimePortfolioPlanner
 from tradingx.runtime_strategy_registry import (
     ActivatedRuntimePlanner,
     RuntimeStrategyRegistry,
@@ -414,4 +414,74 @@ def test_activated_runtime_planner_uses_blueprint_planner_when_active() -> None:
             ),
         )
     ]
-    assert planner.last_strategy_id == "bp-runtime"
+
+
+def test_activated_runtime_planner_freezes_nested_blueprint_activation(
+    monkeypatch,
+) -> None:
+    frozen_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-frozen",
+        blueprint_id="bp-frozen",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=Path("/tmp/bp-frozen.yaml"),
+    )
+    changed_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-changed",
+        blueprint_id="bp-changed",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="approved-vol",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=Path("/tmp/bp-changed.yaml"),
+    )
+    gateway = FakeActivationGateway(
+        strategy_id="baseline-long-only-v1",
+        approved_symbols=("SPY",),
+        blueprint_activation=frozen_activation,
+    )
+    blueprint_planner = RuntimePortfolioPlanner(
+        market_data=FixedPriceMarketData(),
+        activation_gateway=gateway,
+    )
+    seen_activation_ids: list[str] = []
+
+    def capture_blueprint(self, *, blueprint_activation, **kwargs):
+        del kwargs
+        seen_activation_ids.append(blueprint_activation.activation_id)
+        return None
+
+    monkeypatch.setattr(
+        RuntimePortfolioPlanner,
+        "_plan_for_blueprint",
+        capture_blueprint,
+    )
+    planner = ActivatedRuntimePlanner(
+        activation_gateway=gateway,
+        registry=RuntimeStrategyRegistry(),
+        blueprint_planner=blueprint_planner,
+    )
+    gateway._blueprint_activation = changed_activation
+
+    planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=_portfolio_state(),
+        default_quantity=Decimal("3"),
+    )
+
+    assert seen_activation_ids == ["bp-activation-frozen"]
+    assert planner.last_strategy_id == "bp-frozen"

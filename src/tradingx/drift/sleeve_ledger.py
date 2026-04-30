@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.portfolio.blueprint import load_portfolio_blueprint
+from tradingx.portfolio.blueprint import portfolio_blueprint_from_activation
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     BlueprintActivationRecord,
@@ -72,7 +72,7 @@ def build_bootstrap_allocation(
     historical_execution_records: tuple[ExecutionLifecycleRecord, ...],
     recorded_at_utc: datetime,
 ) -> BootstrapResult:
-    active_blueprint = load_portfolio_blueprint(active_activation.source_blueprint_path)
+    active_blueprint = portfolio_blueprint_from_activation(active_activation)
     budget_by_sleeve_id = {
         budget.sleeve_id: budget
         for budget in active_blueprint.sleeve_budgets

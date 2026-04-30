@@ -7,7 +7,11 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Final, Protocol
 
-from tradingx.portfolio.blueprint import PortfolioBlueprint
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    portfolio_blueprint_content_hash,
+    portfolio_blueprint_to_payload,
+)
 from tradingx.types import (
     BlueprintActivationRecord,
     OperatorAlert,
@@ -96,6 +100,8 @@ def narrow_blueprint_on_sleeve_failure(
         approved_at_utc=now.astimezone(UTC),
         approved_by=operator_identifier,
         source_blueprint_path=active_activation.source_blueprint_path,
+        blueprint_content_hash=portfolio_blueprint_content_hash(narrowed_blueprint),
+        blueprint_payload=portfolio_blueprint_to_payload(narrowed_blueprint),
         superseded_at_utc=None,
         supersedes_activation_id=active_activation.activation_id,
     )

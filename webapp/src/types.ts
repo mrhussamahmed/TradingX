@@ -140,6 +140,8 @@ export type BlueprintActivationRecord = {
   approved_at_utc: string
   approved_by: string
   source_blueprint_path: string
+  blueprint_content_hash?: string | null
+  blueprint_payload?: Record<string, unknown> | null
   superseded_at_utc?: string | null
   supersedes_activation_id?: string | null
 }
@@ -180,6 +182,7 @@ export type BlueprintActivationPreflight = {
   captured_snapshot_ids: string[]
   source_blueprint_path: string
   preview_hash: string
+  blueprint_content_hash: string
   would_reuse_active_activation: boolean
 }
 

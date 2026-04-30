@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from tradingx.types import PortfolioBlueprintSleeveSummary, PortfolioBlueprintSummary
+from tradingx.types import (
+    BlueprintActivationRecord,
+    PortfolioBlueprintSleeveSummary,
+    PortfolioBlueprintSummary,
+)
 
 
 @dataclass(frozen=True)
@@ -104,7 +109,62 @@ def load_portfolio_blueprint(path: Path) -> PortfolioBlueprint:
         payload = json.loads(raw_text)
     else:
         payload = _parse_blueprint_yaml(raw_text, path=resolved)
+    return portfolio_blueprint_from_payload(payload)
+
+
+def portfolio_blueprint_from_payload(payload: dict[str, object]) -> PortfolioBlueprint:
     return _portfolio_blueprint_from_payload(payload)
+
+
+def portfolio_blueprint_to_payload(blueprint: PortfolioBlueprint) -> dict[str, object]:
+    return {
+        "blueprint_id": blueprint.blueprint_id,
+        "sleeve_budgets": [
+            {
+                "sleeve_id": budget.sleeve_id,
+                "strategy_id": budget.strategy_id,
+                "budget_fraction_of_equity": str(budget.budget_fraction_of_equity),
+                "max_correlation_with_other_sleeves": str(
+                    budget.max_correlation_with_other_sleeves
+                ),
+            }
+            for budget in blueprint.sleeve_budgets
+        ],
+        "max_gross_exposure": str(blueprint.max_gross_exposure),
+        "max_net_exposure": str(blueprint.max_net_exposure),
+        "mdd_design_target": str(blueprint.mdd_design_target),
+        "mdd_hard_halt": str(blueprint.mdd_hard_halt),
+        "cdar_confidence": str(blueprint.cdar_confidence),
+        "cdar_soft_throttle_threshold": str(
+            blueprint.cdar_soft_throttle_threshold
+        ),
+        "annualized_turnover_budget": str(blueprint.annualized_turnover_budget),
+        "sleeve_three_month_sharpe_floor": str(
+            blueprint.sleeve_three_month_sharpe_floor
+        ),
+        "strategy_allocation_limits": [
+            {
+                "strategy_id": limit.strategy_id,
+                "max_strategy_allocation": str(limit.max_strategy_allocation),
+            }
+            for limit in blueprint.strategy_allocation_limits
+        ],
+    }
+
+
+def portfolio_blueprint_content_hash(blueprint: PortfolioBlueprint) -> str:
+    payload = portfolio_blueprint_to_payload(blueprint)
+    return "sha256:" + hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def portfolio_blueprint_from_activation(
+    activation: BlueprintActivationRecord,
+) -> PortfolioBlueprint:
+    if activation.blueprint_payload is not None:
+        return portfolio_blueprint_from_payload(activation.blueprint_payload)
+    return load_portfolio_blueprint(activation.source_blueprint_path)
 
 
 def list_portfolio_blueprints(root: Path) -> tuple[PortfolioBlueprintSummary, ...]:
