@@ -66,11 +66,13 @@ export function MarketDayOpsFlavor() {
 
   const positions = portfolio.positions_panel.positions
   const exposure = commandCenter.exposure_breakdown
+  const pricedExposure = exposure.filter((item) => item.value != null)
+  const missingExposure = exposure.filter((item) => item.value == null)
   const exposureTotal =
-    exposure.reduce(
-      (sum, item) => (item.value == null ? sum : sum + Math.abs(parseNumericValue(item.value))),
+    pricedExposure.reduce(
+      (sum, item) => sum + Math.abs(parseNumericValue(item.value)),
       0,
-    ) || 1
+    )
 
   const writeBlocked = !writeMode.enabled || !writeMode.unlocked
   const writeBlockedReason = writeMode.detail
@@ -423,29 +425,40 @@ export function MarketDayOpsFlavor() {
                   <strong>Account is flat</strong>
                   <p>Exposure will appear when positions are opened.</p>
                 </div>
+              ) : pricedExposure.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <strong>Exposure unavailable</strong>
+                  <p>
+                    Open-position symbols are available ({exposure.map((entry) => entry.symbol).join(', ')}), but
+                    source-backed market values are missing. No allocation chart is shown.
+                  </p>
+                </div>
               ) : (
-                exposure.map((entry) => {
-                  const value = entry.value == null ? null : parseNumericValue(entry.value)
-                  const ratio = value == null ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
-                  return (
-                    <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span className="mono">{entry.symbol}</span>
-                        <span className="numeric">
-                          {value == null
-                            ? prettyLabel(entry.value_status ?? 'source_missing')
-                            : toCurrency(value)}
-                        </span>
+                <>
+                  {pricedExposure.map((entry) => {
+                    const value = parseNumericValue(entry.value)
+                    const ratio = exposureTotal <= 0 ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
+                    return (
+                      <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span className="mono">{entry.symbol}</span>
+                          <span className="numeric">{toCurrency(value)}</span>
+                        </div>
+                        <div className={styles.exposureBar}>
+                          <span style={{ width: `${ratio * 100}%` }} />
+                        </div>
                       </div>
-                      <div className={styles.exposureBar}>
-                        <span style={{ width: `${ratio * 100}%` }} />
-                      </div>
-                      {value == null && entry.missing_reason ? (
-                        <span className={styles.disabledNote}>{entry.missing_reason}</span>
-                      ) : null}
+                    )
+                  })}
+                  {missingExposure.length > 0 ? (
+                    <div className={styles.timelineNotice}>
+                      Missing market values:{' '}
+                      {missingExposure
+                        .map((entry) => `${entry.symbol} (${prettyLabel(entry.value_status ?? 'source_missing')})`)
+                        .join(', ')}
                     </div>
-                  )
-                })
+                  ) : null}
+                </>
               )}
             </div>
           </div>

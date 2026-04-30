@@ -77,6 +77,96 @@
   grid-template-rows: auto auto;
   gap: 14px;
 }
+.portfolioGraphDeck {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 170px;
+  gap: 12px;
+  align-items: stretch;
+}
+.equityChartFrame {
+  min-width: 0;
+  border: 1px solid rgba(36, 82, 122, 0.42);
+  border-radius: var(--radius-md);
+  background: rgba(8, 22, 36, 0.72);
+  padding: 8px;
+}
+.miniChartPanel {
+  min-width: 0;
+  border: 1px solid rgba(36, 82, 122, 0.42);
+  border-radius: var(--radius-md);
+  background: rgba(8, 22, 36, 0.72);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.donutChart {
+  width: 116px;
+  height: 116px;
+  align-self: center;
+}
+.donutValue {
+  fill: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+}
+.donutLabel {
+  fill: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.donutLegend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.donutLegend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.donutLegend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.capitalBars {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 8px 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.capitalBars div {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(36, 82, 122, 0.45);
+  overflow: hidden;
+}
+.capitalBars i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary-bright);
+}
+.capitalBars strong {
+  color: var(--text-primary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.emptyMiniChart {
+  border: 1px dashed rgba(36, 82, 122, 0.55);
+  border-radius: var(--radius-md);
+  min-height: 116px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
 .symbolHeader {
   display: flex;
   align-items: center;
@@ -386,6 +476,33 @@
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
 }
+.timelineNotice {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(46, 161, 255, 0.34);
+  color: var(--text-secondary);
+  background: rgba(46, 161, 255, 0.08);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+.timelineOutOfSession {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.timelineOutOfSessionItem {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 174, 47, 0.34);
+  color: var(--watch);
+  background: rgba(255, 174, 47, 0.08);
+  font-size: var(--fs-xs);
+  cursor: help;
+}
 .timelineLegend {
   display: flex;
   gap: 8px;
@@ -410,8 +527,8 @@
 }
 .sessionTimelineEvent {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 6px;
+  height: 20px;
   min-width: 8px;
   display: flex;
   align-items: center;
@@ -429,6 +546,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-secondary);
+}
+.sessionTimelineCluster {
+  position: absolute;
+  bottom: 8px;
+  height: 12px;
+  min-width: 10px;
+  display: grid;
+  place-items: center;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  color: #03111f;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  opacity: 0.9;
+}
+.sessionTimelineCluster:hover,
+.sessionTimelineEvent:hover {
+  filter: brightness(1.18);
+  z-index: 2;
+}
+.sessionTimelineSingleInstant {
+  border-radius: 999px;
+  width: 12px !important;
+  padding: 0;
+}
+.sessionTimelineSingleInstant span {
+  display: none;
 }
 .nowMarker {
   position: absolute;

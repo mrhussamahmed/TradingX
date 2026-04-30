@@ -24,6 +24,8 @@ const EVENT_COLORS = [
   '#f47cb9',
 ]
 
+const INSTANT_CLUSTER_MS = 15 * 60 * 1000
+
 export function SessionTimelineChart({
   title,
   description,
@@ -37,6 +39,7 @@ export function SessionTimelineChart({
   const colorByType = new Map(lanes.map((lane, index) => [lane, EVENT_COLORS[index % EVENT_COLORS.length]]))
   const bounds = timelineBounds(timeline)
   const dateValue = selectedTradingDay || timeline.filters.trading_day || ''
+  const outOfSession = bounds ? summarizeOutOfSession(events, bounds) : { before: [], after: [] }
 
   return (
     <div className={styles.panel}>
@@ -65,17 +68,40 @@ export function SessionTimelineChart({
           </label>
           <span className={styles.timelineInfo} title={description}>
             <Info size={14} aria-hidden />
-            {timeline.session.session_open_at_utc
-              ? `Open ${formatTimestamp(timeline.session.session_open_at_utc)}`
-              : 'Open missing'}
+            {bounds?.source === 'authoritative_session'
+              ? `Open ${formatTimelineTimestamp(bounds.start)}`
+              : bounds
+                ? `Reference open ${formatTimelineTimestamp(bounds.start)}`
+                : 'Open missing'}
             {' · '}
-            {timeline.session.session_close_at_utc
-              ? `Close ${formatTimestamp(timeline.session.session_close_at_utc)}`
-              : 'Close missing'}
+            {bounds?.source === 'authoritative_session'
+              ? `Close ${formatTimelineTimestamp(bounds.end)}`
+              : bounds
+                ? `Reference close ${formatTimelineTimestamp(bounds.end)}`
+                : 'Close missing'}
+            {bounds?.source === 'regular_session_reference' ? ' · schedule metadata missing' : ''}
           </span>
         </div>
 
-        {timeline.session.partial_reason ? (
+        {bounds?.source === 'regular_session_reference' ? (
+          <div className={styles.timelineNotice}>
+            Market-day schedule metadata is missing, so the chart uses the regular XNYS session as a visual
+            reference only. Out-of-session activity is summarized instead of stretching the session axis.
+          </div>
+        ) : null}
+
+        {outOfSession.before.length > 0 || outOfSession.after.length > 0 ? (
+          <div className={styles.timelineOutOfSession}>
+            {outOfSession.before.length > 0 ? (
+              <OutOfSessionSummary label="Before session" events={outOfSession.before} />
+            ) : null}
+            {outOfSession.after.length > 0 ? (
+              <OutOfSessionSummary label="After session" events={outOfSession.after} />
+            ) : null}
+          </div>
+        ) : null}
+
+        {timeline.session.partial_reason && bounds?.source !== 'regular_session_reference' ? (
           <div className={styles.timelineWarning}>{timeline.session.partial_reason}</div>
         ) : null}
 
@@ -111,11 +137,14 @@ export function SessionTimelineChart({
                       </span>
                     ))}
                   </div>
-                  {lanes.map((lane) => (
-                    <div key={lane} className={styles.timelineRow}>
-                      {events
-                        .filter((event) => (event.event_type || 'event') === lane)
-                        .map((event, index) => (
+                  {lanes.map((lane) => {
+                    const laneEvents = events
+                      .filter((event) => (event.event_type || 'event') === lane)
+                      .filter((event) => isInBounds(event, bounds))
+                    const renderedLane = prepareLaneEvents(laneEvents)
+                    return (
+                      <div key={lane} className={styles.timelineRow}>
+                        {renderedLane.spans.map((event, index) => (
                           <TimelineBar
                             key={`${event.event_id}-${index}`}
                             event={event}
@@ -123,8 +152,17 @@ export function SessionTimelineChart({
                             color={colorByType.get(lane) ?? EVENT_COLORS[0]}
                           />
                         ))}
-                    </div>
-                  ))}
+                        {renderedLane.clusters.map((cluster) => (
+                          <TimelineCluster
+                            key={cluster.id}
+                            cluster={cluster}
+                            bounds={bounds}
+                            color={colorByType.get(lane) ?? EVENT_COLORS[0]}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             </div>
@@ -135,39 +173,68 @@ export function SessionTimelineChart({
   )
 }
 
+function OutOfSessionSummary({ label, events }: { label: string; events: SessionTimelineEvent[] }) {
+  const byType = events.reduce<Record<string, number>>((accumulator, event) => {
+    const key = event.event_type || 'event'
+    accumulator[key] = (accumulator[key] ?? 0) + 1
+    return accumulator
+  }, {})
+  const detail = Object.entries(byType)
+    .map(([type, count]) => `${prettyLabel(type)}: ${count}`)
+    .join('\n')
+  return (
+    <span className={styles.timelineOutOfSessionItem} title={detail}>
+      {label}: {events.length}
+    </span>
+  )
+}
+
+function TimelineCluster({
+  cluster,
+  bounds,
+  color,
+}: {
+  cluster: TimelineEventCluster
+  bounds: TimelineBounds
+  color: string
+}) {
+  const leftPct = clamp(((cluster.start - bounds.start) / bounds.span) * 100, 0, 100)
+  const widthPct = Math.max(0.7, ((cluster.end - cluster.start) / bounds.span) * 100)
+  const tooltip = clusterTooltip(cluster)
+  const isSingle = cluster.events.length === 1
+  return (
+    <button
+      type="button"
+      className={`${styles.sessionTimelineCluster} ${isSingle ? styles.sessionTimelineSingleInstant : ''}`}
+      style={{
+        left: `${leftPct}%`,
+        width: `${Math.min(widthPct, 8)}%`,
+        borderColor: color,
+        backgroundColor: color,
+      }}
+      title={tooltip}
+      aria-label={`${prettyLabel(cluster.eventType)} ${isSingle ? cluster.events[0].headline : `${cluster.events.length} events`}`}
+    >
+      <span>{isSingle ? instantLabel(cluster.events[0]) : cluster.events.length}</span>
+    </button>
+  )
+}
+
 function TimelineBar({
   event,
   bounds,
   color,
 }: {
   event: SessionTimelineEvent
-  bounds: { start: number; span: number }
+  bounds: TimelineBounds
   color: string
 }) {
-  const startTime =
-    event.shape === 'span' && event.started_at_utc
-      ? new Date(event.started_at_utc).getTime()
-      : new Date(event.occurred_at_utc).getTime()
-  const endTime =
-    event.shape === 'span' && event.ended_at_utc
-      ? new Date(event.ended_at_utc).getTime()
-      : startTime
-  const widthPct =
-    event.shape === 'span' && event.started_at_utc && event.ended_at_utc
-      ? Math.max(1, ((endTime - startTime) / bounds.span) * 100)
-      : 0.75
+  const startTime = eventTime(event, 'start')
+  const endTime = eventTime(event, 'end')
+  const widthPct = Math.max(1.5, ((endTime - startTime) / bounds.span) * 100)
   const safeWidth = Math.min(widthPct, 100)
   const leftPct = clamp(((startTime - bounds.start) / bounds.span) * 100, 0, 100)
-  const tooltip = [
-    `Type: ${prettyLabel(event.event_type)}`,
-    event.symbol ? `Symbol: ${event.symbol}` : 'Symbol: none',
-    `Start: ${formatTimestamp(event.started_at_utc ?? event.occurred_at_utc)}`,
-    `End: ${formatTimestamp(event.ended_at_utc ?? event.occurred_at_utc)}`,
-    `Duration: ${formatDuration(event.duration_seconds)}`,
-    `Status: ${prettyLabel(event.status)}`,
-    `Reason: ${event.reason || event.details || 'Not provided'}`,
-    `Evidence freshness: ${prettyLabel(event.evidence_freshness || event.source_status)}`,
-  ].join('\n')
+  const tooltip = eventTooltip(event)
 
   return (
     <button
@@ -189,25 +256,193 @@ function TimelineBar({
   )
 }
 
-function timelineBounds(timeline: SessionTimelineResponse) {
+type TimelineBounds = {
+  start: number
+  end: number
+  span: number
+  source: 'authoritative_session' | 'regular_session_reference' | 'event_range'
+}
+
+type TimelineEventCluster = {
+  id: string
+  eventType: string
+  start: number
+  end: number
+  events: SessionTimelineEvent[]
+}
+
+function prepareLaneEvents(events: SessionTimelineEvent[]) {
+  const spans: SessionTimelineEvent[] = []
+  const instantBuckets = new Map<string, TimelineEventCluster>()
+
+  for (const event of events) {
+    if (isAuthoritativeSpan(event)) {
+      spans.push(event)
+      continue
+    }
+    const occurred = eventTime(event, 'instant')
+    const bucketStart = Math.floor(occurred / INSTANT_CLUSTER_MS) * INSTANT_CLUSTER_MS
+    const bucketEnd = bucketStart + INSTANT_CLUSTER_MS
+    const eventType = event.event_type || 'event'
+    const id = `${eventType}-${bucketStart}`
+    const existing = instantBuckets.get(id)
+    if (existing) {
+      existing.events.push(event)
+      existing.start = Math.min(existing.start, occurred)
+      existing.end = Math.max(existing.end, occurred + 60_000)
+    } else {
+      instantBuckets.set(id, {
+        id,
+        eventType,
+        start: occurred,
+        end: Math.min(bucketEnd, occurred + 60_000),
+        events: [event],
+      })
+    }
+  }
+
+  return {
+    spans,
+    clusters: Array.from(instantBuckets.values()).sort((left, right) => left.start - right.start),
+  }
+}
+
+function isAuthoritativeSpan(event: SessionTimelineEvent): boolean {
+  return Boolean(event.shape === 'span' && event.started_at_utc && event.ended_at_utc)
+}
+
+function isInBounds(event: SessionTimelineEvent, bounds: TimelineBounds): boolean {
+  const start = eventTime(event, 'start')
+  const end = eventTime(event, 'end')
+  return end >= bounds.start && start <= bounds.end
+}
+
+function summarizeOutOfSession(events: SessionTimelineEvent[], bounds: TimelineBounds) {
+  return events.reduce(
+    (summary, event) => {
+      const start = eventTime(event, 'start')
+      const end = eventTime(event, 'end')
+      if (end < bounds.start) summary.before.push(event)
+      if (start > bounds.end) summary.after.push(event)
+      return summary
+    },
+    { before: [] as SessionTimelineEvent[], after: [] as SessionTimelineEvent[] },
+  )
+}
+
+function eventTime(event: SessionTimelineEvent, edge: 'start' | 'end' | 'instant'): number {
+  if (edge === 'start' && isAuthoritativeSpan(event)) {
+    return new Date(event.started_at_utc as string).getTime()
+  }
+  if (edge === 'end' && isAuthoritativeSpan(event)) {
+    return new Date(event.ended_at_utc as string).getTime()
+  }
+  return new Date(event.occurred_at_utc).getTime()
+}
+
+function eventTooltip(event: SessionTimelineEvent): string {
+  return [
+    `Type: ${prettyLabel(event.event_type)}`,
+    event.symbol ? `Symbol: ${event.symbol}` : 'Symbol: none',
+    `Start: ${formatTimestamp(event.started_at_utc ?? event.occurred_at_utc)}`,
+    `End: ${formatTimestamp(event.ended_at_utc ?? event.occurred_at_utc)}`,
+    `Duration: ${formatDuration(event.duration_seconds)}`,
+    `Status: ${prettyLabel(event.status)}`,
+    `Reason: ${event.reason || event.details || 'Not provided'}`,
+    `Evidence freshness: ${prettyLabel(event.evidence_freshness || event.source_status)}`,
+  ].join('\n')
+}
+
+function clusterTooltip(cluster: TimelineEventCluster): string {
+  if (cluster.events.length === 1) return eventTooltip(cluster.events[0])
+  const statuses = cluster.events.reduce<Record<string, number>>((accumulator, event) => {
+    const key = event.status || 'unknown'
+    accumulator[key] = (accumulator[key] ?? 0) + 1
+    return accumulator
+  }, {})
+  const statusSummary = Object.entries(statuses)
+    .map(([status, count]) => `${prettyLabel(status)}: ${count}`)
+    .join(', ')
+  const sampleReasons = cluster.events
+    .slice(0, 4)
+    .map((event) => event.reason || event.details || event.headline)
+    .filter(Boolean)
+    .join('\n')
+  return [
+    `Type: ${prettyLabel(cluster.eventType)}`,
+    `Events: ${cluster.events.length}`,
+    `First: ${formatTimelineTimestamp(cluster.start)}`,
+    `Last: ${formatTimelineTimestamp(cluster.end)}`,
+    `Status summary: ${statusSummary}`,
+    sampleReasons ? `Sample reasons:\n${sampleReasons}` : 'Sample reasons: none',
+  ].join('\n')
+}
+
+function instantLabel(event: SessionTimelineEvent): string {
+  if (event.symbol) return event.symbol
+  const label = prettyLabel(event.event_type)
+  return label.slice(0, 1)
+}
+
+function timelineBounds(timeline: SessionTimelineResponse): TimelineBounds | null {
   const sessionOpen = timeline.session.session_open_at_utc
     ? new Date(timeline.session.session_open_at_utc).getTime()
     : NaN
   const sessionClose = timeline.session.session_close_at_utc
     ? new Date(timeline.session.session_close_at_utc).getTime()
     : NaN
+  if (!Number.isNaN(sessionOpen) && !Number.isNaN(sessionClose) && sessionClose > sessionOpen) {
+    return {
+      start: sessionOpen,
+      end: sessionClose,
+      span: Math.max(60_000, sessionClose - sessionOpen),
+      source: 'authoritative_session',
+    }
+  }
+
+  const reference = regularXnysSessionReference(timeline.filters.trading_day || timeline.session.trading_day)
+  if (reference) {
+    return {
+      ...reference,
+      span: reference.end - reference.start,
+      source: 'regular_session_reference',
+    }
+  }
+
   const timestamps = timeline.events
     .map((event) => new Date(event.occurred_at_utc).getTime())
     .filter((value) => !Number.isNaN(value))
-  if (!Number.isNaN(sessionOpen) && !Number.isNaN(sessionClose) && sessionClose > sessionOpen) {
-    const start = Math.min(sessionOpen, ...timestamps)
-    const end = Math.max(sessionClose, ...timestamps)
-    return { start, span: Math.max(60_000, end - start) }
-  }
   if (timestamps.length === 0) return null
   const start = Math.min(...timestamps)
   const end = Math.max(...timestamps)
-  return { start, span: Math.max(60_000, end - start) }
+  return { start, end, span: Math.max(60_000, end - start), source: 'event_range' }
+}
+
+function regularXnysSessionReference(tradingDay: string): { start: number; end: number } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tradingDay)) return null
+  const offsetHours = isEasternDaylightTime(tradingDay) ? 4 : 5
+  const open = Date.parse(`${tradingDay}T09:30:00-0${offsetHours}:00`)
+  const close = Date.parse(`${tradingDay}T16:00:00-0${offsetHours}:00`)
+  if (Number.isNaN(open) || Number.isNaN(close) || close <= open) return null
+  return { start: open, end: close }
+}
+
+function isEasternDaylightTime(tradingDay: string): boolean {
+  const [yearText, monthText, dayText] = tradingDay.split('-')
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  if (!year || !month || !day) return true
+  const dstStart = nthSundayOfMonth(year, 3, 2)
+  const dstEnd = nthSundayOfMonth(year, 11, 1)
+  const value = Date.UTC(year, month - 1, day)
+  return value >= dstStart && value < dstEnd
+}
+
+function nthSundayOfMonth(year: number, month: number, occurrence: number): number {
+  const first = new Date(Date.UTC(year, month - 1, 1))
+  const firstSundayDate = 1 + ((7 - first.getUTCDay()) % 7)
+  return Date.UTC(year, month - 1, firstSundayDate + (occurrence - 1) * 7)
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -219,6 +454,10 @@ function formatTimestampSlice(value: number): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatTimelineTimestamp(value: number): string {
+  return formatTimestamp(new Date(value).toISOString())
 }
 
 function formatDuration(seconds: number | null): string {

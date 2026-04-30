@@ -68,13 +68,29 @@ export function MarketChartFlavor() {
           ...{ __order: index },
         }))
       : equityPoints
+  const useIntradayLabels = fallbackEquityPoints.some((point) => point.timestamp_utc)
   const chartData = useMemo(
     () =>
-      fallbackEquityPoints.map((point) => ({
-        label: point.label,
-        equity: parseNumericValue(point.equity),
-        cash: parseNumericValue(point.cash),
-      })),
+      fallbackEquityPoints
+        .map((point) => ({
+          label: point.timestamp_utc
+            ? new Date(point.timestamp_utc).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              })
+            : point.label,
+          tooltipLabel: point.timestamp_utc
+            ? new Date(point.timestamp_utc).toLocaleString([], {
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+              })
+            : point.label,
+          equity: parseNumericValue(point.equity),
+          cash: parseNumericValue(point.cash),
+        }))
+        .filter((point) => point.equity > 0),
     [fallbackEquityPoints],
   )
 
@@ -90,11 +106,15 @@ export function MarketChartFlavor() {
 
   const gateEntries = Object.entries(commandCenter.gate_statuses ?? {})
   const exposure = commandCenter.exposure_breakdown ?? []
+  const pricedExposure = exposure.filter((item) => item.value != null)
+  const missingExposure = exposure.filter((item) => item.value == null)
   const exposureTotal =
-    exposure.reduce(
-      (sum, item) => (item.value == null ? sum : sum + Math.abs(parseNumericValue(item.value))),
+    pricedExposure.reduce(
+      (sum, item) => sum + Math.abs(parseNumericValue(item.value)),
       0,
-    ) || 1
+    )
+  const cashValue = parseNumericValue(commandCenter.account_summary.cash)
+  const equityValue = parseNumericValue(commandCenter.account_summary.equity)
 
   return (
     <div className={styles.gridShell}>
@@ -176,70 +196,84 @@ export function MarketChartFlavor() {
               </button>
             ))}
             <span className={styles.toolbarRight}>
-              <span className={styles.disabledNote}>Daily granularity from portfolio snapshot</span>
+              <span className={styles.disabledNote}>
+                {useIntradayLabels ? 'Intraday account snapshots' : 'Source account snapshots'}
+              </span>
             </span>
           </div>
-          <div className={styles.panelBody} style={{ minHeight: 280 }}>
+          <div className={styles.panelBody} style={{ minHeight: 280, flex: '0 0 auto' }}>
             {chartData.length === 0 ? (
               <div className={styles.emptyState}>
                 <strong>{portfolio.equity_curve.headline}</strong>
                 <p>{portfolio.equity_curve.detail}</p>
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={chartData} margin={{ top: 10, right: 16, bottom: 4, left: 0 }}>
-                  <defs>
-                    <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--primary-bright)" stopOpacity={0.4} />
-                      <stop offset="100%" stopColor="var(--primary-bright)" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="rgba(36, 82, 122, 0.3)" strokeDasharray="2 4" />
-                  <XAxis
-                    dataKey="label"
-                    stroke="var(--text-muted)"
-                    fontSize={10}
-                    fontFamily="var(--font-mono)"
-                  />
-                  <YAxis
-                    stroke="var(--text-muted)"
-                    fontSize={10}
-                    fontFamily="var(--font-mono)"
-                    tickFormatter={(value: number) =>
-                      value >= 10000
-                        ? `${(value / 1000).toFixed(0)}k`
-                        : value.toFixed(0)
-                    }
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      background: 'var(--bg-panel-elevated)',
-                      border: '1px solid var(--border-strong)',
-                      borderRadius: 6,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="equity"
-                    stroke="var(--primary-bright)"
-                    strokeWidth={1.6}
-                    fill="url(#equityFill)"
-                    isAnimationActive={false}
-                    name="Equity"
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="cash"
-                    stroke="var(--secondary)"
-                    strokeWidth={1.2}
-                    strokeDasharray="3 3"
-                    dot={false}
-                    isAnimationActive={false}
-                    name="Cash"
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+              <div className={styles.portfolioGraphDeck}>
+                <div className={styles.equityChartFrame}>
+                  <ResponsiveContainer width="100%" height={230}>
+                    <ComposedChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+                      <defs>
+                        <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--primary-bright)" stopOpacity={0.28} />
+                          <stop offset="100%" stopColor="var(--primary-bright)" stopOpacity={0.03} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="rgba(36, 82, 122, 0.24)" strokeDasharray="2 6" />
+                      <XAxis
+                        dataKey="label"
+                        stroke="var(--text-muted)"
+                        fontSize={10}
+                        fontFamily="var(--font-mono)"
+                        interval="preserveStartEnd"
+                        minTickGap={28}
+                      />
+                      <YAxis
+                        stroke="var(--text-muted)"
+                        fontSize={10}
+                        fontFamily="var(--font-mono)"
+                        width={48}
+                        domain={['dataMin - 5', 'dataMax + 5']}
+                        tickFormatter={(value: number) => `$${(value / 1000).toFixed(1)}k`}
+                      />
+                      <Tooltip
+                        labelFormatter={(_, payload) =>
+                          payload?.[0]?.payload?.tooltipLabel ?? ''
+                        }
+                        formatter={(value, name) => [toCurrency(value as number), name ?? 'Value']}
+                        contentStyle={{
+                          background: 'var(--bg-panel-elevated)',
+                          border: '1px solid var(--border-strong)',
+                          borderRadius: 6,
+                          fontSize: 12,
+                        }}
+                      />
+                      <Area
+                        type="linear"
+                        dataKey="equity"
+                        stroke="var(--primary-bright)"
+                        strokeWidth={1.8}
+                        fill="url(#equityFill)"
+                        dot={{ r: 2 }}
+                        activeDot={{ r: 4 }}
+                        isAnimationActive={false}
+                        name="Equity"
+                      />
+                      <Line
+                        type="linear"
+                        dataKey="cash"
+                        stroke="var(--secondary)"
+                        strokeWidth={1.2}
+                        strokeDasharray="4 4"
+                        dot={false}
+                        isAnimationActive={false}
+                        name="Cash"
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <HoldingsDonut exposure={pricedExposure} total={exposureTotal} />
+                <CapitalUseChart cash={cashValue} exposure={exposureTotal} equity={equityValue} />
+              </div>
             )}
           </div>
         </div>
@@ -308,29 +342,40 @@ export function MarketChartFlavor() {
                   <strong>No active exposure</strong>
                   <p>Account is currently flat.</p>
                 </div>
+              ) : pricedExposure.length === 0 ? (
+                <div className={styles.emptyState}>
+                  <strong>Exposure unavailable</strong>
+                  <p>
+                    Open-position symbols are available ({exposure.map((entry) => entry.symbol).join(', ')}), but
+                    source-backed market values are missing. No allocation chart is shown.
+                  </p>
+                </div>
               ) : (
-                exposure.map((entry) => {
-                  const value = entry.value == null ? null : parseNumericValue(entry.value)
-                  const ratio = value == null ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
-                  return (
-                    <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span className="mono">{entry.symbol}</span>
-                        <span className="numeric">
-                          {value == null
-                            ? prettyLabel(entry.value_status ?? 'source_missing')
-                            : toCurrency(value)}
-                        </span>
+                <>
+                  {pricedExposure.map((entry) => {
+                    const value = parseNumericValue(entry.value)
+                    const ratio = exposureTotal <= 0 ? 0 : Math.min(1, Math.abs(value) / exposureTotal)
+                    return (
+                      <div key={entry.symbol} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span className="mono">{entry.symbol}</span>
+                          <span className="numeric">{toCurrency(value)}</span>
+                        </div>
+                        <div className={styles.exposureBar}>
+                          <span style={{ width: `${ratio * 100}%` }} />
+                        </div>
                       </div>
-                      <div className={styles.exposureBar}>
-                        <span style={{ width: `${ratio * 100}%` }} />
-                      </div>
-                      {value == null && entry.missing_reason ? (
-                        <span className={styles.disabledNote}>{entry.missing_reason}</span>
-                      ) : null}
+                    )
+                  })}
+                  {missingExposure.length > 0 ? (
+                    <div className={styles.timelineNotice}>
+                      Missing market values:{' '}
+                      {missingExposure
+                        .map((entry) => `${entry.symbol} (${prettyLabel(entry.value_status ?? 'source_missing')})`)
+                        .join(', ')}
                     </div>
-                  )
-                })
+                  ) : null}
+                </>
               )}
             </div>
           </div>
@@ -353,6 +398,88 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub: str
       <span className={styles.metricLabel}>{label}</span>
       <span className={styles.metricValue}>{value}</span>
       <span className={styles.metricSub}>{sub}</span>
+    </div>
+  )
+}
+
+function HoldingsDonut({
+  exposure,
+  total,
+}: {
+  exposure: Array<{ symbol: string; value: string | null }>
+  total: number
+}) {
+  if (exposure.length === 0 || total <= 0) {
+    return (
+      <div className={styles.miniChartPanel}>
+        <span className={styles.metricLabel}>Holdings %</span>
+        <div className={styles.emptyMiniChart}>No priced holdings</div>
+      </div>
+    )
+  }
+  const colors = ['var(--primary-bright)', 'var(--good)', 'var(--watch)', 'var(--risk)']
+  let cursor = 0
+  return (
+    <div className={styles.miniChartPanel}>
+      <span className={styles.metricLabel}>Holdings %</span>
+      <svg viewBox="0 0 120 120" className={styles.donutChart} aria-label="Holdings allocation by market value">
+        {exposure.map((entry, index) => {
+          const value = Math.abs(parseNumericValue(entry.value))
+          const start = cursor
+          const fraction = value / total
+          cursor += fraction
+          return (
+            <circle
+              key={entry.symbol}
+              cx="60"
+              cy="60"
+              r="42"
+              fill="none"
+              stroke={colors[index % colors.length]}
+              strokeWidth="14"
+              strokeDasharray={`${fraction * 263.89} 263.89`}
+              strokeDashoffset={-start * 263.89}
+              transform="rotate(-90 60 60)"
+            />
+          )
+        })}
+        <text x="60" y="58" textAnchor="middle" className={styles.donutValue}>
+          {exposure.length}
+        </text>
+        <text x="60" y="73" textAnchor="middle" className={styles.donutLabel}>
+          holdings
+        </text>
+      </svg>
+      <div className={styles.donutLegend}>
+        {exposure.map((entry, index) => {
+          const value = Math.abs(parseNumericValue(entry.value))
+          return (
+            <span key={entry.symbol}>
+              <i style={{ background: colors[index % colors.length] }} />
+              {entry.symbol} {(value / total * 100).toFixed(1)}%
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function CapitalUseChart({ cash, exposure, equity }: { cash: number; exposure: number; equity: number }) {
+  const denominator = equity > 0 ? equity : Math.max(cash + exposure, 1)
+  const cashPct = Math.min(100, Math.max(0, (cash / denominator) * 100))
+  const exposurePct = Math.min(100, Math.max(0, (exposure / denominator) * 100))
+  return (
+    <div className={styles.miniChartPanel}>
+      <span className={styles.metricLabel}>Capital Use</span>
+      <div className={styles.capitalBars}>
+        <span>Cash</span>
+        <div><i style={{ width: `${cashPct}%` }} /></div>
+        <strong>{cashPct.toFixed(1)}%</strong>
+        <span>Exposure</span>
+        <div><i style={{ width: `${exposurePct}%` }} /></div>
+        <strong>{exposurePct.toFixed(1)}%</strong>
+      </div>
     </div>
   )
 }

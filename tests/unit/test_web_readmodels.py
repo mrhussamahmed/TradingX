@@ -429,6 +429,93 @@ def test_same_cycle_reconciliation_before_cycle_completion_is_used_for_exposure(
     assert portfolio.positions_panel.positions[0].market_value == "1000"
 
 
+def test_symbol_matching_stale_reconciliation_is_used_with_stale_status(
+    tmp_path,
+) -> None:
+    reconciliation_at = datetime(2026, 4, 28, 19, 40, tzinfo=UTC)
+    cycle_at = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, cycle_at)
+    read_model._paper_store.write_reconciliation_snapshot(
+        ReconciliationSnapshot(
+            reconciliation_id="reconcile-stale-priced",
+            portfolio_state=PortfolioState(
+                as_of_utc=reconciliation_at,
+                cash=Decimal("98000"),
+                equity=Decimal("100000"),
+                buying_power=Decimal("390000"),
+                positions=(
+                    PositionSnapshot(
+                        symbol="SPY",
+                        quantity=Decimal("2"),
+                        average_entry_price=Decimal("500"),
+                        market_value=Decimal("1000"),
+                    ),
+                ),
+                open_orders=(),
+            ),
+            broker_state_age_seconds=10,
+            differences=(),
+            resolved=True,
+        )
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=cycle_at,
+        cycle_id="cycle-newer-same-symbol",
+        payload_overrides={
+            "open_position_symbols": ("SPY",),
+        },
+    )
+
+    command_center = read_model.build_command_center_snapshot()
+    portfolio = read_model.build_portfolio_workspace_snapshot()
+    row = portfolio.positions_panel.positions[0]
+
+    assert command_center.exposure_breakdown[0]["value"] == "1000"
+    assert command_center.exposure_breakdown[0]["value_status"] == "stale"
+    assert row.quantity == "2"
+    assert row.market_value == "1000"
+    assert row.exposure_pct == "1.00"
+    assert row.quantity_status == "stale"
+    assert row.price_status == "stale"
+    assert row.exposure_status == "stale"
+    assert row.status == "stale_price"
+
+
+def test_portfolio_equity_curve_ignores_zero_placeholders_and_sorts_by_time(
+    tmp_path,
+) -> None:
+    read_model = _minimal_read_model(
+        tmp_path,
+        datetime(2026, 4, 28, 19, 44, tzinfo=UTC),
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=datetime(2026, 4, 28, 19, 44, tzinfo=UTC),
+        cycle_id="cycle-late",
+        payload_overrides={"equity": "100010", "cash": "99000"},
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=datetime(2026, 4, 28, 9, 30, tzinfo=UTC),
+        cycle_id="cycle-zero",
+        payload_overrides={"equity": "0", "cash": "0"},
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=datetime(2026, 4, 28, 13, 30, tzinfo=UTC),
+        cycle_id="cycle-early",
+        payload_overrides={"equity": "100000", "cash": "98000"},
+    )
+
+    curve = read_model.build_portfolio_workspace_snapshot().equity_curve
+
+    assert [point.equity for point in curve.points] == ["100,000.00", "100,010.00"]
+    assert [point.timestamp_utc for point in curve.points] == sorted(
+        point.timestamp_utc for point in curve.points
+    )
+
+
 def test_flat_reconciliation_suppresses_stale_service_cycle_exposure(
     tmp_path,
 ) -> None:

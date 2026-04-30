@@ -304,15 +304,26 @@ class LocalWebReadModel:
         runtime_heartbeat = self.build_runtime_heartbeat_snapshot()
         service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
         latest_account_cycle = self._pick_latest_account_cycle(service_cycles)
+        fallback_open_positions = tuple(
+            {"symbol": symbol}
+            for symbol in self._payload_strings(
+                latest_account_cycle.get("open_position_symbols", ())
+                if latest_account_cycle is not None
+                else ()
+            )
+        )
         latest_portfolio_state = self._latest_reconciliation_portfolio_state_payload(
             minimum_as_of=self._payload_timestamp(
                 latest_account_cycle,
                 "started_at_utc",
                 "completed_at_utc",
             ),
+            fallback_open_symbols=tuple(
+                position["symbol"] for position in fallback_open_positions
+            ),
         )
         latest_open_positions = self._latest_open_position_symbols(
-            fallback_positions=dashboard.positions,
+            fallback_positions=fallback_open_positions or dashboard.positions,
             latest_portfolio_state=latest_portfolio_state,
         )
         exposure_breakdown = self._build_exposure_breakdown(
@@ -343,6 +354,26 @@ class LocalWebReadModel:
             }
             else "standby"
         )
+        command_equity_points: list[tuple[datetime, dict[str, str]]] = []
+        for payload in service_cycles:
+            timestamp = self._payload_timestamp(payload, "completed_at_utc")
+            equity_value = self._decimal_from_candidates(
+                payload.get("equity"),
+                default=Decimal("0"),
+            )
+            if timestamp is None or equity_value <= Decimal("0"):
+                continue
+            command_equity_points.append(
+                (
+                    timestamp,
+                    {
+                        "label": self._timeline_label(
+                            str(payload.get("completed_at_utc", ""))
+                        ),
+                        "value": str(equity_value),
+                    },
+                )
+            )
         return CommandCenterSnapshot(
             generated_at_utc=dashboard.generated_at_utc,
             service_status=dashboard.service_status,
@@ -350,13 +381,10 @@ class LocalWebReadModel:
             session_mode=session_mode,
             account_summary=dashboard.account_summary,
             equity_curve=tuple(
-                {
-                    "label": self._timeline_label(
-                        str(payload.get("completed_at_utc", ""))
-                    ),
-                    "value": str(payload.get("equity", "")),
-                }
-                for payload in service_cycles[-12:]
+                point
+                for _, point in sorted(command_equity_points, key=lambda item: item[0])[
+                    -12:
+                ]
             ),
             exposure_breakdown=exposure_breakdown,
             watchlist=watchlist,
@@ -540,6 +568,15 @@ class LocalWebReadModel:
         runtime_state = self.get_runtime_host_state()
         warmup = self.get_latest_historical_warmup()
         service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
+        latest_account_cycle = self._pick_latest_account_cycle(service_cycles)
+        fallback_open_positions = tuple(
+            {"symbol": symbol}
+            for symbol in self._payload_strings(
+                latest_account_cycle.get("open_position_symbols", ())
+                if latest_account_cycle is not None
+                else ()
+            )
+        )
         closed_trades = self._paper_store.list_artifact_payloads("closed_trades")
         account_seed = self._load_ops_payload("paper_account_starting_state.json")
         has_rehearsal_baseline = bool(account_seed)
@@ -934,12 +971,15 @@ class LocalWebReadModel:
             ),
             positions_panel=self._build_portfolio_positions_panel(
                 positions=self._portfolio_position_inputs(
-                    fallback_positions=dashboard.positions,
+                    fallback_positions=fallback_open_positions or dashboard.positions,
                     latest_portfolio_state=self._latest_reconciliation_portfolio_state_payload(
                         minimum_as_of=self._payload_timestamp(
-                            self._pick_latest_account_cycle(service_cycles),
+                            latest_account_cycle,
                             "started_at_utc",
                             "completed_at_utc",
+                        ),
+                        fallback_open_symbols=tuple(
+                            position["symbol"] for position in fallback_open_positions
                         ),
                     ),
                 ),
@@ -1161,6 +1201,13 @@ class LocalWebReadModel:
                 latest_cycle_payload,
                 "started_at_utc",
                 "completed_at_utc",
+            ),
+            fallback_open_symbols=tuple(
+                self._payload_strings(
+                    latest_cycle_payload.get("open_position_symbols", ())
+                )
+                if latest_cycle_payload is not None
+                else ()
             ),
         )
         fallback_open_positions = tuple(
@@ -1391,6 +1438,13 @@ class LocalWebReadModel:
                 "started_at_utc",
                 "completed_at_utc",
             ),
+            fallback_open_symbols=tuple(
+                self._payload_strings(
+                    latest_cycle_payload.get("open_position_symbols", ())
+                )
+                if latest_cycle_payload is not None
+                else ()
+            ),
         )
         fallback_open_positions = tuple(
             {"symbol": symbol}
@@ -1619,39 +1673,57 @@ class LocalWebReadModel:
                 ),
                 points=(),
             )
-        points = tuple(
-            PortfolioSeriesPoint(
-                label=self._timeline_label(str(payload.get("completed_at_utc", ""))),
-                timestamp_utc=(
-                    self._parse_datetime(str(payload.get("completed_at_utc", "")))
-                    if str(payload.get("completed_at_utc", "")).strip()
-                    else None
-                ),
-                equity=self._format_money(
-                    self._decimal_from_candidates(
-                        payload.get("equity"),
-                        default=Decimal("0"),
-                    )
-                ),
-                cash=self._format_money(
-                    self._decimal_from_candidates(
-                        payload.get("cash"),
-                        default=Decimal("0"),
-                    )
-                ),
-                buying_power=self._format_money(
-                    self._decimal_from_candidates(
-                        payload.get("buying_power"),
-                        default=Decimal("0"),
-                    )
-                ),
+        candidate_points: list[tuple[datetime, PortfolioSeriesPoint]] = []
+        for payload in service_cycles:
+            timestamp_raw = str(payload.get("completed_at_utc", "")).strip()
+            if not timestamp_raw:
+                continue
+            timestamp = self._parse_datetime(timestamp_raw)
+            equity = self._decimal_from_candidates(
+                payload.get("equity"),
+                default=Decimal("0"),
             )
-            for payload in service_cycles[-24:]
+            if equity <= Decimal("0"):
+                continue
+            candidate_points.append(
+                (
+                    timestamp,
+                    PortfolioSeriesPoint(
+                        label=self._timeline_label(timestamp_raw),
+                        timestamp_utc=timestamp,
+                        equity=self._format_money(equity),
+                        cash=self._format_money(
+                            self._decimal_from_candidates(
+                                payload.get("cash"),
+                                default=Decimal("0"),
+                            )
+                        ),
+                        buying_power=self._format_money(
+                            self._decimal_from_candidates(
+                                payload.get("buying_power"),
+                                default=Decimal("0"),
+                            )
+                        ),
+                    ),
+                )
+            )
+        points = tuple(
+            point
+            for _, point in sorted(candidate_points, key=lambda item: item[0])[-24:]
         )
+        if len(points) < 2:
+            return PortfolioCurvePanel(
+                status="unavailable",
+                headline="No real TradingX equity curve yet",
+                detail=(
+                    "The portfolio curve needs at least two non-zero, timestamped account snapshots."
+                ),
+                points=points,
+            )
         return PortfolioCurvePanel(
             status="available",
             headline="TradingX equity curve",
-            detail="This chart is built only from recorded service cycles.",
+            detail="This chart is built from non-zero recorded account snapshots sorted by source timestamp.",
             points=points,
         )
 
@@ -1913,19 +1985,41 @@ class LocalWebReadModel:
         self,
         *,
         minimum_as_of: datetime | None = None,
+        fallback_open_symbols: tuple[str, ...] = (),
     ) -> dict[str, object] | None:
         latest_payload: dict[str, object] | None = None
         latest_timestamp: datetime | None = None
+        latest_any_payload: dict[str, object] | None = None
+        latest_any_timestamp: datetime | None = None
         for payload in self._paper_store.list_artifact_payloads("reconciliation"):
             portfolio_state = self._ensure_mapping(payload.get("portfolio_state", {}))
             timestamp = self._payload_timestamp(portfolio_state, "as_of_utc")
             if timestamp is None:
                 continue
+            if latest_any_timestamp is None or timestamp > latest_any_timestamp:
+                latest_any_timestamp = timestamp
+                latest_any_payload = dict(portfolio_state)
             if minimum_as_of is not None and timestamp < minimum_as_of:
                 continue
             if latest_timestamp is None or timestamp > latest_timestamp:
                 latest_timestamp = timestamp
                 latest_payload = dict(portfolio_state)
+        if latest_payload is None and fallback_open_symbols and latest_any_payload is not None:
+            portfolio_symbols = {
+                symbol
+                for position in self._ensure_list(latest_any_payload.get("positions", ()))
+                if isinstance(position, Mapping)
+                and (symbol := str(position.get("symbol", "")).strip())
+                and (
+                    self._decimal_from_payload(position.get("quantity")) is None
+                    or self._decimal_from_payload(position.get("quantity"))
+                    != Decimal("0")
+                )
+            }
+            fallback_symbols = {symbol for symbol in fallback_open_symbols if symbol}
+            if portfolio_symbols and portfolio_symbols == fallback_symbols:
+                latest_payload = dict(latest_any_payload)
+                latest_payload["_source_status"] = "stale"
         return latest_payload
 
     def _portfolio_position_inputs(
@@ -1937,6 +2031,7 @@ class LocalWebReadModel:
         if latest_portfolio_state is None:
             return tuple(dict(position) for position in fallback_positions)
         source_at = str(latest_portfolio_state.get("as_of_utc", "")).strip()
+        source_status = str(latest_portfolio_state.get("_source_status", "fresh")).strip()
         positions = []
         for position in self._ensure_list(latest_portfolio_state.get("positions", ())):
             if not isinstance(position, Mapping):
@@ -1944,6 +2039,8 @@ class LocalWebReadModel:
             row = dict(position)
             if source_at:
                 row["source_evidence_at_utc"] = source_at
+            if source_status:
+                row["source_status"] = source_status
             row["portfolio_equity"] = latest_portfolio_state.get("equity")
             positions.append(row)
         return tuple(positions)
@@ -1978,6 +2075,8 @@ class LocalWebReadModel:
             market_value_decimal = self._decimal_from_payload(market_value)
             exposure_pct = None
             exposure_status = "source_missing"
+            source_status = str(position.get("source_status", "fresh")).strip()
+            valued_status = "stale" if source_status == "stale" else "fresh"
             if (
                 market_value_decimal is not None
                 and portfolio_equity is not None
@@ -1987,9 +2086,9 @@ class LocalWebReadModel:
                     (abs(market_value_decimal) / portfolio_equity) * Decimal("100"),
                     decimals=2,
                 )
-                exposure_status = "fresh"
-            quantity_status = "fresh" if quantity is not None else "source_missing"
-            price_status = "fresh" if market_value is not None else "unpriced"
+                exposure_status = valued_status
+            quantity_status = valued_status if quantity is not None else "source_missing"
+            price_status = valued_status if market_value is not None else "unpriced"
             source_evidence_at = self._payload_timestamp(
                 position,
                 "source_evidence_at_utc",
@@ -2000,7 +2099,13 @@ class LocalWebReadModel:
                     quantity=quantity,
                     market_value=market_value,
                     exposure_pct=exposure_pct,
-                    status=("missing_price" if market_value is None else "open"),
+                    status=(
+                        "missing_price"
+                        if market_value is None
+                        else "stale_price"
+                        if source_status == "stale"
+                        else "open"
+                    ),
                     quantity_status=quantity_status,
                     price_status=price_status,
                     exposure_status=exposure_status,
@@ -3988,6 +4093,9 @@ class LocalWebReadModel:
             return ()
         positions_by_symbol: dict[str, Mapping[str, object]] = {}
         if latest_portfolio_state is not None:
+            source_status = str(
+                latest_portfolio_state.get("_source_status", "fresh")
+            ).strip()
             for position in self._ensure_list(
                 latest_portfolio_state.get("positions", ())
             ):
@@ -4023,8 +4131,14 @@ class LocalWebReadModel:
                 {
                     "symbol": symbol,
                     "value": str(market_value),
-                    "value_status": "fresh",
-                    "missing_reason": "",
+                    "value_status": (
+                        "stale" if source_status == "stale" else "fresh"
+                    ),
+                    "missing_reason": (
+                        "Using latest broker-priced reconciliation because newer cycles did not publish a newer broker snapshot."
+                        if source_status == "stale"
+                        else ""
+                    ),
                 }
             )
         return tuple(rows)

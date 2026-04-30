@@ -107,7 +107,7 @@ describe('SessionTimelineChart', () => {
     expect(onTradingDayChange).toHaveBeenCalledWith('2026-04-27')
   })
 
-  it('expands the visual range for retained post-close events', () => {
+  it('summarizes retained post-close events without stretching the session axis', () => {
     const timeline = makeTimeline()
     timeline.events = [
       {
@@ -137,7 +137,76 @@ describe('SessionTimelineChart', () => {
     )
 
     const close = screen.getByRole('button', { name: /Digest Close digest/i })
-    const postClose = screen.getByRole('button', { name: /Digest Post-close reconciliation/i })
-    expect(close.style.left).not.toBe(postClose.style.left)
+    expect(close).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Digest Post-close reconciliation/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/After session: 1/i)).toHaveAttribute('title', expect.stringContaining('Digest: 1'))
+  })
+
+  it('clusters dense instant events into readable count markers', () => {
+    const timeline = makeTimeline()
+    timeline.events = Array.from({ length: 12 }, (_, index) => ({
+      ...timeline.events[0],
+      event_id: `cycle-${index}`,
+      headline: `Cycle ${index}`,
+      occurred_at_utc: `2026-04-28T14:${String(index).padStart(2, '0')}:00+00:00`,
+    }))
+
+    render(
+      <SessionTimelineChart
+        title="Operation Timeline"
+        description="Session timeline"
+        timeline={timeline}
+        selectedTradingDay="2026-04-28"
+        onTradingDayChange={() => undefined}
+        emptyStateMessage="No events."
+      />,
+    )
+
+    const cluster = screen.getByRole('button', { name: /Service Cycle 12 events/i })
+    expect(cluster).toHaveTextContent('12')
+    expect(cluster).toHaveAttribute('title', expect.stringContaining('Events: 12'))
+    expect(screen.queryByRole('button', { name: /Service Cycle Cycle 0/i })).not.toBeInTheDocument()
+  })
+
+  it('uses a disclosed regular-session reference when schedule metadata is missing', () => {
+    const timeline = makeTimeline()
+    timeline.session = {
+      ...timeline.session,
+      session_open_at_utc: null,
+      session_close_at_utc: null,
+      status: 'missing_session_metadata',
+      metadata_status: 'schedule_missing',
+      partial_reason: 'No market-day schedule metadata was found for this trading day.',
+    }
+    timeline.events = [
+      {
+        ...timeline.events[0],
+        event_id: 'pre-open',
+        headline: 'Pre-open closed cycle',
+        occurred_at_utc: '2026-04-28T09:00:00+00:00',
+      },
+      {
+        ...timeline.events[0],
+        event_id: 'regular-session',
+        headline: 'Regular session cycle',
+        occurred_at_utc: '2026-04-28T14:00:00+00:00',
+      },
+    ]
+
+    render(
+      <SessionTimelineChart
+        title="Evidence Timeline"
+        description="Session timeline"
+        timeline={timeline}
+        selectedTradingDay="2026-04-28"
+        onTradingDayChange={() => undefined}
+        emptyStateMessage="No events."
+      />,
+    )
+
+    expect(screen.getByText(/regular XNYS session as a visual reference/i)).toBeInTheDocument()
+    expect(screen.getByText(/Before session: 1/i)).toBeInTheDocument()
+    expect(screen.queryByText(/No market-day schedule metadata was found/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Service Cycle Regular session cycle/i })).toBeInTheDocument()
   })
 })
