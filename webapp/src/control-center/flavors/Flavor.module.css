@@ -79,9 +79,14 @@
 }
 .portfolioGraphDeck {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px 170px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
+}
+.portfolioMiniGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 .equityChartFrame {
   min-width: 0;
@@ -92,6 +97,7 @@
 }
 .miniChartPanel {
   min-width: 0;
+  min-height: 170px;
   border: 1px solid rgba(36, 82, 122, 0.42);
   border-radius: var(--radius-md);
   background: rgba(8, 22, 36, 0.72);
@@ -116,8 +122,8 @@
   text-transform: uppercase;
 }
 .donutLegend {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 4px;
   font-size: 10px;
   color: var(--text-secondary);
@@ -134,11 +140,12 @@
 }
 .capitalBars {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) auto;
-  gap: 8px 6px;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  gap: 14px 10px;
   align-items: center;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
+  margin-top: 20px;
 }
 .capitalBars div {
   height: 8px;

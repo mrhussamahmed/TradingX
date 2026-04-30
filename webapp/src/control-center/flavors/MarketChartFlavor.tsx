@@ -26,14 +26,14 @@ import {
 import styles from './Flavor.module.css'
 
 const TIMEFRAMES = [
-  { id: '1m', label: '1m', interactive: false },
-  { id: '5m', label: '5m', interactive: false },
-  { id: '15m', label: '15m', interactive: false },
-  { id: '1h', label: '1H', interactive: false },
-  { id: '4h', label: '4H', interactive: false },
-  { id: '1d', label: '1D', interactive: true },
-  { id: '1w', label: '1W', interactive: false },
-  { id: '1M', label: '1M', interactive: false },
+  { id: '1m', label: '1m', minutes: 1 },
+  { id: '5m', label: '5m', minutes: 5 },
+  { id: '15m', label: '15m', minutes: 15 },
+  { id: '1h', label: '1H', minutes: 60 },
+  { id: '4h', label: '4H', minutes: 240 },
+  { id: '1d', label: '1D', minutes: 1440 },
+  { id: '1w', label: '1W', minutes: 10080 },
+  { id: '1M', label: '1M', minutes: 43200 },
 ] as const
 
 type TimeframeId = (typeof TIMEFRAMES)[number]['id']
@@ -70,9 +70,9 @@ export function MarketChartFlavor() {
       : equityPoints
   const useIntradayLabels = fallbackEquityPoints.some((point) => point.timestamp_utc)
   const chartData = useMemo(
-    () =>
-      fallbackEquityPoints
-        .map((point) => ({
+    () => {
+      const rawPoints = fallbackEquityPoints
+        .map((point, index) => ({
           label: point.timestamp_utc
             ? new Date(point.timestamp_utc).toLocaleTimeString([], {
                 hour: 'numeric',
@@ -89,9 +89,23 @@ export function MarketChartFlavor() {
             : point.label,
           equity: parseNumericValue(point.equity),
           cash: parseNumericValue(point.cash),
+          timestamp: point.timestamp_utc ? new Date(point.timestamp_utc).getTime() : null,
+          order: index,
         }))
-        .filter((point) => point.equity > 0),
-    [fallbackEquityPoints],
+        .filter((point) => point.equity > 0)
+      const selected = TIMEFRAMES.find((option) => option.id === timeframe) ?? TIMEFRAMES[5]
+      if (rawPoints.length === 0) return rawPoints
+      const timestamped = rawPoints.filter((point) => point.timestamp != null)
+      if (timestamped.length > 0) {
+        const latest = Math.max(...timestamped.map((point) => point.timestamp as number))
+        const cutoff = latest - selected.minutes * 60_000
+        const filtered = rawPoints.filter((point) => point.timestamp != null && point.timestamp >= cutoff)
+        return filtered.length >= 2 ? filtered : rawPoints.slice(-Math.min(rawPoints.length, 2))
+      }
+      const fallbackCount = Math.max(2, Math.min(rawPoints.length, Math.ceil(selected.minutes / 60)))
+      return rawPoints.slice(-fallbackCount)
+    },
+    [fallbackEquityPoints, timeframe],
   )
 
   const equity = commandCenter.account_summary.equity
@@ -188,8 +202,7 @@ export function MarketChartFlavor() {
                 className={[styles.timeframeBtn, timeframe === option.id ? styles.timeframeActive : '']
                   .filter(Boolean)
                   .join(' ')}
-                onClick={() => option.interactive && setTimeframe(option.id)}
-                disabled={!option.interactive}
+                onClick={() => setTimeframe(option.id)}
                 aria-pressed={timeframe === option.id}
               >
                 {option.label}
@@ -210,7 +223,7 @@ export function MarketChartFlavor() {
             ) : (
               <div className={styles.portfolioGraphDeck}>
                 <div className={styles.equityChartFrame}>
-                  <ResponsiveContainer width="100%" height={230}>
+                  <ResponsiveContainer width="100%" height={260}>
                     <ComposedChart data={chartData} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
                       <defs>
                         <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
@@ -271,8 +284,10 @@ export function MarketChartFlavor() {
                     </ComposedChart>
                   </ResponsiveContainer>
                 </div>
-                <HoldingsDonut exposure={pricedExposure} total={exposureTotal} />
-                <CapitalUseChart cash={cashValue} exposure={exposureTotal} equity={equityValue} />
+                <div className={styles.portfolioMiniGrid}>
+                  <HoldingsDonut exposure={pricedExposure} total={exposureTotal} />
+                  <CapitalUseChart cash={cashValue} exposure={exposureTotal} equity={equityValue} />
+                </div>
               </div>
             )}
           </div>
