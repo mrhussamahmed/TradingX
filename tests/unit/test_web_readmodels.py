@@ -646,7 +646,7 @@ def test_runtime_heartbeat_uses_persisted_operator_cadence_override(
         {
             "configured_cadence_seconds": 600,
             "cadence_source": "operator_override",
-            "applies_at": "next_evaluation",
+            "applies_at": "next_start",
             "updated_at_utc": timestamp.isoformat(),
         },
     )

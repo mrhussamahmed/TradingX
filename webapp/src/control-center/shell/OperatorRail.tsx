@@ -300,7 +300,16 @@ export function OperatorRail({
           <dt>Started</dt>
           <dd>{runtimeState.started_at_utc ? formatTimestamp(runtimeState.started_at_utc) : '—'}</dd>
           <dt>Cadence</dt>
-          <dd>{runtimeHeartbeat.cadence_label || `${runtimeHeartbeat.cadence_seconds}s`}</dd>
+          <dd>
+            {runtimeHeartbeat.configured_cadence_seconds
+              ? cadenceLabel(runtimeHeartbeat.configured_cadence_seconds)
+              : runtimeHeartbeat.cadence_label || `${runtimeHeartbeat.cadence_seconds}s`}
+            {runtimeHeartbeat.running_cadence_seconds &&
+            runtimeHeartbeat.configured_cadence_seconds &&
+            runtimeHeartbeat.running_cadence_seconds !== runtimeHeartbeat.configured_cadence_seconds
+              ? ` configured · running ${cadenceLabel(runtimeHeartbeat.running_cadence_seconds)}`
+              : ''}
+          </dd>
           <dt>Last Eval</dt>
           <dd>
             {runtimeHeartbeat.last_evaluation_at_utc
@@ -376,6 +385,14 @@ export function OperatorRail({
       </section>
     </aside>
   )
+}
+
+function cadenceLabel(seconds: number): string {
+  if (seconds >= 3600) {
+    const hours = seconds / 3600
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  return `${Math.round(seconds / 60)} minutes`
 }
 
 function RuntimeBadge({ state }: { state: BotRuntimeState }) {

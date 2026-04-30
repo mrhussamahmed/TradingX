@@ -763,7 +763,7 @@ class LocalWebActionRunner:
                 {
                     "configured_cadence_seconds": cadence_seconds,
                     "cadence_source": "operator_override",
-                    "applies_at": "next_evaluation",
+                    "applies_at": "next_start",
                     "updated_at_utc": datetime.now(UTC).isoformat(),
                 },
                 indent=2,

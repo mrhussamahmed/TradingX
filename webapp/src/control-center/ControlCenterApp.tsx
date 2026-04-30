@@ -46,6 +46,14 @@ function ControlCenterShell() {
   const shellClass = railCollapsed
     ? `${shellStyles.shell} ${shellStyles.shellRailCollapsed}`
     : shellStyles.shell
+  const configuredCadenceSeconds =
+    data.runtimeHeartbeat.configured_cadence_seconds ??
+    data.configSummary.config.service_interval_seconds ??
+    300
+  const runningCadenceSeconds =
+    data.runtimeHeartbeat.running_cadence_seconds ??
+    data.runtimeHeartbeat.cadence_seconds ??
+    configuredCadenceSeconds
 
   const onRequestResume = useCallback(() => {
     setResumeOpen(true)
@@ -64,15 +72,11 @@ function ControlCenterShell() {
     }
     setResumeBusy(true)
     try {
-      const cadenceSeconds =
-        data.runtimeHeartbeat.configured_cadence_seconds ??
-        data.configSummary.config.service_interval_seconds ??
-        300
       await data.runAction('Start Paper Runtime', () =>
         postRuntimeHostStart({
           symbols,
           quantity: paperRuntimeFallbackQuantity(sizingSettings),
-          interval_seconds: Number(cadenceSeconds),
+          interval_seconds: Number(configuredCadenceSeconds),
           max_cycles: null,
           sizing_policy: buildPaperRuntimeSizingPayload(sizingSettings),
         }),
@@ -81,7 +85,7 @@ function ControlCenterShell() {
       setResumeBusy(false)
       setResumeOpen(false)
     }
-  }, [data, pushToast])
+  }, [configuredCadenceSeconds, data, pushToast])
 
   const onConfirmKillSwitch = useCallback(async () => {
     setKillBusy(true)
@@ -235,13 +239,23 @@ function ControlCenterShell() {
           Sizing: {resumeSizingSummary}.
         </p>
         <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
-          Cadence: every {data.runtimeHeartbeat.configured_cadence_seconds ?? data.configSummary.config.service_interval_seconds ?? 300}s
-          {data.runtimeHeartbeat.cadence_source === 'operator_override' ? ' from operator override' : ' from config'}.
+          Cadence: configured {cadenceLabel(configuredCadenceSeconds)}
+          {data.runtimeHeartbeat.cadence_source === 'operator_override' ? ' from operator override' : ' from config'}
+          {' · '}currently running {cadenceLabel(runningCadenceSeconds)}
+          {' · '}applies {data.runtimeHeartbeat.cadence_applies_at?.replaceAll('_', ' ') ?? 'next start'}.
           The runtime will start from idle. If a gate degrades during startup, the runtime will halt automatically.
         </p>
       </ConfirmDialog>
     </>
   )
+}
+
+function cadenceLabel(seconds: number): string {
+  if (seconds >= 3600) {
+    const hours = seconds / 3600
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  return `${Math.round(seconds / 60)} minutes`
 }
 
 export function ControlCenterApp() {
