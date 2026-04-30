@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import {
+  postRuntimeHostCadence,
   postRuntimeHostStart,
   postRuntimeHostStop,
   postSessionClose,
@@ -35,6 +36,8 @@ import styles from './Flavor.module.css'
 
 type ActionState = 'idle' | 'running'
 
+const CADENCE_OPTIONS = [180, 300, 600, 1200, 1800, 3600, 7200]
+
 export function MarketDayOpsFlavor() {
   const {
     commandCenter,
@@ -55,6 +58,7 @@ export function MarketDayOpsFlavor() {
   } = useData()
   const { pushToast } = useToast()
   const [busyAction, setBusyAction] = useState<string | null>(null)
+  const [cadenceSaving, setCadenceSaving] = useState(false)
   const [writeSecret, setWriteSecret] = useState('')
   const [sizingSettings, setSizingSettings] = useState<PaperRuntimeSizingSettings>(
     readPaperRuntimeSizingSettings,
@@ -88,6 +92,10 @@ export function MarketDayOpsFlavor() {
 
   const writeBlocked = !writeMode.enabled || !writeMode.unlocked
   const writeBlockedReason = writeMode.detail
+  const configuredCadence =
+    runtimeHeartbeat.configured_cadence_seconds ?? runtimeHeartbeat.cadence_seconds
+  const runningCadence =
+    runtimeHeartbeat.running_cadence_seconds ?? runtimeHeartbeat.cadence_seconds
 
   async function callAction(label: string, key: string, request: () => Promise<unknown>) {
     if (writeBlocked) {
@@ -138,7 +146,38 @@ export function MarketDayOpsFlavor() {
           <dt>Runtime</dt>
           <dd>{prettyLabel(runtimeState.status)}</dd>
           <dt>Cadence</dt>
-          <dd>{runtimeHeartbeat.cadence_label}</dd>
+          <dd>
+            <select
+              aria-label="Service cycle cadence"
+              value={configuredCadence}
+              disabled={cadenceSaving}
+              onChange={async (event) => {
+                const nextCadence = Number(event.currentTarget.value)
+                setCadenceSaving(true)
+                try {
+                  await callAction('Update service cycle cadence', 'cadence', () =>
+                    postRuntimeHostCadence(nextCadence),
+                  )
+                } finally {
+                  setCadenceSaving(false)
+                }
+              }}
+            >
+              {CADENCE_OPTIONS.map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {cadenceLabel(seconds)}
+                </option>
+              ))}
+            </select>
+            <span className={styles.inlineMeta}>
+              Running {cadenceLabel(runningCadence)}
+              {runtimeHeartbeat.cadence_source === 'operator_override'
+                ? ' · operator override'
+                : ' · config'}
+              {' · '}
+              applies {prettyLabel(runtimeHeartbeat.cadence_applies_at ?? 'next_start')}
+            </span>
+          </dd>
           <dt>Last Heartbeat</dt>
           <dd>
             {runtimeHeartbeat.last_evaluation_at_utc
@@ -538,4 +577,12 @@ export function MarketDayOpsFlavor() {
       </div>
     </div>
   )
+}
+
+function cadenceLabel(seconds: number): string {
+  if (seconds >= 3600) {
+    const hours = seconds / 3600
+    return hours === 1 ? '1 hour' : `${hours} hours`
+  }
+  return `${Math.round(seconds / 60)} minutes`
 }

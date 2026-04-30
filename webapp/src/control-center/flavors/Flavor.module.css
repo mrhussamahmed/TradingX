@@ -215,6 +215,14 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.inlineMeta {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
 
 .timeframeBar {
   display: flex;
