@@ -406,6 +406,50 @@ def test_activate_blueprint_returns_blocked_for_validation_error(
     assert "stale" in result.message
 
 
+def test_activate_blueprint_returns_blocked_for_invalid_blueprint_id(tmp_path) -> None:
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    result = runner.activate_blueprint(
+        blueprint_id="../escape",
+        preview_hash="sha256:irrelevant",
+    )
+
+    assert result.status == "blocked"
+    assert result.action_type == "blueprint_activate"
+    assert "Invalid blueprint id" in result.message
+
+
+def test_activate_blueprint_returns_blocked_for_malformed_blueprint(tmp_path) -> None:
+    blueprint_dir = tmp_path / "config" / "portfolio" / "blueprints"
+    blueprint_dir.mkdir(parents=True)
+    (blueprint_dir / "bad-blueprint.yaml").write_text(
+        "blueprint_id: bad-blueprint\n",
+        encoding="utf-8",
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=tmp_path,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    result = runner.activate_blueprint(
+        blueprint_id="bad-blueprint",
+        preview_hash="sha256:irrelevant",
+    )
+
+    assert result.status == "blocked"
+    assert result.action_type == "blueprint_activate"
+    assert "sleeve_budgets" in result.message
+
+
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
     runner = LocalWebActionRunner(
         config=TradingConfig.from_mapping({}),

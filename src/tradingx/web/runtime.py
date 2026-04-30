@@ -549,10 +549,10 @@ class LocalWebActionRunner:
                     ),
                     evidence_refs=(),
                 )
-        blueprint_path = self._blueprint_path(blueprint_id)
-        blueprint = load_portfolio_blueprint(blueprint_path)
-        activation_gateway = self._blueprint_activation_gateway()
         try:
+            blueprint_path = self._blueprint_path(blueprint_id)
+            blueprint = load_portfolio_blueprint(blueprint_path)
+            activation_gateway = self._blueprint_activation_gateway()
             record = activation_gateway.stage_blueprint_activation_for_next_start(
                 blueprint=blueprint,
                 operator_identifier="local-operator",

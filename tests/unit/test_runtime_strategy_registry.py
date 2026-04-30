@@ -144,6 +144,16 @@ class FakeActivationGateway:
     def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
         return self._blueprint_activation
 
+    def supersede_active_blueprint(
+        self,
+        *,
+        new_activation: BlueprintActivationRecord,
+        now: datetime,
+    ) -> BlueprintActivationRecord:
+        del now
+        self._blueprint_activation = new_activation
+        return new_activation
+
 
 class CapturingResolver:
     def __init__(self) -> None:
@@ -485,3 +495,77 @@ def test_activated_runtime_planner_freezes_nested_blueprint_activation(
 
     assert seen_activation_ids == ["bp-activation-frozen"]
     assert planner.last_strategy_id == "bp-frozen"
+
+
+def test_activated_runtime_planner_updates_run_scope_after_blueprint_supersede(
+    monkeypatch,
+) -> None:
+    original_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-original",
+        blueprint_id="bp-original",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 13, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=Path("/tmp/bp-original.yaml"),
+    )
+    narrowed_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-narrowed",
+        blueprint_id="bp-narrowed",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="approved-vol",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 14, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=Path("/tmp/bp-narrowed.yaml"),
+    )
+    gateway = FakeActivationGateway(
+        strategy_id="baseline-long-only-v1",
+        approved_symbols=("SPY",),
+        blueprint_activation=original_activation,
+    )
+    blueprint_planner = RuntimePortfolioPlanner(
+        market_data=FixedPriceMarketData(),
+        activation_gateway=gateway,
+    )
+    seen_activation_ids: list[str] = []
+
+    def capture_blueprint(self, *, blueprint_activation, **kwargs):
+        del kwargs
+        seen_activation_ids.append(blueprint_activation.activation_id)
+        return None
+
+    monkeypatch.setattr(
+        RuntimePortfolioPlanner,
+        "_plan_for_blueprint",
+        capture_blueprint,
+    )
+    planner = ActivatedRuntimePlanner(
+        activation_gateway=gateway,
+        registry=RuntimeStrategyRegistry(),
+        blueprint_planner=blueprint_planner,
+    )
+
+    planner.supersede_active_blueprint(
+        new_activation=narrowed_activation,
+        now=datetime(2026, 4, 22, 14, 1, tzinfo=UTC),
+    )
+    planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=_portfolio_state(),
+        default_quantity=Decimal("3"),
+    )
+
+    assert planner.get_active_blueprint_activation() == narrowed_activation
+    assert seen_activation_ids == ["bp-activation-narrowed"]
