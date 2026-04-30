@@ -126,6 +126,69 @@ export type PortfolioStrategyPanel = {
   narrowing_notice?: string | null
 }
 
+export type BlueprintSleeveBinding = {
+  sleeve_id: string
+  strategy_id: string
+  captured_snapshot_id: string
+}
+
+export type BlueprintActivationRecord = {
+  activation_id: string
+  blueprint_id: string
+  sleeve_activation_bindings: BlueprintSleeveBinding[]
+  status: string
+  approved_at_utc: string
+  approved_by: string
+  source_blueprint_path: string
+  superseded_at_utc?: string | null
+  supersedes_activation_id?: string | null
+}
+
+export type PortfolioBlueprintSleeveSummary = {
+  sleeve_id: string
+  strategy_id: string
+  budget_fraction_of_equity: string
+  max_correlation_with_other_sleeves: string
+}
+
+export type PortfolioBlueprintSummary = {
+  blueprint_id: string
+  source_path: string
+  sleeve_budgets: PortfolioBlueprintSleeveSummary[]
+  max_gross_exposure: string
+  max_net_exposure: string
+  status: string
+  detail: string
+}
+
+export type BlueprintActivationCheck = {
+  code: string
+  status: string
+  severity: string
+  message: string
+  sleeve_id?: string | null
+  strategy_id?: string | null
+  evidence_refs: string[]
+  captured_snapshot_ids: string[]
+}
+
+export type BlueprintActivationPreflight = {
+  blueprint_id: string
+  status: string
+  checks: BlueprintActivationCheck[]
+  sleeve_bindings: BlueprintSleeveBinding[]
+  captured_snapshot_ids: string[]
+  source_blueprint_path: string
+  preview_hash: string
+  would_reuse_active_activation: boolean
+}
+
+export type PortfolioBlueprintCatalog = {
+  blueprints: PortfolioBlueprintSummary[]
+  active_activation?: BlueprintActivationRecord | null
+  pending_activation?: BlueprintActivationRecord | null
+}
+
 export type PortfolioKeyValue = {
   label: string
   value: string

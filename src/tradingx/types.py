@@ -969,6 +969,56 @@ class BlueprintSleeveBinding:
 
 
 @dataclass(frozen=True)
+class BlueprintActivationCheck:
+    code: str
+    status: str
+    severity: str
+    message: str
+    sleeve_id: str | None = None
+    strategy_id: str | None = None
+    evidence_refs: tuple[str, ...] = ()
+    captured_snapshot_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class BlueprintActivationPreflight:
+    blueprint_id: str
+    status: str
+    checks: tuple[BlueprintActivationCheck, ...]
+    sleeve_bindings: tuple[BlueprintSleeveBinding, ...]
+    captured_snapshot_ids: tuple[str, ...]
+    source_blueprint_path: Path
+    preview_hash: str
+    would_reuse_active_activation: bool = False
+
+
+@dataclass(frozen=True)
+class PortfolioBlueprintSleeveSummary:
+    sleeve_id: str
+    strategy_id: str
+    budget_fraction_of_equity: Decimal
+    max_correlation_with_other_sleeves: Decimal
+
+
+@dataclass(frozen=True)
+class PortfolioBlueprintSummary:
+    blueprint_id: str
+    source_path: Path
+    sleeve_budgets: tuple[PortfolioBlueprintSleeveSummary, ...]
+    max_gross_exposure: Decimal
+    max_net_exposure: Decimal
+    status: str = "available"
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class PortfolioBlueprintCatalog:
+    blueprints: tuple[PortfolioBlueprintSummary, ...]
+    active_activation: BlueprintActivationRecord | None
+    pending_activation: BlueprintActivationRecord | None
+
+
+@dataclass(frozen=True)
 class BlueprintActivationRecord:
     activation_id: str
     blueprint_id: str

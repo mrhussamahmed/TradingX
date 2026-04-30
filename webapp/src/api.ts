@@ -21,6 +21,8 @@ import type {
   ModelWeightSnapshot,
   OpportunitySelectionRecord,
   MarketSessionRecord,
+  BlueprintActivationPreflight,
+  PortfolioBlueprintCatalog,
   PortfolioWorkspaceSnapshot,
   PerformanceAnalyticsSnapshot,
   ReplaySlippageSummary,
@@ -212,6 +214,17 @@ export function getPortfolioWorkspace() {
   return request<PortfolioWorkspaceSnapshot>('/api/platform/portfolio')
 }
 
+export function getBlueprintCatalog() {
+  return request<PortfolioBlueprintCatalog>('/api/platform/blueprints')
+}
+
+export function postBlueprintActivationPreview(blueprint_id: string) {
+  return request<BlueprintActivationPreflight>('/api/platform/blueprints/preview-activation', {
+    method: 'POST',
+    body: JSON.stringify({ blueprint_id }),
+  })
+}
+
 export function getPerformanceAnalytics() {
   return request<PerformanceAnalyticsSnapshot>('/api/platform/performance')
 }
@@ -367,6 +380,13 @@ export function postRuntimeHostCadence(cadence_seconds: number) {
   return request<ActionResult>('/api/actions/runtime-host/cadence', {
     method: 'POST',
     body: JSON.stringify({ cadence_seconds }),
+  })
+}
+
+export function postBlueprintActivation(blueprint_id: string, preview_hash?: string) {
+  return request<ActionResult>('/api/actions/portfolio/blueprint/activate', {
+    method: 'POST',
+    body: JSON.stringify({ blueprint_id, preview_hash }),
   })
 }
 

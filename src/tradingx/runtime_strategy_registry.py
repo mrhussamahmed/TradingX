@@ -55,6 +55,9 @@ class ActivatedRuntimePlanner:
         self._activation_gateway = activation_gateway
         self._registry = registry
         self._blueprint_planner = blueprint_planner
+        self._applied_blueprint_activation = (
+            activation_gateway.get_active_blueprint_activation()
+        )
         self.last_strategy_id = ""
 
     def plan_for_service(
@@ -65,7 +68,7 @@ class ActivatedRuntimePlanner:
         default_quantity: Decimal,
         sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> RuntimePortfolioPlan | None:
-        active_blueprint = self._activation_gateway.get_active_blueprint_activation()
+        active_blueprint = self._applied_blueprint_activation
         if self._blueprint_planner is not None and active_blueprint is not None:
             self.last_strategy_id = active_blueprint.blueprint_id
             return self._blueprint_planner.plan_for_service(

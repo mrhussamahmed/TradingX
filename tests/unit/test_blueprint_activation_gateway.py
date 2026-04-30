@@ -216,3 +216,111 @@ def test_supersede_active_blueprint_updates_predecessor(tmp_path: Path) -> None:
     active = gateway.get_active_blueprint_activation()
     assert active is not None
     assert active.activation_id == narrowed.activation_id
+
+
+def test_preflight_blueprint_activation_reports_snapshot_blockers_without_writing(
+    tmp_path: Path,
+) -> None:
+    gateway = _gateway(tmp_path, _StubSnapshotStore({}))
+
+    report = gateway.preflight_blueprint_activation(
+        blueprint=_blueprint(),
+        source_blueprint_path=Path("bp.yaml"),
+    )
+
+    assert report.status == "blocked"
+    assert {
+        check.code for check in report.checks if check.status == "blocked"
+    } == {"approved_snapshot_missing"}
+    assert report.sleeve_bindings == ()
+    assert gateway.get_active_blueprint_activation() is None
+    assert gateway.list_pending_blueprint_activations() == ()
+
+
+def test_stage_blueprint_activation_writes_pending_next_start_not_active(
+    tmp_path: Path,
+) -> None:
+    snapshots = {
+        "trend-following-v1": _snapshot("trend-following-v1", "snap-trend-1"),
+        "vol-target-v1": _snapshot("vol-target-v1", "snap-vol-1"),
+    }
+    gateway = _gateway(tmp_path, _StubSnapshotStore(snapshots))
+    report = gateway.preflight_blueprint_activation(
+        blueprint=_blueprint(),
+        source_blueprint_path=Path("config/portfolio/blueprints/bp-test-v1.yaml"),
+    )
+
+    record = gateway.stage_blueprint_activation_for_next_start(
+        blueprint=_blueprint(),
+        operator_identifier="operator:test",
+        source_blueprint_path=Path("config/portfolio/blueprints/bp-test-v1.yaml"),
+        preview_hash=report.preview_hash,
+    )
+
+    assert record.status == "pending_next_start"
+    assert gateway.get_active_blueprint_activation() is None
+    assert gateway.list_pending_blueprint_activations() == (record,)
+
+
+def test_apply_pending_blueprint_activation_on_start_supersedes_previous_active(
+    tmp_path: Path,
+) -> None:
+    blueprint_path = tmp_path / "bp-new.yaml"
+    blueprint_path.write_text(
+        "\n".join(
+            (
+                "blueprint_id: bp-test-v1",
+                "sleeve_budgets:",
+                "  - sleeve_id: trend-following-v1",
+                "    budget_fraction_of_equity: 0.5",
+                "    max_correlation_with_other_sleeves: 0.85",
+                "  - sleeve_id: vol-target-v1",
+                "    budget_fraction_of_equity: 0.5",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    snapshots = {
+        "trend-following-v1": _snapshot("trend-following-v1", "snap-trend-1"),
+        "vol-target-v1": _snapshot("vol-target-v1", "snap-vol-1"),
+    }
+    gateway = _gateway(tmp_path, _StubSnapshotStore(snapshots))
+    active = gateway.load_or_activate_blueprint(
+        blueprint=PortfolioBlueprint(
+            blueprint_id="bp-old-v1",
+            sleeve_budgets=(
+                SleeveRiskBudget(
+                    sleeve_id="trend-following-v1",
+                    budget_fraction_of_equity=Decimal("0.5"),
+                    max_correlation_with_other_sleeves=Decimal("0.85"),
+                ),
+            ),
+        ),
+        operator_identifier="operator:test",
+        source_blueprint_path=Path("bp-old.yaml"),
+    )
+    report = gateway.preflight_blueprint_activation(
+        blueprint=_blueprint(),
+        source_blueprint_path=blueprint_path,
+    )
+    pending = gateway.stage_blueprint_activation_for_next_start(
+        blueprint=_blueprint(),
+        operator_identifier="operator:test",
+        source_blueprint_path=blueprint_path,
+        preview_hash=report.preview_hash,
+    )
+
+    applied = gateway.apply_pending_blueprint_activation_on_start(
+        now=datetime(2026, 4, 22, 15, 0, tzinfo=UTC),
+    )
+
+    assert applied is not None
+    assert applied.activation_id == pending.activation_id
+    assert applied.status == "active"
+    assert gateway.get_active_blueprint_activation() == applied
+    loaded_old = gateway._store.load_blueprint_activation_record(  # type: ignore[attr-defined]
+        activation_id=active.activation_id
+    )
+    assert loaded_old is not None
+    assert loaded_old.status == "superseded"

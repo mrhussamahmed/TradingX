@@ -37,6 +37,7 @@ from tradingx.live_enablement import (
 from tradingx.opportunity import RuntimeOpportunityPlanner
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio import AlpacaPortfolioGateway
+from tradingx.portfolio.blueprint import load_portfolio_blueprint
 from tradingx.promotion import (
     LEGACY_NON_AUTHORITY_STATUS,
     PromotionState,
@@ -53,8 +54,13 @@ from tradingx.service import (
     build_runtime_host_trading_service,
 )
 from tradingx.sizing import RuntimeSizingPolicy
+from tradingx.strategy import (
+    CANONICAL_STAGE1_UNIVERSE,
+    build_mandatory_candidate_registry,
+)
 from tradingx.types import (
     AlertDrillRecord,
+    BlueprintActivationPreflight,
     BotRuntimeState,
     ConfigProposal,
     MarketDaySchedulerState,
@@ -499,6 +505,103 @@ class LocalWebActionRunner:
                 evidence_refs=(),
             )
         return self._runtime_host_manager.stop()
+
+    def preview_blueprint_activation(
+        self,
+        *,
+        blueprint_id: str,
+    ) -> BlueprintActivationPreflight:
+        blueprint_path = self._blueprint_path(blueprint_id)
+        blueprint = load_portfolio_blueprint(blueprint_path)
+        return self._blueprint_activation_gateway().preflight_blueprint_activation(
+            blueprint=blueprint,
+            source_blueprint_path=blueprint_path,
+        )
+
+    def activate_blueprint(
+        self,
+        *,
+        blueprint_id: str,
+        preview_hash: str | None = None,
+    ) -> WebActionResult:
+        if self._runtime_host_manager is not None:
+            runtime_status = self._runtime_host_manager.get_state().status
+            if runtime_status in {
+                "bootstrapping",
+                "historical_warmup",
+                "broker_sync",
+                "feature_ready",
+                "strategy_ready",
+                "clearance_requested",
+                "reconciling",
+                "stopping",
+            }:
+                return WebActionResult(
+                    action_id=f"action-{uuid.uuid4()}",
+                    action_type="blueprint_activate",
+                    status="blocked",
+                    message=(
+                        "Blueprint activation cannot be queued while runtime "
+                        f"startup/shutdown is in progress ({runtime_status})."
+                    ),
+                    evidence_refs=(),
+                )
+        blueprint_path = self._blueprint_path(blueprint_id)
+        blueprint = load_portfolio_blueprint(blueprint_path)
+        activation_gateway = self._blueprint_activation_gateway()
+        record = activation_gateway.stage_blueprint_activation_for_next_start(
+            blueprint=blueprint,
+            operator_identifier="local-operator",
+            source_blueprint_path=blueprint_path,
+            preview_hash=preview_hash,
+        )
+        output_path = (
+            self._operator_platform_root
+            / "blueprint_activation"
+            / f"{record.activation_id}.json"
+        )
+        return WebActionResult(
+            action_id=f"action-{uuid.uuid4()}",
+            action_type="blueprint_activate",
+            status="completed",
+            message=(
+                f"Blueprint {blueprint.blueprint_id} queued for next runtime start."
+            ),
+            evidence_refs=(str(output_path),),
+        )
+
+    def _blueprint_path(self, blueprint_id: str) -> Path:
+        safe_id = blueprint_id.strip()
+        if not safe_id or "/" in safe_id or "\\" in safe_id:
+            raise ValueError("Invalid blueprint id.")
+        root = self._repo_root / "config" / "portfolio" / "blueprints"
+        for suffix in (".yaml", ".json"):
+            path = root / f"{safe_id}{suffix}"
+            if path.exists():
+                return path
+        raise FileNotFoundError(f"Blueprint {safe_id!r} was not found.")
+
+    def _blueprint_activation_gateway(self) -> LocalActivationGateway:
+        known_strategies = {
+            candidate.candidate_id
+            for candidate in build_mandatory_candidate_registry(
+                self._config.runtime.symbol_universe or CANONICAL_STAGE1_UNIVERSE
+            )
+            if candidate.sleeve_class_path is not None
+        }
+        known_strategies.add("baseline-long-only-v1")
+        return LocalActivationGateway(
+            store=self._operator_platform_store,
+            runtime_snapshot_store=FilesystemArtifactStore(
+                self._config.runtime.artifact_root
+            ),
+            strategy_id_validator=lambda strategy_id: strategy_id in known_strategies,
+            promotion_decision_provider=build_artifact_promotion_decision_provider(
+                self._repo_root / "config" / "strategy" / "promotion"
+            ),
+            required_promotion_state=PromotionState.PAPER_TRADING,
+            projection_root=self._repo_root / "config" / "strategy" / "promotion",
+        )
 
     def start_market_scheduler(
         self,
@@ -1126,22 +1229,23 @@ def build_default_local_web_components(
         broker_mode=decision.requested_mode,
     )
     trading_client = build_trading_client_for_mode(config, decision)
-    activation_gateway = (
-        LocalActivationGateway(
-            store=FilesystemArtifactStore(operator_store_root),
-            runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
-            legacy_non_authority_mode=True,
+    known_strategies = {
+        candidate.candidate_id
+        for candidate in build_mandatory_candidate_registry(
+            config.runtime.symbol_universe or CANONICAL_STAGE1_UNIVERSE
         )
-        if decision.requested_mode == "paper"
-        else LocalActivationGateway(
-            store=FilesystemArtifactStore(operator_store_root),
-            runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
-            promotion_decision_provider=build_artifact_promotion_decision_provider(
-                config.runtime.artifact_root / "quant" / "promotion"
-            ),
-            required_promotion_state=PromotionState.PAPER_TRADING,
-            projection_root=Path("config/strategy/promotion"),
-        )
+        if candidate.sleeve_class_path is not None
+    }
+    known_strategies.add("baseline-long-only-v1")
+    activation_gateway = LocalActivationGateway(
+        store=FilesystemArtifactStore(operator_store_root),
+        runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
+        strategy_id_validator=lambda strategy_id: strategy_id in known_strategies,
+        promotion_decision_provider=build_artifact_promotion_decision_provider(
+            repo_root / "config" / "strategy" / "promotion"
+        ),
+        required_promotion_state=PromotionState.PAPER_TRADING,
+        projection_root=repo_root / "config" / "strategy" / "promotion",
     )
     runtime_host_manager = LocalRuntimeHostManager(
         config=config,

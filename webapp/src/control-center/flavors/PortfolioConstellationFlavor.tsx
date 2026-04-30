@@ -1,9 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Layers, ListFilter, RefreshCcw } from 'lucide-react'
 
+import { postBlueprintActivation, postBlueprintActivationPreview } from '../../api'
 import { parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import type {
+  BlueprintActivationPreflight,
   PortfolioBenchmarkRow,
+  PortfolioBlueprintSummary,
   PortfolioPositionRow,
   PortfolioStrategyRow,
 } from '../../types'
@@ -35,11 +38,22 @@ function classifyStrategy(strategy: PortfolioStrategyRow): 'good' | 'watch' | 'r
   return 'info'
 }
 
+function checkTone(check: { status: string; severity: string }): 'good' | 'watch' | 'risk' | 'info' {
+  if (check.status === 'passed') return 'good'
+  if (check.severity === 'error') return 'risk'
+  if (check.severity === 'warning') return 'watch'
+  return 'info'
+}
+
 export function PortfolioConstellationFlavor() {
-  const { portfolio, refresh } = useData()
+  const { portfolio, blueprintCatalog, refresh, runAction, writeMode } = useData()
   const [filter, setFilter] = useState<Filter>('all')
   const [symbolFilter, setSymbolFilter] = useState('all')
   const [showBudget, setShowBudget] = useState(true)
+  const [selectedBlueprintId, setSelectedBlueprintId] = useState('')
+  const selectedBlueprintIdRef = useRef('')
+  const [preflight, setPreflight] = useState<BlueprintActivationPreflight | null>(null)
+  const [preflightBusy, setPreflightBusy] = useState(false)
 
   const positions = portfolio.positions_panel.positions
   const strategies = portfolio.strategy_panel.strategies
@@ -55,6 +69,11 @@ export function PortfolioConstellationFlavor() {
   }, [positions, filter, symbolFilter])
   const positionSymbols = Array.from(new Set(positions.map((position) => position.symbol))).sort()
   const activeSleeveCount = portfolio.strategy_panel.constituent_sleeve_ids?.length ?? strategies.length
+  const selectedBlueprint =
+    blueprintCatalog.blueprints.find((blueprint) => blueprint.blueprint_id === selectedBlueprintId) ??
+    blueprintCatalog.blueprints[0]
+  const effectiveBlueprintId = selectedBlueprint?.blueprint_id ?? ''
+  const writeBlocked = !writeMode.enabled || !writeMode.unlocked
 
   const positionsTotal =
     positions.reduce(
@@ -230,6 +249,112 @@ export function PortfolioConstellationFlavor() {
 
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
+            <span>Blueprint Activation</span>
+            <span className={styles.panelSub}>
+              {blueprintCatalog.pending_activation
+                ? 'Pending Next Start'
+                : blueprintCatalog.active_activation
+                  ? 'Active'
+                  : 'No Active Blueprint'}
+            </span>
+          </div>
+          <div className={styles.panelBody}>
+            <div className={styles.sourceDisclosure}>
+              {blueprintCatalog.active_activation ? (
+                <>
+                  Running blueprint:{' '}
+                  <strong>{blueprintCatalog.active_activation.blueprint_id}</strong>
+                </>
+              ) : (
+                <>No runtime-applied blueprint is active. The current runtime may still be using the baseline strategy.</>
+              )}
+              {blueprintCatalog.pending_activation ? (
+                <span>
+                  {' · '}queued:{' '}
+                  <strong>{blueprintCatalog.pending_activation.blueprint_id}</strong>
+                </span>
+              ) : null}
+            </div>
+            {blueprintCatalog.blueprints.length === 0 ? (
+              <div className={styles.emptyState}>
+                <strong>No blueprint catalog found</strong>
+                <p>Add blueprint files under config/portfolio/blueprints.</p>
+              </div>
+            ) : (
+              <>
+                <label style={{ display: 'grid', gap: 6, color: 'var(--text-secondary)', fontSize: 12 }}>
+                  <span className={styles.metricLabel}>Blueprint</span>
+                  <select
+                    aria-label="Blueprint to activate"
+                    value={effectiveBlueprintId}
+                    onChange={(event) => {
+                      const nextBlueprintId = event.currentTarget.value
+                      selectedBlueprintIdRef.current = nextBlueprintId
+                      setSelectedBlueprintId(nextBlueprintId)
+                      setPreflight(null)
+                    }}
+                  >
+                    {blueprintCatalog.blueprints.map((blueprint) => (
+                      <option key={blueprint.blueprint_id} value={blueprint.blueprint_id}>
+                        {blueprint.blueprint_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedBlueprint ? <BlueprintSleeveList blueprint={selectedBlueprint} /> : null}
+                <div className={styles.panelHeaderActions}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!effectiveBlueprintId || preflightBusy}
+                    onClick={() => {
+                      const requestedBlueprintId = effectiveBlueprintId
+                      selectedBlueprintIdRef.current = requestedBlueprintId
+                      setPreflightBusy(true)
+                      void postBlueprintActivationPreview(requestedBlueprintId)
+                        .then((result) => {
+                          if (selectedBlueprintIdRef.current === requestedBlueprintId) {
+                            setPreflight(result)
+                          }
+                        })
+                        .finally(() => setPreflightBusy(false))
+                    }}
+                  >
+                    {preflightBusy ? 'Checking...' : 'Run Preflight'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={
+                      writeBlocked ||
+                      !preflight ||
+                      preflight.status !== 'ready_to_activate'
+                    }
+                    title={writeBlocked ? writeMode.detail : undefined}
+                    onClick={() => {
+                      if (!preflight) return
+                      const approvedPreflight = preflight
+                      void runAction('Activate Blueprint', () =>
+                        postBlueprintActivation(
+                          approvedPreflight.blueprint_id,
+                          approvedPreflight.preview_hash,
+                        ),
+                      )
+                    }}
+                  >
+                    Queue For Next Start
+                  </button>
+                </div>
+                {preflight ? <BlueprintPreflightPanel preflight={preflight} /> : null}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className={styles.forgeRow}>
+        <div className={styles.panel}>
+          <div className={styles.panelHeader}>
             <span>Benchmark Comparison</span>
             <span className={styles.panelSub}>{prettyLabel(portfolio.benchmark_panel.status)}</span>
           </div>
@@ -379,6 +504,60 @@ function BenchmarkRowView({ row }: { row: PortfolioBenchmarkRow }) {
         <span className={`badge badge-${tone}`} title={row.detail}>{row.excess_return}</span>
       </td>
     </tr>
+  )
+}
+
+function BlueprintSleeveList({ blueprint }: { blueprint: PortfolioBlueprintSummary }) {
+  return (
+    <table className={styles.simpleTable}>
+      <thead>
+        <tr>
+          <th>Sleeve</th>
+          <th>Strategy</th>
+          <th>Budget</th>
+        </tr>
+      </thead>
+      <tbody>
+        {blueprint.sleeve_budgets.map((budget) => (
+          <tr key={`${blueprint.blueprint_id}-${budget.sleeve_id}`}>
+            <td>{prettyLabel(budget.sleeve_id)}</td>
+            <td>{prettyLabel(budget.strategy_id)}</td>
+            <td className="numeric">
+              {(parseNumericValue(budget.budget_fraction_of_equity) * 100).toFixed(0)}%
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function BlueprintPreflightPanel({ preflight }: { preflight: BlueprintActivationPreflight }) {
+  const blockers = preflight.checks.filter((check) => check.status === 'blocked')
+  return (
+    <div className={styles.sourceDisclosure}>
+      <strong>{prettyLabel(preflight.status)}</strong>
+      {preflight.status === 'ready_to_activate' ? (
+        <span> · this blueprint can be queued for the next clean runtime start.</span>
+      ) : (
+        <span> · fix {blockers.length} blocker(s) before activation.</span>
+      )}
+      <table className={styles.simpleTable} style={{ marginTop: 8 }}>
+        <tbody>
+          {preflight.checks.map((check, index) => (
+            <tr key={`${check.code}-${check.sleeve_id ?? index}`}>
+              <td>
+                <span className={`badge badge-${checkTone(check)}`}>{prettyLabel(check.status)}</span>
+              </td>
+              <td>
+                <strong>{prettyLabel(check.code)}</strong>
+                <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{check.message}</div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 

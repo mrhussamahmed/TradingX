@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from tradingx.persistence import FilesystemArtifactStore
 from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
     BotRuntimeState,
     HistoricalWarmupRecord,
     OpportunitySelectionRecord,
@@ -22,6 +24,7 @@ from tradingx.types import (
     StrategyActivationRecord,
     WebActionResult,
 )
+from tradingx.weights import approved_weight_snapshot_from_payload
 
 
 class ServiceManagerProtocol(Protocol):
@@ -60,6 +63,14 @@ class ActivationGatewayProtocol(Protocol):
     def get_latest_snapshot(
         self, *, strategy_id: str
     ) -> ApprovedWeightSnapshot | None: ...
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None: ...
+
+    def apply_pending_blueprint_activation_on_start(
+        self,
+        *,
+        now: datetime,
+    ) -> BlueprintActivationRecord | None: ...
 
 
 class OpportunityPlannerProtocol(Protocol):
@@ -337,9 +348,60 @@ class LocalRuntimeHostManager:
         sizing_policy: RuntimeSizingPolicy | None = None,
     ) -> None:
         try:
-            activation, snapshot = (
-                self._activation_gateway.load_or_create_active_records(symbols)
-            )
+            applied_blueprint = None
+            if hasattr(
+                self._activation_gateway,
+                "apply_pending_blueprint_activation_on_start",
+            ):
+                applied_blueprint = (
+                    self._activation_gateway.apply_pending_blueprint_activation_on_start(
+                        now=self._now_provider()
+                    )
+                )
+                if applied_blueprint is not None:
+                    self._write_running_blueprint_activation(applied_blueprint)
+            if applied_blueprint is not None:
+                first_binding = (
+                    applied_blueprint.sleeve_activation_bindings[0]
+                    if applied_blueprint.sleeve_activation_bindings
+                    else None
+                )
+                activation = StrategyActivationRecord(
+                    activation_id=applied_blueprint.activation_id,
+                    strategy_id=applied_blueprint.blueprint_id,
+                    strategy_version="1.0.0",
+                    approved_symbols=symbols,
+                    deploy_threshold=Decimal("0.50"),
+                    allow_fallback_weights=False,
+                    status="active",
+                    activated_at_utc=applied_blueprint.approved_at_utc,
+                    notes=(
+                        "Runtime applied blueprint "
+                        f"{applied_blueprint.blueprint_id}."
+                    ),
+                )
+                snapshot = approved_weight_snapshot_from_payload(
+                    {
+                        "snapshot_id": (
+                            first_binding.captured_snapshot_id
+                            if first_binding is not None
+                            else applied_blueprint.activation_id
+                        ),
+                        "strategy_id": (
+                            first_binding.strategy_id
+                            if first_binding is not None
+                            else applied_blueprint.blueprint_id
+                        ),
+                        "status": "active",
+                        "generated_at_utc": applied_blueprint.approved_at_utc,
+                        "minimum_supporting_trades": 0,
+                        "weights": {},
+                    }
+                )
+            else:
+                activation, snapshot = (
+                    self._activation_gateway.load_or_create_active_records(symbols)
+                )
             self._set_state(
                 status="historical_warmup",
                 status_reason="Building historical warmup.",
@@ -411,6 +473,28 @@ class LocalRuntimeHostManager:
                 status_reason="Runtime host halted.",
                 last_error=str(exc),
             )
+
+    def _write_running_blueprint_activation(
+        self,
+        activation: BlueprintActivationRecord,
+    ) -> None:
+        output_dir = self._operator_store._root_dir / "runtime_config"  # type: ignore[attr-defined]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "running_activation.json").write_text(
+            json.dumps(
+                {
+                    "applied_blueprint_activation_id": activation.activation_id,
+                    "applied_blueprint_id": activation.blueprint_id,
+                    "applied_sleeve_ids": [
+                        binding.sleeve_id
+                        for binding in activation.sleeve_activation_bindings
+                    ],
+                    "applied_at_utc": self._now_provider().isoformat(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _run_clearance_reconciliation(self) -> None:
         self._set_state(

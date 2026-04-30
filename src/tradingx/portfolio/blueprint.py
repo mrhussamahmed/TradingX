@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
+from tradingx.types import PortfolioBlueprintSleeveSummary, PortfolioBlueprintSummary
+
 
 @dataclass(frozen=True)
 class SleeveRiskBudget:
@@ -103,6 +105,46 @@ def load_portfolio_blueprint(path: Path) -> PortfolioBlueprint:
     else:
         payload = _parse_blueprint_yaml(raw_text, path=resolved)
     return _portfolio_blueprint_from_payload(payload)
+
+
+def list_portfolio_blueprints(root: Path) -> tuple[PortfolioBlueprintSummary, ...]:
+    if not root.exists():
+        return ()
+    rows: list[PortfolioBlueprintSummary] = []
+    for path in sorted((*root.glob("*.yaml"), *root.glob("*.json"))):
+        try:
+            blueprint = load_portfolio_blueprint(path)
+        except Exception as exc:
+            rows.append(
+                PortfolioBlueprintSummary(
+                    blueprint_id=path.stem,
+                    source_path=path,
+                    sleeve_budgets=(),
+                    max_gross_exposure=Decimal("0"),
+                    max_net_exposure=Decimal("0"),
+                    status="invalid",
+                    detail=str(exc),
+                )
+            )
+            continue
+        rows.append(
+            PortfolioBlueprintSummary(
+                blueprint_id=blueprint.blueprint_id,
+                source_path=path,
+                sleeve_budgets=tuple(
+                    PortfolioBlueprintSleeveSummary(
+                        sleeve_id=budget.sleeve_id,
+                        strategy_id=effective_strategy_id(budget),
+                        budget_fraction_of_equity=budget.budget_fraction_of_equity,
+                        max_correlation_with_other_sleeves=budget.max_correlation_with_other_sleeves,
+                    )
+                    for budget in blueprint.sleeve_budgets
+                ),
+                max_gross_exposure=blueprint.max_gross_exposure,
+                max_net_exposure=blueprint.max_net_exposure,
+            )
+        )
+    return tuple(rows)
 
 
 def _portfolio_blueprint_from_payload(payload: dict[str, object]) -> PortfolioBlueprint:

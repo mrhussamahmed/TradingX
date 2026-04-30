@@ -19,6 +19,7 @@ from tradingx.experiments import (
 )
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio.blueprint import list_portfolio_blueprints
 from tradingx.promotion import (
     LEGACY_NON_AUTHORITY_STATUS,
     PromotionState,
@@ -53,6 +54,7 @@ from tradingx.types import (
     PerformanceWindowSnapshot,
     PortfolioBenchmarkPanel,
     PortfolioBenchmarkRow,
+    PortfolioBlueprintCatalog,
     PortfolioCurvePanel,
     PortfolioDiagnostic,
     PortfolioEventSummary,
@@ -168,6 +170,18 @@ class LocalWebReadModel:
         self._operator_platform_root = artifact_root / "operator_platform"
         self._approved_snapshot_store = ApprovedWeightSnapshotStore(
             repo_root / "config" / "strategy" / "weights"
+        )
+
+    def list_blueprint_catalog(self) -> PortfolioBlueprintCatalog:
+        records = self._operator_platform_store().list_blueprint_activation_records()
+        active = self._latest_activation_by_status(records, "active")
+        pending = self._latest_activation_by_status(records, "pending_next_start")
+        return PortfolioBlueprintCatalog(
+            blueprints=list_portfolio_blueprints(
+                self._repo_root / "config" / "portfolio" / "blueprints"
+            ),
+            active_activation=active,
+            pending_activation=pending,
         )
 
     def build_dashboard_snapshot(self) -> DashboardSnapshot:
@@ -1932,10 +1946,17 @@ class LocalWebReadModel:
 
     def _latest_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
         records = self._operator_platform_store().list_blueprint_activation_records()
-        active = tuple(record for record in records if record.status == "active")
-        if not active:
+        return self._latest_activation_by_status(records, "active")
+
+    def _latest_activation_by_status(
+        self,
+        records: Sequence[BlueprintActivationRecord],
+        status: str,
+    ) -> BlueprintActivationRecord | None:
+        matching = tuple(record for record in records if record.status == status)
+        if not matching:
             return None
-        return max(active, key=lambda record: record.approved_at_utc)
+        return max(matching, key=lambda record: record.approved_at_utc)
 
     def _latest_sleeve_daily_attribution(
         self,

@@ -11,6 +11,8 @@ from tradingx.config import TradingConfig
 from tradingx.runtime_host import LocalRuntimeHostManager
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     HistoricalWarmupRecord,
     OpportunityScore,
     OpportunitySelectionRecord,
@@ -125,6 +127,38 @@ class FakeActivationGateway:
     def get_latest_snapshot(self, *, strategy_id: str) -> ApprovedWeightSnapshot | None:
         del strategy_id
         return self._snapshot
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        return None
+
+    def apply_pending_blueprint_activation_on_start(
+        self,
+        *,
+        now: datetime,
+    ) -> BlueprintActivationRecord | None:
+        del now
+        return None
+
+
+class FakePendingBlueprintActivationGateway(FakeActivationGateway):
+    def __init__(
+        self,
+        activation: StrategyActivationRecord,
+        snapshot: ApprovedWeightSnapshot,
+        pending: BlueprintActivationRecord,
+    ) -> None:
+        super().__init__(activation, snapshot)
+        self.pending = pending
+        self.apply_calls = 0
+
+    def apply_pending_blueprint_activation_on_start(
+        self,
+        *,
+        now: datetime,
+    ) -> BlueprintActivationRecord | None:
+        del now
+        self.apply_calls += 1
+        return self.pending
 
 
 class FakeReconciliationGateway:
@@ -393,6 +427,93 @@ def test_runtime_host_bootstraps_to_trading_ready_and_starts_service(tmp_path) -
     assert state.active_model_snapshot_id == "snapshot-1"
     assert service_manager.calls == [(("SPY", "QQQ"), Decimal("1"), 300, 1)]
     assert (tmp_path / "artifacts" / "operator_platform" / "runtime_host").exists()
+
+
+def test_runtime_host_applies_pending_blueprint_once_on_start(tmp_path) -> None:
+    activation = StrategyActivationRecord(
+        activation_id="activation-1",
+        strategy_id="baseline-long-only-v1",
+        strategy_version="1.0.0",
+        approved_symbols=("SPY", "QQQ"),
+        deploy_threshold=Decimal("0.5"),
+        allow_fallback_weights=True,
+        status="approved",
+        activated_at_utc=datetime(2026, 4, 19, 11, 0, tzinfo=UTC),
+        notes="Baseline activation.",
+    )
+    snapshot = ApprovedWeightSnapshot(
+        snapshot_id="snapshot-1",
+        strategy_id="baseline-long-only-v1",
+        status="approved",
+        generated_at_utc=datetime(2026, 4, 19, 11, 15, tzinfo=UTC),
+        minimum_supporting_trades=5,
+        weights={"signal": Decimal("1.0")},
+    )
+    pending = BlueprintActivationRecord(
+        activation_id="activation-blueprint-1",
+        blueprint_id="core-paper-multi-sleeve-v1",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                captured_snapshot_id="approved-baseline-long-only-v1",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 19, 11, 20, tzinfo=UTC),
+        approved_by="operator:test",
+        source_blueprint_path=tmp_path / "bp.yaml",
+    )
+    warmup = HistoricalWarmupRecord(
+        warmup_id="warmup-1",
+        generated_at_utc=datetime(2026, 4, 19, 11, 30, tzinfo=UTC),
+        benchmark_symbol="SPY",
+        symbols=("SPY", "QQQ"),
+        window_start_utc=datetime(2026, 2, 1, tzinfo=UTC),
+        window_end_utc=datetime(2026, 4, 18, tzinfo=UTC),
+        required_bar_count=30,
+        symbols_ready=("SPY", "QQQ"),
+        symbols_blocked={},
+        return_summary={"benchmark": {"cumulative_return": Decimal("0.02")}},
+    )
+    service_manager = FakeServiceManager()
+    activation_gateway = FakePendingBlueprintActivationGateway(
+        activation,
+        snapshot,
+        pending,
+    )
+    manager = LocalRuntimeHostManager(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        operator_store_root=tmp_path / "artifacts" / "operator_platform",
+        service_manager=service_manager,
+        warmup_service=FakeWarmupService(warmup),
+        activation_gateway=activation_gateway,
+        opportunity_planner=FakeOpportunityPlanner(),
+        portfolio_gateway=FakePortfolioGateway(),
+    )
+
+    result = manager.start(
+        symbols=("SPY", "QQQ"),
+        quantity=Decimal("1"),
+        interval_seconds=300,
+        max_cycles=1,
+    )
+
+    _wait_for(lambda: manager.get_state().status == "trading_ready")
+
+    assert result.status == "accepted"
+    assert activation_gateway.apply_calls == 1
+    assert manager.get_state().active_strategy_id == "core-paper-multi-sleeve-v1"
+    running_activation = (
+        tmp_path
+        / "artifacts"
+        / "operator_platform"
+        / "runtime_config"
+        / "running_activation.json"
+    )
+    assert running_activation.exists()
 
 
 def test_runtime_host_rejects_second_start_when_already_active(tmp_path) -> None:

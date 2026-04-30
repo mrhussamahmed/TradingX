@@ -20,6 +20,7 @@ import {
   getGate3Readiness,
   getIncidents,
   getLatestDigest,
+  getBlueprintCatalog,
   getPortfolioWorkspace,
   getReplay,
   getResearch,
@@ -51,6 +52,7 @@ import type {
   ModelWeightSnapshot,
   OpportunitySelectionRecord,
   PortfolioWorkspaceSnapshot,
+  PortfolioBlueprintCatalog,
   ReplaySession,
   ResearchStudioSnapshot,
   RuntimeHeartbeatSnapshot,
@@ -85,6 +87,7 @@ export type DataState = {
   explorer: ExplorerRecord[]
   digest: DailySessionDigest | null
   portfolio: PortfolioWorkspaceSnapshot
+  blueprintCatalog: PortfolioBlueprintCatalog
   gate3Readiness: Gate3ReadinessReport
   gate3Package: Gate3PromotionPackage | null
   runtimeState: BotRuntimeState
@@ -234,6 +237,12 @@ const defaultPortfolio: PortfolioWorkspaceSnapshot = {
   diagnostics: [],
 }
 
+const defaultBlueprintCatalog: PortfolioBlueprintCatalog = {
+  blueprints: [],
+  active_activation: null,
+  pending_activation: null,
+}
+
 const defaultGate3Readiness: Gate3ReadinessReport = {
   report_id: '',
   generated_at_utc: '',
@@ -356,6 +365,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [explorer, setExplorer] = useState<ExplorerRecord[]>([])
   const [digest, setDigest] = useState<DailySessionDigest | null>(null)
   const [portfolio, setPortfolio] = useState<PortfolioWorkspaceSnapshot>(defaultPortfolio)
+  const [blueprintCatalog, setBlueprintCatalog] =
+    useState<PortfolioBlueprintCatalog>(defaultBlueprintCatalog)
   const [gate3Readiness, setGate3Readiness] = useState<Gate3ReadinessReport>(defaultGate3Readiness)
   const [gate3Package, setGate3Package] = useState<Gate3PromotionPackage | null>(null)
   const [runtimeState, setRuntimeState] = useState<BotRuntimeState>(defaultRuntimeState)
@@ -403,6 +414,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           getExplorer({ query: '' }),
           getLatestDigest(),
           getPortfolioWorkspace(),
+          getBlueprintCatalog(),
           getGate3Readiness(),
           getGate3PromotionPackage(),
           getRuntimeHostState(),
@@ -432,16 +444,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const nextExplorer = value<ExplorerRecord[]>(7, [])
         const nextDigest = value<DailySessionDigest | null>(8, null)
         const nextPortfolio = value(9, defaultPortfolio)
-        const nextGate3Readiness = value(10, defaultGate3Readiness)
-        const nextGate3Package = value<Gate3PromotionPackage | null>(11, null)
-        const nextRuntimeState = value(12, defaultRuntimeState)
-        const nextRuntimeHeartbeat = value(13, defaultRuntimeHeartbeat)
-        const nextRuntimeWarmup = value<HistoricalWarmupRecord | null>(14, null)
-        const nextRuntimeActivation = value<StrategyActivationRecord | null>(15, null)
-        const nextRuntimeModel = value<ModelWeightSnapshot | null>(16, null)
-        const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(17, null)
-        const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(18, null)
-        const nextSchedulerState = value(19, defaultSchedulerState)
+        const nextBlueprintCatalog = value(10, defaultBlueprintCatalog)
+        const nextGate3Readiness = value(11, defaultGate3Readiness)
+        const nextGate3Package = value<Gate3PromotionPackage | null>(12, null)
+        const nextRuntimeState = value(13, defaultRuntimeState)
+        const nextRuntimeHeartbeat = value(14, defaultRuntimeHeartbeat)
+        const nextRuntimeWarmup = value<HistoricalWarmupRecord | null>(15, null)
+        const nextRuntimeActivation = value<StrategyActivationRecord | null>(16, null)
+        const nextRuntimeModel = value<ModelWeightSnapshot | null>(17, null)
+        const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(18, null)
+        const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(19, null)
+        const nextSchedulerState = value(20, defaultSchedulerState)
 
         startTransition(() => {
           setCommandCenter(nextCommandCenter)
@@ -468,6 +481,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           setExplorer(nextExplorer)
           setDigest(nextDigest)
           setPortfolio(nextPortfolio)
+          setBlueprintCatalog(nextBlueprintCatalog)
           setGate3Readiness(nextGate3Readiness)
           setGate3Package(nextGate3Package)
           setRuntimeState(nextRuntimeState)
@@ -625,6 +639,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       explorer,
       digest,
       portfolio,
+      blueprintCatalog,
       gate3Readiness,
       gate3Package,
       runtimeState,
@@ -658,6 +673,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       explorer,
       digest,
       portfolio,
+      blueprintCatalog,
       gate3Readiness,
       gate3Package,
       runtimeState,

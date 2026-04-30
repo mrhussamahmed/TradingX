@@ -20,6 +20,7 @@ from tradingx.live_enablement import resolve_broker_mode
 from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationPreflight,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -35,6 +36,7 @@ from tradingx.types import (
     MarketDaySchedulerState,
     OpportunitySelectionRecord,
     PerformanceAnalyticsSnapshot,
+    PortfolioBlueprintCatalog,
     PortfolioWorkspaceSnapshot,
     ReplaySession,
     ReplaySlippageSummary,
@@ -136,6 +138,8 @@ class ReadModelProtocol(Protocol):
 
     def get_latest_market_day_schedule(self) -> MarketDayScheduleRecord | None: ...
 
+    def list_blueprint_catalog(self) -> PortfolioBlueprintCatalog: ...
+
 
 class ActionRunnerProtocol(Protocol):
     def start_service(
@@ -163,6 +167,19 @@ class ActionRunnerProtocol(Protocol):
     def stop_runtime_host(self) -> WebActionResult: ...
 
     def set_runtime_cadence(self, *, cadence_seconds: int) -> WebActionResult: ...
+
+    def preview_blueprint_activation(
+        self,
+        *,
+        blueprint_id: str,
+    ) -> BlueprintActivationPreflight: ...
+
+    def activate_blueprint(
+        self,
+        *,
+        blueprint_id: str,
+        preview_hash: str | None = None,
+    ) -> WebActionResult: ...
 
     def start_market_scheduler(
         self,
@@ -292,6 +309,11 @@ class RuntimeHostStartRequest(BaseModel):
 
 class RuntimeCadenceRequest(BaseModel):
     cadence_seconds: int
+
+
+class BlueprintActivationRequest(BaseModel):
+    blueprint_id: str
+    preview_hash: str | None = None
 
 
 class RecoverRequest(BaseModel):
@@ -1035,6 +1057,22 @@ def create_app(
             content=_serialize(read_model.build_portfolio_workspace_snapshot())
         )
 
+    @app.get("/api/platform/blueprints")
+    def get_blueprint_catalog() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.list_blueprint_catalog()))
+
+    @app.post("/api/platform/blueprints/preview-activation")
+    def post_blueprint_activation_preview(
+        payload: BlueprintActivationRequest,
+    ) -> JSONResponse:
+        return JSONResponse(
+            content=_serialize(
+                action_runner.preview_blueprint_activation(
+                    blueprint_id=payload.blueprint_id
+                )
+            )
+        )
+
     @app.get("/api/platform/performance")
     def get_performance_analytics() -> JSONResponse:
         return JSONResponse(
@@ -1251,6 +1289,19 @@ def create_app(
             request,
             lambda: action_runner.set_runtime_cadence(
                 cadence_seconds=payload.cadence_seconds
+            ),
+        )
+
+    @app.post("/api/actions/portfolio/blueprint/activate")
+    async def post_blueprint_activate(
+        request: Request,
+        payload: BlueprintActivationRequest,
+    ) -> JSONResponse:
+        return await _run_authorized_write(
+            request,
+            lambda: action_runner.activate_blueprint(
+                blueprint_id=payload.blueprint_id,
+                preview_hash=payload.preview_hash,
             ),
         )
 

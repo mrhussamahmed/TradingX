@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,6 +14,7 @@ from tradingx.portfolio.blueprint import (
     PortfolioBlueprint,
     StrategyAllocationLimit,
     effective_strategy_id,
+    load_portfolio_blueprint,
 )
 from tradingx.promotion import (
     PromotionDecision,
@@ -23,6 +26,8 @@ from tradingx.promotion import (
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationCheck,
+    BlueprintActivationPreflight,
     BlueprintActivationRecord,
     BlueprintSleeveBinding,
     StrategyActivationRecord,
@@ -195,6 +200,285 @@ class LocalActivationGateway:
                 )
             self._persist_snapshot_payload(snapshot)
         return record
+
+    def preflight_blueprint_activation(
+        self,
+        *,
+        blueprint: PortfolioBlueprint,
+        source_blueprint_path: Path,
+    ) -> BlueprintActivationPreflight:
+        checks: list[BlueprintActivationCheck] = []
+        bindings: list[BlueprintSleeveBinding] = []
+        captured_snapshot_ids: list[str] = []
+        seen_sleeves: set[str] = set()
+
+        for budget in blueprint.sleeve_budgets:
+            strategy_id = effective_strategy_id(budget)
+            if budget.sleeve_id in seen_sleeves:
+                checks.append(
+                    BlueprintActivationCheck(
+                        code="duplicate_sleeve_id",
+                        status="blocked",
+                        severity="error",
+                        message=f"Sleeve {budget.sleeve_id} appears more than once.",
+                        sleeve_id=budget.sleeve_id,
+                        strategy_id=strategy_id,
+                    )
+                )
+                continue
+            seen_sleeves.add(budget.sleeve_id)
+            invalid_strategy = (
+                self._strategy_id_validator is not None
+                and not self._strategy_id_validator(strategy_id)
+            )
+            if invalid_strategy:
+                checks.append(
+                    BlueprintActivationCheck(
+                        code="strategy_unresolvable",
+                        status="blocked",
+                        severity="error",
+                        message=(
+                            f"Strategy {strategy_id} cannot be resolved by "
+                            "the runtime planner."
+                        ),
+                        sleeve_id=budget.sleeve_id,
+                        strategy_id=strategy_id,
+                    )
+                )
+                continue
+            try:
+                self._enforce_promotion_authority(strategy_id)
+            except Exception as exc:
+                checks.append(
+                    BlueprintActivationCheck(
+                        code="promotion_authority_blocked",
+                        status="blocked",
+                        severity="error",
+                        message=str(exc),
+                        sleeve_id=budget.sleeve_id,
+                        strategy_id=strategy_id,
+                    )
+                )
+                continue
+            try:
+                snapshot = self._snapshot_store.load_by_strategy_id(strategy_id)
+            except ApprovedWeightSnapshotNotFoundError:
+                checks.append(
+                    BlueprintActivationCheck(
+                        code="approved_snapshot_missing",
+                        status="blocked",
+                        severity="error",
+                        message=(
+                            f"Strategy {strategy_id} has no approved "
+                            "weight snapshot."
+                        ),
+                        sleeve_id=budget.sleeve_id,
+                        strategy_id=strategy_id,
+                    )
+                )
+                continue
+            captured_snapshot_ids.append(snapshot.snapshot_id)
+            bindings.append(
+                BlueprintSleeveBinding(
+                    sleeve_id=budget.sleeve_id,
+                    strategy_id=strategy_id,
+                    captured_snapshot_id=snapshot.snapshot_id,
+                )
+            )
+            checks.append(
+                BlueprintActivationCheck(
+                    code="sleeve_ready",
+                    status="passed",
+                    severity="info",
+                    message=(
+                        f"Sleeve {budget.sleeve_id} can bind strategy "
+                        f"{strategy_id}."
+                    ),
+                    sleeve_id=budget.sleeve_id,
+                    strategy_id=strategy_id,
+                    captured_snapshot_ids=(snapshot.snapshot_id,),
+                )
+            )
+
+        try:
+            allocation_limits = self.get_strategy_allocation_limits(blueprint)
+            from tradingx.portfolio.blueprint import (
+                validate_blueprint_allocation_limits,
+            )
+
+            validate_blueprint_allocation_limits(
+                blueprint,
+                allocation_limits=allocation_limits,
+            )
+            checks.append(
+                BlueprintActivationCheck(
+                    code="allocation_limits_valid",
+                    status="passed",
+                    severity="info",
+                    message="Blueprint sleeve budgets fit verified allocation limits.",
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                BlueprintActivationCheck(
+                    code="allocation_limit_blocked",
+                    status="blocked",
+                    severity="error",
+                    message=str(exc),
+                )
+            )
+
+        status = (
+            "blocked"
+            if any(check.status == "blocked" for check in checks)
+            else "ready_to_activate"
+        )
+        active = self.get_active_blueprint_activation()
+        preview_payload = {
+            "blueprint_id": blueprint.blueprint_id,
+            "status": status,
+            "source_blueprint_path": str(source_blueprint_path),
+            "bindings": [
+                dataclasses.asdict(binding)
+                for binding in bindings
+            ],
+            "checks": [dataclasses.asdict(check) for check in checks],
+        }
+        preview_hash = "sha256:" + hashlib.sha256(
+            json.dumps(preview_payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return BlueprintActivationPreflight(
+            blueprint_id=blueprint.blueprint_id,
+            status=status,
+            checks=tuple(checks),
+            sleeve_bindings=tuple(bindings) if status != "blocked" else (),
+            captured_snapshot_ids=(
+                tuple(captured_snapshot_ids) if status != "blocked" else ()
+            ),
+            source_blueprint_path=source_blueprint_path,
+            preview_hash=preview_hash,
+            would_reuse_active_activation=(
+                active is not None
+                and active.blueprint_id == blueprint.blueprint_id
+                and active.sleeve_activation_bindings == tuple(bindings)
+            ),
+        )
+
+    def list_pending_blueprint_activations(
+        self,
+    ) -> tuple[BlueprintActivationRecord, ...]:
+        records = self._store.list_blueprint_activation_records()
+        pending = tuple(
+            record for record in records if record.status == "pending_next_start"
+        )
+        return tuple(sorted(pending, key=lambda record: record.approved_at_utc))
+
+    def stage_blueprint_activation_for_next_start(
+        self,
+        *,
+        blueprint: PortfolioBlueprint,
+        operator_identifier: str,
+        source_blueprint_path: Path,
+        preview_hash: str | None = None,
+    ) -> BlueprintActivationRecord:
+        report = self.preflight_blueprint_activation(
+            blueprint=blueprint,
+            source_blueprint_path=source_blueprint_path,
+        )
+        if report.status != "ready_to_activate":
+            blocker_codes = ", ".join(
+                check.code for check in report.checks if check.status == "blocked"
+            )
+            raise BlueprintActivationValidationError(
+                f"Blueprint activation blocked: {blocker_codes or 'unknown'}"
+            )
+        if preview_hash is None:
+            raise BlueprintActivationValidationError(
+                "Blueprint activation requires a current preflight preview hash."
+            )
+        if preview_hash != report.preview_hash:
+            raise BlueprintActivationValidationError(
+                "Blueprint activation preview is stale; rerun preflight."
+            )
+        now = self._now()
+        for pending in self.list_pending_blueprint_activations():
+            self._store.write_blueprint_activation_record(
+                dataclasses.replace(pending, status="superseded", superseded_at_utc=now)
+            )
+        record = BlueprintActivationRecord(
+            activation_id=f"activation-{uuid.uuid4()}",
+            blueprint_id=blueprint.blueprint_id,
+            sleeve_activation_bindings=report.sleeve_bindings,
+            status="pending_next_start",
+            approved_at_utc=now,
+            approved_by=operator_identifier,
+            source_blueprint_path=source_blueprint_path,
+        )
+        self._store.write_blueprint_activation_record(record)
+        for binding in record.sleeve_activation_bindings:
+            snapshot = self._snapshot_store.load_by_strategy_id(binding.strategy_id)
+            self._persist_snapshot_payload(snapshot)
+        return record
+
+    def apply_pending_blueprint_activation_on_start(
+        self,
+        *,
+        now: datetime,
+    ) -> BlueprintActivationRecord | None:
+        pending_records = self.list_pending_blueprint_activations()
+        if not pending_records:
+            return self.get_active_blueprint_activation()
+        pending = pending_records[-1]
+        try:
+            blueprint = load_portfolio_blueprint(pending.source_blueprint_path)
+            report = self.preflight_blueprint_activation(
+                blueprint=blueprint,
+                source_blueprint_path=pending.source_blueprint_path,
+            )
+        except Exception as exc:
+            failed = dataclasses.replace(
+                pending,
+                status="failed",
+                superseded_at_utc=now,
+            )
+            self._store.write_blueprint_activation_record(failed)
+            raise BlueprintActivationValidationError(
+                f"Pending blueprint activation failed startup validation: {exc}"
+            ) from exc
+        if report.status != "ready_to_activate":
+            failed = dataclasses.replace(
+                pending,
+                status="failed",
+                superseded_at_utc=now,
+            )
+            self._store.write_blueprint_activation_record(failed)
+            blocker_codes = ", ".join(
+                check.code for check in report.checks if check.status == "blocked"
+            )
+            raise BlueprintActivationValidationError(
+                "Pending blueprint activation failed startup validation: "
+                f"{blocker_codes or 'unknown'}"
+            )
+        active = self.get_active_blueprint_activation()
+        if active is not None and active.activation_id != pending.activation_id:
+            self._store.write_blueprint_activation_record(
+                dataclasses.replace(active, status="superseded", superseded_at_utc=now)
+            )
+        applied = dataclasses.replace(
+            pending,
+            status="active",
+            supersedes_activation_id=active.activation_id if active else None,
+        )
+        self._store.write_blueprint_activation_record(applied)
+        for stale_pending in pending_records[:-1]:
+            self._store.write_blueprint_activation_record(
+                dataclasses.replace(
+                    stale_pending,
+                    status="superseded",
+                    superseded_at_utc=now,
+                )
+            )
+        return applied
 
     def ensure_activation_snapshot_payloads(
         self,
