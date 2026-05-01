@@ -69,9 +69,14 @@ export function PortfolioConstellationFlavor() {
   }, [positions, filter, symbolFilter])
   const positionSymbols = Array.from(new Set(positions.map((position) => position.symbol))).sort()
   const activeSleeveCount = portfolio.strategy_panel.constituent_sleeve_ids?.length ?? strategies.length
+  const defaultBlueprintId =
+    blueprintCatalog.active_activation?.blueprint_id ??
+    blueprintCatalog.pending_activation?.blueprint_id ??
+    ''
   const selectedBlueprint =
-    blueprintCatalog.blueprints.find((blueprint) => blueprint.blueprint_id === selectedBlueprintId) ??
-    blueprintCatalog.blueprints[0]
+    blueprintCatalog.blueprints.find(
+      (blueprint) => blueprint.blueprint_id === (selectedBlueprintId || defaultBlueprintId),
+    ) ?? blueprintCatalog.blueprints[0]
   const effectiveBlueprintId = selectedBlueprint?.blueprint_id ?? ''
   const writeBlocked = !writeMode.enabled || !writeMode.unlocked
 

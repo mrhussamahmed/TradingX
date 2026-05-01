@@ -1,0 +1,14 @@
+blueprint_id: core-paper-ready-v1
+max_gross_exposure: 1.0
+max_net_exposure: 1.0
+mdd_design_target: 0.15
+mdd_hard_halt: 0.25
+cdar_confidence: 0.95
+cdar_soft_throttle_threshold: 0.08
+annualized_turnover_budget: 3.0
+sleeve_three_month_sharpe_floor: 0.0
+sleeve_budgets:
+  - sleeve_id: baseline-long-only-v1
+    strategy_id: baseline-long-only-v1
+    budget_fraction_of_equity: 0.05
+    max_correlation_with_other_sleeves: 0.85

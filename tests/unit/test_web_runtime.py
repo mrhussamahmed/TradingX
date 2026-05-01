@@ -10,6 +10,7 @@ import pytest
 
 from tradingx.activation import BlueprintActivationValidationError
 from tradingx.config import TradingConfig
+from tradingx.portfolio.blueprint import load_portfolio_blueprint
 from tradingx.service import ServiceRunResult
 from tradingx.types import ServiceCycleSnapshot
 from tradingx.web import runtime as web_runtime
@@ -448,6 +449,31 @@ def test_activate_blueprint_returns_blocked_for_malformed_blueprint(tmp_path) ->
     assert result.status == "blocked"
     assert result.action_type == "blueprint_activate"
     assert "sleeve_budgets" in result.message
+
+
+def test_paper_ready_blueprint_preflight_is_ready_to_activate(tmp_path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    blueprint = load_portfolio_blueprint(
+        repo_root / "config" / "portfolio" / "blueprints" / "core-paper-ready-v1.yaml"
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=repo_root,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    preflight = runner.preview_blueprint_activation(
+        blueprint_id="core-paper-ready-v1",
+    )
+
+    assert preflight.status == "ready_to_activate"
+    assert preflight.blueprint_id == "core-paper-ready-v1"
+    assert blueprint.sleeve_budgets[0].budget_fraction_of_equity == Decimal("0.05")
+    assert [binding.strategy_id for binding in preflight.sleeve_bindings] == [
+        "baseline-long-only-v1"
+    ]
 
 
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
