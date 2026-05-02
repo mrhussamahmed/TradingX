@@ -25,7 +25,7 @@ from tradingx.promotion import (
     state_allows,
     validate_state_action_contracts,
 )
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationCheck,
@@ -139,7 +139,7 @@ class LocalActivationGateway:
         activation = self.get_latest_activation()
         if activation is None:
             return None
-        for candidate in build_mandatory_candidate_registry(
+        for candidate in build_runtime_candidate_registry(
             activation.approved_symbols
         ):
             if candidate.candidate_id == activation.strategy_id:

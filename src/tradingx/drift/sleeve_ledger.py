@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from tradingx.persistence import FilesystemArtifactStore
 from tradingx.portfolio.blueprint import portfolio_blueprint_from_activation
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     BlueprintActivationRecord,
     BootstrapPositionAllocation,
@@ -84,7 +84,7 @@ def build_bootstrap_allocation(
     }
     candidate_by_strategy_id = {
         candidate.candidate_id: candidate
-        for candidate in build_mandatory_candidate_registry()
+        for candidate in build_runtime_candidate_registry()
     }
     owner_sleeve_ids = tuple(
         sorted(

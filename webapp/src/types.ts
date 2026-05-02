@@ -459,6 +459,7 @@ export type BotBrainSleeveReadiness = {
   activation_id?: string
   blueprint_id?: string
   activation_role?: string
+  candidate_role?: string
 }
 
 export type BotBrainSleeveCycleReason = {

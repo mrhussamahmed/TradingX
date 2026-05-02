@@ -848,6 +848,7 @@ class BotBrainSleeveReadiness:
     activation_id: str = ""
     blueprint_id: str = ""
     activation_role: str = ""
+    candidate_role: str = "unknown"
 
 
 @dataclass(frozen=True)

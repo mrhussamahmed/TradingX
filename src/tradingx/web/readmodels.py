@@ -31,7 +31,7 @@ from tradingx.promotion import (
     state_allows,
 )
 from tradingx.sleeves.base import build_sleeve_from_candidate
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
@@ -2694,7 +2694,7 @@ class LocalWebReadModel:
     ) -> tuple[BotBrainSleeveReadiness, ...]:
         candidate_by_id = {
             candidate.candidate_id: candidate
-            for candidate in build_mandatory_candidate_registry(
+            for candidate in build_runtime_candidate_registry(
                 self._config.runtime.symbol_universe
             )
         }
@@ -2715,6 +2715,13 @@ class LocalWebReadModel:
                 sleeve_id = binding.sleeve_id
                 strategy_id = binding.strategy_id
                 candidate = candidate_by_id.get(strategy_id)
+                candidate_role = (
+                    "reference"
+                    if candidate is not None and candidate.status == "reference"
+                    else "evaluated"
+                    if candidate is not None
+                    else "unknown"
+                )
                 implemented = candidate is not None
                 runtime_resolvable = False
                 if candidate is not None and candidate.sleeve_class_path is not None:
@@ -2767,6 +2774,7 @@ class LocalWebReadModel:
                         activation_id=activation.activation_id,
                         blueprint_id=activation.blueprint_id,
                         activation_role=activation_role,
+                        candidate_role=candidate_role,
                     )
                 )
         return tuple(rows)

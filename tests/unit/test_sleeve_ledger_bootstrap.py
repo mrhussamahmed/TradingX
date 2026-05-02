@@ -6,11 +6,23 @@ from decimal import Decimal
 
 import pytest
 
+from tradingx.drift.sleeve_ledger import build_bootstrap_allocation
+from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    portfolio_blueprint_content_hash,
+    portfolio_blueprint_to_payload,
+)
 from tradingx.types import (
+    ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     BootstrapPositionAllocation,
     ClosedTradeRecord,
     ExecutionLifecycleRecord,
     PortfolioState,
+    PositionSnapshot,
     ResidualPositionAllocation,
     ResidualReserveSnapshot,
     SessionOpenPortfolioStateRecord,
@@ -111,6 +123,78 @@ def test_new_ledger_records_are_frozen(record: object) -> None:
     frozen_field = dataclasses.fields(record)[0].name
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(record, frozen_field, "mutated")
+
+
+def test_sleeve_ledger_bootstrap_allocates_baseline_activation_to_owner(
+    tmp_path,
+) -> None:
+    runtime_store = FilesystemArtifactStore(tmp_path / "runtime")
+    runtime_store.write_model_weight_snapshot(
+        ApprovedWeightSnapshot(
+            snapshot_id="approved-baseline-long-only-v1",
+            strategy_id="baseline-long-only-v1",
+            status="approved",
+            generated_at_utc=datetime(2026, 5, 2, 13, 0, tzinfo=UTC),
+            minimum_supporting_trades=0,
+            weights={"signal": Decimal("1")},
+        )
+    )
+    approved_blueprint = PortfolioBlueprint(
+        blueprint_id="baseline-blueprint",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                budget_fraction_of_equity=Decimal("1.0"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+    activation = BlueprintActivationRecord(
+        activation_id="activation-baseline",
+        blueprint_id="baseline-blueprint",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                captured_snapshot_id="approved-baseline-long-only-v1",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 5, 2, 13, 0, tzinfo=UTC),
+        approved_by="test",
+        source_blueprint_path=tmp_path / "baseline-blueprint.yaml",
+        blueprint_content_hash=portfolio_blueprint_content_hash(approved_blueprint),
+        blueprint_payload=portfolio_blueprint_to_payload(approved_blueprint),
+    )
+    portfolio = PortfolioState(
+        as_of_utc=datetime(2026, 5, 2, 13, 30, tzinfo=UTC),
+        cash=Decimal("100000"),
+        equity=Decimal("100000"),
+        buying_power=Decimal("100000"),
+        positions=(
+            PositionSnapshot(
+                symbol="SPY",
+                quantity=Decimal("1"),
+                market_value=Decimal("500"),
+                average_entry_price=Decimal("500"),
+            ),
+        ),
+        open_orders=(),
+    )
+
+    result = build_bootstrap_allocation(
+        active_activation=activation,
+        snapshot_store=runtime_store,
+        open_portfolio_state=portfolio,
+        historical_execution_records=(),
+        recorded_at_utc=datetime(2026, 5, 2, 20, 0, tzinfo=UTC),
+    )
+
+    assert result.bootstrap_record.residual_positions == ()
+    assert result.bootstrap_record.position_allocations[0].sleeve_id == (
+        "baseline-long-only-v1"
+    )
 
 
 def test_trade_execution_and_closed_trade_shapes_remain_unchanged() -> None:

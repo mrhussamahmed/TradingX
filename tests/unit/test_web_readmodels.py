@@ -424,6 +424,11 @@ def test_bot_brain_readiness_keeps_active_and_pending_rows_for_same_sleeve(
         ("active-1", "active"),
         ("pending-1", "queued"),
     ]
+    assert all(row.strategy_id == "baseline-long-only-v1" for row in baseline_rows)
+    assert all(row.implemented is True for row in baseline_rows)
+    assert all(row.runtime_resolvable is True for row in baseline_rows)
+    assert all(row.candidate_role == "reference" for row in baseline_rows)
+    assert all(row.blocker_code == "" for row in baseline_rows)
 
 
 def test_bot_brain_allocation_guidance_uses_activation_blueprint_payload(

@@ -59,7 +59,7 @@ from tradingx.service import (
 from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.strategy import (
     CANONICAL_STAGE1_UNIVERSE,
-    build_mandatory_candidate_registry,
+    build_runtime_candidate_registry,
 )
 from tradingx.types import (
     AlertDrillRecord,
@@ -596,12 +596,11 @@ class LocalWebActionRunner:
     def _blueprint_activation_gateway(self) -> LocalActivationGateway:
         known_strategies = {
             candidate.candidate_id
-            for candidate in build_mandatory_candidate_registry(
+            for candidate in build_runtime_candidate_registry(
                 self._config.runtime.symbol_universe or CANONICAL_STAGE1_UNIVERSE
             )
             if candidate.sleeve_class_path is not None
         }
-        known_strategies.add("baseline-long-only-v1")
         return LocalActivationGateway(
             store=self._operator_platform_store,
             runtime_snapshot_store=FilesystemArtifactStore(
@@ -1243,12 +1242,11 @@ def build_default_local_web_components(
     trading_client = build_trading_client_for_mode(config, decision)
     known_strategies = {
         candidate.candidate_id
-        for candidate in build_mandatory_candidate_registry(
+        for candidate in build_runtime_candidate_registry(
             config.runtime.symbol_universe or CANONICAL_STAGE1_UNIVERSE
         )
         if candidate.sleeve_class_path is not None
     }
-    known_strategies.add("baseline-long-only-v1")
     activation_gateway = LocalActivationGateway(
         store=FilesystemArtifactStore(operator_store_root),
         runtime_snapshot_store=FilesystemArtifactStore(runtime_store_root),
