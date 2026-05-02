@@ -218,7 +218,11 @@ def test_runtime_portfolio_planner_returns_none_for_baseline_strategy() -> None:
 
 
 def test_runtime_regime_snapshots_require_200_prior_observations() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = next(
+        candidate
+        for candidate in build_mandatory_candidate_registry(("SPY", "QQQ"))
+        if candidate.candidate_id == "trend-following-v1"
+    )
     index = pd.date_range("2025-01-02", periods=201, freq="B", tz="UTC")
     closes = [float(100 + index_value) for index_value in range(201)]
     bars = pd.DataFrame(

@@ -7,7 +7,9 @@ from decimal import Decimal
 from tradingx.strategy import (
     CANONICAL_STAGE1_UNIVERSE,
     DeterministicBaselineStrategy,
+    build_baseline_reference_candidate,
     build_mandatory_candidate_registry,
+    build_runtime_candidate_registry,
 )
 from tradingx.types import (
     MarketSnapshot,
@@ -190,18 +192,52 @@ def test_baseline_strategy_exits_on_stop_loss_threshold() -> None:
     assert intent.reason_code == "stop_loss_exit"
 
 
+def test_mandatory_candidate_registry_excludes_baseline_reference() -> None:
+    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+
+    assert [candidate.candidate_id for candidate in candidates] == [
+        "trend-following-v1",
+        "vol-target-v1",
+        "mean-reversion-v1",
+    ]
+    assert "baseline-long-only-v1" not in {
+        candidate.candidate_id for candidate in candidates
+    }
+
+
+def test_runtime_candidate_registry_includes_baseline_reference() -> None:
+    candidates = build_runtime_candidate_registry(("SPY", "QQQ"))
+
+    assert [candidate.candidate_id for candidate in candidates] == [
+        "baseline-long-only-v1",
+        "trend-following-v1",
+        "vol-target-v1",
+        "mean-reversion-v1",
+    ]
+    baseline = candidates[0]
+    assert baseline.family == "baseline_long_only"
+    assert baseline.status == "reference"
+
+
+def test_baseline_reference_candidate_contract() -> None:
+    baseline = build_baseline_reference_candidate()
+
+    assert baseline.candidate_id == "baseline-long-only-v1"
+    assert baseline.family == "baseline_long_only"
+    assert baseline.universe == ("SPY",)
+    assert baseline.status == "reference"
+
+
 def test_mandatory_candidate_registry_contains_required_families() -> None:
     candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
     candidates_by_family = {candidate.family: candidate for candidate in candidates}
 
     assert [candidate.family for candidate in candidates] == [
-        "baseline_long_only",
         "trend_following",
         "vol_target",
         "mean_reversion",
     ]
     assert all(candidate.benchmark_symbol == "SPY" for candidate in candidates)
-    assert candidates_by_family["baseline_long_only"].universe == ("SPY",)
     assert candidates_by_family["trend_following"].universe == ("SPY", "QQQ")
     assert candidates_by_family["vol_target"].universe == ("SPY", "QQQ")
     assert candidates_by_family["mean_reversion"].universe == ("QQQ",)
@@ -263,8 +299,8 @@ def test_strategy_candidate_sleeve_class_path_defaults_to_none() -> None:
     assert candidate.sleeve_class_path is None
 
 
-def test_registry_sets_sleeve_class_path_for_all_blueprint_strategies() -> None:
-    candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
+def test_runtime_registry_sets_sleeve_class_path_for_all_blueprint_strategies() -> None:
+    candidates = build_runtime_candidate_registry(("SPY", "QQQ"))
     by_id = {candidate.candidate_id: candidate for candidate in candidates}
 
     assert by_id["baseline-long-only-v1"].sleeve_class_path == (
@@ -281,13 +317,18 @@ def test_registry_sets_sleeve_class_path_for_all_blueprint_strategies() -> None:
     )
 
 
-def test_mandatory_candidate_registry_defaults_to_canonical_stage1_universe() -> None:
-    candidates = build_mandatory_candidate_registry()
-    candidates_by_family = {candidate.family: candidate for candidate in candidates}
+def test_candidate_registries_default_to_canonical_stage1_universe() -> None:
+    mandatory = {
+        candidate.family: candidate
+        for candidate in build_mandatory_candidate_registry()
+    }
+    runtime = {
+        candidate.family: candidate for candidate in build_runtime_candidate_registry()
+    }
 
-    assert candidates_by_family["baseline_long_only"].universe == ("SPY",)
-    assert candidates_by_family["trend_following"].universe == CANONICAL_STAGE1_UNIVERSE
-    assert candidates_by_family["vol_target"].universe == CANONICAL_STAGE1_UNIVERSE
-    assert candidates_by_family["mean_reversion"].universe == tuple(
+    assert runtime["baseline_long_only"].universe == ("SPY",)
+    assert mandatory["trend_following"].universe == CANONICAL_STAGE1_UNIVERSE
+    assert mandatory["vol_target"].universe == CANONICAL_STAGE1_UNIVERSE
+    assert mandatory["mean_reversion"].universe == tuple(
         symbol for symbol in CANONICAL_STAGE1_UNIVERSE if symbol != "SPY"
     )

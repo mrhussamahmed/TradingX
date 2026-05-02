@@ -67,6 +67,10 @@ GATE1_MIN_CAGR_EDGE = Decimal("0.02")
 GATE1_MIN_OUT_OF_SAMPLE_DAYS = 756
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE1_MAX_PROFILE_DRIFT = Decimal("0.30")
+_GATE1_MARGINAL_CANDIDATE_IDS = (
+    "trend-following-v1",
+    "vol-target-v1",
+)
 
 # source: docs/validation/acceptance_gates.md (GATES-0001 v1.0.0, retrieved 2026-04-17)
 GATE2_MIN_WALK_FORWARD_DAYS = 252
@@ -879,6 +883,73 @@ def _reconcile_gate1_status(pass1_status: str, marginal_status: str) -> str:
     return "pass" if marginal_status == "pass" else marginal_status
 
 
+def gate1_marginal_candidate_ids(
+    candidates: Sequence[StrategyCandidate],
+) -> tuple[str, ...]:
+    """Return the GATES-0001 tranche 1.4 trend/vol marginal pair."""
+    available_ids = {candidate.candidate_id for candidate in candidates}
+    return tuple(
+        candidate_id
+        for candidate_id in _GATE1_MARGINAL_CANDIDATE_IDS
+        if candidate_id in available_ids
+    )
+
+
+def gate1_marginal_candidates(
+    candidates: Sequence[StrategyCandidate],
+) -> tuple[StrategyCandidate, ...]:
+    by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    return tuple(
+        by_id[candidate_id]
+        for candidate_id in gate1_marginal_candidate_ids(candidates)
+        if by_id[candidate_id].sleeve_class_path is not None
+    )
+
+
+def _pending_marginal_portfolio_contribution(
+    *,
+    sleeve_candidate_count: int,
+) -> ValidationCriterionResult:
+    return ValidationCriterionResult(
+        criterion_id="marginal_portfolio_contribution",
+        passed=False,
+        threshold=(
+            "Adding candidate improves portfolio Sharpe AND Calmar "
+            "AND does not worsen CDaR@95%"
+        ),
+        details=(
+            "Marginal contribution is pending because the current evaluator only "
+            "supports the two-sleeve case; found "
+            f"{sleeve_candidate_count} sleeve-backed candidates."
+        ),
+        status="pending",
+    )
+
+
+def _mark_gate1_marginal_pending(
+    pass1_result: ValidationCandidateResult,
+    *,
+    sleeve_candidate_count: int,
+) -> ValidationCandidateResult:
+    marginal_criterion = _pending_marginal_portfolio_contribution(
+        sleeve_candidate_count=sleeve_candidate_count
+    )
+    final_status = _reconcile_gate1_status(
+        pass1_result.status,
+        _criterion_status(marginal_criterion),
+    )
+    return replace(
+        pass1_result,
+        status=final_status,
+        criteria=pass1_result.criteria + (marginal_criterion,),
+        summary=(
+            "Gate 1 evidence is incomplete."
+            if final_status == "pending"
+            else pass1_result.summary
+        ),
+    )
+
+
 def _marginal_deltas(
     *,
     portfolio_without_candidate_returns: tuple[Decimal, ...],
@@ -1065,16 +1136,7 @@ def build_gate_report(
     aligned_bars = _align_bars_by_symbol(bars_by_symbol)
     benchmark_returns = benchmark_stack_payload.opportunity_cost_returns
     base_cost_model_config = CostModelConfig()
-    sleeve_candidates = tuple(
-        candidate for candidate in candidates if candidate.sleeve_class_path is not None
-    )
-    if gate_id == "1" and len(sleeve_candidates) != 2:
-        raise NotImplementedError(
-            "Marginal-portfolio-contribution criterion in tranche 1.4 is scoped "
-            "to the two-sleeve case; found "
-            f"{len(sleeve_candidates)} sleeve-backed candidates. "
-            "Generalization for 3+ sleeves is deferred."
-        )
+    sleeve_candidates = gate1_marginal_candidates(candidates)
 
     def backtest_runner(
         rerun_candidate: StrategyCandidate,
@@ -1134,15 +1196,32 @@ def build_gate_report(
             pass1_returns[candidate.candidate_id] = candidate_returns
             pass1_cost_drag[candidate.candidate_id] = candidate_cost_drag_bps
 
-        regimes_for_book = _build_default_regime_snapshots(
-            sleeve_candidates[0],
-            bars_by_symbol=aligned_bars,
+        marginal_supported = len(sleeve_candidates) == 2
+        scoped_candidate_ids = {item.candidate_id for item in sleeve_candidates}
+        regimes_for_book = (
+            _build_default_regime_snapshots(
+                sleeve_candidates[0],
+                bars_by_symbol=aligned_bars,
+            )
+            if marginal_supported
+            else {}
         )
         candidate_results: list[ValidationCandidateResult] = []
         for candidate in candidates:
             pass1_entry = pass1_results[candidate.candidate_id]
             if candidate.sleeve_class_path is None:
                 candidate_results.append(pass1_entry)
+                continue
+            if candidate.candidate_id not in scoped_candidate_ids:
+                candidate_results.append(pass1_entry)
+                continue
+            if not marginal_supported:
+                candidate_results.append(
+                    _mark_gate1_marginal_pending(
+                        pass1_entry,
+                        sleeve_candidate_count=len(sleeve_candidates),
+                    )
+                )
                 continue
             sibling = next(
                 sibling_candidate
@@ -1489,6 +1568,8 @@ def _config_fingerprint(candidate: StrategyCandidate) -> str:
 __all__ = (
     "build_gate_report",
     "evaluate_marginal_portfolio_contribution",
+    "gate1_marginal_candidate_ids",
+    "gate1_marginal_candidates",
     "load_benchmark_close_series",
     "load_benchmark_stack_payload",
     "load_close_series",

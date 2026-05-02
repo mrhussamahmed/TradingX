@@ -135,9 +135,7 @@ def portfolio_blueprint_to_payload(blueprint: PortfolioBlueprint) -> dict[str, o
         "mdd_design_target": str(blueprint.mdd_design_target),
         "mdd_hard_halt": str(blueprint.mdd_hard_halt),
         "cdar_confidence": str(blueprint.cdar_confidence),
-        "cdar_soft_throttle_threshold": str(
-            blueprint.cdar_soft_throttle_threshold
-        ),
+        "cdar_soft_throttle_threshold": str(blueprint.cdar_soft_throttle_threshold),
         "annualized_turnover_budget": str(blueprint.annualized_turnover_budget),
         "sleeve_three_month_sharpe_floor": str(
             blueprint.sleeve_three_month_sharpe_floor
@@ -154,9 +152,12 @@ def portfolio_blueprint_to_payload(blueprint: PortfolioBlueprint) -> dict[str, o
 
 def portfolio_blueprint_content_hash(blueprint: PortfolioBlueprint) -> str:
     payload = portfolio_blueprint_to_payload(blueprint)
-    return "sha256:" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    )
 
 
 def portfolio_blueprint_from_activation(

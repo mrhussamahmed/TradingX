@@ -78,6 +78,11 @@ def write_paper_trading_promotion_bundle(
     store = FileContentAddressedStore(root / "cas")
     template_record = _latest_template_record(template_bundle_root)
     ledger_sequence = _next_ledger_sequence(root)
+    artifact_refs = template_record.get("artifact_refs")
+    if not isinstance(artifact_refs, (list, tuple)):
+        raise ValueError(
+            f"Template bundle {template_bundle_root} has no artifact refs."
+        )
     artifact_payloads = [
         _transform_payload(
             _load_cas_payload(template_bundle_root, ref),
@@ -85,7 +90,7 @@ def write_paper_trading_promotion_bundle(
             strategy_id=strategy_id,
             max_strategy_allocation=max_strategy_allocation,
         )
-        for ref in template_record["artifact_refs"]
+        for ref in artifact_refs
     ]
 
     finalized_payloads: list[dict[str, object]] = []
@@ -151,13 +156,16 @@ def write_paper_trading_promotion_bundle(
 
 
 def _latest_template_record(root: Path) -> dict[str, object]:
-    records = [
-        json.loads(line)
-        for line in (root / "ledger" / "records.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if line.strip()
-    ]
+    records: list[dict[str, object]] = []
+    for line in (
+        (root / "ledger" / "records.jsonl").read_text(encoding="utf-8").splitlines()
+    ):
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise ValueError(f"Template bundle {root} has a non-object ledger record.")
+        records.append({str(key): value for key, value in payload.items()})
     if not records:
         raise ValueError(f"Template bundle {root} has no ledger records.")
     return records[-1]
@@ -177,7 +185,10 @@ def _load_cas_payload(root: Path, ref: object) -> dict[str, object]:
 
 
 def _read_json(path: Path) -> dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON document {path} must contain an object.")
+    return {str(key): value for key, value in payload.items()}
 
 
 def _transform_payload(
@@ -187,7 +198,10 @@ def _transform_payload(
     strategy_id: str,
     max_strategy_allocation: Decimal,
 ) -> dict[str, object]:
-    transformed = _replace_strategy_id(payload, source_strategy_id, strategy_id)
+    replaced = _replace_strategy_id(payload, source_strategy_id, strategy_id)
+    if not isinstance(replaced, dict):
+        raise ValueError("Promotion bundle artifact payload must contain an object.")
+    transformed = {str(key): value for key, value in replaced.items()}
     kind = str(transformed.get("kind", ""))
     if kind == "capital_allocation_policy":
         cap = _decimal_string(max_strategy_allocation)

@@ -27,6 +27,7 @@ from tradingx.snapshots import ContentAddressedSnapshotStore
 from tradingx.strategy import DeterministicBaselineStrategy
 from tradingx.types import (
     ApprovedWeightSnapshot,
+    BlueprintActivationRecord,
     BotRuntimeState,
     HistoricalWarmupRecord,
     MarketSnapshot,
@@ -205,6 +206,17 @@ class _ActivationGateway:
 
     def get_latest_snapshot(self, *, strategy_id: str) -> ApprovedWeightSnapshot | None:
         return self._snapshot_store.load_by_strategy_id(strategy_id)
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        return None
+
+    def apply_pending_blueprint_activation_on_start(
+        self,
+        *,
+        now: datetime,
+    ) -> BlueprintActivationRecord | None:
+        del now
+        return None
 
 
 class _OpportunityPlanner:

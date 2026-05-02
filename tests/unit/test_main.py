@@ -127,7 +127,7 @@ def test_promotion_check_summary_format_reports_state_and_blockers(capsys) -> No
     assert "statistical_blocker_codes: none" in output
 
 
-def test_promotion_check_default_artifact_root_reports_research_blockers(
+def test_promotion_check_default_artifact_root_allows_paper_trading_only(
     capsys,
 ) -> None:
     exit_code = cli.main(
@@ -141,21 +141,10 @@ def test_promotion_check_default_artifact_root_reports_research_blockers(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["strategy_id"] == "trend-following-v1"
-    assert payload["max_state"] == "research_only"
-    assert payload["blocker_codes"] == [
-        "utility_definition_missing",
-        "tax_account_financing_unspecified",
-        "jurisdiction_account_use_unknown",
-        "instrument_package_missing",
-        "strategy_materiality_policy_missing",
-    ]
-    assert payload["mandate_blocker_codes"] == [
-        "utility_definition_missing",
-        "tax_account_financing_unspecified",
-        "jurisdiction_account_use_unknown",
-        "instrument_package_missing",
-        "strategy_materiality_policy_missing",
-    ]
+    assert payload["requested_state"] == "paper_trading"
+    assert payload["max_state"] == "paper_trading"
+    assert payload["blocker_codes"] == []
+    assert payload["mandate_blocker_codes"] == []
     assert payload["statistical_blocker_codes"] == []
 
 
@@ -1456,6 +1445,8 @@ def test_main_prints_live_disable_status(tmp_path, capsys) -> None:
     env_file.write_text(
         "ALPACA_PAPER_API_KEY=pk-paper\n"
         "ALPACA_PAPER_API_SECRET=sk-paper\n"
+        "TRADINGX_BROKER_MODE=paper\n"
+        "TRADINGX_LIVE_CONFIG_ENABLED=false\n"
         "TRADINGX_MANUAL_KILL_SWITCH=true\n",
         encoding="utf-8",
     )
@@ -1465,6 +1456,9 @@ def test_main_prints_live_disable_status(tmp_path, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["manual_kill_switch_active"] is True
+    assert payload["paper_only_mode"] is True
+    assert payload["live_trading_enabled"] is False
+    assert "broker_mode_not_live" in payload["disable_reasons"]
 
 
 def test_main_runs_gate_report_command(monkeypatch, tmp_path, capsys) -> None:

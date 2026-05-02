@@ -36,6 +36,25 @@ def _normalize_quantity(quantity: Decimal | None) -> str:
     return format(quantity.normalize(), "f")
 
 
+def build_baseline_reference_candidate(
+    *,
+    benchmark_symbol: str = "SPY",
+) -> StrategyCandidate:
+    return StrategyCandidate(
+        candidate_id=DEFAULT_CANDIDATE_ID,
+        family="baseline_long_only",
+        benchmark_symbol=benchmark_symbol,
+        universe=(benchmark_symbol,),
+        parameter_set={
+            "benchmark_symbol": benchmark_symbol,
+            "target_weight": Decimal("1"),
+            "signal": "baseline_long_only",
+        },
+        status="reference",
+        sleeve_class_path="tradingx.sleeves.baseline_long_only.BaselineLongOnlySleeve",
+    )
+
+
 def build_mandatory_candidate_registry(
     universe: Sequence[str] | None = None,
     *,
@@ -46,21 +65,6 @@ def build_mandatory_candidate_registry(
         symbol for symbol in normalized_universe if symbol != benchmark_symbol
     )
     return (
-        StrategyCandidate(
-            candidate_id=DEFAULT_CANDIDATE_ID,
-            family="baseline_long_only",
-            benchmark_symbol=benchmark_symbol,
-            universe=(benchmark_symbol,),
-            parameter_set={
-                "benchmark_symbol": benchmark_symbol,
-                "target_weight": Decimal("1"),
-                "signal": "baseline_long_only",
-            },
-            status="paper_ready",
-            sleeve_class_path=(
-                "tradingx.sleeves.baseline_long_only.BaselineLongOnlySleeve"
-            ),
-        ),
         StrategyCandidate(
             candidate_id="trend-following-v1",
             family="trend_following",
@@ -105,6 +109,20 @@ def build_mandatory_candidate_registry(
             },
             status="under_evaluation",
             sleeve_class_path="tradingx.sleeves.mean_reversion.MeanReversionSleeve",
+        ),
+    )
+
+
+def build_runtime_candidate_registry(
+    universe: Sequence[str] | None = None,
+    *,
+    benchmark_symbol: str = "SPY",
+) -> tuple[StrategyCandidate, ...]:
+    return (
+        build_baseline_reference_candidate(benchmark_symbol=benchmark_symbol),
+        *build_mandatory_candidate_registry(
+            universe,
+            benchmark_symbol=benchmark_symbol,
         ),
     )
 
@@ -251,5 +269,7 @@ __all__ = (
     "CANONICAL_STAGE1_UNIVERSE",
     "DEFAULT_CANDIDATE_ID",
     "DeterministicBaselineStrategy",
+    "build_baseline_reference_candidate",
     "build_mandatory_candidate_registry",
+    "build_runtime_candidate_registry",
 )

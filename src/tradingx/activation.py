@@ -25,7 +25,7 @@ from tradingx.promotion import (
     state_allows,
     validate_state_action_contracts,
 )
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationCheck,
@@ -139,9 +139,7 @@ class LocalActivationGateway:
         activation = self.get_latest_activation()
         if activation is None:
             return None
-        for candidate in build_mandatory_candidate_registry(
-            activation.approved_symbols
-        ):
+        for candidate in build_runtime_candidate_registry(activation.approved_symbols):
             if candidate.candidate_id == activation.strategy_id:
                 return candidate
         return None
@@ -348,15 +346,15 @@ class LocalActivationGateway:
             "source_blueprint_path": str(source_blueprint_path),
             "blueprint_content_hash": blueprint_content_hash,
             "blueprint_payload": blueprint_payload,
-            "bindings": [
-                dataclasses.asdict(binding)
-                for binding in bindings
-            ],
+            "bindings": [dataclasses.asdict(binding) for binding in bindings],
             "checks": [dataclasses.asdict(check) for check in checks],
         }
-        preview_hash = "sha256:" + hashlib.sha256(
-            json.dumps(preview_payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        preview_hash = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(preview_payload, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+        )
         return BlueprintActivationPreflight(
             blueprint_id=blueprint.blueprint_id,
             status=status,

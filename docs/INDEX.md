@@ -1,13 +1,13 @@
 ---
 id: INDEX-0001
 title: Artifact index
-version: 1.2.60
+version: 1.2.61
 status: active
 created: 2026-04-17
-last_amended: 2026-04-25
-supersedes: INDEX-0001@1.2.59
+last_amended: 2026-05-02
+supersedes: INDEX-0001@1.2.60
 superseded_by: null
-author_session: codex-gpt-5-2026-04-25
+author_session: codex-gpt-5-2026-05-02
 ---
 
 # Artifact index
@@ -74,7 +74,7 @@ field (session lifecycle). This index tracks `status` only.
 | id          | title             | version | status | path                          |
 | ----------- | ----------------- | ------- | ------ | ----------------------------- |
 | STATE-0001  | Project state     | 1.0.14  | active | `docs/handover/STATE.md`      |
-| INDEX-0001  | Artifact index    | 1.2.60  | active | `docs/INDEX.md` (this file)   |
+| INDEX-0001  | Artifact index    | 1.2.61  | active | `docs/INDEX.md` (this file)   |
 
 ### Architecture maps
 
@@ -291,7 +291,7 @@ field (session lifecycle). This index tracks `status` only.
 
 | id       | title | version | status | path |
 | -------- | ----- | ------- | ------ | ---- |
-| GATES-0001 | Stage 1 acceptance gates | 1.3.1 | active | `docs/validation/acceptance_gates.md` |
+| GATES-0001 | Stage 1 acceptance gates | 1.3.2 | active | `docs/validation/acceptance_gates.md` |
 
 ### Session handovers (SESS-*)
 

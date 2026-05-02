@@ -8,7 +8,11 @@ import pandas as pd  # type: ignore[import-untyped]
 from tradingx.costs import CostModelConfig
 from tradingx.evaluation import AdversarialCheckContext
 from tradingx.strategy import build_mandatory_candidate_registry
-from tradingx.types import BenchmarkStackPayload, OperatingConstraintBudget
+from tradingx.types import (
+    BenchmarkStackPayload,
+    OperatingConstraintBudget,
+    StrategyCandidate,
+)
 from tradingx.validation import _build_gate1_candidate_result_pass1
 
 
@@ -78,10 +82,18 @@ def _criterion_by_id(result, criterion_id: str):  # type: ignore[no-untyped-def]
     )
 
 
+def _mandatory_candidate(candidate_id: str) -> StrategyCandidate:
+    by_id = {
+        candidate.candidate_id: candidate
+        for candidate in build_mandatory_candidate_registry(("SPY", "QQQ"))
+    }
+    return by_id[candidate_id]
+
+
 def test_gate1_pbo_pending_keeps_candidate_pending() -> None:
     periods = 1100
     returns = _candidate_returns(periods)
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = _mandatory_candidate("trend-following-v1")
     result, pack = _build_gate1_candidate_result_pass1(
         candidate=candidate,
         candidate_returns=returns,
@@ -102,7 +114,7 @@ def test_gate1_pbo_pending_keeps_candidate_pending() -> None:
 def test_gate1_pbo_pass_populates_pack_and_passes_criterion() -> None:
     periods = 1100
     returns = _candidate_returns(periods)
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = _mandatory_candidate("trend-following-v1")
     result, pack = _build_gate1_candidate_result_pass1(
         candidate=candidate,
         candidate_returns=returns,
@@ -124,7 +136,7 @@ def test_gate1_pbo_pass_populates_pack_and_passes_criterion() -> None:
 def test_gate1_pbo_fail_fails_candidate() -> None:
     periods = 1100
     returns = _candidate_returns(periods)
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = _mandatory_candidate("trend-following-v1")
     result, pack = _build_gate1_candidate_result_pass1(
         candidate=candidate,
         candidate_returns=returns,
@@ -146,7 +158,7 @@ def test_gate1_pbo_fail_fails_candidate() -> None:
 def test_gate1_pbo_payload_is_applied_to_non_sleeve_candidate() -> None:
     periods = 1100
     returns = _candidate_returns(periods)
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[2]
+    candidate = _mandatory_candidate("mean-reversion-v1")
     result, pack = _build_gate1_candidate_result_pass1(
         candidate=candidate,
         candidate_returns=returns,

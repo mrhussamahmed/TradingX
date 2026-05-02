@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { Menu, PanelRightClose } from 'lucide-react'
 
 import {
   FLATTEN_ALL_ENDPOINT_AVAILABLE,
@@ -42,10 +43,17 @@ function ControlCenterShell() {
   const [resumeOpen, setResumeOpen] = useState(false)
   const [resumeBusy, setResumeBusy] = useState(false)
   const [railCollapsed, setRailCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileRailOpen, setMobileRailOpen] = useState(false)
 
-  const shellClass = railCollapsed
-    ? `${shellStyles.shell} ${shellStyles.shellRailCollapsed}`
-    : shellStyles.shell
+  const shellClass = [
+    shellStyles.shell,
+    railCollapsed ? shellStyles.shellRailCollapsed : '',
+    mobileNavOpen ? shellStyles.shellMobileNavOpen : '',
+    mobileRailOpen ? shellStyles.shellMobileRailOpen : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const configuredCadenceSeconds =
     data.runtimeHeartbeat.configured_cadence_seconds ??
     data.configSummary.config.service_interval_seconds ??
@@ -143,6 +151,32 @@ function ControlCenterShell() {
 
   return (
     <>
+      <div className={shellStyles.mobileShellControls} aria-label="Mobile layout controls">
+        <button
+          type="button"
+          className={shellStyles.mobileShellButton}
+          aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+          aria-expanded={mobileNavOpen}
+          onClick={() => {
+            setMobileNavOpen((open) => !open)
+            setMobileRailOpen(false)
+          }}
+        >
+          <Menu size={18} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={shellStyles.mobileShellButton}
+          aria-label={mobileRailOpen ? 'Close operator rail' : 'Open operator rail'}
+          aria-expanded={mobileRailOpen}
+          onClick={() => {
+            setMobileRailOpen((open) => !open)
+            setMobileNavOpen(false)
+          }}
+        >
+          <PanelRightClose size={18} aria-hidden="true" />
+        </button>
+      </div>
       <div className={shellClass}>
         <Brand />
         <TopStatusStrip
@@ -176,6 +210,18 @@ function ControlCenterShell() {
           onCollapsedChange={setRailCollapsed}
         />
       </div>
+
+      {mobileNavOpen || mobileRailOpen ? (
+        <button
+          type="button"
+          className={shellStyles.mobileShellScrim}
+          aria-label="Close mobile panels"
+          onClick={() => {
+            setMobileNavOpen(false)
+            setMobileRailOpen(false)
+          }}
+        />
+      ) : null}
 
       {data.pageError ? (
         <div

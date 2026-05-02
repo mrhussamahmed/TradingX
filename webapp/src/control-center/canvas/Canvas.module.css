@@ -647,3 +647,45 @@
   width: 72%;
   background: linear-gradient(90deg, rgba(46, 161, 255, 0.48), rgba(46, 161, 255, 0.12));
 }
+
+@media (max-width: 900px) {
+  .canvasHeader {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 12px 18px;
+  }
+
+  .canvasTitleBlock {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .canvasTitle {
+    flex-wrap: wrap;
+  }
+
+  .canvasSubtitle {
+    line-height: 1.45;
+    white-space: normal;
+  }
+
+  .canvasHeaderActions {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .suggestionBanner,
+  .overrideBanner,
+  .systemDefaultsHint {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .suggestionBanner button,
+  .overrideBanner button,
+  .systemDefaultsHint button {
+    margin-left: 0;
+  }
+}

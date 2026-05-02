@@ -353,10 +353,11 @@ class LocalRuntimeHostManager:
                 self._activation_gateway,
                 "apply_pending_blueprint_activation_on_start",
             ):
-                applied_blueprint = (
-                    self._activation_gateway.apply_pending_blueprint_activation_on_start(
-                        now=self._now_provider()
-                    )
+                apply_pending_activation = (
+                    self._activation_gateway.apply_pending_blueprint_activation_on_start
+                )
+                applied_blueprint = apply_pending_activation(
+                    now=self._now_provider(),
                 )
                 if applied_blueprint is not None:
                     self._write_running_blueprint_activation(applied_blueprint)
@@ -478,7 +479,7 @@ class LocalRuntimeHostManager:
         self,
         activation: BlueprintActivationRecord,
     ) -> None:
-        output_dir = self._operator_store._root_dir / "runtime_config"  # type: ignore[attr-defined]
+        output_dir = self._operator_store._root_dir / "runtime_config"
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "running_activation.json").write_text(
             json.dumps(

@@ -197,6 +197,16 @@ def _rolling_records(
     )
 
 
+def test_drift_candidate_lookup_resolves_baseline_reference() -> None:
+    from tradingx.drift import gateway as drift_gateway
+
+    candidate = drift_gateway._candidate_for_sleeve("baseline-long-only-v1")
+
+    assert candidate is not None
+    assert candidate.candidate_id == "baseline-long-only-v1"
+    assert candidate.status == "reference"
+
+
 def test_market_data_feature_reader_spy_sma_uses_200_prior_observations() -> None:
     index = pd.date_range("2025-01-02", periods=201, freq="B", tz="UTC")
     closes = [float(100 + index_value) for index_value in range(201)]

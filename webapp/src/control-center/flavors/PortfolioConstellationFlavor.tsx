@@ -557,7 +557,7 @@ function StrategyReadinessCards({ rows }: { rows: BotBrainSleeveReadiness[] }) {
             <div className={styles.metricDetail}>{row.human_explanation}</div>
             <div className={styles.metricSub}>{row.fix_guidance}</div>
             <div className={styles.sourceDisclosure}>
-              Implemented {row.implemented ? 'yes' : 'no'} · runtime {row.runtime_resolvable ? 'yes' : 'no'} · paper {row.paper_approved ? 'yes' : 'no'} · allocation {row.allocation_approved ? 'yes' : 'no'}
+              Role {prettyLabel(row.candidate_role || 'unknown')} · Implemented {row.implemented ? 'yes' : 'no'} · runtime {row.runtime_resolvable ? 'yes' : 'no'} · paper {row.paper_approved ? 'yes' : 'no'} · allocation {row.allocation_approved ? 'yes' : 'no'}
             </div>
           </div>
         )

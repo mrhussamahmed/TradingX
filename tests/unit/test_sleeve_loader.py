@@ -6,7 +6,10 @@ from tradingx.sleeves.base import build_sleeve_from_candidate
 from tradingx.sleeves.baseline_long_only import BaselineLongOnlySleeve
 from tradingx.sleeves.mean_reversion import MeanReversionSleeve
 from tradingx.sleeves.trend import TrendSleeve
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import (
+    build_baseline_reference_candidate,
+    build_mandatory_candidate_registry,
+)
 from tradingx.types import StrategyCandidate
 
 
@@ -65,7 +68,7 @@ def test_build_sleeve_from_candidate_resolves_baseline_and_mean_reversion() -> N
         for candidate in build_mandatory_candidate_registry(("SPY", "QQQ"))
     }
 
-    baseline = build_sleeve_from_candidate(candidates["baseline-long-only-v1"])
+    baseline = build_sleeve_from_candidate(build_baseline_reference_candidate())
     mean_reversion = build_sleeve_from_candidate(candidates["mean-reversion-v1"])
 
     assert isinstance(baseline, BaselineLongOnlySleeve)

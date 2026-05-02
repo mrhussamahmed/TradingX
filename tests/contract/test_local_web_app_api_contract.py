@@ -961,8 +961,25 @@ class FakeActionRunner:
         window_start: str,
         window_end: str,
         universe: tuple[str, ...] = (),
+        experiment_id: str | None = None,
+        run_id: str | None = None,
+        promotion_decision_scope: str | None = None,
+        metric_release_token: str | None = None,
+        dataset_manifest_id: str | None = None,
+        dataset_manifest_file: str | None = None,
     ) -> WebActionResult:
-        del benchmark_stack_file, window_start, window_end, universe
+        del (
+            benchmark_stack_file,
+            window_start,
+            window_end,
+            universe,
+            experiment_id,
+            run_id,
+            promotion_decision_scope,
+            metric_release_token,
+            dataset_manifest_id,
+            dataset_manifest_file,
+        )
         return WebActionResult(
             action_id="action-gate",
             action_type="gate_report",

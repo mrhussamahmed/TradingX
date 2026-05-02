@@ -45,7 +45,7 @@ from tradingx.sizing import (
     entry_marketable_limit_price,
 )
 from tradingx.sleeves.base import SleeveProtocol, build_sleeve_from_candidate
-from tradingx.strategy import DEFAULT_CANDIDATE_ID, build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationRecord,
@@ -214,6 +214,8 @@ class RuntimePortfolioPlanner:
         )
         if candidate is None:
             return None
+        if candidate.status == "reference":
+            return None
 
         bars_by_symbol = self._load_bars(
             symbols=tuple(
@@ -366,7 +368,7 @@ class RuntimePortfolioPlanner:
             )
 
         generated_at = self._now_provider()
-        registry_candidates = build_mandatory_candidate_registry(symbols)
+        registry_candidates = build_runtime_candidate_registry(symbols)
         candidate_by_strategy_id = {
             candidate.candidate_id: candidate for candidate in registry_candidates
         }
@@ -626,9 +628,7 @@ class RuntimePortfolioPlanner:
         strategy_id: str,
         symbols: tuple[str, ...],
     ) -> StrategyCandidate | None:
-        if strategy_id == DEFAULT_CANDIDATE_ID:
-            return None
-        for candidate in build_mandatory_candidate_registry(symbols):
+        for candidate in build_runtime_candidate_registry(symbols):
             if candidate.candidate_id == strategy_id:
                 return candidate
         return None
@@ -1012,7 +1012,7 @@ def _compute_sleeve_attributions(
         if registry_order_by_sleeve_id is not None
         else {
             candidate.candidate_id: index
-            for index, candidate in enumerate(build_mandatory_candidate_registry())
+            for index, candidate in enumerate(build_runtime_candidate_registry())
         }
     )
     fractions = sorted(

@@ -29,7 +29,7 @@ from tradingx.risk_free import (
 )
 from tradingx.signals.trend import generate_trend_signal
 from tradingx.signals.vol_target_spy import generate_vol_target_spy_signal
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import build_runtime_candidate_registry
 from tradingx.types import (
     DriftMonitorVerdictRecord,
     OperatorAlert,
@@ -541,7 +541,7 @@ class DriftAlarmGateway:
                         monitor_id=f"ks::{sleeve_id}",
                         sleeve_id=sleeve_id,
                         details=(
-                            "sleeve not in mandatory registry or sleeve_class_path=None"
+                            "sleeve not in runtime registry or sleeve_class_path=None"
                         ),
                     )
                 )
@@ -747,7 +747,7 @@ def build_drift_monitor_verdict_record(
 
 
 def _candidate_for_sleeve(sleeve_id: str) -> StrategyCandidate | None:
-    for candidate in build_mandatory_candidate_registry():
+    for candidate in build_runtime_candidate_registry():
         if candidate.candidate_id == sleeve_id:
             return candidate
     return None
