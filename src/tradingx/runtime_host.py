@@ -353,8 +353,11 @@ class LocalRuntimeHostManager:
                 self._activation_gateway,
                 "apply_pending_blueprint_activation_on_start",
             ):
-                applied_blueprint = self._activation_gateway.apply_pending_blueprint_activation_on_start(
-                    now=self._now_provider()
+                apply_pending_activation = (
+                    self._activation_gateway.apply_pending_blueprint_activation_on_start
+                )
+                applied_blueprint = apply_pending_activation(
+                    now=self._now_provider(),
                 )
                 if applied_blueprint is not None:
                     self._write_running_blueprint_activation(applied_blueprint)
