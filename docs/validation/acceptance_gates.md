@@ -25,6 +25,15 @@ reference that later validation reports can cite.
 - Live trading remains disabled regardless of any gate state until Gate 4
   sign-off explicitly says otherwise.
 
+## Paper-Only Trial Posture
+
+TradingX may report `paper_trading` for strategies approved for local paper trials.
+This state permits paper-only observation and iteration. It does not permit live
+trading, broker live mode, or live order submission.
+
+Live trading remains fail-closed until Gate 4 explicitly enables all live-control
+layers and the operator performs live sign-off.
+
 ## Gate 0 — Repo hygiene
 
 **Pass criteria**
