@@ -125,6 +125,39 @@ function makeData(): DataContextValue {
       },
       pending_activation: null,
     },
+    botBrain: {
+      generated_at_utc: '2026-04-30T17:00:00Z',
+      active_blueprint_id: 'core-paper-ready-v1',
+      queued_blueprint_id: '',
+      trading_mode: 'paper',
+      market_state: 'open',
+      next_check_at_utc: null,
+      decision_stages: [],
+      last_real_order: null,
+      cycle_explanation: {
+        summary: 'No trade because the planner held.',
+        primary_reason_code: 'no_trade',
+        market_state: 'open',
+        planner_status: 'no_trade',
+        risk_status: 'not_blocked',
+        sleeve_reasons: [],
+      },
+      sleeve_readiness: [
+        {
+          sleeve_id: 'mean-reversion-v1',
+          strategy_id: 'mean-reversion-v1',
+          implemented: true,
+          runtime_resolvable: true,
+          paper_approved: false,
+          allocation_approved: false,
+          display_state: 'blocked',
+          blocker_code: 'authority_artifact_invalid',
+          human_explanation: 'Missing authority package for paper trading.',
+          fix_guidance: 'Generate and sign a valid paper-trading promotion bundle.',
+          evidence_refs: [],
+        },
+      ],
+    },
     writeMode: {
       enabled: false,
       configured: false,
@@ -160,5 +193,12 @@ describe('PortfolioConstellationFlavor blueprint activation panel', () => {
       'core-paper-multi-sleeve-v1',
     )
     expect(screen.getAllByText('Mean Reversion V1').length).toBeGreaterThan(0)
+  })
+
+  it('renders backend-provided strategy readiness guidance', () => {
+    render(<PortfolioConstellationFlavor />)
+
+    expect(screen.getByText('Missing authority package for paper trading.')).toBeInTheDocument()
+    expect(screen.getByText('Generate and sign a valid paper-trading promotion bundle.')).toBeInTheDocument()
   })
 })

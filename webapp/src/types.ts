@@ -427,6 +427,68 @@ export type BotRuntimeState = {
   latest_selection_id: string
 }
 
+export type BotBrainDecisionStage = {
+  stage: string
+  status: string
+  detail: string
+  occurred_at_utc: string | null
+}
+
+export type BotBrainOrderEvent = {
+  event_type: string
+  recorded_at_utc: string
+  symbol: string
+  side: string
+  client_order_id: string
+  broker_order_id: string
+  reason: string
+}
+
+export type BotBrainSleeveReadiness = {
+  sleeve_id: string
+  strategy_id: string
+  implemented: boolean
+  runtime_resolvable: boolean
+  paper_approved: boolean
+  allocation_approved: boolean
+  display_state: string
+  blocker_code: string
+  human_explanation: string
+  fix_guidance: string
+  evidence_refs: string[]
+  activation_id?: string
+  blueprint_id?: string
+  activation_role?: string
+}
+
+export type BotBrainSleeveCycleReason = {
+  sleeve_id: string
+  status: string
+  reason: string
+}
+
+export type BotBrainCycleExplanation = {
+  summary: string
+  primary_reason_code: string
+  market_state: string
+  planner_status: string
+  risk_status: string
+  sleeve_reasons: BotBrainSleeveCycleReason[]
+}
+
+export type BotBrainSnapshot = {
+  generated_at_utc: string
+  active_blueprint_id: string
+  queued_blueprint_id: string
+  trading_mode: string
+  market_state: string
+  next_check_at_utc: string | null
+  decision_stages: BotBrainDecisionStage[]
+  last_real_order: BotBrainOrderEvent | null
+  sleeve_readiness: BotBrainSleeveReadiness[]
+  cycle_explanation: BotBrainCycleExplanation
+}
+
 export type RuntimeTruthItem = {
   label: string
   value: string

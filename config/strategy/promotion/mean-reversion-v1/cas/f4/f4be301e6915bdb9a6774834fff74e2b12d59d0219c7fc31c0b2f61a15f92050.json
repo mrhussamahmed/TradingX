@@ -1,0 +1,1 @@
+{"allocation_policy_id":"legacy-zero-capital","description":"Legacy allocation policy retained only for compatibility.","kind":"allocation_policy","schema_version":"1.0","strategy_id":"mean-reversion-v1"}

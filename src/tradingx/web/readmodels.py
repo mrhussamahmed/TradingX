@@ -19,17 +19,29 @@ from tradingx.experiments import (
 )
 from tradingx.gate3 import build_gate3_promotion_package, build_gate3_readiness_report
 from tradingx.persistence import FilesystemArtifactStore
-from tradingx.portfolio.blueprint import list_portfolio_blueprints
+from tradingx.portfolio.blueprint import (
+    list_portfolio_blueprints,
+    load_portfolio_blueprint,
+    portfolio_blueprint_from_payload,
+)
 from tradingx.promotion import (
     LEGACY_NON_AUTHORITY_STATUS,
     PromotionState,
     build_artifact_promotion_decision_provider,
     state_allows,
 )
+from tradingx.sleeves.base import build_sleeve_from_candidate
+from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BenchmarkComparisonRow,
     BlueprintActivationRecord,
+    BotBrainCycleExplanation,
+    BotBrainDecisionStage,
+    BotBrainOrderEvent,
+    BotBrainSleeveCycleReason,
+    BotBrainSleeveReadiness,
+    BotBrainSnapshot,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -182,6 +194,58 @@ class LocalWebReadModel:
             ),
             active_activation=active,
             pending_activation=pending,
+        )
+
+    def build_bot_brain_snapshot(self) -> BotBrainSnapshot:
+        generated_at = self._now_provider()
+        catalog = self.list_blueprint_catalog()
+        heartbeat = self.build_runtime_heartbeat_snapshot()
+        runtime_state = self.get_runtime_host_state()
+        service_cycles = self._paper_store.list_artifact_payloads("service_cycles")
+        latest_cycle = self._pick_latest_payload(
+            service_cycles,
+            timestamp_field="completed_at_utc",
+        )
+        cycle_explanation = self._build_bot_brain_cycle_explanation(latest_cycle)
+        market_state = (
+            cycle_explanation.market_state
+            if cycle_explanation.market_state
+            else self._market_session_label(latest_cycle).lower()
+        )
+        live_report = self._config.live_disable_report()
+        sleeve_readiness = self._build_bot_brain_sleeve_readiness(
+            active_activation=catalog.active_activation,
+            pending_activation=catalog.pending_activation,
+        )
+        latest_cycle_order = self._latest_real_order_event(latest_cycle=latest_cycle)
+        last_real_order = self._latest_real_order_event()
+        return BotBrainSnapshot(
+            generated_at_utc=generated_at,
+            active_blueprint_id=(
+                catalog.active_activation.blueprint_id
+                if catalog.active_activation is not None
+                else ""
+            ),
+            queued_blueprint_id=(
+                catalog.pending_activation.blueprint_id
+                if catalog.pending_activation is not None
+                else ""
+            ),
+            trading_mode=(
+                "live" if bool(live_report.get("live_trading_enabled")) else "paper"
+            ),
+            market_state=market_state,
+            next_check_at_utc=heartbeat.next_evaluation_at_utc,
+            decision_stages=self._build_bot_brain_decision_stages(
+                heartbeat=heartbeat,
+                runtime_state=runtime_state,
+                latest_cycle=latest_cycle,
+                cycle_explanation=cycle_explanation,
+                last_order=latest_cycle_order,
+            ),
+            last_real_order=last_real_order,
+            sleeve_readiness=sleeve_readiness,
+            cycle_explanation=cycle_explanation,
         )
 
     def build_dashboard_snapshot(self) -> DashboardSnapshot:
@@ -2083,10 +2147,16 @@ class LocalWebReadModel:
             if latest_timestamp is None or timestamp > latest_timestamp:
                 latest_timestamp = timestamp
                 latest_payload = dict(portfolio_state)
-        if latest_payload is None and fallback_open_symbols and latest_any_payload is not None:
+        if (
+            latest_payload is None
+            and fallback_open_symbols
+            and latest_any_payload is not None
+        ):
             portfolio_symbols = {
                 symbol
-                for position in self._ensure_list(latest_any_payload.get("positions", ()))
+                for position in self._ensure_list(
+                    latest_any_payload.get("positions", ())
+                )
                 if isinstance(position, Mapping)
                 and (symbol := str(position.get("symbol", "")).strip())
                 and (
@@ -2110,7 +2180,9 @@ class LocalWebReadModel:
         if latest_portfolio_state is None:
             return tuple(dict(position) for position in fallback_positions)
         source_at = str(latest_portfolio_state.get("as_of_utc", "")).strip()
-        source_status = str(latest_portfolio_state.get("_source_status", "fresh")).strip()
+        source_status = str(
+            latest_portfolio_state.get("_source_status", "fresh")
+        ).strip()
         positions = []
         for position in self._ensure_list(latest_portfolio_state.get("positions", ())):
             if not isinstance(position, Mapping):
@@ -2166,7 +2238,9 @@ class LocalWebReadModel:
                     decimals=2,
                 )
                 exposure_status = valued_status
-            quantity_status = valued_status if quantity is not None else "source_missing"
+            quantity_status = (
+                valued_status if quantity is not None else "source_missing"
+            )
             price_status = valued_status if market_value is not None else "unpriced"
             source_evidence_at = self._payload_timestamp(
                 position,
@@ -2316,6 +2390,468 @@ class LocalWebReadModel:
                 }
             )
         return events
+
+    def _latest_real_order_event(
+        self,
+        *,
+        latest_cycle: Mapping[str, object] | None = None,
+    ) -> BotBrainOrderEvent | None:
+        journal_path = self._data_root_path() / "journal.db"
+        if not journal_path.exists():
+            return None
+        real_order_events = (
+            "submit_attempt",
+            "ack",
+            "accepted",
+            "order_recovered",
+            "fill",
+            "fill_recorded",
+            "reject",
+            "submit_rejected",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "expired",
+        )
+        placeholders = ",".join("?" for _event in real_order_events)
+        query = (
+            "select event_type, recorded_at_utc, decision_snapshot_id, "
+            "cycle_correlation_id, client_order_id, broker_order_id, symbol, side, "
+            "payload_json from oms_journal "
+            f"where event_type in ({placeholders}) order by row_id desc limit 200"
+        )
+        try:
+            with sqlite3.connect(journal_path) as connection:
+                rows = connection.execute(query, real_order_events).fetchall()
+        except sqlite3.Error:
+            return None
+        if latest_cycle is not None:
+            rows = [
+                row
+                for row in rows
+                if self._oms_order_row_belongs_to_cycle(row, latest_cycle)
+            ]
+        if not rows:
+            return None
+        latest_by_client_order_id: dict[str, tuple[object, ...]] = {}
+        for row in rows:
+            client_order_id = str(row[4] or "")
+            key = client_order_id or f"row:{len(latest_by_client_order_id)}"
+            latest_by_client_order_id.setdefault(key, row)
+        row = next(iter(latest_by_client_order_id.values()))
+        (
+            event_type,
+            recorded_at_utc,
+            _decision_snapshot_id,
+            _cycle_correlation_id,
+            client_order_id,
+            broker_order_id,
+            symbol,
+            side,
+            payload_json,
+        ) = row
+        try:
+            payload = self._ensure_mapping(json.loads(str(payload_json)))
+        except Exception:
+            payload = {}
+        reason = str(
+            payload.get("reason_code")
+            or payload.get("terminal_reason")
+            or payload.get("message")
+            or event_type
+        )
+        return BotBrainOrderEvent(
+            event_type=str(event_type),
+            recorded_at_utc=self._parse_datetime(str(recorded_at_utc)),
+            symbol=str(symbol),
+            side=str(side),
+            client_order_id=str(client_order_id or ""),
+            broker_order_id=str(broker_order_id or ""),
+            reason=reason,
+        )
+
+    def _oms_order_row_belongs_to_cycle(
+        self,
+        row: tuple[object, ...],
+        latest_cycle: Mapping[str, object],
+    ) -> bool:
+        cycle_id = str(latest_cycle.get("cycle_id", "")).strip()
+        decision_snapshot_id = str(row[2] or "").strip()
+        cycle_correlation_id = str(row[3] or "").strip()
+        if cycle_id and cycle_correlation_id == cycle_id:
+            return True
+        expected_decision_ids = {
+            str(value).strip()
+            for value in self._ensure_sequence(
+                latest_cycle.get("decision_snapshot_ids", ())
+            )
+            if str(value).strip()
+        }
+        single_decision_id = str(latest_cycle.get("decision_snapshot_id", "")).strip()
+        if single_decision_id:
+            expected_decision_ids.add(single_decision_id)
+        if decision_snapshot_id and decision_snapshot_id in expected_decision_ids:
+            return True
+
+        recorded_at = self._parse_datetime(str(row[1] or ""))
+        started_at = self._payload_timestamp(latest_cycle, "started_at_utc")
+        completed_at = self._payload_timestamp(latest_cycle, "completed_at_utc")
+        if recorded_at is None or started_at is None or completed_at is None:
+            return False
+        return started_at <= recorded_at <= completed_at + timedelta(seconds=60)
+
+    def _build_bot_brain_decision_stages(
+        self,
+        *,
+        heartbeat: RuntimeHeartbeatSnapshot,
+        runtime_state: BotRuntimeState,
+        latest_cycle: Mapping[str, object] | None,
+        cycle_explanation: BotBrainCycleExplanation,
+        last_order: BotBrainOrderEvent | None,
+    ) -> tuple[BotBrainDecisionStage, ...]:
+        cycle_status = str(latest_cycle.get("cycle_status", "")) if latest_cycle else ""
+        decision_source_at = heartbeat.last_evaluation_at_utc
+        selected_status = "complete" if heartbeat.selected_symbol else "empty"
+        planned_status = (
+            "complete"
+            if cycle_explanation.planner_status in {"planned", "executed"}
+            or cycle_status == "executed"
+            else "empty"
+        )
+        submitted_status = "complete" if last_order is not None else "empty"
+        terminal_without_fill_events = {
+            "reject",
+            "submit_rejected",
+            "rejected",
+            "canceled",
+            "cancelled",
+            "expired",
+        }
+        filled_status = (
+            "complete"
+            if last_order is not None
+            and last_order.event_type in {"fill", "fill_recorded"}
+            else "empty"
+        )
+        held_status = (
+            "complete"
+            if (
+                (cycle_status and cycle_status != "executed" and last_order is None)
+                or (
+                    last_order is not None
+                    and last_order.event_type in terminal_without_fill_events
+                )
+            )
+            else "empty"
+        )
+        return (
+            BotBrainDecisionStage(
+                stage="selected",
+                status=selected_status,
+                detail=heartbeat.last_decision or "No candidate selected yet.",
+                occurred_at_utc=decision_source_at,
+            ),
+            BotBrainDecisionStage(
+                stage="planned",
+                status=planned_status,
+                detail=(
+                    "Runtime planner produced evidence for the latest cycle."
+                    if planned_status == "complete"
+                    else "No persisted executable planner output for the latest cycle."
+                ),
+                occurred_at_utc=self._payload_timestamp(
+                    latest_cycle,
+                    "completed_at_utc",
+                ),
+            ),
+            BotBrainDecisionStage(
+                stage="submitted",
+                status=submitted_status,
+                detail=(
+                    f"{last_order.event_type} for {last_order.symbol}"
+                    if last_order is not None
+                    else "No OMS submit or acceptance event has been recorded."
+                ),
+                occurred_at_utc=(
+                    last_order.recorded_at_utc if last_order is not None else None
+                ),
+            ),
+            BotBrainDecisionStage(
+                stage="filled",
+                status=filled_status,
+                detail=(
+                    f"Fill recorded for {last_order.symbol}"
+                    if filled_status == "complete" and last_order is not None
+                    else "No broker fill event has been recorded."
+                ),
+                occurred_at_utc=(
+                    last_order.recorded_at_utc
+                    if filled_status == "complete" and last_order is not None
+                    else None
+                ),
+            ),
+            BotBrainDecisionStage(
+                stage="held_skipped",
+                status=held_status,
+                detail=(
+                    f"Latest order ended as {last_order.event_type}: {last_order.reason}"
+                    if last_order is not None
+                    and last_order.event_type in terminal_without_fill_events
+                    else (
+                        f"Latest cycle ended as {cycle_status}."
+                        if held_status == "complete"
+                        else runtime_state.status_reason
+                    )
+                ),
+                occurred_at_utc=self._payload_timestamp(
+                    latest_cycle,
+                    "completed_at_utc",
+                ),
+            ),
+        )
+
+    def _build_bot_brain_cycle_explanation(
+        self,
+        latest_cycle: Mapping[str, object] | None,
+    ) -> BotBrainCycleExplanation:
+        if latest_cycle is None:
+            return BotBrainCycleExplanation(
+                summary="No service cycle has been recorded yet.",
+                primary_reason_code="no_cycle",
+                market_state="unknown",
+                planner_status="unknown",
+                risk_status="unknown",
+                sleeve_reasons=(),
+            )
+        raw = self._ensure_mapping(latest_cycle.get("cycle_explanation", {}))
+        if raw:
+            sleeve_reasons = tuple(
+                BotBrainSleeveCycleReason(
+                    sleeve_id=str(item.get("sleeve_id", "")),
+                    status=str(item.get("status", "")),
+                    reason=str(item.get("reason", "")),
+                )
+                for item in self._ensure_sequence(raw.get("sleeve_reasons", ()))
+                if isinstance(item, Mapping)
+            )
+            return BotBrainCycleExplanation(
+                summary=str(raw.get("summary", "")),
+                primary_reason_code=str(raw.get("primary_reason_code", "")),
+                market_state=str(raw.get("market_state", "")),
+                planner_status=str(raw.get("planner_status", "")),
+                risk_status=str(raw.get("risk_status", "")),
+                sleeve_reasons=sleeve_reasons,
+            )
+        cycle_status = str(latest_cycle.get("cycle_status", "unknown"))
+        symbol_results = self._ensure_sequence(latest_cycle.get("symbol_results", ()))
+        blocked_count = int(str(latest_cycle.get("blocked_trade_count", 0) or 0))
+        if cycle_status == "market_closed":
+            summary = "No trade because the market is closed."
+            market_state = "closed"
+            planner_status = "not_run"
+            risk_status = "not_evaluated"
+        elif cycle_status == "no_trade":
+            summary = (
+                "No trade because the planner did not produce an executable order."
+            )
+            market_state = "open_or_unknown"
+            planner_status = "no_trade"
+            risk_status = "not_blocked"
+        elif blocked_count > 0:
+            summary = "No trade because risk or execution controls blocked the order."
+            market_state = "open_or_unknown"
+            planner_status = "planned"
+            risk_status = "blocked"
+        else:
+            summary = f"Latest cycle ended as {cycle_status}."
+            market_state = "open_or_unknown"
+            planner_status = "executed" if cycle_status == "executed" else cycle_status
+            risk_status = "not_blocked"
+        sleeve_reasons = tuple(
+            BotBrainSleeveCycleReason(
+                sleeve_id=sleeve_id,
+                status=str(item.get("terminal_state", "")),
+                reason=str(item.get("reason_code", "")),
+            )
+            for item in symbol_results
+            if isinstance(item, Mapping)
+            and (sleeve_id := str(item.get("sleeve_id", "")).strip())
+        )
+        return BotBrainCycleExplanation(
+            summary=summary,
+            primary_reason_code=cycle_status,
+            market_state=market_state,
+            planner_status=planner_status,
+            risk_status=risk_status,
+            sleeve_reasons=sleeve_reasons,
+        )
+
+    def _build_bot_brain_sleeve_readiness(
+        self,
+        *,
+        active_activation: BlueprintActivationRecord | None,
+        pending_activation: BlueprintActivationRecord | None,
+    ) -> tuple[BotBrainSleeveReadiness, ...]:
+        candidate_by_id = {
+            candidate.candidate_id: candidate
+            for candidate in build_mandatory_candidate_registry(
+                self._config.runtime.symbol_universe
+            )
+        }
+        promotion_provider = build_artifact_promotion_decision_provider(
+            self._repo_root / "config" / "strategy" / "promotion"
+        )
+        rows: list[BotBrainSleeveReadiness] = []
+        for activation, activation_role in (
+            (active_activation, "active"),
+            (pending_activation, "queued"),
+        ):
+            if activation is None:
+                continue
+            budget_by_sleeve = self._bot_brain_budget_by_sleeve_for_activation(
+                activation
+            )
+            for binding in activation.sleeve_activation_bindings:
+                sleeve_id = binding.sleeve_id
+                strategy_id = binding.strategy_id
+                candidate = candidate_by_id.get(strategy_id)
+                implemented = candidate is not None
+                runtime_resolvable = False
+                if candidate is not None and candidate.sleeve_class_path is not None:
+                    try:
+                        build_sleeve_from_candidate(candidate)
+                        runtime_resolvable = True
+                    except Exception:
+                        runtime_resolvable = False
+                decision = promotion_provider(strategy_id)
+                paper_approved = (
+                    state_allows(decision.max_state, PromotionState.PAPER_TRADING)
+                    and not decision.blocker_codes
+                )
+                budget = budget_by_sleeve.get(sleeve_id)
+                cap = self._promotion_allocation_cap(
+                    decision.strategy_allocation_limits
+                )
+                allocation_approved = paper_approved and (
+                    budget is None or (cap is not None and cap >= budget)
+                )
+                blocker_code = self._bot_brain_blocker_code(
+                    implemented=implemented,
+                    runtime_resolvable=runtime_resolvable,
+                    paper_approved=paper_approved,
+                    allocation_approved=allocation_approved,
+                    promotion_blockers=decision.blocker_codes,
+                )
+                human, guidance = self._humanize_bot_brain_blocker(blocker_code)
+                if blocker_code:
+                    display_state = "blocked"
+                elif activation_role == "active":
+                    display_state = "active"
+                elif activation_role == "queued":
+                    display_state = "queued"
+                else:
+                    display_state = "ready"
+                rows.append(
+                    BotBrainSleeveReadiness(
+                        sleeve_id=sleeve_id,
+                        strategy_id=strategy_id,
+                        implemented=implemented,
+                        runtime_resolvable=runtime_resolvable,
+                        paper_approved=paper_approved,
+                        allocation_approved=allocation_approved,
+                        display_state=display_state,
+                        blocker_code=blocker_code,
+                        human_explanation=human,
+                        fix_guidance=guidance,
+                        evidence_refs=tuple(decision.artifact_refs),
+                        activation_id=activation.activation_id,
+                        blueprint_id=activation.blueprint_id,
+                        activation_role=activation_role,
+                    )
+                )
+        return tuple(rows)
+
+    def _bot_brain_budget_by_sleeve_for_activation(
+        self,
+        activation: BlueprintActivationRecord,
+    ) -> dict[str, Decimal]:
+        try:
+            if activation.blueprint_payload is not None:
+                blueprint = portfolio_blueprint_from_payload(
+                    activation.blueprint_payload
+                )
+            else:
+                source_path = activation.source_blueprint_path
+                if not source_path.is_absolute():
+                    source_path = self._repo_root / source_path
+                blueprint = load_portfolio_blueprint(source_path)
+        except Exception:
+            return {}
+        return {
+            sleeve.sleeve_id: sleeve.budget_fraction_of_equity
+            for sleeve in blueprint.sleeve_budgets
+        }
+
+    def _promotion_allocation_cap(
+        self,
+        limits: tuple[dict[str, str], ...],
+    ) -> Decimal | None:
+        caps: list[Decimal] = []
+        for limit in limits:
+            try:
+                caps.append(Decimal(str(limit.get("max_strategy_allocation", ""))))
+            except Exception:
+                continue
+        return min(caps) if caps else None
+
+    def _bot_brain_blocker_code(
+        self,
+        *,
+        implemented: bool,
+        runtime_resolvable: bool,
+        paper_approved: bool,
+        allocation_approved: bool,
+        promotion_blockers: tuple[str, ...],
+    ) -> str:
+        if not implemented or not runtime_resolvable:
+            return "strategy_not_connected_as_sleeve"
+        if not paper_approved:
+            return (
+                promotion_blockers[0]
+                if promotion_blockers
+                else "not_approved_for_paper_trading"
+            )
+        if not allocation_approved:
+            return "budget_above_approved_limit"
+        return ""
+
+    def _humanize_bot_brain_blocker(self, blocker_code: str) -> tuple[str, str]:
+        messages = {
+            "": ("Ready for paper runtime.", "No fix needed."),
+            "authority_artifact_invalid": (
+                "Missing authority package for paper trading.",
+                "Generate and sign a valid paper-trading promotion bundle for this strategy.",
+            ),
+            "not_approved_for_paper_trading": (
+                "Strategy is not approved for paper trading.",
+                "Promote the strategy to paper trading with no blocker codes.",
+            ),
+            "strategy_not_connected_as_sleeve": (
+                "Strategy is not connected as a runtime sleeve.",
+                "Register a SleeveProtocol implementation for this strategy.",
+            ),
+            "budget_above_approved_limit": (
+                "Blueprint budget is above the approved allocation limit.",
+                "Sign a capital allocation policy with an approved cap at the blueprint budget.",
+            ),
+        }
+        return messages.get(
+            blocker_code,
+            (
+                f"Authority blocker {blocker_code} is preventing paper trading.",
+                "Inspect the promotion-check output and fix the cited authority evidence.",
+            ),
+        )
 
     def _count_pending_orders(self) -> int:
         journal_path = self._data_root_path() / "journal.db"
@@ -4111,6 +4647,11 @@ class LocalWebReadModel:
             return {str(key): item for key, item in value.items()}
         return {}
 
+    def _ensure_sequence(self, value: object) -> tuple[object, ...]:
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+            return tuple(value)
+        return ()
+
     def _sanitize_validation_payload(
         self,
         payload: dict[str, object],
@@ -4210,9 +4751,7 @@ class LocalWebReadModel:
                 {
                     "symbol": symbol,
                     "value": str(market_value),
-                    "value_status": (
-                        "stale" if source_status == "stale" else "fresh"
-                    ),
+                    "value_status": ("stale" if source_status == "stale" else "fresh"),
                     "missing_reason": (
                         "Using latest broker-priced reconciliation because newer cycles did not publish a newer broker snapshot."
                         if source_status == "stale"

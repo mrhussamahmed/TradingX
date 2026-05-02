@@ -464,6 +464,7 @@ class ServiceCycleSnapshot:
     cash: Decimal
     equity: Decimal
     buying_power: Decimal
+    cycle_explanation: BotBrainCycleExplanation | None = None
 
 
 @dataclass(frozen=True)
@@ -810,6 +811,74 @@ class BotRuntimeState:
     active_strategy_id: str
     active_model_snapshot_id: str
     latest_selection_id: str
+
+
+@dataclass(frozen=True)
+class BotBrainDecisionStage:
+    stage: str
+    status: str
+    detail: str
+    occurred_at_utc: datetime | None = None
+
+
+@dataclass(frozen=True)
+class BotBrainOrderEvent:
+    event_type: str
+    recorded_at_utc: datetime
+    symbol: str
+    side: str
+    client_order_id: str
+    broker_order_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class BotBrainSleeveReadiness:
+    sleeve_id: str
+    strategy_id: str
+    implemented: bool
+    runtime_resolvable: bool
+    paper_approved: bool
+    allocation_approved: bool
+    display_state: str
+    blocker_code: str
+    human_explanation: str
+    fix_guidance: str
+    evidence_refs: tuple[str, ...] = ()
+    activation_id: str = ""
+    blueprint_id: str = ""
+    activation_role: str = ""
+
+
+@dataclass(frozen=True)
+class BotBrainSleeveCycleReason:
+    sleeve_id: str
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class BotBrainCycleExplanation:
+    summary: str
+    primary_reason_code: str
+    market_state: str
+    planner_status: str
+    risk_status: str
+    sleeve_reasons: tuple[BotBrainSleeveCycleReason, ...] = ()
+
+
+@dataclass(frozen=True)
+class BotBrainSnapshot:
+    generated_at_utc: datetime
+    active_blueprint_id: str
+    queued_blueprint_id: str
+    trading_mode: str
+    market_state: str
+    next_check_at_utc: datetime | None
+    decision_stages: tuple[BotBrainDecisionStage, ...]
+    last_real_order: BotBrainOrderEvent | None
+    sleeve_readiness: tuple[BotBrainSleeveReadiness, ...]
+    cycle_explanation: BotBrainCycleExplanation
 
 
 @dataclass(frozen=True)
@@ -1582,6 +1651,12 @@ __all__ = (
     "BenchmarkOption",
     "BenchmarkCloseSeries",
     "BootstrapPositionAllocation",
+    "BotBrainCycleExplanation",
+    "BotBrainDecisionStage",
+    "BotBrainOrderEvent",
+    "BotBrainSleeveCycleReason",
+    "BotBrainSleeveReadiness",
+    "BotBrainSnapshot",
     "BotRuntimeState",
     "BlueprintActivationRecord",
     "BlueprintSleeveBinding",

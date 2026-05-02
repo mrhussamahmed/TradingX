@@ -219,6 +219,9 @@ class FakeReadModel:
     def get_service_state(self) -> WebServiceState:
         return self.build_dashboard_snapshot().service_status
 
+    def build_bot_brain_snapshot(self):
+        return {"status": "ok"}
+
     def build_command_center_snapshot(self) -> CommandCenterSnapshot:
         timestamp = datetime(2026, 4, 18, 18, 0, tzinfo=UTC)
         return CommandCenterSnapshot(

@@ -1,6 +1,7 @@
 import type {
   ActionResult,
   AlertDrillRecord,
+  BotBrainSnapshot,
   BotRuntimeState,
   CommandCenterSnapshot,
   ConfigProposal,
@@ -156,6 +157,10 @@ export function getOverview() {
 
 export function getCommandCenter() {
   return request<CommandCenterSnapshot>('/api/platform/command-center')
+}
+
+export function getBotBrain() {
+  return request<BotBrainSnapshot>('/api/platform/bot-brain')
 }
 
 export function getConfigSummary() {

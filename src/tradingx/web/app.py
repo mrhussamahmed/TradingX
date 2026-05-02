@@ -21,6 +21,7 @@ from tradingx.sizing import RuntimeSizingPolicy
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationPreflight,
+    BotBrainSnapshot,
     BotRuntimeState,
     CommandCenterSnapshot,
     ConfigProposal,
@@ -61,6 +62,8 @@ class ReadModelProtocol(Protocol):
     def build_command_center_snapshot(self) -> CommandCenterSnapshot: ...
 
     def build_portfolio_workspace_snapshot(self) -> PortfolioWorkspaceSnapshot: ...
+
+    def build_bot_brain_snapshot(self) -> BotBrainSnapshot: ...
 
     def build_performance_analytics_snapshot(
         self,
@@ -1060,6 +1063,10 @@ def create_app(
     @app.get("/api/platform/blueprints")
     def get_blueprint_catalog() -> JSONResponse:
         return JSONResponse(content=_serialize(read_model.list_blueprint_catalog()))
+
+    @app.get("/api/platform/bot-brain")
+    def get_bot_brain() -> JSONResponse:
+        return JSONResponse(content=_serialize(read_model.build_bot_brain_snapshot()))
 
     @app.post("/api/platform/blueprints/preview-activation")
     def post_blueprint_activation_preview(

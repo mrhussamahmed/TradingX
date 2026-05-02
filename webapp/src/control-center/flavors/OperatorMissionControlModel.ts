@@ -1,7 +1,21 @@
 import { prettyLabel } from '../../platform/format'
 import type { RiskTone } from '../shell/TopStatusStrip'
+import { runtimeStatusTone as deriveRuntimeStatusTone } from '../shell/runtimeStatus'
 
 export type VerdictTone = 'good' | 'watch' | 'risk' | 'info'
+
+export function runtimeStatusTone(status: string, heartbeatTone: string): VerdictTone {
+  const statusTone = deriveRuntimeStatusTone(status) as VerdictTone
+  if (statusTone === 'risk' || statusTone === 'watch' || statusTone === 'good') {
+    return statusTone
+  }
+  const hasStatus = status.trim().length > 0
+  const heartbeat = heartbeatTone.toLowerCase()
+  if (heartbeat === 'risk') return 'risk'
+  if (heartbeat === 'watch') return 'watch'
+  if (heartbeat === 'good' && !hasStatus) return 'good'
+  return 'info'
+}
 
 export function describeTradePermission(args: {
   liveTradingEnabled: boolean

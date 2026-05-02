@@ -47,6 +47,21 @@ def build_mandatory_candidate_registry(
     )
     return (
         StrategyCandidate(
+            candidate_id=DEFAULT_CANDIDATE_ID,
+            family="baseline_long_only",
+            benchmark_symbol=benchmark_symbol,
+            universe=(benchmark_symbol,),
+            parameter_set={
+                "benchmark_symbol": benchmark_symbol,
+                "target_weight": Decimal("1"),
+                "signal": "baseline_long_only",
+            },
+            status="paper_ready",
+            sleeve_class_path=(
+                "tradingx.sleeves.baseline_long_only.BaselineLongOnlySleeve"
+            ),
+        ),
+        StrategyCandidate(
             candidate_id="trend-following-v1",
             family="trend_following",
             benchmark_symbol=benchmark_symbol,
@@ -89,6 +104,7 @@ def build_mandatory_candidate_registry(
                 "forecast_method": "garch",
             },
             status="under_evaluation",
+            sleeve_class_path="tradingx.sleeves.mean_reversion.MeanReversionSleeve",
         ),
     )
 

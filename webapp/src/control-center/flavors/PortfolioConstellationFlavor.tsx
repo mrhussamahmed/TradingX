@@ -5,6 +5,7 @@ import { postBlueprintActivation, postBlueprintActivationPreview } from '../../a
 import { parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import type {
   BlueprintActivationPreflight,
+  BotBrainSleeveReadiness,
   PortfolioBenchmarkRow,
   PortfolioBlueprintSummary,
   PortfolioPositionRow,
@@ -46,7 +47,7 @@ function checkTone(check: { status: string; severity: string }): 'good' | 'watch
 }
 
 export function PortfolioConstellationFlavor() {
-  const { portfolio, blueprintCatalog, refresh, runAction, writeMode } = useData()
+  const { portfolio, blueprintCatalog, botBrain, refresh, runAction, writeMode } = useData()
   const [filter, setFilter] = useState<Filter>('all')
   const [symbolFilter, setSymbolFilter] = useState('all')
   const [showBudget, setShowBudget] = useState(true)
@@ -351,6 +352,7 @@ export function PortfolioConstellationFlavor() {
                   </button>
                 </div>
                 {preflight ? <BlueprintPreflightPanel preflight={preflight} /> : null}
+                <StrategyReadinessCards rows={botBrain.sleeve_readiness} />
               </>
             )}
           </div>
@@ -534,6 +536,33 @@ function BlueprintSleeveList({ blueprint }: { blueprint: PortfolioBlueprintSumma
         ))}
       </tbody>
     </table>
+  )
+}
+
+function StrategyReadinessCards({ rows }: { rows: BotBrainSleeveReadiness[] }) {
+  if (rows.length === 0) {
+    return null
+  }
+  return (
+    <div className={styles.kpis}>
+      {rows.map((row) => {
+        const tone = row.display_state === 'blocked' ? 'risk' : row.display_state === 'queued' ? 'watch' : 'good'
+        const rowKey = `${row.activation_id ?? row.activation_role ?? 'readiness'}-${row.sleeve_id}-${row.strategy_id}`
+        return (
+          <div key={rowKey} className={styles.metric}>
+            <div className={styles.metricLabel}>{row.sleeve_id}</div>
+            <div className={styles.metricValue}>
+              <span className={`badge badge-${tone}`}>{prettyLabel(row.display_state)}</span>
+            </div>
+            <div className={styles.metricDetail}>{row.human_explanation}</div>
+            <div className={styles.metricSub}>{row.fix_guidance}</div>
+            <div className={styles.sourceDisclosure}>
+              Implemented {row.implemented ? 'yes' : 'no'} · runtime {row.runtime_resolvable ? 'yes' : 'no'} · paper {row.paper_approved ? 'yes' : 'no'} · allocation {row.allocation_approved ? 'yes' : 'no'}
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

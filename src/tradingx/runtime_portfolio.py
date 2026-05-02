@@ -45,7 +45,7 @@ from tradingx.sizing import (
     entry_marketable_limit_price,
 )
 from tradingx.sleeves.base import SleeveProtocol, build_sleeve_from_candidate
-from tradingx.strategy import build_mandatory_candidate_registry
+from tradingx.strategy import DEFAULT_CANDIDATE_ID, build_mandatory_candidate_registry
 from tradingx.types import (
     ApprovedWeightSnapshot,
     BlueprintActivationRecord,
@@ -167,6 +167,13 @@ class RuntimePortfolioPlanner:
         activation: BlueprintActivationRecord | None,
     ) -> None:
         self._applied_blueprint_activation = activation
+
+    def get_active_blueprint_activation(self) -> BlueprintActivationRecord | None:
+        if self._applied_blueprint_activation is not None:
+            return self._applied_blueprint_activation
+        if self._activation_gateway is None:
+            return None
+        return self._activation_gateway.get_active_blueprint_activation()
 
     def plan_for_service(
         self,
@@ -368,6 +375,7 @@ class RuntimePortfolioPlanner:
             for index, candidate in enumerate(registry_candidates)
         }
         sleeves_by_id: dict[str, SleeveProtocol] = {}
+        benchmark_symbol_by_sleeve_id: dict[str, str] = {}
         benchmark_symbols: set[str] = set()
         required_symbols: set[str] = set()
         for budget in blueprint.sleeve_budgets:
@@ -393,6 +401,7 @@ class RuntimePortfolioPlanner:
                 trial_candidate_id=binding.strategy_id,
             )
             sleeves_by_id[budget.sleeve_id] = sleeve
+            benchmark_symbol_by_sleeve_id[budget.sleeve_id] = candidate.benchmark_symbol
             benchmark_symbols.add(candidate.benchmark_symbol)
             required_symbols.update(candidate.universe)
             required_symbols.add(candidate.benchmark_symbol)
@@ -422,6 +431,7 @@ class RuntimePortfolioPlanner:
             sleeve_id: _build_sleeve_context(
                 sleeve_id=sleeve_id,
                 sleeve=sleeve,
+                benchmark_symbol=benchmark_symbol_by_sleeve_id.get(sleeve_id),
                 bars_by_symbol=bars_by_symbol,
                 regimes=regimes,
                 current_weights_by_symbol=current_weights_by_sleeve_id.get(
@@ -616,6 +626,8 @@ class RuntimePortfolioPlanner:
         strategy_id: str,
         symbols: tuple[str, ...],
     ) -> StrategyCandidate | None:
+        if strategy_id == DEFAULT_CANDIDATE_ID:
+            return None
         for candidate in build_mandatory_candidate_registry(symbols):
             if candidate.candidate_id == strategy_id:
                 return candidate
@@ -1155,13 +1167,18 @@ def _build_sleeve_context(
     *,
     sleeve_id: str,
     sleeve: SleeveProtocol,
+    benchmark_symbol: str | None = None,
     bars_by_symbol: dict[str, Any],
     regimes: dict[date, RegimeSnapshot],
     current_weights_by_symbol: dict[str, Decimal],
     generated_at: datetime,
 ) -> SleeveContext:
-    benchmark_symbol = sleeve.allowed_instruments[0]
-    benchmark_bars = bars_by_symbol.get(benchmark_symbol)
+    context_symbol = benchmark_symbol
+    if context_symbol is None and sleeve.allowed_instruments:
+        context_symbol = sleeve.allowed_instruments[0]
+    if context_symbol is None:
+        raise ValueError(f"Missing benchmark symbol for sleeve {sleeve_id!r}.")
+    benchmark_bars = bars_by_symbol.get(context_symbol)
     if benchmark_bars is None or benchmark_bars.empty:
         raise ValueError(f"Missing bars for sleeve {sleeve_id!r}.")
     timestamp = benchmark_bars.index[-1]

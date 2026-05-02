@@ -20,6 +20,7 @@ import {
   postSessionPreopen,
 } from '../../api'
 import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
+import { isRuntimeActive } from '../shell/runtimeStatus'
 import { useData } from '../state/DataContext'
 import { useToast } from '../state/ToastContext'
 import {
@@ -339,7 +340,7 @@ export function MarketDayOpsFlavor() {
                 className="btn"
                 disabled={
                   writeBlocked ||
-                  runtimeState.status === 'running' ||
+                  isRuntimeActive(runtimeState.status) ||
                   getActionState('start-runtime') === 'running'
                 }
                 onClick={() =>
@@ -367,7 +368,7 @@ export function MarketDayOpsFlavor() {
                 className="btn btn-warn"
                 disabled={
                   writeBlocked ||
-                  runtimeState.status !== 'running' ||
+                  !isRuntimeActive(runtimeState.status) ||
                   getActionState('stop-runtime') === 'running'
                 }
                 onClick={() => callAction('Stop Runtime', 'stop-runtime', () => postRuntimeHostStop())}

@@ -3,7 +3,10 @@ from __future__ import annotations
 import pytest
 
 from tradingx.sleeves.base import build_sleeve_from_candidate
+from tradingx.sleeves.baseline_long_only import BaselineLongOnlySleeve
+from tradingx.sleeves.mean_reversion import MeanReversionSleeve
 from tradingx.sleeves.trend import TrendSleeve
+from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.types import StrategyCandidate
 
 
@@ -56,10 +59,23 @@ def test_build_sleeve_from_candidate_silently_drops_unknown_keys() -> None:
     assert sleeve is not None
 
 
+def test_build_sleeve_from_candidate_resolves_baseline_and_mean_reversion() -> None:
+    candidates = {
+        candidate.candidate_id: candidate
+        for candidate in build_mandatory_candidate_registry(("SPY", "QQQ"))
+    }
+
+    baseline = build_sleeve_from_candidate(candidates["baseline-long-only-v1"])
+    mean_reversion = build_sleeve_from_candidate(candidates["mean-reversion-v1"])
+
+    assert isinstance(baseline, BaselineLongOnlySleeve)
+    assert isinstance(mean_reversion, MeanReversionSleeve)
+
+
 def test_build_sleeve_from_candidate_raises_on_null_path() -> None:
     candidate = StrategyCandidate(
-        candidate_id="mean-reversion-v1",
-        family="mean_reversion",
+        candidate_id="dummy-unwired-v1",
+        family="dummy",
         benchmark_symbol="SPY",
         universe=("SPY",),
         parameter_set={},

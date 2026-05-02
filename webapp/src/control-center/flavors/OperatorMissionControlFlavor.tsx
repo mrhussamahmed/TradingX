@@ -14,6 +14,7 @@ import {
 import { formatTimestamp, parseNumericValue, prettyLabel, toCurrency } from '../../platform/format'
 import { postRuntimeHostCadence } from '../../api'
 import type {
+  BotBrainSnapshot,
   IncidentRecord,
   OpportunitySelectionRecord,
   RuntimeDecisionDetail,
@@ -32,6 +33,7 @@ import {
   deriveGateEvidenceTimestamp,
   deriveRequiredSafetyEvidence,
   latestSourceEvidenceTimestamp,
+  runtimeStatusTone,
   type VerdictTone,
 } from './OperatorMissionControlModel'
 
@@ -85,6 +87,7 @@ export function OperatorMissionControlFlavor() {
     generatedAt,
     runtimeSelection,
     runtimeDecisionDetail,
+    botBrain,
     runAction,
   } = data
 
@@ -522,6 +525,8 @@ export function OperatorMissionControlFlavor() {
         onOpen={setActiveFlavor}
       />
 
+      <BotBrainPanel botBrain={botBrain} />
+
       <div className={styles.forgeRow}>
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
@@ -658,6 +663,88 @@ function MissionCard({
         {card.evidence}
       </span>
     </button>
+  )
+}
+
+function BotBrainPanel({ botBrain }: { botBrain: BotBrainSnapshot }) {
+  const lastOrder = botBrain.last_real_order
+  return (
+    <div className={styles.panel}>
+      <div className={styles.panelHeader}>
+        <span>Bot Brain</span>
+        <span className={styles.panelSub}>{prettyLabel(botBrain.trading_mode || 'paper')}</span>
+      </div>
+      <div className={styles.panelBody}>
+        <div className={styles.forgeRow}>
+          <DigestRow
+            icon={<GitBranch size={14} />}
+            label="Blueprints"
+            value={botBrain.active_blueprint_id || 'No active blueprint'}
+            detail={
+              botBrain.queued_blueprint_id
+                ? `Queued ${botBrain.queued_blueprint_id}`
+                : 'No queued blueprint.'
+            }
+          />
+          <DigestRow
+            icon={<CalendarClock size={14} />}
+            label="Next check"
+            value={
+              botBrain.next_check_at_utc
+                ? formatTimestamp(botBrain.next_check_at_utc)
+                : 'Not scheduled'
+            }
+            detail={`Market ${prettyLabel(botBrain.market_state || 'unknown')}`}
+          />
+        </div>
+        <div className={styles.forgeRow}>
+          <DigestRow
+            icon={<Gauge size={14} />}
+            label="Why no trade?"
+            value={botBrain.cycle_explanation.summary}
+            detail={`Planner ${prettyLabel(botBrain.cycle_explanation.planner_status)} · risk ${prettyLabel(botBrain.cycle_explanation.risk_status)}`}
+          />
+          <DigestRow
+            icon={<BookOpenCheck size={14} />}
+            label="Last real order"
+            value={
+              lastOrder
+                ? `${prettyLabel(lastOrder.event_type)} ${lastOrder.symbol}`
+                : 'No broker order event'
+            }
+            detail={
+              lastOrder
+                ? `${prettyLabel(lastOrder.side)} · ${lastOrder.reason} · ${formatTimestamp(lastOrder.recorded_at_utc)}`
+                : 'Only OMS submitted, accepted, recovered, or filled events count here.'
+            }
+          />
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className={styles.simpleTable}>
+            <thead>
+              <tr>
+                <th>Decision stage</th>
+                <th>Status</th>
+                <th>Backend detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {botBrain.decision_stages.map((stage) => (
+                <tr key={stage.stage}>
+                  <td>{prettyLabel(stage.stage)}</td>
+                  <td>
+                    <span className={`badge badge-${stage.status === 'complete' ? 'good' : 'info'}`}>
+                      {prettyLabel(stage.status)}
+                    </span>
+                  </td>
+                  <td>{stage.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -802,14 +889,6 @@ function ToneIcon({ tone }: { tone: VerdictTone }) {
   if (tone === 'risk') return <AlertTriangle size={14} color="var(--risk)" />
   if (tone === 'watch') return <FileWarning size={14} color="var(--watch)" />
   return <BookOpenCheck size={14} color="var(--primary-bright)" />
-}
-
-function runtimeStatusTone(status: string, heartbeatTone: string): VerdictTone {
-  const lowered = `${status} ${heartbeatTone}`.toLowerCase()
-  if (/fail|halt|risk|error/.test(lowered)) return 'risk'
-  if (/pause|warm|watch|warn|idle/.test(lowered)) return 'watch'
-  if (/run|start|good|ok|pass/.test(lowered)) return 'good'
-  return 'info'
 }
 
 function incidentTone(incident: IncidentRecord): VerdictTone {

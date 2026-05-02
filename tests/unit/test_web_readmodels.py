@@ -5,12 +5,24 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from tradingx.config import TradingConfig
 from tradingx.journal import SqliteOmsJournal
 from tradingx.persistence import FilesystemArtifactStore
+from tradingx.portfolio.blueprint import (
+    PortfolioBlueprint,
+    SleeveRiskBudget,
+    portfolio_blueprint_content_hash,
+    portfolio_blueprint_to_payload,
+)
+from tradingx.promotion import PromotionDecision, PromotionState
 from tradingx.types import (
+    BlueprintActivationRecord,
+    BlueprintSleeveBinding,
     BotRuntimeState,
     ClosedTradeRecord,
     EvaluationEvidencePack,
@@ -121,6 +133,447 @@ def _write_service_cycle(
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload.update(payload_overrides)
         path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _activation(
+    *,
+    activation_id: str,
+    blueprint_id: str,
+    status: str,
+    timestamp: datetime,
+) -> BlueprintActivationRecord:
+    return BlueprintActivationRecord(
+        activation_id=activation_id,
+        blueprint_id=blueprint_id,
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                captured_snapshot_id="approved-baseline-long-only-v1",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="mean-reversion-v1",
+                strategy_id="mean-reversion-v1",
+                captured_snapshot_id="approved-mean-reversion-v1",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend-following-v1",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="approved-vol-target-v1",
+            ),
+        ),
+        status=status,
+        approved_at_utc=timestamp,
+        approved_by="test",
+        source_blueprint_path=Path(
+            "config/portfolio/blueprints/core-paper-multi-sleeve-v1.yaml"
+        ),
+        blueprint_content_hash="sha256:" + "a" * 64,
+    )
+
+
+def _paper_decision(
+    strategy_id: str,
+    *,
+    cap: Decimal = Decimal("1.0"),
+    caps: tuple[Decimal, ...] | None = None,
+) -> PromotionDecision:
+    resolved_caps = caps or (cap,)
+    return PromotionDecision(
+        strategy_id=strategy_id,
+        requested_state=PromotionState.PAPER_TRADING,
+        max_state=PromotionState.PAPER_TRADING,
+        blockers=(),
+        artifact_refs=(f"cas://{strategy_id}",),
+        ledger_sequence=1,
+        ledger_hash="sha256:" + "b" * 64,
+        strategy_allocation_limits=tuple(
+            {
+                "strategy_id": strategy_id,
+                "max_strategy_allocation": str(resolved_cap),
+            }
+            for resolved_cap in resolved_caps
+        ),
+    )
+
+
+def test_bot_brain_snapshot_uses_backend_evidence_for_orders_and_blockers(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        _activation(
+            activation_id="active-1",
+            blueprint_id="core-paper-ready-v1",
+            status="active",
+            timestamp=timestamp,
+        )
+    )
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        _activation(
+            activation_id="pending-1",
+            blueprint_id="core-paper-multi-sleeve-v1",
+            status="pending_next_start",
+            timestamp=timestamp + timedelta(minutes=1),
+        )
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        payload_overrides={
+            "cycle_status": "market_closed",
+            "cycle_explanation": {
+                "summary": "No trade because the market is closed.",
+                "primary_reason_code": "market_closed",
+                "market_state": "closed",
+                "planner_status": "not_run",
+                "risk_status": "not_evaluated",
+                "sleeve_reasons": [
+                    {
+                        "sleeve_id": "mean-reversion-v1",
+                        "status": "zero_target",
+                        "reason": "Signal was zero or negative.",
+                    }
+                ],
+            },
+        },
+    )
+    SqliteOmsJournal(tmp_path / "data" / "journal.db").append_event(
+        event_type="fill",
+        recorded_at_utc=timestamp + timedelta(seconds=30),
+        decision_snapshot_id="decision-1",
+        cycle_correlation_id="cycle-1",
+        client_order_id="client-1",
+        broker_order_id="broker-1",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "target_weight_entry", "filled_qty": "1"},
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+
+    assert snapshot.active_blueprint_id == "core-paper-ready-v1"
+    assert snapshot.queued_blueprint_id == "core-paper-multi-sleeve-v1"
+    assert snapshot.last_real_order is not None
+    assert snapshot.last_real_order.event_type == "fill"
+    assert (
+        snapshot.cycle_explanation.summary == "No trade because the market is closed."
+    )
+    mean_status = {row.sleeve_id: row for row in snapshot.sleeve_readiness}[
+        "mean-reversion-v1"
+    ]
+    assert mean_status.implemented is True
+    assert mean_status.runtime_resolvable is True
+    assert mean_status.paper_approved is False
+    assert mean_status.blocker_code == "authority_artifact_invalid"
+    assert "authority package" in mean_status.human_explanation.lower()
+
+
+@pytest.mark.parametrize("terminal_event", ("rejected", "canceled"))
+def test_bot_brain_last_real_order_uses_latest_terminal_order_state(
+    tmp_path,
+    terminal_event: str,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(read_model._paper_store, timestamp=timestamp)
+    journal = SqliteOmsJournal(tmp_path / "data" / "journal.db")
+    journal.append_event(
+        event_type="ack",
+        recorded_at_utc=timestamp + timedelta(seconds=10),
+        decision_snapshot_id="decision-1",
+        cycle_correlation_id="cycle-1",
+        client_order_id="client-1",
+        broker_order_id="broker-1",
+        symbol="SPY",
+        side="buy",
+        payload={"status": "accepted"},
+    )
+    journal.append_event(
+        event_type=terminal_event,
+        recorded_at_utc=timestamp + timedelta(seconds=30),
+        decision_snapshot_id="decision-1",
+        cycle_correlation_id="cycle-1",
+        client_order_id="client-1",
+        broker_order_id="broker-1",
+        symbol="SPY",
+        side="buy",
+        payload={"message": f"broker {terminal_event} order"},
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    stages = {stage.stage: stage for stage in snapshot.decision_stages}
+
+    assert snapshot.last_real_order is not None
+    assert snapshot.last_real_order.event_type == terminal_event
+    assert stages["submitted"].detail == f"{terminal_event} for SPY"
+    assert stages["filled"].status == "empty"
+
+
+def test_bot_brain_decision_stages_ignore_orders_from_older_cycles(
+    tmp_path,
+) -> None:
+    first_timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    latest_timestamp = first_timestamp + timedelta(minutes=5)
+    read_model = _minimal_read_model(tmp_path, latest_timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=first_timestamp,
+        cycle_id="cycle-old",
+    )
+    SqliteOmsJournal(tmp_path / "data" / "journal.db").append_event(
+        event_type="fill",
+        recorded_at_utc=first_timestamp + timedelta(seconds=30),
+        decision_snapshot_id="decision-old",
+        cycle_correlation_id="cycle-old",
+        client_order_id="client-old",
+        broker_order_id="broker-old",
+        symbol="SPY",
+        side="buy",
+        payload={"reason_code": "target_weight_entry", "filled_qty": "1"},
+    )
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=latest_timestamp,
+        cycle_id="cycle-new",
+        payload_overrides={"cycle_status": "market_closed"},
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    stages = {stage.stage: stage for stage in snapshot.decision_stages}
+
+    assert snapshot.last_real_order is not None
+    assert snapshot.last_real_order.client_order_id == "client-old"
+    assert stages["submitted"].status == "empty"
+    assert stages["filled"].status == "empty"
+    assert stages["held_skipped"].status == "complete"
+
+
+def test_bot_brain_marks_planned_when_latest_cycle_planner_ran_but_order_blocked(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        payload_overrides={
+            "cycle_status": "data_unavailable",
+            "blocked_trade_count": 1,
+            "cycle_explanation": {
+                "summary": "No trade because market data was unavailable or stale.",
+                "primary_reason_code": "data_unavailable",
+                "market_state": "open_or_unknown",
+                "planner_status": "planned",
+                "risk_status": "data_unavailable",
+                "sleeve_reasons": [],
+            },
+        },
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    stages = {stage.stage: stage for stage in snapshot.decision_stages}
+
+    assert stages["planned"].status == "complete"
+    assert stages["submitted"].status == "empty"
+
+
+def test_bot_brain_readiness_keeps_active_and_pending_rows_for_same_sleeve(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        _activation(
+            activation_id="active-1",
+            blueprint_id="core-paper-multi-sleeve-v1",
+            status="active",
+            timestamp=timestamp,
+        )
+    )
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        _activation(
+            activation_id="pending-1",
+            blueprint_id="core-paper-multi-sleeve-v1",
+            status="pending_next_start",
+            timestamp=timestamp + timedelta(minutes=1),
+        )
+    )
+
+    monkeypatch.setattr(
+        readmodels_module,
+        "build_artifact_promotion_decision_provider",
+        lambda _root: lambda strategy_id: _paper_decision(strategy_id),
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    baseline_rows = [
+        row
+        for row in snapshot.sleeve_readiness
+        if row.sleeve_id == "baseline-long-only-v1"
+    ]
+
+    assert [(row.activation_id, row.display_state) for row in baseline_rows] == [
+        ("active-1", "active"),
+        ("pending-1", "queued"),
+    ]
+
+
+def test_bot_brain_allocation_guidance_uses_activation_blueprint_payload(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    blueprint_dir = tmp_path / "config" / "portfolio" / "blueprints"
+    blueprint_dir.mkdir(parents=True)
+    (blueprint_dir / "aaa-low-budget.yaml").write_text(
+        "\n".join(
+            (
+                "blueprint_id: stale-low-budget",
+                "sleeve_budgets:",
+                "  - sleeve_id: baseline-long-only-v1",
+                "    strategy_id: baseline-long-only-v1",
+                "    budget_fraction_of_equity: 0.01",
+                "    max_correlation_with_other_sleeves: 0.85",
+            )
+        ),
+        encoding="utf-8",
+    )
+    approved_blueprint = PortfolioBlueprint(
+        blueprint_id="approved-blueprint",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                budget_fraction_of_equity=Decimal("0.40"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        BlueprintActivationRecord(
+            activation_id="active-1",
+            blueprint_id="approved-blueprint",
+            sleeve_activation_bindings=(
+                BlueprintSleeveBinding(
+                    sleeve_id="baseline-long-only-v1",
+                    strategy_id="baseline-long-only-v1",
+                    captured_snapshot_id="approved-baseline",
+                ),
+            ),
+            status="active",
+            approved_at_utc=timestamp,
+            approved_by="test",
+            source_blueprint_path=tmp_path / "deleted-after-approval.yaml",
+            blueprint_content_hash=portfolio_blueprint_content_hash(approved_blueprint),
+            blueprint_payload=portfolio_blueprint_to_payload(approved_blueprint),
+        )
+    )
+    monkeypatch.setattr(
+        readmodels_module,
+        "build_artifact_promotion_decision_provider",
+        lambda _root: (
+            lambda strategy_id: _paper_decision(
+                strategy_id,
+                cap=Decimal("0.20"),
+            )
+        ),
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    baseline = snapshot.sleeve_readiness[0]
+
+    assert baseline.allocation_approved is False
+    assert baseline.blocker_code == "budget_above_approved_limit"
+
+
+def test_bot_brain_allocation_approval_uses_strictest_duplicate_cap(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    approved_blueprint = PortfolioBlueprint(
+        blueprint_id="approved-blueprint",
+        sleeve_budgets=(
+            SleeveRiskBudget(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                budget_fraction_of_equity=Decimal("0.15"),
+                max_correlation_with_other_sleeves=Decimal("0.85"),
+            ),
+        ),
+    )
+    read_model._operator_platform_store().write_blueprint_activation_record(
+        BlueprintActivationRecord(
+            activation_id="active-1",
+            blueprint_id="approved-blueprint",
+            sleeve_activation_bindings=(
+                BlueprintSleeveBinding(
+                    sleeve_id="baseline-long-only-v1",
+                    strategy_id="baseline-long-only-v1",
+                    captured_snapshot_id="approved-baseline",
+                ),
+            ),
+            status="active",
+            approved_at_utc=timestamp,
+            approved_by="test",
+            source_blueprint_path=tmp_path / "deleted-after-approval.yaml",
+            blueprint_content_hash=portfolio_blueprint_content_hash(approved_blueprint),
+            blueprint_payload=portfolio_blueprint_to_payload(approved_blueprint),
+        )
+    )
+    monkeypatch.setattr(
+        readmodels_module,
+        "build_artifact_promotion_decision_provider",
+        lambda _root: (
+            lambda strategy_id: _paper_decision(
+                strategy_id,
+                caps=(Decimal("0.20"), Decimal("0.10")),
+            )
+        ),
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+    baseline = snapshot.sleeve_readiness[0]
+
+    assert baseline.allocation_approved is False
+    assert baseline.blocker_code == "budget_above_approved_limit"
+
+
+def test_bot_brain_legacy_cycle_does_not_report_symbols_as_sleeves(
+    tmp_path,
+) -> None:
+    timestamp = datetime(2026, 4, 28, 19, 44, tzinfo=UTC)
+    read_model = _minimal_read_model(tmp_path, timestamp)
+    _write_service_cycle(
+        read_model._paper_store,
+        timestamp=timestamp,
+        payload_overrides={
+            "cycle_status": "no_trade",
+            "symbol_results": [
+                {
+                    "symbol": "SPY",
+                    "terminal_state": "held",
+                    "reason_code": "target_weight_hold",
+                    "recovered": False,
+                    "control_type": "runtime",
+                }
+            ],
+        },
+    )
+
+    snapshot = read_model.build_bot_brain_snapshot()
+
+    assert snapshot.cycle_explanation.sleeve_reasons == ()
 
 
 def test_dashboard_service_status_uses_persisted_cycles_when_web_manager_idle(
@@ -1080,9 +1533,11 @@ def test_command_center_uses_operational_paper_gates_for_trade_permission(
     monkeypatch.setattr(
         readmodels_module,
         "build_artifact_promotion_decision_provider",
-        lambda root: lambda strategy_id: SimpleNamespace(
-            max_state=readmodels_module.PromotionState.PAPER_TRADING,
-            blocker_codes=(),
+        lambda root: (
+            lambda strategy_id: SimpleNamespace(
+                max_state=readmodels_module.PromotionState.PAPER_TRADING,
+                blocker_codes=(),
+            )
         ),
     )
 

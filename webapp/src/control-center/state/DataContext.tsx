@@ -12,6 +12,7 @@ import {
 
 import {
   areWebWritesUnlocked,
+  getBotBrain,
   getCommandCenter,
   getConfigSummary,
   getDocuments,
@@ -38,6 +39,7 @@ import {
 } from '../../api'
 import type {
   ActionResult,
+  BotBrainSnapshot,
   BotRuntimeState,
   CommandCenterSnapshot,
   ConfigSummary,
@@ -97,6 +99,7 @@ export type DataState = {
   runtimeModel: ModelWeightSnapshot | null
   runtimeSelection: OpportunitySelectionRecord | null
   runtimeDecisionDetail: RuntimeDecisionDetail | null
+  botBrain: BotBrainSnapshot
   schedulerState: MarketDaySchedulerState
 }
 
@@ -272,6 +275,26 @@ const defaultRuntimeState: BotRuntimeState = {
   latest_selection_id: '',
 }
 
+const defaultBotBrain: BotBrainSnapshot = {
+  generated_at_utc: '',
+  active_blueprint_id: '',
+  queued_blueprint_id: '',
+  trading_mode: 'paper',
+  market_state: 'unknown',
+  next_check_at_utc: null,
+  decision_stages: [],
+  last_real_order: null,
+  sleeve_readiness: [],
+  cycle_explanation: {
+    summary: 'No service cycle has been recorded yet.',
+    primary_reason_code: 'no_cycle',
+    market_state: 'unknown',
+    planner_status: 'unknown',
+    risk_status: 'unknown',
+    sleeve_reasons: [],
+  },
+}
+
 const defaultRuntimeHeartbeat: RuntimeHeartbeatSnapshot = {
   heartbeat_state: 'Idle',
   heartbeat_summary: 'The runtime host is not currently active.',
@@ -377,6 +400,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [runtimeModel, setRuntimeModel] = useState<ModelWeightSnapshot | null>(null)
   const [runtimeSelection, setRuntimeSelection] = useState<OpportunitySelectionRecord | null>(null)
   const [runtimeDecisionDetail, setRuntimeDecisionDetail] = useState<RuntimeDecisionDetail | null>(null)
+  const [botBrain, setBotBrain] = useState<BotBrainSnapshot>(defaultBotBrain)
   const [schedulerState, setSchedulerState] =
     useState<MarketDaySchedulerState>(defaultSchedulerState)
   const [pageError, setPageError] = useState('')
@@ -424,6 +448,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           getRuntimeHostModel(),
           getRuntimeHostSelection(),
           getRuntimeHostDecisionDetail(),
+          getBotBrain(),
           getSchedulerState(),
         ])
 
@@ -454,7 +479,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         const nextRuntimeModel = value<ModelWeightSnapshot | null>(17, null)
         const nextRuntimeSelection = value<OpportunitySelectionRecord | null>(18, null)
         const nextRuntimeDecisionDetail = value<RuntimeDecisionDetail | null>(19, null)
-        const nextSchedulerState = value(20, defaultSchedulerState)
+        const nextBotBrain = value(20, defaultBotBrain)
+        const nextSchedulerState = value(21, defaultSchedulerState)
 
         startTransition(() => {
           setCommandCenter(nextCommandCenter)
@@ -491,6 +517,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           setRuntimeModel(nextRuntimeModel)
           setRuntimeSelection(nextRuntimeSelection)
           setRuntimeDecisionDetail(nextRuntimeDecisionDetail)
+          setBotBrain(nextBotBrain)
           setSchedulerState(nextSchedulerState)
           setGeneratedAt(
             nextPortfolio.generated_at_utc || nextCommandCenter.generated_at_utc || new Date().toISOString(),
@@ -649,6 +676,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeModel,
       runtimeSelection,
       runtimeDecisionDetail,
+      botBrain,
       schedulerState,
       refresh,
       setSessionTimelineDate,
@@ -683,6 +711,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       runtimeModel,
       runtimeSelection,
       runtimeDecisionDetail,
+      botBrain,
       schedulerState,
       refresh,
       setSessionTimelineDate,

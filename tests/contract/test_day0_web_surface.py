@@ -33,6 +33,9 @@ class _Day0ReadModel:
     def build_command_center_snapshot(self) -> CommandCenterSnapshot:
         raise NotImplementedError
 
+    def build_bot_brain_snapshot(self):
+        return {"status": "ok"}
+
     def list_documents(self) -> tuple[DocumentRecord, ...]:
         return ()
 

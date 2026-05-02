@@ -24,6 +24,7 @@ import type {
 import { usePreferences } from '../state/PreferencesContext'
 
 import { deriveRiskTone } from './TopStatusStrip'
+import { isRuntimeActive, runtimeStatusTone } from './runtimeStatus'
 import styles from './Shell.module.css'
 
 const COLLAPSE_BREAKPOINT_PX = 1280
@@ -85,7 +86,7 @@ export function deriveResumeBlocker(args: {
       reason: 'Start blocked: configured symbol universe is empty. Configure at least one symbol before starting.',
     }
   }
-  if (args.runtimeState.status === 'running' || args.runtimeState.status === 'starting') {
+  if (isRuntimeActive(args.runtimeState.status)) {
     return {
       blocked: true,
       reason: 'Start blocked: runtime host is already running.',
@@ -396,15 +397,7 @@ function cadenceLabel(seconds: number): string {
 }
 
 function RuntimeBadge({ state }: { state: BotRuntimeState }) {
-  const status = state.status?.toLowerCase()
-  const tone =
-    status === 'running' || status === 'starting'
-      ? 'good'
-      : status === 'paused' || status === 'warmup'
-        ? 'watch'
-        : status === 'halted' || status === 'failed'
-          ? 'risk'
-          : 'info'
+  const tone = runtimeStatusTone(state.status)
   return <span className={`badge badge-${tone}`}>{prettyLabel(state.status || 'idle')}</span>
 }
 

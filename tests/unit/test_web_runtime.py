@@ -476,6 +476,40 @@ def test_paper_ready_blueprint_preflight_is_ready_to_activate(tmp_path) -> None:
     ]
 
 
+def test_core_multi_sleeve_blueprint_preflight_is_ready_to_activate(tmp_path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    blueprint = load_portfolio_blueprint(
+        repo_root
+        / "config"
+        / "portfolio"
+        / "blueprints"
+        / "core-paper-multi-sleeve-v1.yaml"
+    )
+    runner = LocalWebActionRunner(
+        config=TradingConfig.from_mapping(
+            {"TRADINGX_ARTIFACT_ROOT": str(tmp_path / "artifacts")}
+        ),
+        repo_root=repo_root,
+        service_manager=LocalServiceManager(config=TradingConfig.from_mapping({})),
+    )
+
+    preflight = runner.preview_blueprint_activation(
+        blueprint_id="core-paper-multi-sleeve-v1",
+    )
+
+    assert preflight.status == "ready_to_activate"
+    assert preflight.blueprint_id == "core-paper-multi-sleeve-v1"
+    assert {
+        binding.strategy_id: blueprint.sleeve_budgets[index].budget_fraction_of_equity
+        for index, binding in enumerate(preflight.sleeve_bindings)
+    } == {
+        "baseline-long-only-v1": Decimal("0.40"),
+        "mean-reversion-v1": Decimal("0.20"),
+        "trend-following-v1": Decimal("0.20"),
+        "vol-target-v1": Decimal("0.20"),
+    }
+
+
 def test_local_web_action_runner_writes_config_proposal(tmp_path) -> None:
     runner = LocalWebActionRunner(
         config=TradingConfig.from_mapping({}),

@@ -571,6 +571,9 @@ def test_paper_trading_service_marks_cycle_recovery_required_on_divergence(
 
     assert result.last_cycle.cycle_status == "recovery_required"
     assert result.last_cycle.reconciliation_failure_count == 1
+    assert result.last_cycle.cycle_explanation is not None
+    assert "recovery controls" in result.last_cycle.cycle_explanation.summary
+    assert result.last_cycle.cycle_explanation.planner_status == "not_run"
 
 
 def test_paper_trading_service_marks_cycle_overrun_when_budget_is_exceeded(
@@ -624,6 +627,9 @@ def test_paper_trading_service_marks_broker_unavailable_when_state_is_stale(
 
     assert loop_controller.calls == []
     assert result.last_cycle.cycle_status == "broker_unavailable"
+    assert result.last_cycle.cycle_explanation is not None
+    assert "broker/account state" in result.last_cycle.cycle_explanation.summary
+    assert result.last_cycle.cycle_explanation.planner_status == "not_run"
 
 
 def test_paper_trading_service_marks_broker_unavailable_after_failed_reads(
@@ -652,6 +658,9 @@ def test_paper_trading_service_marks_broker_unavailable_after_failed_reads(
     assert portfolio.calls == 2
     assert loop_controller.calls == []
     assert result.last_cycle.cycle_status == "broker_unavailable"
+    assert result.last_cycle.cycle_explanation is not None
+    assert "broker/account state" in result.last_cycle.cycle_explanation.summary
+    assert result.last_cycle.cycle_explanation.planner_status == "not_run"
 
 
 def test_paper_trading_service_marks_data_unavailable_on_stale_market_veto(
@@ -685,6 +694,9 @@ def test_paper_trading_service_marks_data_unavailable_on_stale_market_veto(
             control_type="stale_market_data",
         ),
     )
+    assert result.last_cycle.cycle_explanation is not None
+    assert "market data" in result.last_cycle.cycle_explanation.summary
+    assert result.last_cycle.cycle_explanation.planner_status == "not_run"
 
 
 def test_paper_trading_service_honors_kill_flag_at_cycle_boundary(tmp_path) -> None:
@@ -804,6 +816,13 @@ def test_paper_trading_service_writes_decomposition_sidecar_when_present(
     assert {
         entry.sleeve_id for entry in decompositions[0].per_sleeve_target_weights
     } == {
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    assert result.last_cycle.cycle_explanation is not None
+    assert result.last_cycle.cycle_explanation.planner_status == "planned"
+    sleeve_reasons = result.last_cycle.cycle_explanation.sleeve_reasons
+    assert {reason.sleeve_id for reason in sleeve_reasons} == {
         "trend-following-v1",
         "vol-target-v1",
     }

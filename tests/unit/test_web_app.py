@@ -50,6 +50,9 @@ class _ReadModel:
     def build_portfolio_workspace_snapshot(self):
         return {"status": "ok"}
 
+    def build_bot_brain_snapshot(self):
+        return {"status": "ok"}
+
     def build_performance_analytics_snapshot(self):
         return {"status": "ok"}
 

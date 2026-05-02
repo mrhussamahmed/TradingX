@@ -195,11 +195,13 @@ def test_mandatory_candidate_registry_contains_required_families() -> None:
     candidates_by_family = {candidate.family: candidate for candidate in candidates}
 
     assert [candidate.family for candidate in candidates] == [
+        "baseline_long_only",
         "trend_following",
         "vol_target",
         "mean_reversion",
     ]
     assert all(candidate.benchmark_symbol == "SPY" for candidate in candidates)
+    assert candidates_by_family["baseline_long_only"].universe == ("SPY",)
     assert candidates_by_family["trend_following"].universe == ("SPY", "QQQ")
     assert candidates_by_family["vol_target"].universe == ("SPY", "QQQ")
     assert candidates_by_family["mean_reversion"].universe == ("QQQ",)
@@ -261,23 +263,29 @@ def test_strategy_candidate_sleeve_class_path_defaults_to_none() -> None:
     assert candidate.sleeve_class_path is None
 
 
-def test_registry_sets_sleeve_class_path_for_trend_and_vol_target() -> None:
+def test_registry_sets_sleeve_class_path_for_all_blueprint_strategies() -> None:
     candidates = build_mandatory_candidate_registry(("SPY", "QQQ"))
     by_id = {candidate.candidate_id: candidate for candidate in candidates}
 
+    assert by_id["baseline-long-only-v1"].sleeve_class_path == (
+        "tradingx.sleeves.baseline_long_only.BaselineLongOnlySleeve"
+    )
     assert by_id["trend-following-v1"].sleeve_class_path == (
         "tradingx.sleeves.trend.TrendSleeve"
     )
     assert by_id["vol-target-v1"].sleeve_class_path == (
         "tradingx.sleeves.vol_managed_beta.VolManagedBetaSleeve"
     )
-    assert by_id["mean-reversion-v1"].sleeve_class_path is None
+    assert by_id["mean-reversion-v1"].sleeve_class_path == (
+        "tradingx.sleeves.mean_reversion.MeanReversionSleeve"
+    )
 
 
 def test_mandatory_candidate_registry_defaults_to_canonical_stage1_universe() -> None:
     candidates = build_mandatory_candidate_registry()
     candidates_by_family = {candidate.family: candidate for candidate in candidates}
 
+    assert candidates_by_family["baseline_long_only"].universe == ("SPY",)
     assert candidates_by_family["trend_following"].universe == CANONICAL_STAGE1_UNIVERSE
     assert candidates_by_family["vol_target"].universe == CANONICAL_STAGE1_UNIVERSE
     assert candidates_by_family["mean_reversion"].universe == tuple(

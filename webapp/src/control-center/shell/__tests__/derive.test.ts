@@ -9,6 +9,7 @@ import type {
 
 import { describePnl, deriveRiskTone, deriveRuntimeTone } from '../TopStatusStrip'
 import { deriveResumeBlocker } from '../OperatorRail'
+import { isRuntimeActive } from '../runtimeStatus'
 
 const blankRuntimeState: BotRuntimeState = {
   status: 'idle',
@@ -194,6 +195,19 @@ describe('deriveResumeBlocker', () => {
   it('blocks when runtime is already running', () => {
     const blocker = deriveResumeBlocker({
       runtimeState: { ...blankRuntimeState, status: 'running' },
+      runtimeHeartbeat: blankRuntimeHeartbeat,
+      commandCenter: makeCommandCenter({}),
+      configSummary: blankConfig,
+      writeUnlocked: true,
+    })
+    expect(blocker.blocked).toBe(true)
+    expect(blocker.reason).toMatch(/already running/i)
+  })
+
+  it('treats trading_ready as an active runtime status', () => {
+    expect(isRuntimeActive('trading_ready')).toBe(true)
+    const blocker = deriveResumeBlocker({
+      runtimeState: { ...blankRuntimeState, status: 'trading_ready' },
       runtimeHeartbeat: blankRuntimeHeartbeat,
       commandCenter: makeCommandCenter({}),
       configSummary: blankConfig,

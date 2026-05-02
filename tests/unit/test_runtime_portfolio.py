@@ -565,6 +565,171 @@ def test_runtime_portfolio_planner_builds_blueprint_plan_with_attributions(
     assert qqq_intent.sleeve_attributions == (("trend-following-v1", Decimal("1")),)
 
 
+def test_runtime_portfolio_planner_runs_core_multi_sleeve_long_only() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    blueprint_path = (
+        repo_root
+        / "config"
+        / "portfolio"
+        / "blueprints"
+        / "core-paper-multi-sleeve-v1.yaml"
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-core",
+        blueprint_id="core-paper-multi-sleeve-v1",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                captured_snapshot_id="approved-baseline",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="mean-reversion-v1",
+                strategy_id="mean-reversion-v1",
+                captured_snapshot_id="approved-mean",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="approved-vol",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+    allocation_limits = (
+        StrategyAllocationLimit("baseline-long-only-v1", Decimal("0.40")),
+        StrategyAllocationLimit("mean-reversion-v1", Decimal("0.20")),
+        StrategyAllocationLimit("trend-following-v1", Decimal("0.20")),
+        StrategyAllocationLimit("vol-target-v1", Decimal("0.20")),
+    )
+    planner = RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+            allocation_limits=allocation_limits,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    assert planner.get_active_blueprint_activation() == blueprint_activation
+
+    plan = planner.plan_for_service(
+        symbols=("SPY", "QQQ", "IWM"),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("10000"),
+            equity=Decimal("10000"),
+            buying_power=Decimal("20000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+    )
+
+    assert plan is not None
+    assert plan.strategy_id == "core-paper-multi-sleeve-v1"
+    assert {entry.sleeve_id for entry in plan.per_sleeve_target_weights} == {
+        "baseline-long-only-v1",
+        "mean-reversion-v1",
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    for entry in plan.per_sleeve_target_weights:
+        assert all(
+            weight >= Decimal("0") for _symbol, weight in entry.target_weights_by_symbol
+        )
+
+
+def test_runtime_portfolio_planner_allows_spy_only_blueprint_universe() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    blueprint_path = (
+        repo_root
+        / "config"
+        / "portfolio"
+        / "blueprints"
+        / "core-paper-multi-sleeve-v1.yaml"
+    )
+    blueprint_activation = BlueprintActivationRecord(
+        activation_id="bp-activation-core",
+        blueprint_id="core-paper-multi-sleeve-v1",
+        sleeve_activation_bindings=(
+            BlueprintSleeveBinding(
+                sleeve_id="baseline-long-only-v1",
+                strategy_id="baseline-long-only-v1",
+                captured_snapshot_id="approved-baseline",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="mean-reversion-v1",
+                strategy_id="mean-reversion-v1",
+                captured_snapshot_id="approved-mean",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="trend-following-v1",
+                strategy_id="trend-following-v1",
+                captured_snapshot_id="approved-trend",
+            ),
+            BlueprintSleeveBinding(
+                sleeve_id="vol-target-v1",
+                strategy_id="vol-target-v1",
+                captured_snapshot_id="approved-vol",
+            ),
+        ),
+        status="active",
+        approved_at_utc=datetime(2026, 4, 22, 9, 0, tzinfo=UTC),
+        approved_by="operator",
+        source_blueprint_path=blueprint_path,
+    )
+    allocation_limits = (
+        StrategyAllocationLimit("baseline-long-only-v1", Decimal("0.40")),
+        StrategyAllocationLimit("mean-reversion-v1", Decimal("0.20")),
+        StrategyAllocationLimit("trend-following-v1", Decimal("0.20")),
+        StrategyAllocationLimit("vol-target-v1", Decimal("0.20")),
+    )
+    planner = RuntimePortfolioPlanner(
+        market_data=FakeMarketData(),
+        activation_gateway=FakeActivationGateway(
+            strategy_id="baseline-long-only-v1",
+            blueprint_activation=blueprint_activation,
+            allocation_limits=allocation_limits,
+        ),
+        now_provider=lambda: datetime(2026, 4, 22, 13, 30, tzinfo=UTC),
+    )
+
+    plan = planner.plan_for_service(
+        symbols=("SPY",),
+        portfolio_state=PortfolioState(
+            as_of_utc=datetime(2026, 4, 22, 13, 29, tzinfo=UTC),
+            cash=Decimal("10000"),
+            equity=Decimal("10000"),
+            buying_power=Decimal("20000"),
+            positions=(),
+            open_orders=(),
+        ),
+        default_quantity=Decimal("0"),
+    )
+
+    assert plan is not None
+    assert {entry.sleeve_id for entry in plan.per_sleeve_target_weights} == {
+        "baseline-long-only-v1",
+        "mean-reversion-v1",
+        "trend-following-v1",
+        "vol-target-v1",
+    }
+    for entry in plan.per_sleeve_target_weights:
+        assert all(
+            weight >= Decimal("0") for _symbol, weight in entry.target_weights_by_symbol
+        )
+
+
 def test_runtime_portfolio_planner_uses_pinned_blueprint_payload(
     monkeypatch,
     tmp_path: Path,

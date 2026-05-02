@@ -7,6 +7,7 @@ import {
   deriveGateEvidenceTimestamp,
   deriveRequiredSafetyEvidence,
   latestSourceEvidenceTimestamp,
+  runtimeStatusTone,
 } from '../OperatorMissionControlModel'
 
 describe('describeTradePermission', () => {
@@ -294,5 +295,16 @@ describe('deriveCombinedGateTone', () => {
 
     expect(tone.tone).toBe('watch')
     expect(tone.detail).toMatch(/Gate 3/i)
+  })
+})
+
+describe('runtimeStatusTone', () => {
+  it('does not mark negated ready states as good', () => {
+    expect(runtimeStatusTone('not_ready', 'neutral')).toBe('info')
+    expect(runtimeStatusTone('not_ready', 'good')).toBe('info')
+  })
+
+  it('uses explicit active runtime statuses', () => {
+    expect(runtimeStatusTone('trading_ready', 'neutral')).toBe('good')
   })
 })

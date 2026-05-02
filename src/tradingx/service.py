@@ -56,6 +56,8 @@ from tradingx.strategy import DEFAULT_CANDIDATE_ID
 from tradingx.trials import TrialsLedger
 from tradingx.types import (
     BlueprintActivationRecord,
+    BotBrainCycleExplanation,
+    BotBrainSleeveCycleReason,
     OperatorAlert,
     PortfolioState,
     ServiceCycleSnapshot,
@@ -180,6 +182,7 @@ class PaperTradingService:
         blocked_trade_count = 0
         reconciliation_failure_count = 0
         cycle_status = "market_closed"
+        portfolio_plan_for_explanation: RuntimePortfolioPlan | None = None
         self._log_cycle_event(
             event_type="cycle_started",
             severity="info",
@@ -250,6 +253,7 @@ class PaperTradingService:
                     )
                     portfolio_plan = None
                 if portfolio_plan is not None:
+                    portfolio_plan_for_explanation = portfolio_plan
                     self._artifacts.write_runtime_portfolio_plan(portfolio_plan)
                     self._write_sleeve_decomposition_record_if_available(
                         plan=portfolio_plan,
@@ -403,6 +407,124 @@ class PaperTradingService:
             cash=portfolio_state.cash,
             equity=portfolio_state.equity,
             buying_power=portfolio_state.buying_power,
+            cycle_explanation=self._build_cycle_explanation(
+                cycle_status=cycle_status,
+                symbol_results=tuple(symbol_results),
+                blocked_trade_count=blocked_trade_count,
+                portfolio_plan=portfolio_plan_for_explanation,
+            ),
+        )
+
+    def _build_cycle_explanation(
+        self,
+        *,
+        cycle_status: str,
+        symbol_results: tuple[ServiceSymbolResult, ...],
+        blocked_trade_count: int,
+        portfolio_plan: RuntimePortfolioPlan | None,
+    ) -> BotBrainCycleExplanation:
+        if cycle_status == "market_closed":
+            return BotBrainCycleExplanation(
+                summary="No trade because the market is closed.",
+                primary_reason_code="market_closed",
+                market_state="closed",
+                planner_status="not_run",
+                risk_status="not_evaluated",
+                sleeve_reasons=(),
+            )
+        if cycle_status == "kill_requested":
+            return BotBrainCycleExplanation(
+                summary="No trade because the operator kill switch is active.",
+                primary_reason_code="kill_requested",
+                market_state="open_or_unknown",
+                planner_status="not_run",
+                risk_status="operator_blocked",
+                sleeve_reasons=(),
+            )
+        sleeve_reasons: list[BotBrainSleeveCycleReason] = []
+        if portfolio_plan is not None:
+            for entry in portfolio_plan.per_sleeve_target_weights:
+                if entry.target_weights_by_symbol:
+                    reason = ", ".join(
+                        f"{symbol} {weight}"
+                        for symbol, weight in entry.target_weights_by_symbol
+                    )
+                    sleeve_reasons.append(
+                        BotBrainSleeveCycleReason(
+                            sleeve_id=entry.sleeve_id,
+                            status="targeted",
+                            reason=reason,
+                        )
+                    )
+                else:
+                    sleeve_reasons.append(
+                        BotBrainSleeveCycleReason(
+                            sleeve_id=entry.sleeve_id,
+                            status="zero_target",
+                            reason="Sleeve produced no positive target weight.",
+                        )
+                    )
+            for sleeve_id, reason in portfolio_plan.sleeve_failure_reasons:
+                sleeve_reasons.append(
+                    BotBrainSleeveCycleReason(
+                        sleeve_id=sleeve_id,
+                        status="held",
+                        reason=reason,
+                    )
+                )
+        if cycle_status == "broker_unavailable":
+            return BotBrainCycleExplanation(
+                summary=(
+                    "No trade because broker/account state was unavailable or stale."
+                ),
+                primary_reason_code="broker_unavailable",
+                market_state="open_or_unknown",
+                planner_status="not_run",
+                risk_status="broker_unavailable",
+                sleeve_reasons=tuple(sleeve_reasons),
+            )
+        if cycle_status == "data_unavailable":
+            return BotBrainCycleExplanation(
+                summary="No trade because market data was unavailable or stale.",
+                primary_reason_code="data_unavailable",
+                market_state="open_or_unknown",
+                planner_status="planned" if portfolio_plan is not None else "not_run",
+                risk_status="data_unavailable",
+                sleeve_reasons=tuple(sleeve_reasons),
+            )
+        if cycle_status == "recovery_required":
+            return BotBrainCycleExplanation(
+                summary="No trade because recovery controls require intervention.",
+                primary_reason_code="recovery_required",
+                market_state="open_or_unknown",
+                planner_status="planned" if portfolio_plan is not None else "not_run",
+                risk_status="recovery_required",
+                sleeve_reasons=tuple(sleeve_reasons),
+            )
+        if blocked_trade_count > 0:
+            summary = "No trade because risk or execution controls blocked the order."
+            risk_status = "blocked"
+        elif portfolio_plan is None:
+            summary = "No trade because the runtime planner did not return a plan."
+            risk_status = "not_evaluated"
+        elif all(
+            result.terminal_state in {"held", "skipped"} for result in symbol_results
+        ):
+            summary = (
+                "No order was submitted because the planner held or skipped every "
+                "trade."
+            )
+            risk_status = "not_blocked"
+        else:
+            summary = f"Latest cycle ended as {cycle_status}."
+            risk_status = "not_blocked"
+        return BotBrainCycleExplanation(
+            summary=summary,
+            primary_reason_code=cycle_status,
+            market_state="open_or_unknown",
+            planner_status="planned" if portfolio_plan is not None else "no_plan",
+            risk_status=risk_status,
+            sleeve_reasons=tuple(sleeve_reasons),
         )
 
     def _get_portfolio_state_guarded(self) -> tuple[str | None, PortfolioState]:
