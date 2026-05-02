@@ -479,7 +479,7 @@ class LocalRuntimeHostManager:
         self,
         activation: BlueprintActivationRecord,
     ) -> None:
-        output_dir = self._operator_store._root_dir / "runtime_config"  # type: ignore[attr-defined]
+        output_dir = self._operator_store._root_dir / "runtime_config"
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "running_activation.json").write_text(
             json.dumps(

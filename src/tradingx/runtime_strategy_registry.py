@@ -61,7 +61,7 @@ class ActivatedRuntimePlanner:
         if self._blueprint_planner is not None and hasattr(
             self._blueprint_planner, "set_run_scoped_blueprint_activation"
         ):
-            self._blueprint_planner.set_run_scoped_blueprint_activation(  # type: ignore[attr-defined]
+            self._blueprint_planner.set_run_scoped_blueprint_activation(
                 self._applied_blueprint_activation
             )
         self.last_strategy_id = ""
@@ -74,9 +74,7 @@ class ActivatedRuntimePlanner:
         if self._blueprint_planner is not None and hasattr(
             self._blueprint_planner, "set_run_scoped_blueprint_activation"
         ):
-            self._blueprint_planner.set_run_scoped_blueprint_activation(  # type: ignore[attr-defined]
-                activation
-            )
+            self._blueprint_planner.set_run_scoped_blueprint_activation(activation)
 
     def plan_for_service(
         self,

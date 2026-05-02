@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from tradingx.config import TradingConfig
 from tradingx.drift.gateway import ArtifactBackedDriftAlarmStateReader
@@ -1254,7 +1254,11 @@ class LocalWebReadModel:
             else None
         )
         cadence_settings = self._runtime_cadence_settings(runtime_state=runtime_state)
-        cadence_seconds = int(cadence_settings["running_cadence_seconds"])
+        configured_cadence_seconds = cast(
+            int, cadence_settings["configured_cadence_seconds"]
+        )
+        running_cadence_seconds = cast(int, cadence_settings["running_cadence_seconds"])
+        cadence_seconds = running_cadence_seconds
         cadence_label = (
             f"Every {cadence_seconds // 60}m"
             if cadence_seconds % 60 == 0
@@ -1445,8 +1449,8 @@ class LocalWebReadModel:
             symbol_rows=symbol_rows,
             decision_ladder=decision_ladder,
             operator_guidance=operator_guidance,
-            configured_cadence_seconds=cadence_settings["configured_cadence_seconds"],
-            running_cadence_seconds=cadence_settings["running_cadence_seconds"],
+            configured_cadence_seconds=configured_cadence_seconds,
+            running_cadence_seconds=running_cadence_seconds,
             cadence_source=str(cadence_settings["cadence_source"]),
             cadence_applies_at=str(cadence_settings["cadence_applies_at"]),
         )
@@ -2438,33 +2442,33 @@ class LocalWebReadModel:
             latest_by_client_order_id.setdefault(key, row)
         row = next(iter(latest_by_client_order_id.values()))
         (
-            event_type,
-            recorded_at_utc,
+            row_event_type,
+            row_recorded_at_utc,
             _decision_snapshot_id,
             _cycle_correlation_id,
-            client_order_id,
-            broker_order_id,
-            symbol,
-            side,
-            payload_json,
+            row_client_order_id,
+            row_broker_order_id,
+            row_symbol,
+            row_side,
+            row_payload_json,
         ) = row
         try:
-            payload = self._ensure_mapping(json.loads(str(payload_json)))
+            payload = self._ensure_mapping(json.loads(str(row_payload_json)))
         except Exception:
             payload = {}
         reason = str(
             payload.get("reason_code")
             or payload.get("terminal_reason")
             or payload.get("message")
-            or event_type
+            or row_event_type
         )
         return BotBrainOrderEvent(
-            event_type=str(event_type),
-            recorded_at_utc=self._parse_datetime(str(recorded_at_utc)),
-            symbol=str(symbol),
-            side=str(side),
-            client_order_id=str(client_order_id or ""),
-            broker_order_id=str(broker_order_id or ""),
+            event_type=str(row_event_type),
+            recorded_at_utc=self._parse_datetime(str(row_recorded_at_utc)),
+            symbol=str(row_symbol),
+            side=str(row_side),
+            client_order_id=str(row_client_order_id or ""),
+            broker_order_id=str(row_broker_order_id or ""),
             reason=reason,
         )
 
@@ -4724,15 +4728,15 @@ class LocalWebReadModel:
                 latest_portfolio_state.get("positions", ())
             ):
                 if isinstance(position, Mapping):
-                    symbol = str(position.get("symbol", "")).strip()
-                    if symbol:
-                        positions_by_symbol[symbol] = position
+                    position_symbol = str(position.get("symbol", "")).strip()
+                    if position_symbol:
+                        positions_by_symbol[position_symbol] = position
         rows: list[dict[str, object]] = []
         for symbol in latest_open_positions:
-            position = positions_by_symbol.get(symbol)
+            latest_position = positions_by_symbol.get(symbol)
             market_value = (
-                self._decimal_from_payload(position.get("market_value"))
-                if position is not None
+                self._decimal_from_payload(latest_position.get("market_value"))
+                if latest_position is not None
                 else None
             )
             if market_value is None:
@@ -4741,11 +4745,13 @@ class LocalWebReadModel:
                         "symbol": symbol,
                         "value": None,
                         "value_status": (
-                            "unpriced" if position is not None else "source_missing"
+                            "unpriced"
+                            if latest_position is not None
+                            else "source_missing"
                         ),
                         "missing_reason": (
                             "Position market value is missing."
-                            if position is not None
+                            if latest_position is not None
                             else "Only open-position symbols are available; market values are missing."
                         ),
                     }
