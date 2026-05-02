@@ -101,6 +101,7 @@ from tradingx.validation import (
     _CPCV_TEST_GROUP_COUNT,
     _run_cpcv_for_candidate,
     build_gate_report,
+    gate1_marginal_candidates,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -1713,7 +1714,7 @@ class GateValidationController:
             for symbol in sorted(required_symbols)
         }
         if gate_id == "1":
-            for candidate in candidates:
+            for candidate in gate1_marginal_candidates(candidates):
                 try:
                     _run_cpcv_for_candidate(
                         candidate=candidate,

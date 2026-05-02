@@ -24,7 +24,7 @@ from tradingx.evaluation import (
 )
 from tradingx.strategy import build_mandatory_candidate_registry
 from tradingx.trials import TrialsLedger
-from tradingx.types import ScalarValue, TrialRecord
+from tradingx.types import ScalarValue, StrategyCandidate, TrialRecord
 
 
 def test_evaluation_module_shell_is_importable() -> None:
@@ -141,8 +141,19 @@ def _seed_family_trials(ledger: TrialsLedger, family: str, sharpes: list[str]) -
         )
 
 
+def _mandatory_candidate(
+    candidate_id: str = "trend-following-v1",
+    universe: tuple[str, ...] = ("SPY",),
+) -> StrategyCandidate:
+    by_id = {
+        candidate.candidate_id: candidate
+        for candidate in build_mandatory_candidate_registry(universe)
+    }
+    return by_id[candidate_id]
+
+
 def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     context = AdversarialCheckContext(
         benchmark_bars=_benchmark_bars(),
@@ -189,7 +200,7 @@ def test_evaluate_candidate_produces_benchmark_relative_evidence_pack() -> None:
 
 
 def test_evaluate_candidate_threads_cost_drag_to_evidence_pack() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     context = AdversarialCheckContext(
         benchmark_bars=_benchmark_bars(),
@@ -211,7 +222,7 @@ def test_evaluate_candidate_threads_cost_drag_to_evidence_pack() -> None:
 
 
 def test_evaluate_candidate_cost_drag_is_none_when_not_supplied() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     context = AdversarialCheckContext(
         benchmark_bars=_benchmark_bars(),
@@ -232,7 +243,7 @@ def test_evaluate_candidate_cost_drag_is_none_when_not_supplied() -> None:
 
 
 def test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     context = AdversarialCheckContext(
         benchmark_bars=_benchmark_bars(),
@@ -259,7 +270,7 @@ def test_evaluate_candidate_forwards_marginal_inputs_to_evidence_pack() -> None:
 
 
 def test_evaluate_candidate_marginal_inputs_default_to_none() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     context = AdversarialCheckContext(
         benchmark_bars=_benchmark_bars(),
@@ -284,7 +295,7 @@ def test_evaluate_candidate_marginal_inputs_default_to_none() -> None:
 def test_evaluate_candidate_populates_dsr_when_trials_sufficient(
     tmp_path,
 ) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _moderate_positive_returns()
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     _seed_family_trials(
@@ -324,7 +335,7 @@ def test_evaluate_candidate_passes_per_period_sharpe_units_to_dsr(
         SharpeVariancePerPeriod,
     )
 
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _moderate_positive_returns()
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     _seed_family_trials(
@@ -364,7 +375,7 @@ def test_evaluate_candidate_passes_per_period_sharpe_units_to_dsr(
 
 
 def test_evaluate_candidate_dsr_is_none_when_trials_insufficient(tmp_path) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     context = AdversarialCheckContext(
@@ -388,7 +399,7 @@ def test_evaluate_candidate_dsr_is_none_when_trials_insufficient(tmp_path) -> No
 
 
 def test_evaluate_candidate_sets_north_star_flag_when_sharpe_present(tmp_path) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     context = AdversarialCheckContext(
@@ -412,7 +423,7 @@ def test_evaluate_candidate_sets_north_star_flag_when_sharpe_present(tmp_path) -
 
 
 def test_evaluate_candidate_does_not_record_trial(tmp_path) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     base_returns = _stable_returns()
     ledger = TrialsLedger(database_path=tmp_path / "trials.db")
     context = AdversarialCheckContext(
@@ -446,7 +457,7 @@ def test_oos_check_uses_settled_thirty_percent_tolerance_rule() -> None:
 
 
 def test_parameter_sensitivity_check_fails_on_large_sharpe_drop() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     runner = FakeBacktestRunner(
         base_returns=_stable_returns(),
         parameter_returns=tuple(Decimal("-0.005") for _ in range(1200)),
@@ -508,7 +519,7 @@ def test_regime_behavior_check_ignores_rows_without_trend_context() -> None:
 
 
 def test_cost_sensitivity_check_requires_profitability_under_all_stresses() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     runner = FakeBacktestRunner(
         base_returns=_stable_returns(),
         cost_returns=tuple(Decimal("-0.020") for _ in range(1200)),
@@ -524,7 +535,7 @@ def test_cost_sensitivity_check_requires_profitability_under_all_stresses() -> N
 
 
 def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     runner = FakeBacktestRunner(
         base_returns=_stable_returns(),
         cost_returns=_stable_returns(),
@@ -548,7 +559,7 @@ def test_cost_sensitivity_check_uses_one_two_and_four_x_cost_grid() -> None:
 def test_cost_sensitivity_check_uses_distinct_commission_stresses_from_zero_base() -> (
     None
 ):
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     runner = FakeBacktestRunner(
         base_returns=_stable_returns(),
         cost_returns=_stable_returns(),

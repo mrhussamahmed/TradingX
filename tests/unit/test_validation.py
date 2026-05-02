@@ -88,6 +88,17 @@ def _compound_total_return(returns: tuple[Decimal, ...]) -> Decimal:
     return equity - Decimal("1")
 
 
+def _mandatory_candidate(
+    candidate_id: str,
+    universe: tuple[str, ...] = ("SPY", "QQQ"),
+) -> StrategyCandidate:
+    by_id = {
+        candidate.candidate_id: candidate
+        for candidate in build_mandatory_candidate_registry(universe)
+    }
+    return by_id[candidate_id]
+
+
 def _benchmark_stack_payload_for_periods(return_periods: int) -> BenchmarkStackPayload:
     return BenchmarkStackPayload(
         hurdle_returns=tuple([Decimal("0.0001")] * return_periods),
@@ -128,7 +139,7 @@ def test_validation_module_shell_is_importable() -> None:
 
 
 def test_default_regime_snapshots_require_200_prior_observations() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = _mandatory_candidate("trend-following-v1")
     closes = [float(100 + index) for index in range(201)]
     bars = _ohlcv_frame(closes)
 
@@ -142,7 +153,7 @@ def test_default_regime_snapshots_require_200_prior_observations() -> None:
 
 
 def test_default_regime_snapshots_do_not_count_execution_row_as_sma_history() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[0]
+    candidate = _mandatory_candidate("trend-following-v1")
     bars = _ohlcv_frame([float(100 + index) for index in range(200)])
 
     regimes = _build_default_regime_snapshots(candidate, bars_by_symbol={"SPY": bars})
@@ -495,7 +506,7 @@ def test_candidate_returns_support_parameter_overrides_and_cost_replays() -> Non
     assert base_trend_drag >= Decimal("0")
     assert overridden_trend_drag >= Decimal("0")
 
-    vol_candidate = build_mandatory_candidate_registry(("SPY",))[1]
+    vol_candidate = _mandatory_candidate("vol-target-v1", ("SPY",))
     vol_bars = {
         "SPY": _quote_enriched_ohlcv_frame(
             [
@@ -636,7 +647,7 @@ def test_adversarial_backtest_runner_still_returns_plain_tuple(monkeypatch) -> N
             ]
         ),
     }
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[1]
+    candidate = _mandatory_candidate("vol-target-v1")
 
     def fake_evaluate_candidate(
         candidate: StrategyCandidate,
@@ -720,7 +731,7 @@ def test_build_gate_report_threads_trials_ledger_to_gate_layer(tmp_path) -> None
 def test_build_gate1_candidate_result_records_trial_with_real_gate_status(
     tmp_path,
 ) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     candidate_returns = tuple(
         Decimal("0.0012") if index % 4 in (0, 1) else Decimal("-0.0003")
         for index in range(1008)
@@ -752,7 +763,7 @@ def test_build_gate1_candidate_result_records_trial_with_real_gate_status(
 
 
 def test_build_gate1_candidate_result_populates_cost_drag_on_result(tmp_path) -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     candidate_returns = tuple(
         Decimal("0.0012") if index % 4 in (0, 1) else Decimal("-0.0003")
         for index in range(1008)
@@ -798,7 +809,7 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
             ]
         ),
     }
-    candidate = build_mandatory_candidate_registry(("SPY", "QQQ"))[1]
+    candidate = _mandatory_candidate("vol-target-v1")
 
     report = build_gate_report(
         gate_id="2",
@@ -824,7 +835,7 @@ def test_build_gate2_report_uses_real_stress_descriptions() -> None:
 
 
 def test_gate1_drawdown_reports_design_target_separately_from_hard_limit() -> None:
-    candidate = build_mandatory_candidate_registry(("SPY",))[0]
+    candidate = _mandatory_candidate("trend-following-v1", ("SPY",))
     candidate_returns = (
         Decimal("0.10"),
         Decimal("-0.13"),
@@ -950,6 +961,9 @@ class _Gate1MarginalFixtures:
 def _gate1_marginal_fixtures() -> _Gate1MarginalFixtures:
     registry = build_mandatory_candidate_registry(("SPY", "QQQ"))
     trend_candidate, vol_candidate, mean_reversion_candidate = registry
+    assert trend_candidate.candidate_id == "trend-following-v1"
+    assert vol_candidate.candidate_id == "vol-target-v1"
+    assert mean_reversion_candidate.candidate_id == "mean-reversion-v1"
     spy_closes = [
         float(value)
         for value in _build_close_series(
@@ -1026,11 +1040,11 @@ def _gate1_marginal_fixtures() -> _Gate1MarginalFixtures:
     )
 
 
-def test_gate1_rejects_registry_with_not_two_sleeve_backed_candidates() -> None:
+def test_gate1_marks_marginal_contribution_pending_when_pair_is_incomplete() -> None:
     one_sleeve = (
         StrategyCandidate(
-            candidate_id="only-sleeve-v1",
-            family="x",
+            candidate_id="trend-following-v1",
+            family="trend_following",
             benchmark_symbol="SPY",
             universe=("SPY",),
             parameter_set={},
@@ -1038,19 +1052,27 @@ def test_gate1_rejects_registry_with_not_two_sleeve_backed_candidates() -> None:
             sleeve_class_path="tradingx.sleeves.trend.TrendSleeve",
         ),
     )
-    bars = {"SPY": _ohlcv_frame([100.0, 101.0])}
+    bars = {"SPY": _ohlcv_frame([100.0, 101.0, 102.0, 103.0, 104.0])}
 
-    with pytest.raises(NotImplementedError, match="two-sleeve case"):
-        build_gate_report(
-            gate_id="1",
-            bars_by_symbol=bars,
-            candidates=one_sleeve,
-            benchmark_stack_payload=_benchmark_stack_payload_for_periods(
-                len(bars["SPY"])
-            ),
-            window_start_utc=bars["SPY"].index[0].to_pydatetime(),
-            window_end_utc=bars["SPY"].index[-1].to_pydatetime(),
-        )
+    report = build_gate_report(
+        gate_id="1",
+        bars_by_symbol=bars,
+        candidates=one_sleeve,
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
+            len(bars["SPY"])
+        ),
+        window_start_utc=bars["SPY"].index[0].to_pydatetime(),
+        window_end_utc=bars["SPY"].index[-1].to_pydatetime(),
+    )
+
+    result = report.candidate_results[0]
+    marginal = next(
+        criterion
+        for criterion in result.criteria
+        if criterion.criterion_id == "marginal_portfolio_contribution"
+    )
+    assert result.status == "pending"
+    assert marginal.status == "pending"
 
 
 def test_gate1_evaluates_marginal_contribution_for_two_sleeves() -> None:
@@ -1084,7 +1106,16 @@ def test_gate1_evaluates_marginal_contribution_for_two_sleeves() -> None:
     }
     assert trend.marginal_sharpe_delta is not None
     assert vol.marginal_sharpe_delta is not None
+    assert {criterion.criterion_id for criterion in mr.criteria} == {
+        "hurdle_clearance",
+        "opportunity_cost_edge",
+        "operating_constraint",
+        "out_of_sample_profile",
+        "pbo_overfitting",
+    }
     assert mr.marginal_sharpe_delta is None
+    assert mr.marginal_calmar_delta is None
+    assert mr.marginal_cdar_delta is None
 
 
 def test_gate1_marginal_deltas_land_on_evidence_pack_not_just_result() -> None:
