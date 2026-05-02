@@ -19,7 +19,7 @@ workspace edits.
 ## Verification
 
 - Clean detached worktree `./scripts/validate-fast`: passed. Index validation,
-  Ruff, Black, and mypy passed; focused backend tests reported 164 passed and
+  Ruff, Black, and mypy passed; focused backend tests reported 163 passed and
   12 warnings in 3.14s.
 - Clean detached worktree `./scripts/validate`: passed. Index validation,
   Ruff, Black, and mypy passed. Unit/integration coverage reported 1459 passed,

@@ -64,8 +64,9 @@ as fixed here:
 - Web action inputs may accept impossible runtime values.
 - Runtime heartbeat symbol rows may mix active runtime universe and historical
   activation/config coverage.
-- OpenAPI docs and non-loopback web binding guardrails still need a separate
-  product decision.
+- OpenAPI docs and non-loopback web binding guardrails still need
+  hardening/documentation under the decided local-only constraint: do not
+  expose, cloud-host, or port-forward the FastAPI/React trading control plane.
 - The frontend production bundle still emits the existing large chunk warning.
 
 ## Verification
