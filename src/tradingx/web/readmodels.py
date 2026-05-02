@@ -2255,9 +2255,7 @@ class LocalWebReadModel:
                     status=(
                         "missing_price"
                         if market_value is None
-                        else "stale_price"
-                        if source_status == "stale"
-                        else "open"
+                        else "stale_price" if source_status == "stale" else "open"
                     ),
                     quantity_status=quantity_status,
                     price_status=price_status,
@@ -2718,9 +2716,7 @@ class LocalWebReadModel:
                 candidate_role = (
                     "reference"
                     if candidate is not None and candidate.status == "reference"
-                    else "evaluated"
-                    if candidate is not None
-                    else "unknown"
+                    else "evaluated" if candidate is not None else "unknown"
                 )
                 implemented = candidate is not None
                 runtime_resolvable = False

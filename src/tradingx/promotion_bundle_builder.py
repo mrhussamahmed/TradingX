@@ -153,9 +153,9 @@ def write_paper_trading_promotion_bundle(
 def _latest_template_record(root: Path) -> dict[str, object]:
     records = [
         json.loads(line)
-        for line in (root / "ledger" / "records.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
+        for line in (root / "ledger" / "records.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line.strip()
     ]
     if not records:

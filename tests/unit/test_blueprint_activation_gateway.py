@@ -229,9 +229,9 @@ def test_preflight_blueprint_activation_reports_snapshot_blockers_without_writin
     )
 
     assert report.status == "blocked"
-    assert {
-        check.code for check in report.checks if check.status == "blocked"
-    } == {"approved_snapshot_missing"}
+    assert {check.code for check in report.checks if check.status == "blocked"} == {
+        "approved_snapshot_missing"
+    }
     assert report.sleeve_bindings == ()
     assert gateway.get_active_blueprint_activation() is None
     assert gateway.list_pending_blueprint_activations() == ()
