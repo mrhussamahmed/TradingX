@@ -40,6 +40,13 @@ claim fixes that exist only as unstaged workspace edits.
 - If the trend/vol pair is incomplete, marginal contribution remains
   `pending` instead of crashing.
 
+### Automation reference generation
+
+- Backtest reference generation skips sleeve candidates with no allowed
+  instruments.
+- This prevents empty `bars_by_symbol` payloads when a candidate universe is
+  empty after benchmark-symbol exclusion.
+
 ### Mobile Control Center shell
 
 - Narrow screens use explicit navigation and operator-rail drawer controls.
@@ -55,8 +62,6 @@ as fixed here:
 
 - Duplicate signed web writes can race before idempotency response persistence.
 - Web action inputs may accept impossible runtime values.
-- Backtest reference generation may fail for candidates with no allowed
-  instruments.
 - Runtime heartbeat symbol rows may mix active runtime universe and historical
   activation/config coverage.
 - OpenAPI docs and non-loopback web binding guardrails still need a separate

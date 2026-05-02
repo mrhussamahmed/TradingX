@@ -18,15 +18,19 @@ workspace edits.
 
 ## Verification
 
-- Clean detached worktree `./scripts/validate-fast`: pending rerun after the
-  code-review correction commits.
-- Clean detached worktree `./scripts/validate`: pending rerun after the
-  code-review correction commits.
-- `npm --prefix webapp run lint`: previously passed on this branch.
-- `npm --prefix webapp test`: previously passed with 10 test files and 108
+- Clean detached worktree `./scripts/validate-fast`: passed. Index validation,
+  Ruff, Black, and mypy passed; focused backend tests reported 164 passed and
+  12 warnings in 3.14s.
+- Clean detached worktree `./scripts/validate`: passed. Index validation,
+  Ruff, Black, and mypy passed. Unit/integration coverage reported 1459 passed,
+  98 skipped, 18 warnings in 450.46s, with coverage 84.66% against the 80%
+  threshold.
+- Frontend tests inside `./scripts/validate`: passed with 10 test files and 108
   tests.
-- `npm --prefix webapp run build`: previously passed with the existing
-  chunk-size warning.
+- Frontend build inside `./scripts/validate`: passed with the existing
+  chunk-size warning; the main JS bundle is 732.57 kB, gzip 212.39 kB.
+- Smoke gate inside `./scripts/validate`: 1 skipped because regular US market
+  hours were closed.
 - Browser desktop screenshot:
   `/Users/ahmedabd/Desktop/AI Projects/TradingX/artifacts/verification/2026-05-02-responsive-shell/tradingx-desktop-1440x900.png`.
 - Browser mobile screenshot:
@@ -45,5 +49,7 @@ workspace edits.
 - Gate 1 evidence is scoped to the model the code can actually evaluate.
 - Mean reversion receives pass-through Gate 1 criteria where appropriate and
   does not receive the trend/vol marginal contribution criterion.
+- Backtest reference generation no longer attempts to simulate candidates with
+  no allowed instruments.
 - Mobile layout no longer hides the main operator surface behind fixed columns,
   and drawer controls do not occlude `.topStrip`.
