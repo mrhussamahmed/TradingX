@@ -886,6 +886,7 @@ def _reconcile_gate1_status(pass1_status: str, marginal_status: str) -> str:
 def gate1_marginal_candidate_ids(
     candidates: Sequence[StrategyCandidate],
 ) -> tuple[str, ...]:
+    """Return the GATES-0001 tranche 1.4 trend/vol marginal pair."""
     available_ids = {candidate.candidate_id for candidate in candidates}
     return tuple(
         candidate_id

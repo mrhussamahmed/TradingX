@@ -1,13 +1,13 @@
 ---
 id: GATES-0001
 title: Stage 1 acceptance gates
-version: 1.3.1
+version: 1.3.2
 status: active
 created: 2026-04-17
-last_amended: 2026-04-23
-supersedes: GATES-0001@1.3.0
+last_amended: 2026-05-02
+supersedes: GATES-0001@1.3.1
 superseded_by: null
-author_session: gpt-5-codex-2026-04-23
+author_session: codex-gpt-5-2026-05-02
 ---
 
 # Stage 1 acceptance gates
@@ -106,15 +106,16 @@ reframed gate logic in
   Before those readiness gates clear, `pbo_overfitting` remains
   `pending` rather than failed. Once a PBO payload exists for the
   Gate 1 run, the criterion becomes a hard pass/fail gate.
-- `marginal_portfolio_contribution`: for each sleeve-backed candidate,
-  adding the candidate to the reference book of mandatory sleeve-backed
-  candidates must strictly improve portfolio Sharpe AND Calmar AND not
-  worsen portfolio CDaR@95%. For tranche 1.4, the reference book is the
-  registry-pinned sibling — the other mandatory sleeve-backed candidate
-  from `build_mandatory_candidate_registry()` with
-  `sleeve_class_path is not None`, independent of the sibling's own Gate 1
-  outcome. Generalization for 3+ sleeve-backed candidates is deferred to
-  the tranche that introduces a third sleeve-backed candidate.
+- `marginal_portfolio_contribution`: for tranche 1.4, this criterion is
+  scoped to the registry-pinned two-sleeve portfolio pair:
+  `trend-following-v1` and `vol-target-v1`. Adding either candidate to
+  the other candidate's reference book must strictly improve portfolio
+  Sharpe AND Calmar AND not worsen portfolio CDaR@95%, independent of the
+  sibling's own Gate 1 outcome. `mean-reversion-v1` remains evaluated by
+  the other Gate 1 criteria but does not receive this marginal criterion
+  until a future gate amendment defines the 3+ sleeve-backed candidate
+  marginal model. If the trend/vol pair is incomplete, the marginal
+  criterion remains `pending` rather than failed.
 
 **Deferred to tranche 1 hardening**
 
