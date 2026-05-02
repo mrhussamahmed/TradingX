@@ -635,3 +635,118 @@
   margin: 0;
   padding: 4px 6px 0;
 }
+
+.mobileShellControls,
+.mobileShellScrim {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .shell,
+  .shellRailCollapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--header-height) minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .brandRow {
+    display: none;
+  }
+
+  .topStrip {
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+    min-width: 0;
+    padding-left: 96px;
+    padding-right: 8px;
+  }
+
+  .mobileShellControls {
+    position: fixed;
+    z-index: 70;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    gap: 6px;
+  }
+
+  .mobileShellButton {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-muted);
+    background: var(--bg-panel-elevated);
+    color: var(--text-primary);
+    display: grid;
+    place-items: center;
+  }
+
+  .mobileShellButton[aria-expanded='true'] {
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+  }
+
+  .mobileShellScrim {
+    position: fixed;
+    z-index: 30;
+    inset: var(--header-height) 0 0;
+    display: block;
+    border: 0;
+    background: rgba(0, 0, 0, 0.38);
+  }
+
+  .statusActions {
+    position: sticky;
+    right: 0;
+    background: var(--bg-shell);
+    padding-right: 4px;
+  }
+
+  .leftNav {
+    position: fixed;
+    z-index: 40;
+    left: 0;
+    top: var(--header-height);
+    bottom: 0;
+    width: min(280px, 84vw);
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: 12px 0 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .shellMobileNavOpen .leftNav {
+    transform: translateX(0);
+  }
+
+  .canvas {
+    grid-column: 1 / 2;
+    grid-row: 2 / 3;
+    min-width: 0;
+  }
+
+  .rail {
+    position: fixed;
+    z-index: 35;
+    top: var(--header-height);
+    right: 0;
+    bottom: 0;
+    width: min(360px, 92vw);
+    transform: translateX(100%);
+    transition: transform 160ms ease;
+    box-shadow: -12px 0 24px rgba(0, 0, 0, 0.28);
+  }
+
+  .shellMobileRailOpen .rail {
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 560px) {
+  .statusCard:nth-child(n + 4) {
+    display: none;
+  }
+
+  .topStrip {
+    overflow-x: hidden;
+  }
+}
