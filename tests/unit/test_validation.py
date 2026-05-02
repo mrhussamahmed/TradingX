@@ -1058,9 +1058,7 @@ def test_gate1_marks_marginal_contribution_pending_when_pair_is_incomplete() -> 
         gate_id="1",
         bars_by_symbol=bars,
         candidates=one_sleeve,
-        benchmark_stack_payload=_benchmark_stack_payload_for_periods(
-            len(bars["SPY"])
-        ),
+        benchmark_stack_payload=_benchmark_stack_payload_for_periods(len(bars["SPY"])),
         window_start_utc=bars["SPY"].index[0].to_pydatetime(),
         window_end_utc=bars["SPY"].index[-1].to_pydatetime(),
     )

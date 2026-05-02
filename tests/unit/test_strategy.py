@@ -319,7 +319,8 @@ def test_runtime_registry_sets_sleeve_class_path_for_all_blueprint_strategies() 
 
 def test_candidate_registries_default_to_canonical_stage1_universe() -> None:
     mandatory = {
-        candidate.family: candidate for candidate in build_mandatory_candidate_registry()
+        candidate.family: candidate
+        for candidate in build_mandatory_candidate_registry()
     }
     runtime = {
         candidate.family: candidate for candidate in build_runtime_candidate_registry()
