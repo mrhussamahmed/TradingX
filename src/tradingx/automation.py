@@ -725,6 +725,9 @@ def _ensure_backtest_reference_returns(
         )
         if path.exists() and not force_rebuild:
             continue
+        sleeve = build_sleeve_from_candidate(candidate)
+        if not sleeve.allowed_instruments:
+            continue
         bars_by_symbol = {
             symbol: market_data_gateway.get_daily_bar_history(
                 symbol,
@@ -735,7 +738,6 @@ def _ensure_backtest_reference_returns(
                 sorted({candidate.benchmark_symbol, *candidate.universe})
             )
         }
-        sleeve = build_sleeve_from_candidate(candidate)
         regimes = _build_default_regime_snapshots(
             candidate,
             bars_by_symbol=bars_by_symbol,
