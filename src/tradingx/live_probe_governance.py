@@ -53,6 +53,7 @@ def build_authority_boundary(
     approved_at_utc: datetime,
     expires_at_utc: datetime,
     now_utc: datetime | None = None,
+    checklist_evidence_refs: Sequence[str] = (),
 ) -> dict[str, object]:
     now = (now_utc or datetime.now(UTC)).astimezone(UTC)
     blocker_codes: list[str] = []
@@ -78,6 +79,7 @@ def build_authority_boundary(
         "approvers": list(approvers),
         "canonical_approval_payload_hash": canonical_approval_payload_hash,
         "signatures": list(signatures),
+        "checklist_evidence_refs": list(checklist_evidence_refs),
         "approved_at_utc": _utc_iso(approved_at_utc),
         "expires_at_utc": _utc_iso(expires_at_utc),
         "blocker_codes": blocker_codes,

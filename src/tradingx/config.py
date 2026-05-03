@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import dotenv_values
 
+from tradingx.authority import SchemaValidationError, validate_quant_artifact
 from tradingx.strategy import CANONICAL_STAGE1_UNIVERSE
+
+_AUTHORITY_BOUNDARY_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "schemas"
+    / "quant"
+    / "authority_boundary.schema.json"
+)
+
+
+def _authority_boundary_schema() -> dict[str, object]:
+    payload = json.loads(_AUTHORITY_BOUNDARY_SCHEMA_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SchemaValidationError("authority_boundary schema must be an object")
+    return payload
 
 
 def _normalize_value(value: str | None) -> str:
@@ -47,6 +64,13 @@ def _normalize_csv(value: str | None) -> tuple[str, ...]:
     if not normalized:
         return ()
     return tuple(item.strip().upper() for item in normalized.split(",") if item.strip())
+
+
+def _normalize_path(value: str | None) -> Path | None:
+    normalized = _normalize_value(value)
+    if not normalized:
+        return None
+    return Path(normalized)
 
 
 def _normalize_choice(
@@ -134,6 +158,24 @@ def _empty_live_credentials() -> LiveCredentials:
     return LiveCredentials(api_key="", api_secret="")
 
 
+def _parse_utc_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _non_empty_string_sequence(value: object) -> bool:
+    return isinstance(value, list | tuple) and any(
+        isinstance(item, str) and item.strip() for item in value
+    )
+
+
 @dataclass(frozen=True)
 class PaperCredentials:
     api_key: str
@@ -154,6 +196,9 @@ class LiveTradingControls:
     env_enabled: bool = False
     code_enabled: bool = False
     broker_enabled: bool = False
+    operator_signoff: bool = False
+    gate4_checklist_approved: bool = False
+    gate4_approval_file: Path | None = None
 
     def all_layers_enabled(self) -> bool:
         return (
@@ -161,6 +206,8 @@ class LiveTradingControls:
             and self.env_enabled
             and self.code_enabled
             and self.broker_enabled
+            and self.operator_signoff
+            and self.gate4_checklist_approved
         )
 
 
@@ -268,6 +315,17 @@ class TradingConfig:
                 ),
                 code_enabled=True,
                 broker_enabled=broker_mode == "live",
+                operator_signoff=_normalize_bool(
+                    env_values.get("TRADINGX_GATE4_OPERATOR_SIGNOFF"),
+                    default=False,
+                ),
+                gate4_checklist_approved=_normalize_bool(
+                    env_values.get("TRADINGX_GATE4_CHECKLIST_APPROVED"),
+                    default=False,
+                ),
+                gate4_approval_file=_normalize_path(
+                    env_values.get("TRADINGX_GATE4_APPROVAL_FILE")
+                ),
             ),
             alerting=AlertingConfig(
                 telegram_bot_token=_normalize_value(
@@ -443,11 +501,63 @@ class TradingConfig:
             reasons.append("code_layer_disabled")
         if not self.web.write_signing_configured():
             reasons.append("web_write_signing_unconfigured")
+        if not self.live_controls.operator_signoff:
+            reasons.append("operator_signoff_missing")
+        if not self.live_controls.gate4_checklist_approved:
+            reasons.append("gate4_checklist_missing")
+        gate4_artifact_status = self.gate4_approval_artifact_status()
+        if gate4_artifact_status != "valid":
+            if gate4_artifact_status in {"missing", "not_found"}:
+                reasons.append("gate4_approval_artifact_missing")
+            elif gate4_artifact_status == "expired":
+                reasons.append("gate4_approval_artifact_expired")
+            else:
+                reasons.append("gate4_approval_artifact_invalid")
         if self.runtime.manual_kill_switch_active:
             reasons.append("manual_kill_switch_active")
         if self.runtime.dry_run:
             reasons.append("dry_run_enabled")
         return tuple(reasons)
+
+    def gate4_approval_artifact_status(self) -> str:
+        approval_file = self.live_controls.gate4_approval_file
+        if approval_file is None:
+            return "missing"
+        if not approval_file.exists():
+            return "not_found"
+        try:
+            payload = json.loads(approval_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "invalid"
+        if not isinstance(payload, dict):
+            return "invalid"
+        try:
+            validate_quant_artifact(payload, schema=_authority_boundary_schema())
+        except (OSError, json.JSONDecodeError, SchemaValidationError):
+            return "invalid"
+        if payload.get("approval_type") != "gate4_live_trading":
+            return "invalid"
+        if "live" not in str(payload.get("scope", "")).lower():
+            return "invalid"
+        if payload.get("write_authorization_status") != "authorized":
+            return "invalid"
+        if payload.get("blocker_codes"):
+            return "invalid"
+        if not _non_empty_string_sequence(payload.get("operator_identity_ids")):
+            return "unsigned"
+        if not _non_empty_string_sequence(payload.get("approvers")):
+            return "unsigned"
+        if not _non_empty_string_sequence(payload.get("signatures")):
+            return "unsigned"
+        if not _non_empty_string_sequence(payload.get("checklist_evidence_refs")):
+            return "checklist_missing"
+        approved_at = _parse_utc_datetime(payload.get("approved_at_utc"))
+        expires_at = _parse_utc_datetime(payload.get("expires_at_utc"))
+        if approved_at is None or expires_at is None:
+            return "invalid"
+        if expires_at <= datetime.now(UTC):
+            return "expired"
+        return "valid"
 
     def to_safe_summary(
         self,
@@ -483,7 +593,22 @@ class TradingConfig:
             "live_control_env_enabled": self.live_controls.env_enabled,
             "live_control_code_enabled": self.live_controls.code_enabled,
             "live_control_broker_enabled": self.live_controls.broker_enabled,
-            "live_control_layers_enabled": self.live_controls.all_layers_enabled(),
+            "live_control_operator_signoff": self.live_controls.operator_signoff,
+            "live_control_gate4_checklist_approved": (
+                self.live_controls.gate4_checklist_approved
+            ),
+            "gate4_env_operator_acknowledgement": (self.live_controls.operator_signoff),
+            "gate4_env_checklist_acknowledgement": (
+                self.live_controls.gate4_checklist_approved
+            ),
+            "gate4_approval_artifact_configured": (
+                self.live_controls.gate4_approval_file is not None
+            ),
+            "gate4_approval_artifact_status": (self.gate4_approval_artifact_status()),
+            "live_control_layers_enabled": (
+                self.live_controls.all_layers_enabled()
+                and self.gate4_approval_artifact_status() == "valid"
+            ),
             "live_trading_enabled": bool(live_disable_report["live_trading_enabled"]),
             "control_plane_store": self.control_plane.store,
             "control_plane_domain_stores": dict(self.control_plane.domain_stores),
@@ -523,5 +648,17 @@ class TradingConfig:
             "live_control_env_enabled": self.live_controls.env_enabled,
             "live_control_code_enabled": self.live_controls.code_enabled,
             "live_control_broker_enabled": self.live_controls.broker_enabled,
+            "live_control_operator_signoff": self.live_controls.operator_signoff,
+            "live_control_gate4_checklist_approved": (
+                self.live_controls.gate4_checklist_approved
+            ),
+            "gate4_env_operator_acknowledgement": (self.live_controls.operator_signoff),
+            "gate4_env_checklist_acknowledgement": (
+                self.live_controls.gate4_checklist_approved
+            ),
+            "gate4_approval_artifact_configured": (
+                self.live_controls.gate4_approval_file is not None
+            ),
+            "gate4_approval_artifact_status": (self.gate4_approval_artifact_status()),
             "disable_reasons": disable_reasons,
         }

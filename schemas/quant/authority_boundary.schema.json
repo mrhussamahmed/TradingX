@@ -42,6 +42,7 @@
     "approvers": {"type": "array", "items": {"type": "string"}},
     "canonical_approval_payload_hash": {"type": "string"},
     "signatures": {"type": "array", "items": {"type": "string"}},
+    "checklist_evidence_refs": {"type": "array", "items": {"type": "string"}},
     "approved_at_utc": {"type": "string", "format": "utc-datetime"},
     "expires_at_utc": {"type": "string", "format": "utc-datetime"},
     "blocker_codes": {"type": "array", "items": {"type": "string"}}

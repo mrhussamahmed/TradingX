@@ -508,16 +508,27 @@ def create_app(
     def _control_posture_data() -> dict[str, object]:
         current_decision = resolve_broker_mode(config)
         live_capability = resolve_broker_mode(config, explicit_mode="live")
+        operator_env_acknowledged = config.live_controls.operator_signoff
+        checklist_env_acknowledged = config.live_controls.gate4_checklist_approved
         governance_posture = {
             "operator_signoff_required": True,
-            "operator_signoff_status": "missing",
-            "gate4_checklist_status": "missing",
+            "operator_signoff_status": (
+                "env_acknowledged" if operator_env_acknowledged else "missing"
+            ),
+            "gate4_checklist_status": (
+                "env_acknowledged" if checklist_env_acknowledged else "missing"
+            ),
+            "approval_evidence_status": config.gate4_approval_artifact_status(),
             "approved_by": None,
             "approved_at": None,
         }
-        governance_blockers = (
-            "operator_signoff_missing",
-            "gate4_checklist_missing",
+        governance_blockers = tuple(
+            blocker
+            for blocker, active in (
+                ("operator_signoff_missing", not operator_env_acknowledged),
+                ("gate4_checklist_missing", not checklist_env_acknowledged),
+            )
+            if active
         )
         blockers = tuple(
             dict.fromkeys((*live_capability.disable_reasons, *governance_blockers))
@@ -550,6 +561,14 @@ def create_app(
                 "code_live_enabled": config.live_controls.code_enabled,
                 "broker_mode_live_requested": config.broker_mode == "live",
                 "write_signing_configured": config.web.write_signing_configured(),
+                "operator_env_acknowledged": operator_env_acknowledged,
+                "gate4_checklist_env_acknowledged": checklist_env_acknowledged,
+                "gate4_approval_artifact_configured": (
+                    config.live_controls.gate4_approval_file is not None
+                ),
+                "gate4_approval_artifact_status": (
+                    config.gate4_approval_artifact_status()
+                ),
                 "manual_kill_switch_active": config.runtime.manual_kill_switch_active,
                 "dry_run_active": config.runtime.dry_run,
             },
@@ -1559,8 +1578,15 @@ _LIVE_BLOCKER_MESSAGES = {
     "web_write_signing_unconfigured": "Signed web writes are not configured.",
     "manual_kill_switch_active": "The manual kill switch is active.",
     "dry_run_enabled": "Dry-run mode is still active.",
-    "operator_signoff_missing": "Operator sign-off has not been recorded.",
-    "gate4_checklist_missing": "The Gate 4 approval checklist is not complete.",
+    "operator_signoff_missing": (
+        "Operator Gate 4 environment acknowledgement is missing."
+    ),
+    "gate4_checklist_missing": (
+        "Gate 4 checklist environment acknowledgement is missing."
+    ),
+    "gate4_approval_artifact_missing": "Durable Gate 4 approval evidence is missing.",
+    "gate4_approval_artifact_invalid": "Durable Gate 4 approval evidence is invalid.",
+    "gate4_approval_artifact_expired": "Durable Gate 4 approval evidence is expired.",
 }
 
 

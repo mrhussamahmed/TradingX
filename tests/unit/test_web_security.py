@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -177,6 +178,113 @@ def test_web_write_authorizer_replays_exact_duplicate(tmp_path) -> None:
     assert replay is not None
     assert replay.status_code == 200
     assert json.loads(replay.body) == {"status": "accepted"}
+
+
+def test_web_write_authorizer_preserves_pending_first_seen_when_completed(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    store = WebWriteIdempotencyStore(
+        config.runtime.data_root / "control" / "web_write_idempotency"
+    )
+    current_time = datetime(2026, 4, 23, 12, 0, tzinfo=UTC)
+    authorizer = WebWriteAuthorizer(
+        config=config,
+        idempotency_store=store,
+        now_provider=lambda: current_time,
+    )
+    body = b"{}"
+    timestamp = str(int(current_time.timestamp()))
+    request = _make_request(
+        method="POST",
+        path="/api/actions/service/stop",
+        headers=_signed_headers(
+            secret="super-secret",
+            method="POST",
+            path="/api/actions/service/stop",
+            timestamp=timestamp,
+            idempotency_key="idem-first-seen",
+            body=body,
+        ),
+        body=body,
+    )
+    authorization, _ = asyncio.run(authorizer.authorize(request))
+    assert authorization is not None
+
+    current_time = datetime(2026, 4, 23, 12, 1, tzinfo=UTC)
+    authorizer.store_response(
+        authorization,
+        response_payload={"status": "accepted"},
+        status_code=200,
+    )
+
+    record = store.load("idem-first-seen")
+    assert record is not None
+    assert record.first_seen_at_utc == "2026-04-23T12:00:00+00:00"
+    assert record.state == "completed"
+
+
+def test_web_write_idempotency_store_completed_write_avoids_direct_write_text(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    store = WebWriteIdempotencyStore(tmp_path / "idempotency")
+    record = StoredWebWriteResponse(
+        method="POST",
+        path="/api/actions/service/stop",
+        idempotency_key="idem-atomic",
+        request_fingerprint="fingerprint",
+        status_code=200,
+        response_payload={"status": "accepted"},
+        first_seen_at_utc="2026-04-23T12:00:00+00:00",
+    )
+
+    def _fail_write_text(self, *args, **kwargs):
+        raise AssertionError(f"direct write_text used for {self}")
+
+    monkeypatch.setattr(Path, "write_text", _fail_write_text)
+
+    store.write(record)
+
+    loaded = store.load("idem-atomic")
+    assert loaded == record
+
+
+def test_web_write_authorizer_rejects_duplicate_while_first_request_is_pending(
+    tmp_path,
+) -> None:
+    config = _config(tmp_path)
+    store = WebWriteIdempotencyStore(
+        config.runtime.data_root / "control" / "web_write_idempotency"
+    )
+    authorizer = WebWriteAuthorizer(
+        config=config,
+        idempotency_store=store,
+        now_provider=lambda: datetime(2026, 4, 23, 12, 0, tzinfo=UTC),
+    )
+    body = b"{}"
+    timestamp = str(int(datetime(2026, 4, 23, 12, 0, tzinfo=UTC).timestamp()))
+    request = _make_request(
+        method="POST",
+        path="/api/actions/service/stop",
+        headers=_signed_headers(
+            secret="super-secret",
+            method="POST",
+            path="/api/actions/service/stop",
+            timestamp=timestamp,
+            idempotency_key="idem-pending",
+            body=body,
+        ),
+        body=body,
+    )
+    initial_authorization, _ = asyncio.run(authorizer.authorize(request))
+    assert initial_authorization is not None
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(authorizer.authorize(request))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Web write idempotency request is already pending."
 
 
 def test_web_write_authorizer_replays_exact_duplicate_after_timestamp_expires(

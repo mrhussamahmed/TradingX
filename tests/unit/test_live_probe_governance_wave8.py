@@ -52,6 +52,7 @@ def _authority(**overrides: object) -> dict[str, object]:
         "approvers": ["op-001", "op-002"],
         "canonical_approval_payload_hash": "sha256:" + "a" * 64,
         "signatures": ["sig-001", "sig-002"],
+        "checklist_evidence_refs": ["artifact://gate4/checklist"],
         "approved_at_utc": NOW,
         "expires_at_utc": LATER,
     }
@@ -615,6 +616,7 @@ def test_build_authority_boundary_is_deterministic_given_now_utc() -> None:
         "approvers": ["op-001", "op-002"],
         "canonical_approval_payload_hash": "sha256:" + "a" * 64,
         "signatures": ["sig-001", "sig-002"],
+        "checklist_evidence_refs": ["artifact://gate4/checklist"],
         "approved_at_utc": NOW,
         "expires_at_utc": LATER,
     }

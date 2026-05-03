@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -108,6 +110,7 @@ class StoredWebWriteResponse:
     status_code: int
     response_payload: Any
     first_seen_at_utc: str
+    state: str = "completed"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> StoredWebWriteResponse:
@@ -116,9 +119,10 @@ class StoredWebWriteResponse:
             path=str(payload["path"]),
             idempotency_key=str(payload["idempotency_key"]),
             request_fingerprint=str(payload["request_fingerprint"]),
-            status_code=int(payload["status_code"]),
-            response_payload=payload["response_payload"],
+            status_code=int(payload.get("status_code", 409)),
+            response_payload=payload.get("response_payload"),
             first_seen_at_utc=str(payload["first_seen_at_utc"]),
+            state=str(payload.get("state", "completed")),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -130,6 +134,7 @@ class StoredWebWriteResponse:
             "status_code": self.status_code,
             "response_payload": self.response_payload,
             "first_seen_at_utc": self.first_seen_at_utc,
+            "state": self.state,
         }
 
 
@@ -145,17 +150,69 @@ class WebWriteIdempotencyStore:
         path = self._record_path(idempotency_key)
         if not path.exists():
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return StoredWebWriteResponse.from_payload(payload)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return StoredWebWriteResponse.from_payload(payload)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return StoredWebWriteResponse(
+                method="",
+                path="",
+                idempotency_key=idempotency_key,
+                request_fingerprint="",
+                status_code=409,
+                response_payload={
+                    "detail": "Web write idempotency record is not readable."
+                },
+                first_seen_at_utc="",
+                state="corrupt",
+            )
 
     def write(self, record: StoredWebWriteResponse) -> Path:
         path = self._record_path(record.idempotency_key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(record.to_payload(), sort_keys=True),
-            encoding="utf-8",
-        )
+        self._atomic_write_json(path, record.to_payload())
         return path
+
+    def _atomic_write_json(self, path: Path, payload: dict[str, Any]) -> None:
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temp_path.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temp_path.replace(path)
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def reserve(
+        self,
+        authorization: WebWriteAuthorization,
+        *,
+        first_seen_at_utc: str,
+    ) -> bool:
+        path = self._record_path(authorization.idempotency_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = StoredWebWriteResponse(
+            method=authorization.method,
+            path=authorization.path,
+            idempotency_key=authorization.idempotency_key,
+            request_fingerprint=authorization.request_fingerprint,
+            status_code=409,
+            response_payload={
+                "detail": "Web write idempotency request is already pending."
+            },
+            first_seen_at_utc=first_seen_at_utc,
+            state="pending",
+        )
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(record.to_payload(), handle, sort_keys=True)
+        except FileExistsError:
+            return False
+        return True
 
 
 class WebWriteAuthorizer:
@@ -220,11 +277,12 @@ class WebWriteAuthorizer:
         fingerprint = _request_fingerprint(method, path, body)
         existing = self._idempotency_store.load(idempotency_key)
         if existing is not None:
-            if (
-                existing.method == method
-                and existing.path == path
-                and existing.request_fingerprint == fingerprint
-            ):
+            if existing.state != "completed":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Web write idempotency request is already pending.",
+                )
+            if self._same_request(existing, method, path, fingerprint):
                 return None, JSONResponse(
                     status_code=existing.status_code,
                     content=existing.response_payload,
@@ -247,14 +305,51 @@ class WebWriteAuthorizer:
                 detail="Web write timestamp is stale.",
             )
 
+        authorization = WebWriteAuthorization(
+            method=method,
+            path=path,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+        )
+        reserved = self._idempotency_store.reserve(
+            authorization,
+            first_seen_at_utc=self._now_provider().isoformat(),
+        )
+        if not reserved:
+            existing = self._idempotency_store.load(idempotency_key)
+            if existing is not None and self._same_request(
+                existing,
+                method,
+                path,
+                fingerprint,
+            ):
+                if existing.state == "completed":
+                    return None, JSONResponse(
+                        status_code=existing.status_code,
+                        content=existing.response_payload,
+                    )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Web write idempotency request is already pending.",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="Web write idempotency conflict.",
+            )
+
+        return authorization, None
+
+    @staticmethod
+    def _same_request(
+        existing: StoredWebWriteResponse,
+        method: str,
+        path: str,
+        request_fingerprint: str,
+    ) -> bool:
         return (
-            WebWriteAuthorization(
-                method=method,
-                path=path,
-                idempotency_key=idempotency_key,
-                request_fingerprint=fingerprint,
-            ),
-            None,
+            existing.method == method
+            and existing.path == path
+            and existing.request_fingerprint == request_fingerprint
         )
 
     def store_response(
@@ -264,6 +359,15 @@ class WebWriteAuthorizer:
         response_payload: Any,
         status_code: int,
     ) -> Path:
+        first_seen_at_utc = self._now_provider().isoformat()
+        existing = self._idempotency_store.load(authorization.idempotency_key)
+        if existing is not None and self._same_request(
+            existing,
+            authorization.method,
+            authorization.path,
+            authorization.request_fingerprint,
+        ):
+            first_seen_at_utc = existing.first_seen_at_utc or first_seen_at_utc
         record = StoredWebWriteResponse(
             method=authorization.method,
             path=authorization.path,
@@ -271,7 +375,8 @@ class WebWriteAuthorizer:
             request_fingerprint=authorization.request_fingerprint,
             status_code=status_code,
             response_payload=response_payload,
-            first_seen_at_utc=self._now_provider().isoformat(),
+            first_seen_at_utc=first_seen_at_utc,
+            state="completed",
         )
         return self._idempotency_store.write(record)
 

@@ -1,8 +1,36 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tradingx.config import PaperCredentials, TradingConfig
+from tradingx.live_probe_governance import build_authority_boundary
+
+
+def _write_gate4_approval(path: Path, **overrides: object) -> Path:
+    defaults: dict[str, object] = {
+        "boundary_id": "gate4-approval-001",
+        "approval_type": "gate4_live_trading",
+        "identity_provider": "local-ops",
+        "operator_identity_ids": ["operator:local-a"],
+        "role_registry_version": "gate4-v1",
+        "role": "gate4-operator",
+        "scope": "live_trading",
+        "write_authorization_status": "authorized",
+        "max_exception_duration_seconds": 0,
+        "second_approver_required": False,
+        "approvers": ["operator:local-a"],
+        "canonical_approval_payload_hash": "sha256:" + "a" * 64,
+        "signatures": ["signature-ref"],
+        "checklist_evidence_refs": ["artifact://gate4/checklist"],
+        "approved_at_utc": datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        "expires_at_utc": datetime(2099, 1, 1, 0, 0, tzinfo=UTC),
+    }
+    defaults.update(overrides)
+    payload = build_authority_boundary(**defaults)  # type: ignore[arg-type]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def test_placeholder_credentials_are_not_treated_as_real() -> None:
@@ -195,13 +223,18 @@ def test_from_env_file_prefers_os_environment_over_dotenv(
 def test_from_sources_preserves_live_control_provenance() -> None:
     config = TradingConfig.from_sources(
         {"TRADINGX_LIVE_CONFIG_ENABLED": "true"},
-        {},
+        {
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+        },
     )
 
     assert config.live_controls.config_enabled is True
     assert config.live_controls.env_enabled is False
     assert config.live_controls.code_enabled is True
     assert config.live_controls.broker_enabled is False
+    assert config.live_controls.operator_signoff is True
+    assert config.live_controls.gate4_checklist_approved is True
 
 
 def test_from_env_file_keeps_file_and_env_live_flags_separate(
@@ -221,6 +254,166 @@ def test_from_env_file_keeps_file_and_env_live_flags_separate(
     assert config.live_controls.env_enabled is False
 
 
+def test_from_env_file_requires_process_env_for_gate4_signoff(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "TRADINGX_GATE4_OPERATOR_SIGNOFF=true\n"
+        "TRADINGX_GATE4_CHECKLIST_APPROVED=true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TRADINGX_GATE4_OPERATOR_SIGNOFF", raising=False)
+    monkeypatch.delenv("TRADINGX_GATE4_CHECKLIST_APPROVED", raising=False)
+
+    config = TradingConfig.from_env_file(env_file)
+
+    assert config.live_controls.operator_signoff is False
+    assert config.live_controls.gate4_checklist_approved is False
+
+
+def test_live_disable_report_requires_gate4_operator_approval() -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+        }
+    )
+
+    report = config.live_disable_report()
+
+    assert report["live_trading_enabled"] is False
+    assert report["live_control_operator_signoff"] is False
+    assert report["live_control_gate4_checklist_approved"] is False
+    assert "operator_signoff_missing" in report["disable_reasons"]
+    assert "gate4_checklist_missing" in report["disable_reasons"]
+
+
+def test_live_disable_report_requires_durable_gate4_approval_after_env_ack(
+    tmp_path,
+) -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+        }
+    )
+
+    report = config.live_disable_report()
+
+    assert report["live_trading_enabled"] is False
+    assert report["gate4_approval_artifact_status"] == "missing"
+    assert "gate4_approval_artifact_missing" in report["disable_reasons"]
+    assert config.to_safe_summary()["live_control_layers_enabled"] is False
+
+
+def test_live_disable_report_accepts_valid_durable_gate4_approval(
+    tmp_path,
+) -> None:
+    approval_file = _write_gate4_approval(tmp_path / "gate4-approval.json")
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+            "TRADINGX_GATE4_APPROVAL_FILE": str(approval_file),
+        }
+    )
+
+    report = config.live_disable_report()
+
+    assert report["live_trading_enabled"] is True
+    assert report["gate4_approval_artifact_status"] == "valid"
+    assert report["disable_reasons"] == []
+
+
+def test_gate4_approval_artifact_rejects_non_schema_authority_boundary(
+    tmp_path,
+) -> None:
+    approval_file = tmp_path / "gate4-approval.json"
+    approval_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "kind": "authority_boundary",
+                "approval_type": "gate4_live_trading",
+                "scope": "live_trading",
+                "write_authorization_status": "authorized",
+                "approvers": ["operator:local-a"],
+                "signatures": ["signature-ref"],
+                "approved_at_utc": "2026-05-01T12:00:00+00:00",
+                "expires_at_utc": "2099-01-01T00:00:00+00:00",
+                "checklist_evidence_refs": ["artifact://gate4/checklist"],
+                "blocker_codes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+            "TRADINGX_GATE4_APPROVAL_FILE": str(approval_file),
+        }
+    )
+
+    report = config.live_disable_report()
+
+    assert report["live_trading_enabled"] is False
+    assert report["gate4_approval_artifact_status"] == "invalid"
+    assert "gate4_approval_artifact_invalid" in report["disable_reasons"]
+
+
+def test_gate4_approval_artifact_requires_checklist_evidence_refs(
+    tmp_path,
+) -> None:
+    approval_file = _write_gate4_approval(
+        tmp_path / "gate4-approval.json",
+        checklist_evidence_refs=[],
+    )
+    config = TradingConfig.from_mapping(
+        {
+            "ALPACA_LIVE_API_KEY": "pk-live",
+            "ALPACA_LIVE_API_SECRET": "sk-live",
+            "TRADINGX_BROKER_MODE": "live",
+            "TRADINGX_LIVE_CONFIG_ENABLED": "true",
+            "TRADINGX_ENABLE_LIVE_TRADING": "true",
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+            "TRADINGX_GATE4_APPROVAL_FILE": str(approval_file),
+        }
+    )
+
+    report = config.live_disable_report()
+
+    assert report["live_trading_enabled"] is False
+    assert report["gate4_approval_artifact_status"] == "checklist_missing"
+    assert "gate4_approval_artifact_invalid" in report["disable_reasons"]
+
+
 def test_safe_summary_never_includes_raw_write_signing_secret() -> None:
     config = TradingConfig.from_mapping(
         {
@@ -231,4 +424,21 @@ def test_safe_summary_never_includes_raw_write_signing_secret() -> None:
     summary = config.to_safe_summary()
 
     assert summary["web_write_signing_configured"] is True
+    assert "super-secret-value" not in str(summary)
+
+
+def test_safe_summary_reports_gate4_approval_state_without_secrets() -> None:
+    config = TradingConfig.from_mapping(
+        {
+            "TRADINGX_WEB_WRITE_SIGNING_SECRET": "super-secret-value",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "false",
+        }
+    )
+
+    summary = config.to_safe_summary()
+
+    assert summary["live_control_operator_signoff"] is True
+    assert summary["live_control_gate4_checklist_approved"] is False
+    assert summary["gate4_approval_artifact_status"] == "missing"
     assert "super-secret-value" not in str(summary)

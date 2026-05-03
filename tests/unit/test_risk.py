@@ -1,18 +1,47 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from alpaca.trading.enums import OrderSide
 
 from tradingx.config import TradingConfig
+from tradingx.live_probe_governance import build_authority_boundary
 from tradingx.risk import (
     PaperOnlyRiskEngine,
     PreTradeRiskContext,
     RiskViolation,
 )
 from tradingx.types import MarketSnapshot, PortfolioState, TradeIntent
+
+
+def _write_gate4_approval(path: Path) -> Path:
+    payload = build_authority_boundary(
+        boundary_id="gate4-approval-001",
+        approval_type="gate4_live_trading",
+        identity_provider="local-ops",
+        operator_identity_ids=["operator:local-a"],
+        role_registry_version="gate4-v1",
+        role="gate4-operator",
+        scope="live_trading",
+        write_authorization_status="authorized",
+        max_exception_duration_seconds=0,
+        second_approver_required=False,
+        approvers=["operator:local-a"],
+        canonical_approval_payload_hash="sha256:" + "a" * 64,
+        signatures=["signature-ref"],
+        checklist_evidence_refs=["artifact://gate4/checklist"],
+        approved_at_utc=datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        expires_at_utc=datetime(2099, 1, 1, 0, 0, tzinfo=UTC),
+    )
+    path.write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    return path
 
 
 def make_engine() -> PaperOnlyRiskEngine:
@@ -28,7 +57,7 @@ def make_engine() -> PaperOnlyRiskEngine:
     )
 
 
-def make_live_ready_engine() -> PaperOnlyRiskEngine:
+def make_live_ready_engine(tmp_path: Path) -> PaperOnlyRiskEngine:
     config = TradingConfig.from_mapping(
         {
             "ALPACA_PAPER_API_KEY": "pk-paper",
@@ -39,6 +68,11 @@ def make_live_ready_engine() -> PaperOnlyRiskEngine:
             "TRADINGX_LIVE_CONFIG_ENABLED": "true",
             "TRADINGX_ENABLE_LIVE_TRADING": "true",
             "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+            "TRADINGX_GATE4_APPROVAL_FILE": str(
+                _write_gate4_approval(tmp_path / "gate4-approval.json")
+            ),
         }
     )
     return PaperOnlyRiskEngine(
@@ -88,8 +122,8 @@ def test_allows_paper_order_for_positive_quantity() -> None:
     engine.assert_order_allowed(make_context(), is_live_order=False)
 
 
-def test_allows_live_orders_when_live_controls_are_satisfied() -> None:
-    engine = make_live_ready_engine()
+def test_allows_live_orders_when_live_controls_are_satisfied(tmp_path) -> None:
+    engine = make_live_ready_engine(tmp_path)
 
     engine.assert_order_allowed(make_context(), is_live_order=True)
 

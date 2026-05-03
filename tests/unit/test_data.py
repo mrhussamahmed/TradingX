@@ -1,10 +1,41 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
 import pytest
 
 from tradingx import data as market_data_module
 from tradingx.config import TradingConfig
 from tradingx.data import build_market_data_gateway_for_mode
+from tradingx.live_probe_governance import build_authority_boundary
+
+
+def _write_gate4_approval(path: Path) -> Path:
+    payload = build_authority_boundary(
+        boundary_id="gate4-approval-001",
+        approval_type="gate4_live_trading",
+        identity_provider="local-ops",
+        operator_identity_ids=["operator:local-a"],
+        role_registry_version="gate4-v1",
+        role="gate4-operator",
+        scope="live_trading",
+        write_authorization_status="authorized",
+        max_exception_duration_seconds=0,
+        second_approver_required=False,
+        approvers=["operator:local-a"],
+        canonical_approval_payload_hash="sha256:" + "a" * 64,
+        signatures=["signature-ref"],
+        checklist_evidence_refs=["artifact://gate4/checklist"],
+        approved_at_utc=datetime(2026, 5, 1, 12, 0, tzinfo=UTC),
+        expires_at_utc=datetime(2099, 1, 1, 0, 0, tzinfo=UTC),
+    )
+    path.write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_market_data_gateway_uses_paper_credentials_for_paper_mode(monkeypatch) -> None:
@@ -33,7 +64,10 @@ def test_market_data_gateway_uses_paper_credentials_for_paper_mode(monkeypatch) 
     assert captured == {"api_key": "pk-paper", "api_secret": "sk-paper"}
 
 
-def test_market_data_gateway_uses_live_credentials_for_live_mode(monkeypatch) -> None:
+def test_market_data_gateway_uses_live_credentials_for_live_mode(
+    monkeypatch,
+    tmp_path,
+) -> None:
     captured: dict[str, str] = {}
 
     def _fake_from_credentials(*, api_key: str, api_secret: str):
@@ -57,6 +91,11 @@ def test_market_data_gateway_uses_live_credentials_for_live_mode(monkeypatch) ->
             "TRADINGX_LIVE_CONFIG_ENABLED": "true",
             "TRADINGX_ENABLE_LIVE_TRADING": "true",
             "TRADINGX_WEB_WRITE_SIGNING_SECRET": "local-secret",
+            "TRADINGX_GATE4_OPERATOR_SIGNOFF": "true",
+            "TRADINGX_GATE4_CHECKLIST_APPROVED": "true",
+            "TRADINGX_GATE4_APPROVAL_FILE": str(
+                _write_gate4_approval(tmp_path / "gate4-approval.json")
+            ),
         }
     )
 
