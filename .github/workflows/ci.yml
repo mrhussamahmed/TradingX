@@ -1,14 +1,45 @@
 name: CI
 
+# One run per change: pull requests are the gate and workflow_dispatch is the
+# manual re-run. There is no deploy job, so pushes are not re-tested
+# separately. Draft PRs get the cheap `ci-draft` lane; the full `validate`
+# check runs only once the PR is ready for review.
 on:
-  push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  workflow_dispatch:
+
+# Supersede in-flight runs for the same ref instead of queueing both.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # A draft run reports `ci-draft`, never the full `validate` check name.
+    name: ${{ github.event.pull_request.draft && 'ci-draft' || 'validate' }}
+    # Self-hosted routing is off until the repository variable
+    # CI_TARGET=masterworker is set after enrollment (merge-safe). Then owner
+    # dispatches and same-repository PRs use the enrolled MasterWorker runner;
+    # fork PRs queue on a reserved never-registered label (never on paid
+    # compute). The runner's root started hook independently refuses and
+    # terminates fork-head and non-owner jobs.
+    runs-on: >-
+      ${{ fromJSON(
+        vars.CI_TARGET != 'masterworker' && '"ubuntu-latest"' ||
+        (github.repository == 'mrhussamahmed/TradingX' &&
+         (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) &&
+         '["self-hosted","Linux","X64","masterworker","tradingx"]' ||
+         '["self-hosted","masterworker-ci-blocked-do-not-register"]')) }}
+    # Full validation has taken up to ~18 minutes; never hold the slot for 6 hours.
+    timeout-minutes: ${{ github.event.pull_request.draft && 10 || 30 }}
 
     steps:
+      - name: Verify MasterWorker job lease
+        if: vars.CI_TARGET == 'masterworker'
+        run: /usr/bin/python3 /usr/local/lib/masterworker-ci/resource_gate.py verify-current-worker-lease
+
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -20,15 +51,28 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Run draft checks (index, ruff, black)
+        if: github.event.pull_request.draft
+        run: |
+          python3 scripts/check_index.py
+          uv run ruff check src tests scripts
+          uv run black --check src tests scripts
+
+      - name: Explain draft scope
+        if: github.event.pull_request.draft
+        run: echo 'Draft checks cover the artifact index, ruff and black only. Mark ready for review to run the full validate check.' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Node.js
+        if: ${{ !github.event.pull_request.draft }}
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: webapp/package-lock.json
+          # No `cache:` input: npm uses the guest's local cache, no hosted Actions cache.
 
       - name: Install frontend dependencies
+        if: ${{ !github.event.pull_request.draft }}
         run: npm --prefix webapp ci
 
       - name: Run validation
+        if: ${{ !github.event.pull_request.draft }}
         run: ./scripts/validate
